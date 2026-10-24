@@ -31,12 +31,24 @@ pub enum Message {
     MouseReleased,
     /// Window resized.
     WindowResized(f32, f32),
+    /// A completion popup row was clicked.
+    CompletionPicked(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
     Editor,
     Canvas,
+}
+
+/// Open completion popup: candidate items, the selected index, where the
+/// completed word starts in the buffer, and the typed prefix.
+#[derive(Debug, Clone)]
+pub struct Completion {
+    pub items: Vec<crate::editor::completion::Item>,
+    pub selected: usize,
+    /// Buffer position where the completed word starts.
+    pub word: crate::editor::buffer::Pos,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -93,6 +105,8 @@ pub struct App {
     pub message: Option<String>,
     /// Syntax-highlight tokens for `source` (byte spans), rebuilt with it.
     pub highlights: Vec<dbml_ui::dbml::highlight::Token>,
+    /// Open completion popup (insert mode).
+    pub completion: Option<Completion>,
     /// Help overlay visibility.
     pub show_help: bool,
     /// Pane split fraction (editor share), driven by divider drags.
@@ -127,6 +141,7 @@ impl App {
             should_quit: false,
             message: None,
             highlights: Vec::new(),
+            completion: None,
             show_help: false,
             split: 0.4,
             window_size: (1400.0, 900.0),
@@ -242,6 +257,7 @@ pub fn subscription(_app: &App) -> iced::Subscription<Message> {
             iced::keyboard::Key::Named(n) => Some(match n {
                 iced::keyboard::key::Named::Escape => KeyCode::Esc,
                 iced::keyboard::key::Named::Enter => KeyCode::Enter,
+                iced::keyboard::key::Named::Space => KeyCode::Space,
                 iced::keyboard::key::Named::Backspace => KeyCode::Backspace,
                 iced::keyboard::key::Named::Tab => KeyCode::Tab,
                 iced::keyboard::key::Named::ArrowLeft => KeyCode::Left,
@@ -306,6 +322,7 @@ fn handle_message(app: &mut App, message: Message) {
             }
         }
         Message::WindowResized(w, h) => app.window_size = (w, h),
+        Message::CompletionPicked(idx) => app.completion_accept(idx),
         Message::EditorPressed(p) => {
             let pos = crate::canvas::editor::px_to_pos(app, p);
             app.editor
@@ -463,8 +480,9 @@ impl App {
             self.show_help = false;
             return;
         }
-        // Tab always toggles pane focus
+        // Tab always toggles pane focus (and dismisses the popup)
         if key.code == KeyCode::Tab {
+            self.completion = None;
             self.focus = match self.focus {
                 Focus::Editor => Focus::Canvas,
                 Focus::Canvas => Focus::Editor,
@@ -472,9 +490,13 @@ impl App {
             return;
         }
         // the cmdline is reachable from either pane
-        if self.editor.cmdline.is_some() || self.focus == Focus::Editor {
+        if self.editor.cmdline.is_some() {
             let action = self.editor.handle_key(key);
             self.after_edit(action);
+            return;
+        }
+        if self.focus == Focus::Editor {
+            self.editor_key(key);
             return;
         }
         // canvas focus: hjkl/arrows pan, ':'/'/' open the cmdline
@@ -486,11 +508,257 @@ impl App {
             KeyCode::Char('0') => self.pan = Vector::new(40.0, 40.0),
             KeyCode::Char(':') | KeyCode::Char('/') => {
                 self.focus = Focus::Editor;
-                let action = self.editor.handle_key(key);
-                self.after_edit(action);
+                self.editor_key(key);
             }
             _ => {}
         }
+    }
+
+    /// Keys routed to the editor pane, with the completion popup
+    /// intercepting navigation/filter/accept keys first.
+    fn editor_key(&mut self, key: KeyEvent) {
+        // Ctrl+Space toggles the popup (VSCode muscle memory)
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Space {
+            if self.editor.mode == editor::Mode::Insert {
+                self.toggle_completion();
+            }
+            return;
+        }
+        if self.completion.is_some() {
+            match key.code {
+                KeyCode::Up => {
+                    let c = self.completion.as_mut().unwrap();
+                    c.selected = c.selected.saturating_sub(1);
+                    return;
+                }
+                KeyCode::Down => {
+                    let c = self.completion.as_mut().unwrap();
+                    c.selected = (c.selected + 1).min(c.items.len().saturating_sub(1));
+                    return;
+                }
+                KeyCode::Enter | KeyCode::Tab => {
+                    let idx = self.completion.as_ref().unwrap().selected;
+                    self.completion_accept(idx);
+                    return;
+                }
+                KeyCode::Esc => {
+                    self.completion = None;
+                    return;
+                }
+                KeyCode::Char(c) if c.is_alphanumeric() || c == '_' => {
+                    let action = self.editor.handle_key(key);
+                    self.after_edit(action);
+                    self.refilter_completion();
+                    return;
+                }
+                KeyCode::Backspace => {
+                    let action = self.editor.handle_key(key);
+                    self.after_edit(action);
+                    self.refilter_completion();
+                    return;
+                }
+                _ => self.completion = None, // any other key dismisses, then proceeds
+            }
+        }
+        let action = self.editor.handle_key(key);
+        // auto-triggers, insert mode only
+        if self.editor.mode == editor::Mode::Insert {
+            match key.code {
+                KeyCode::Char(c) if c.is_alphanumeric() || c == '_' => {
+                    self.maybe_autocomplete(false);
+                }
+                KeyCode::Char('.') => self.maybe_autocomplete(true),
+                _ => {}
+            }
+        }
+        self.after_edit(action);
+    }
+
+    /// The word being typed before the cursor: its start position and text.
+    fn word_before_cursor(&self) -> Option<(crate::editor::buffer::Pos, String)> {
+        let (row, col) = self.editor.buf.cursor();
+        let line = self.editor.buf.line(row);
+        let start = line[..line.chars().count().min(col)]
+            .char_indices()
+            .collect::<Vec<_>>();
+        let mut s = col;
+        while s > 0 {
+            let ch = line.chars().nth(s - 1)?;
+            if ch.is_alphanumeric() || ch == '_' {
+                s -= 1;
+            } else {
+                break;
+            }
+        }
+        let prefix: String = line.chars().skip(s).take(col - s).collect();
+        let _ = start;
+        (s < col).then_some((crate::editor::buffer::Pos { row, col: s }, prefix))
+    }
+
+    /// The byte offset of the cursor in `source` (for highlight lookups).
+    fn cursor_byte(&self) -> usize {
+        let (row, col) = self.editor.buf.cursor();
+        let mut b = 0usize;
+        for l in self.editor.buf.lines().iter().take(row) {
+            b += l.len() + 1;
+        }
+        b += self
+            .editor
+            .buf
+            .line(row)
+            .chars()
+            .take(col)
+            .map(char::len_utf8)
+            .sum::<usize>();
+        b
+    }
+
+    /// Inside a string or comment: completions would be noise there.
+    fn in_prose(&self) -> bool {
+        let b = self.cursor_byte();
+        if b == 0 {
+            return false;
+        }
+        let idx = self.highlights.partition_point(|t| t.end < b);
+        self.highlights
+            .get(idx)
+            .map(|t| {
+                t.start < b
+                    && matches!(
+                        t.kind,
+                        dbml_ui::dbml::highlight::Kind::String
+                            | dbml_ui::dbml::highlight::Kind::Comment
+                    )
+            })
+            .unwrap_or(false)
+    }
+
+    fn items_for(
+        &self,
+        word: crate::editor::buffer::Pos,
+        prefix: &str,
+    ) -> Vec<crate::editor::completion::Item> {
+        let line = self.editor.buf.line(word.row);
+        let before: String = line.chars().take(word.col).collect();
+        crate::editor::completion::complete(prefix, &before, &self.diagram)
+    }
+
+    /// Open the popup if the context warrants it. `after_dot` allows an
+    /// empty prefix (member completion right after `table.`).
+    fn maybe_autocomplete(&mut self, after_dot: bool) {
+        if self.in_prose() {
+            self.completion = None;
+            return;
+        }
+        let word = match self.word_before_cursor() {
+            Some(w) => w,
+            None => {
+                if after_dot {
+                    // empty prefix right after the dot
+                    let (row, col) = self.editor.buf.cursor();
+                    (crate::editor::buffer::Pos { row, col }, String::new())
+                } else {
+                    return;
+                }
+            }
+        };
+        // non-dot auto-open needs a real prefix; `.` needs the char before
+        // the cursor to actually be the dot
+        let after_dot_ctx = after_dot
+            && word.1.is_empty()
+            && word
+                .0
+                .col
+                .checked_sub(1)
+                .and_then(|c| self.editor.buf.line(word.0.row).chars().nth(c))
+                == Some('.');
+        if !after_dot && word.1.chars().count() < 2 {
+            return;
+        }
+        if after_dot && !after_dot_ctx && word.1.chars().count() < 2 {
+            return;
+        }
+        let items = self.items_for(word.0, &word.1);
+        if items.is_empty() {
+            self.completion = None;
+            return;
+        }
+        self.completion = Some(Completion {
+            items,
+            selected: 0,
+            word: word.0,
+        });
+    }
+
+    fn toggle_completion(&mut self) {
+        if self.completion.is_some() {
+            self.completion = None;
+        } else {
+            let word = self.word_before_cursor().unwrap_or_else(|| {
+                let (row, col) = self.editor.buf.cursor();
+                (crate::editor::buffer::Pos { row, col }, String::new())
+            });
+            let items = self.items_for(word.0, &word.1);
+            if !items.is_empty() {
+                self.completion = Some(Completion {
+                    items,
+                    selected: 0,
+                    word: word.0,
+                });
+            }
+        }
+    }
+
+    /// Recompute the popup for the extended/shrunk prefix; close when the
+    /// prefix is gone or nothing matches.
+    fn refilter_completion(&mut self) {
+        let Some(c) = &self.completion else { return };
+        let (row, col) = self.editor.buf.cursor();
+        let line = self.editor.buf.line(row);
+        if row != c.word.row || col < c.word.col {
+            self.completion = None;
+            return;
+        }
+        let prefix: String = line
+            .chars()
+            .skip(c.word.col)
+            .take(col - c.word.col)
+            .collect();
+        if prefix.is_empty() {
+            self.completion = None;
+            return;
+        }
+        let items = self.items_for(c.word, &prefix);
+        self.completion = if items.is_empty() {
+            None
+        } else {
+            Some(Completion {
+                selected: c.selected.min(items.len() - 1),
+                items,
+                word: c.word,
+            })
+        };
+    }
+
+    /// Replace the typed prefix with the chosen item and keep typing.
+    fn completion_accept(&mut self, idx: usize) {
+        let Some(c) = self.completion.take() else {
+            return;
+        };
+        let Some(item) = c.items.get(idx) else { return };
+        let (row, col) = self.editor.buf.cursor();
+        if row != c.word.row || col < c.word.col {
+            return;
+        }
+        self.editor
+            .buf
+            .move_cursor(crate::editor::buffer::Move::Jump(c.word.row, c.word.col));
+        self.editor.buf.delete_str(col - c.word.col);
+        self.editor.buf.insert_str(&item.label);
+        if item.kind == crate::editor::completion::ItemKind::Keyword {
+            self.editor.buf.insert_str(" ");
+        }
+        self.after_edit(Action::Changed);
     }
 
     fn after_edit(&mut self, action: Action) {
@@ -698,5 +966,174 @@ mod file_tests {
         app.handle_command("q!");
         assert!(app.should_quit);
         std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod completion_tests {
+    use super::*;
+    use crate::editor::completion::ItemKind;
+
+    fn insert_app() -> App {
+        let mut app = App::default();
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('i'), KeyModifiers::NONE),
+        );
+        app
+    }
+
+    fn ctrl_space() -> Message {
+        Message::KeyPressed(KeyCode::Space, KeyModifiers::CONTROL)
+    }
+
+    #[test]
+    fn ctrl_space_opens_and_toggles() {
+        let mut app = insert_app();
+        let _ = update(&mut app, ctrl_space());
+        let c = app.completion.as_ref().expect("popup open");
+        assert!(c.items.iter().any(|i| i.label == "Table"));
+        assert!(c.items.iter().any(|i| i.label == "users"));
+        let _ = update(&mut app, ctrl_space());
+        assert!(app.completion.is_none(), "second Ctrl-Space closes");
+    }
+
+    #[test]
+    fn typing_two_chars_autocompletes_and_filters() {
+        let mut app = insert_app();
+        for c in ['T', 'a'] {
+            let _ = update(
+                &mut app,
+                Message::KeyPressed(KeyCode::Char(c), KeyModifiers::NONE),
+            );
+        }
+        let c = app.completion.as_ref().expect("auto-opened");
+        assert!(c.items.iter().any(|i| i.label == "Table"), "{c:?}");
+        assert!(!c.items.iter().any(|i| i.label == "users"), "{c:?}");
+    }
+
+    #[test]
+    fn enter_accepts_keyword_with_trailing_space() {
+        let mut app = insert_app();
+        for c in ['T', 'a'] {
+            let _ = update(
+                &mut app,
+                Message::KeyPressed(KeyCode::Char(c), KeyModifiers::NONE),
+            );
+        }
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        assert!(app.completion.is_none());
+        assert!(
+            app.source.starts_with("Table "),
+            "got: {:?}",
+            &app.source[..20]
+        );
+        let (_, col) = app.editor.buf.cursor();
+        assert_eq!(col, "Table ".len());
+    }
+
+    #[test]
+    fn dot_completes_columns_and_accept() {
+        let mut app = App::with_source("Table users { id integer [pk] }\nRef: users\n".into());
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('i'), KeyModifiers::NONE),
+        );
+        app.editor
+            .buf
+            .move_cursor(crate::editor::buffer::Move::Jump(1, 0));
+        app.editor.buf.move_cursor(crate::editor::buffer::Move::End);
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('.'), KeyModifiers::NONE),
+        );
+        let c = app.completion.as_ref().expect("dot opens columns");
+        assert!(
+            c.items
+                .iter()
+                .any(|i| i.label == "id" && i.kind == ItemKind::Column),
+            "{c:?}"
+        );
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        assert!(app.source.ends_with("Ref: users.id\n"), "{:?}", app.source);
+    }
+
+    #[test]
+    fn esc_dismisses_but_keeps_insert_mode() {
+        let mut app = insert_app();
+        let _ = update(&mut app, ctrl_space());
+        assert!(app.completion.is_some());
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Esc, KeyModifiers::NONE),
+        );
+        assert!(app.completion.is_none());
+        assert_eq!(app.editor.mode, crate::editor::Mode::Insert);
+    }
+
+    #[test]
+    fn navigation_moves_selection() {
+        let mut app = insert_app();
+        let _ = update(&mut app, ctrl_space());
+        let start = app.completion.as_ref().unwrap().selected;
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Down, KeyModifiers::NONE),
+        );
+        assert_eq!(app.completion.as_ref().unwrap().selected, start + 1);
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Up, KeyModifiers::NONE),
+        );
+        assert_eq!(app.completion.as_ref().unwrap().selected, start);
+    }
+
+    #[test]
+    fn no_popup_inside_strings_or_comments() {
+        let mut app = insert_app();
+        // cursor inside the project Note string
+        app.editor
+            .buf
+            .move_cursor(crate::editor::buffer::Move::Jump(2, 10));
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('a'), KeyModifiers::NONE),
+        );
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('b'), KeyModifiers::NONE),
+        );
+        assert!(app.completion.is_none(), "in prose: {:?}", app.completion);
+    }
+
+    #[test]
+    fn backspace_refilters_and_closes_on_empty() {
+        let mut app = insert_app();
+        for c in ['T', 'a'] {
+            let _ = update(
+                &mut app,
+                Message::KeyPressed(KeyCode::Char(c), KeyModifiers::NONE),
+            );
+        }
+        assert!(app.completion.is_some());
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Backspace, KeyModifiers::NONE),
+        );
+        assert!(
+            app.completion.is_some(),
+            "still a 1-char... closes below 2? prefix 'T' refilter keeps >=1 matches"
+        );
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Backspace, KeyModifiers::NONE),
+        );
+        assert!(app.completion.is_none(), "empty prefix closes");
     }
 }

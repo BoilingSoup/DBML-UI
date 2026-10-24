@@ -73,10 +73,23 @@ impl canvas::Program<Message> for EditorView<'_> {
                     Some(Message::EditorScrolled(notches)),
                 )
             }
-            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => (
-                canvas::event::Status::Captured,
-                Some(Message::EditorPressed(local)),
-            ),
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                // a press on the popup picks that row; anywhere else places
+                // the caret (and dismisses the popup)
+                if let Some((rect, first_row, _)) = popup_layout(self.app, bounds) {
+                    if rect.contains(local) {
+                        let row = ((local.y - rect.y) / ROW_H) as usize;
+                        return (
+                            canvas::event::Status::Captured,
+                            Some(Message::CompletionPicked(first_row + row)),
+                        );
+                    }
+                }
+                (
+                    canvas::event::Status::Captured,
+                    Some(Message::EditorPressed(local)),
+                )
+            }
             _ => (canvas::event::Status::Ignored, None),
         }
     }
@@ -206,7 +219,197 @@ impl canvas::Program<Message> for EditorView<'_> {
             };
             frame.fill_rectangle(p, rect, color);
         }
+
+        if let Some((prect, first_row, visible)) = popup_layout(app, bounds) {
+            let c = app.completion.as_ref().unwrap();
+            frame.fill(
+                &canvas::Path::rounded_rectangle(
+                    prect.position(),
+                    prect.size(),
+                    iced::border::Radius::from(6.0),
+                ),
+                theme::PANEL,
+            );
+            frame.stroke(
+                &canvas::Path::rounded_rectangle(
+                    prect.position(),
+                    prect.size(),
+                    iced::border::Radius::from(6.0),
+                ),
+                canvas::Stroke {
+                    style: theme::BORDER.into(),
+                    width: 1.0,
+                    ..Default::default()
+                },
+            );
+            for (i, item) in c.items[first_row..first_row + visible].iter().enumerate() {
+                let sel = first_row + i == c.selected;
+                let ry = prect.y + i as f32 * ROW_H;
+                if sel {
+                    frame.fill_rectangle(
+                        Point::new(prect.x + 2.0, ry),
+                        Size::new(prect.width - 4.0, ROW_H),
+                        Color::from_rgba(0.267, 0.576, 0.973, 0.25),
+                    );
+                }
+                frame.fill_text(Text {
+                    content: item.label.clone(),
+                    position: Point::new(prect.x + 10.0, ry + ROW_H * 0.5),
+                    color: item_kind_color(item.kind),
+                    size: (FONT_SIZE - 1.0).into(),
+                    font: Font::MONOSPACE,
+                    horizontal_alignment: iced::alignment::Horizontal::Left,
+                    vertical_alignment: iced::alignment::Vertical::Center,
+                    ..Default::default()
+                });
+            }
+        }
         vec![frame.into_geometry()]
+    }
+}
+
+/// Popup rows per page and row height.
+pub const COMPLETION_ROWS: usize = 8;
+pub const ROW_H: f32 = 20.0;
+
+/// Geometry of the open completion popup: rect, first visible row, visible
+/// count. Positioned under the caret, clamped/flipped to stay inside the
+/// pane. None when the popup is closed.
+fn popup_layout(app: &App, bounds: Rectangle) -> Option<(Rectangle, usize, usize)> {
+    let c = app.completion.as_ref()?;
+    let visible = c.items.len().min(COMPLETION_ROWS);
+    let width = c
+        .items
+        .iter()
+        .map(|i| i.label.chars().count())
+        .max()
+        .unwrap_or(8) as f32
+        * char_width()
+        + 20.0;
+    let height = visible as f32 * ROW_H + 6.0;
+    let caret = pos_to_px(app.editor.buf.pos(), app.editor_scroll);
+    let mut x = caret.x + char_width() + 2.0;
+    let mut y = caret.y + LINE_HEIGHT + 2.0;
+    if y + height > bounds.y + bounds.height - 2.0 {
+        y = caret.y - height - 2.0;
+    }
+    if x + width > bounds.x + bounds.width - 2.0 {
+        x = bounds.x + bounds.width - 2.0 - width;
+    }
+    x = x.max(bounds.x + 2.0);
+    y = y.max(bounds.y + 2.0);
+    // keep the selection visible when scrolled
+    let first_row = if c.selected + 1 > visible {
+        c.selected + 1 - visible
+    } else {
+        0
+    };
+    Some((
+        Rectangle::new(Point::new(x, y), Size::new(width, height)),
+        first_row,
+        visible,
+    ))
+}
+
+#[cfg(test)]
+mod popup_tests {
+    use super::*;
+    use crate::app::{update, App};
+
+    const PANE: Rectangle = Rectangle::new(Point::new(0.0, 0.0), Size::new(400.0, 300.0));
+
+    fn app_with_caret(row: usize, col: usize) -> App {
+        let mut app = App::default();
+        let _ = update(
+            &mut app,
+            crate::app::Message::KeyPressed(
+                crate::editor::KeyCode::Char('i'),
+                crate::editor::KeyModifiers::NONE,
+            ),
+        );
+        app.editor
+            .buf
+            .move_cursor(crate::editor::buffer::Move::Jump(row, col));
+        let _ = update(
+            &mut app,
+            crate::app::Message::KeyPressed(
+                crate::editor::KeyCode::Space,
+                crate::editor::KeyModifiers::CONTROL,
+            ),
+        );
+        app
+    }
+
+    #[test]
+    fn popup_flips_above_when_near_bottom() {
+        // caret on the last visible line of a tall buffer
+        let mut app = App::default();
+        let _ = update(
+            &mut app,
+            crate::app::Message::KeyPressed(
+                crate::editor::KeyCode::Char('i'),
+                crate::editor::KeyModifiers::NONE,
+            ),
+        );
+        app.editor
+            .buf
+            .move_cursor(crate::editor::buffer::Move::Bottom);
+        app.editor_scroll = app.editor.buf.line_count() as f32 - 20.0;
+        let _ = update(
+            &mut app,
+            crate::app::Message::KeyPressed(
+                crate::editor::KeyCode::Space,
+                crate::editor::KeyModifiers::CONTROL,
+            ),
+        );
+        assert!(app.completion.is_some(), "popup open");
+        let (rect, _, _) = popup_layout(&app, PANE).unwrap();
+        let caret = pos_to_px(app.editor.buf.pos(), app.editor_scroll);
+        assert!(
+            rect.y + rect.height <= caret.y,
+            "popup should sit above the caret: rect={rect:?} caret_y={}",
+            caret.y
+        );
+    }
+
+    #[test]
+    fn popup_stays_inside_right_edge() {
+        // caret near the right edge: popup shifts left, stays inside
+        let mut app = app_with_caret(0, 0);
+        // long labels to force a wide popup
+        if let Some(c) = app.completion.as_mut() {
+            c.items.insert(
+                0,
+                crate::editor::completion::Item {
+                    label: "x".repeat(80),
+                    kind: crate::editor::completion::ItemKind::Table,
+                },
+            );
+        }
+        app.editor_scroll = 0.0;
+        // a pane the popup can fit in but not at the caret's default spot
+        let narrow = Rectangle::new(Point::new(0.0, 0.0), Size::new(720.0, 300.0));
+        let (rect, _, _) = popup_layout(&app, narrow).unwrap();
+        assert!(rect.width < narrow.width, "precondition: {rect:?}");
+        assert!(
+            rect.x + rect.width <= narrow.x + narrow.width + 0.5,
+            "{rect:?}"
+        );
+    }
+
+    #[test]
+    fn no_popup_geometry_when_closed() {
+        let app = App::default();
+        assert!(popup_layout(&app, PANE).is_none());
+    }
+}
+
+fn item_kind_color(kind: crate::editor::completion::ItemKind) -> Color {
+    use crate::editor::completion::ItemKind;
+    match kind {
+        ItemKind::Keyword => theme::SYN_KEYWORD,
+        ItemKind::Table | ItemKind::Enum => theme::SYN_NAME,
+        ItemKind::Column | ItemKind::EnumValue => theme::SYN_NUMBER,
     }
 }
 

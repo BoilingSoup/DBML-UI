@@ -138,6 +138,11 @@ fn help_overlay() -> Element<'static, Message> {
         line(":w :q :q! :wq :o file :export f.svg", "ex commands"),
         line("Ctrl-s / Ctrl-c", "save / quit"),
         line(
+            "Ctrl-Space / type 2+ letters",
+            "completion popup (insert mode)"
+        ),
+        line("Up Down Enter Tab Esc", "navigate / accept / dismiss popup"),
+        line(
             "wheel / drag / drag a table",
             "zoom at cursor / pan / move table (live)"
         ),

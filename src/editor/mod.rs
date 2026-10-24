@@ -1,6 +1,7 @@
 //! Vim modal editing over the editor Buffer.
 
 pub mod buffer;
+pub mod completion;
 
 use crate::editor::buffer::{Buffer, Move as CursorMove};
 
@@ -11,6 +12,7 @@ use crate::editor::buffer::{Buffer, Move as CursorMove};
 #[allow(dead_code)] // full crossterm-compatible surface, used piecemeal
 pub enum KeyCode {
     Backspace,
+    Space,
     Enter,
     Left,
     Right,
