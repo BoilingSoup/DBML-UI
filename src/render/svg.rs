@@ -10,6 +10,12 @@ pub const CELL_H: f32 = 20.0;
 /// Diagram-cell margin around the content.
 pub const MARGIN_CELLS: f32 = 1.0;
 
+/// Canvas background color; the rasterizer pads viewports with the same
+/// value (alpha is dropped by the halfblocks encoder, so padding must not
+/// be transparent).
+pub const BG_COLOR: &str = "#101216";
+pub const BG_RGBA: (u8, u8, u8, u8) = (0x10, 0x12, 0x16, 0xff);
+
 pub fn escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -50,16 +56,26 @@ pub fn svg_size(layout: &Layout) -> (f32, f32) {
 }
 
 pub fn build_svg(layout: &Layout) -> String {
+    build_svg_with(layout, true)
+}
+
+/// `show_text: false` omits every label. Below 1:1 zoom the halfblocks
+/// pipeline has ~1 pixel per cell to work with — labels are pure noise at
+/// that size, so the zoomed-out view renders as a clean outline minimap.
+pub fn build_svg_with(layout: &Layout, show_text: bool) -> String {
     let (w, h) = svg_size(layout);
     let mut s = format!(
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">"#
     );
-    s.push_str(r##"<rect width="100%" height="100%" fill="#101216"/>"##);
+    s.push_str(&format!(
+        r##"<rect width="100%" height="100%" fill="{}"/>"##,
+        BG_COLOR
+    ));
     for r in &layout.edges {
         push_edge(&mut s, r);
     }
     for b in &layout.boxes {
-        push_table(&mut s, b);
+        push_table(&mut s, b, show_text);
     }
     s.push_str("</svg>");
     s
@@ -83,7 +99,7 @@ fn push_edge(s: &mut String, r: &EdgeRoute) {
     ));
 }
 
-fn push_table(s: &mut String, b: &TableBox) {
+fn push_table(s: &mut String, b: &TableBox, show_text: bool) {
     let x = (b.x as f32 + MARGIN_CELLS) * CELL_W;
     let y = (b.y as f32 + MARGIN_CELLS) * CELL_H;
     let w = b.w as f32 * CELL_W;
@@ -107,16 +123,21 @@ fn push_table(s: &mut String, b: &TableBox) {
         yh = y + CELL_H,
     ));
     // title
-    let title_size = CELL_H * 0.55;
-    s.push_str(&format!(
-        r##"<text x="{}" y="{:.1}" font-family="monospace" font-size="{title_size}" font-weight="bold" fill="#ffffff">{}</text>"##,
-        x + 2.0 * CELL_W,
-        y + CELL_H * 0.70,
-        escape(&b.title)
-    ));
+    if show_text {
+        let title_size = CELL_H * 0.55;
+        s.push_str(&format!(
+            r##"<text x="{}" y="{:.1}" font-family="monospace" font-size="{title_size}" font-weight="bold" fill="#ffffff">{}</text>"##,
+            x + 2.0 * CELL_W,
+            y + CELL_H * 0.70,
+            escape(&b.title)
+        ));
+    }
     // column rows
     let row_size = CELL_H * 0.55;
     for (i, row) in b.rows.iter().enumerate() {
+        if !show_text {
+            continue;
+        }
         let ry = y + (i as f32 + 1.0) * CELL_H + CELL_H * 0.70;
         let (marker, mfill) = if row.pk {
             ("\u{25c6}", "#d29922") // ◆
@@ -173,6 +194,25 @@ mod tests {
     fn header_color_from_dbml() {
         let svg = svg_of("Table t [headercolor: #123456] { id integer }");
         assert!(svg.contains("fill=\"rgb(18,52,86)\""), "{svg}");
+    }
+
+    #[test]
+    fn textless_variant_drops_labels_not_boxes() {
+        let out = parser::parse("Table users { id integer [pk] }");
+        let l = layout(&build(&out.doc));
+        let outline = build_svg_with(&l, false);
+        assert!(!outline.contains("<text"), "no labels: {outline}");
+        assert!(!outline.contains('\u{25c6}'), "no pk markers");
+        assert!(outline.contains("<rect"), "boxes still drawn");
+        assert!(outline.contains(&format!("fill=\"{BG_COLOR}\"")));
+        let full = build_svg_with(&l, true);
+        assert!(full.contains(">users</text>"));
+    }
+
+    #[test]
+    fn bg_constants_agree() {
+        let (r, g, b) = parse_hex(BG_COLOR).expect("valid hex");
+        assert_eq!((r, g, b, BG_RGBA.3), BG_RGBA);
     }
 
     #[test]

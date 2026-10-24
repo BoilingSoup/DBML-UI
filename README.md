@@ -30,8 +30,13 @@ A terminal DBML diagram editor — vim-style editing on the left, a live
      steps (1.0–8.0), pan by drag or `hjkl`
   2. **sixel** — same pipeline, sixel encoding
   3. **text fallback** — box-drawing tables with `◆` pk / `◇` fk markers
-     at 1:1; wheel zoom switches to a halfblocks raster (works over plain
-     SSH, includes minimap-style zoom-out below 1.0)
+     at 1:1 (native terminal resolution). Wheel-down zooms out to 0.25 via
+     a halfblocks outline minimap (works over plain SSH): labels are
+     dropped below 1:1 because a text cell can only carry 2 pseudo-pixels,
+     so the zoomed-out view shows crisp shapes and edges instead of
+     smeared text. Zoom-in is disabled in text mode — the cell renderer is
+     already at maximum terminal resolution and magnifying it through
+     halfblocks could only blur it.
 - **Full mouse support**: drag to pan (tables slide offscreen edges just
   like the browser), wheel to zoom (image modes) or scroll (text), drag
   the divider to resize panes, click a table to jump the editor to its

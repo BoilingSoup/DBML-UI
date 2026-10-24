@@ -207,11 +207,20 @@ impl App {
         self.editor.text() != self.saved_text
     }
 
+    /// Raster pixels per terminal cell for the image pipeline. Kitty/sixel
+    /// get real font pixels. The halfblocks encoder (text-mode zoom) decimates
+    /// everything to 1x2 pseudo-pixels per cell, so the raster is built
+    /// directly at that resolution — vector-crisp edges instead of a blurry
+    /// downsample of a font-sized raster.
     pub fn font_px(&self) -> (u32, u32) {
-        self.picker
-            .as_ref()
-            .map(|p| (p.font_size().0 as u32, p.font_size().1 as u32))
-            .unwrap_or((10, 20))
+        if self.render_mode == crate::render::Mode::Text {
+            (1, 2)
+        } else {
+            self.picker
+                .as_ref()
+                .map(|p| (p.font_size().0 as u32, p.font_size().1 as u32))
+                .unwrap_or((10, 20))
+        }
     }
 
     /// Canvas inner rect (inside the block border).
@@ -284,7 +293,9 @@ impl App {
                 .as_ref()
                 .is_none_or(|i| i.dimensions() != (want_w, want_h));
         if stale {
-            let doc = svg::build_svg(layout);
+            // Text-mode zoom renders a label-free outline: at 1x2
+            // pseudo-pixels per cell, labels are unreadable noise anyway.
+            let doc = svg::build_svg_with(layout, self.render_mode != crate::render::Mode::Text);
             let (sw, sh) = svg::svg_size(layout);
             match raster::rasterize(&doc, want_w, want_h, want_w as f32 / sw, want_h as f32 / sh) {
                 Ok(img) => {
@@ -308,29 +319,54 @@ impl App {
         self.img_pan.1 = self.img_pan.1.clamp(0, max_y.max(0));
 
         // crop the viewport and pad to the exact area size so the protocol
-        // maps 1 image px row per cell row without resampling
+        // maps 1 image px row per cell row without resampling; the pad is
+        // opaque because the halfblocks encoder drops alpha
         let fx = (self.img_pan.0.max(0) as u32).min(full.width());
         let fy = (self.img_pan.1.max(0) as u32).min(full.height());
         let cw = (full.width() - fx).min(aw);
         let ch = (full.height() - fy).min(ah);
-        let mut view = image::RgbaImage::new(aw, ah);
+        let bg = svg::BG_RGBA;
+        let mut view = image::RgbaImage::from_pixel(aw, ah, image::Rgba([bg.0, bg.1, bg.2, bg.3]));
         let crop = image::imageops::crop_imm(full, fx, fy, cw, ch);
         image::imageops::overlay(&mut view, &crop.to_image(), 0, 0);
 
-        match picker.new_protocol(
-            image::DynamicImage::ImageRgba8(view),
-            inner,
-            ratatui_image::Resize::Fit(None),
-        ) {
+        let proto = if self.render_mode == crate::render::Mode::Text {
+            // The halfblocks raster is in 1x2-per-cell units, not font
+            // pixels; `new_protocol` + `Resize::Fit` would place it at
+            // image_px / font_px (a tiny patch). Encode directly at the
+            // full view area instead — the image is already exactly
+            // area.width x area.height*2, so the internal resize is a
+            // no-op and edges stay vector-crisp.
+            ratatui_image::protocol::halfblocks::Halfblocks::new(
+                image::DynamicImage::ImageRgba8(view),
+                inner,
+            )
+            .map(ratatui_image::protocol::Protocol::Halfblocks)
+        } else {
+            picker.new_protocol(
+                image::DynamicImage::ImageRgba8(view),
+                inner,
+                ratatui_image::Resize::Fit(None),
+            )
+        };
+        match proto {
             Ok(proto) => self.proto = Some(proto),
             Err(e) => self.message = Some(format!("image protocol failed: {e}")),
         }
     }
 
     /// Zoom by one step, keeping the point under the cursor stationary.
+    /// Text mode zooms out only (halfblocks minimap): the cell renderer is
+    /// already at the terminal's native resolution, so magnifying it through
+    /// a 1x2-pseudo-pixel raster can only degrade it.
     pub fn zoom_at(&mut self, col: u16, row: u16, dir: i32) {
         let old = self.zoom;
-        let new = (old * 1.25f32.powi(dir)).clamp(0.25, 8.0);
+        let max = if self.render_mode == crate::render::Mode::Text {
+            1.0
+        } else {
+            8.0
+        };
+        let new = (old * 1.25f32.powi(dir)).clamp(0.25, max);
         if (new - old).abs() < f32::EPSILON {
             return;
         }
@@ -342,6 +378,11 @@ impl App {
         self.img_pan.0 = ((self.img_pan.0 as f32 + cx) * s - cx) as i32;
         self.img_pan.1 = ((self.img_pan.1 as f32 + cy) * s - cy) as i32;
         self.zoom = new;
+        // Landing back on exactly 1.0 in text mode: the halfblocks raster is
+        // 1 px per cell there, so carry the pan over to the cell renderer.
+        if self.render_mode == crate::render::Mode::Text && (new - 1.0).abs() < f32::EPSILON {
+            self.pan = (self.img_pan.0, self.img_pan.1);
+        }
         self.image_due = true;
     }
 
@@ -1289,16 +1330,31 @@ mod tests {
         picker.set_protocol_type(ProtocolType::Halfblocks);
         app.picker = Some(picker);
         assert!(!app.is_image_mode(), "cell renderer at zoom 1.0");
+        assert_eq!(app.font_px(), (1, 2), "halfblocks raster units");
 
-        // wheel up over the canvas zooms in text mode too
-        let wheel = |dir_col: u16| MouseEvent {
-            kind: MouseEventKind::ScrollUp,
-            column: dir_col,
+        // zoom-in is disabled in text mode: the cell renderer is already at
+        // native terminal resolution, magnifying through halfblocks only
+        // degrades it
+        let wheel = |kind: MouseEventKind| MouseEvent {
+            kind,
+            column: 50,
             row: 5,
             modifiers: KeyModifiers::NONE,
         };
-        app.on_mouse(wheel(50));
-        assert!((app.zoom - 1.25).abs() < 1e-6);
+        app.on_mouse(wheel(MouseEventKind::ScrollUp));
+        assert!(
+            (app.zoom - 1.0).abs() < f32::EPSILON,
+            "no zoom-in in text mode"
+        );
+        assert!(!app.is_image_mode());
+
+        // wheel down zooms OUT into the halfblocks minimap range
+        app.on_mouse(wheel(MouseEventKind::ScrollDown));
+        assert!(
+            (app.zoom - 0.8).abs() < 1e-6,
+            "first step is 80%, got {}",
+            app.zoom
+        );
         assert!(app.is_image_mode(), "zoomed text uses the raster pipeline");
         assert!(app.image_due);
 
@@ -1306,14 +1362,8 @@ mod tests {
         assert!(app.full_raster.is_some(), "raster built for halfblocks");
         assert!(app.proto.is_some(), "halfblocks protocol created");
 
-        // wheel down past 1.0 zooms OUT into the minimap range
         for _ in 0..8 {
-            app.on_mouse(MouseEvent {
-                kind: MouseEventKind::ScrollDown,
-                column: 50,
-                row: 5,
-                modifiers: KeyModifiers::NONE,
-            });
+            app.on_mouse(wheel(MouseEventKind::ScrollDown));
         }
         assert!(
             (app.zoom - 0.25).abs() < 1e-6 || app.zoom < 1.0,
@@ -1321,8 +1371,15 @@ mod tests {
             app.zoom
         );
 
-        // back to exactly 1.0: crisp cell renderer again
-        app.zoom = 1.0;
+        // wheel back up lands on exactly 1.0: crisp cell renderer again
+        for _ in 0..10 {
+            app.on_mouse(wheel(MouseEventKind::ScrollUp));
+        }
+        assert!(
+            (app.zoom - 1.0).abs() < f32::EPSILON,
+            "clamped at 1.0, got {}",
+            app.zoom
+        );
         assert!(!app.is_image_mode());
     }
 
