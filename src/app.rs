@@ -33,6 +33,8 @@ pub enum Message {
     WindowResized(f32, f32),
     /// A completion popup row was clicked.
     CompletionPicked(usize),
+    /// Mouse hover over the editor pane (local px, None when it left).
+    EditorHover(Option<Point>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,6 +109,8 @@ pub struct App {
     pub highlights: Vec<dbml_ui::dbml::highlight::Token>,
     /// Open completion popup (insert mode).
     pub completion: Option<Completion>,
+    /// Editor-pane hover position (local px) for error tooltips.
+    pub editor_hover: Option<Point>,
     /// Help overlay visibility.
     pub show_help: bool,
     /// Pane split fraction (editor share), driven by divider drags.
@@ -142,6 +146,7 @@ impl App {
             message: None,
             highlights: Vec::new(),
             completion: None,
+            editor_hover: None,
             show_help: false,
             split: 0.4,
             window_size: (1400.0, 900.0),
@@ -323,6 +328,7 @@ fn handle_message(app: &mut App, message: Message) {
         }
         Message::WindowResized(w, h) => app.window_size = (w, h),
         Message::CompletionPicked(idx) => app.completion_accept(idx),
+        Message::EditorHover(p) => app.editor_hover = p,
         Message::EditorPressed(p) => {
             let pos = crate::canvas::editor::px_to_pos(app, p);
             app.editor

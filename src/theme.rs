@@ -28,3 +28,5 @@ pub const SYN_NAME: iced::Color = iced::Color::from_rgb(0.824, 0.659, 1.0); // #
 pub const SYN_TYPE: iced::Color = iced::Color::from_rgb(1.0, 0.651, 0.341); // #ffa657
 pub const SYN_STRING: iced::Color = iced::Color::from_rgb(0.647, 0.839, 1.0); // #a5d6ff
 pub const SYN_NUMBER: iced::Color = iced::Color::from_rgb(0.475, 0.753, 1.0); // #79c0ff
+
+pub const ERR: iced::Color = iced::Color::from_rgb(0.945, 0.298, 0.298); // #f14c4c

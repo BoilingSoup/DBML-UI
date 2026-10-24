@@ -36,7 +36,8 @@ pub fn px_to_pos(app: &App, p: Point) -> Pos {
     let col = if p.x <= GUTTER {
         0
     } else {
-        (((p.x - GUTTER) / char_width()).round() as usize).min(max_col)
+        // floor: the char under the pointer, also used for hit-testing
+        (((p.x - GUTTER) / char_width()).floor() as usize).min(max_col)
     };
     Pos { row, col }
 }
@@ -57,7 +58,19 @@ impl canvas::Program<Message> for EditorView<'_> {
     ) -> (canvas::event::Status, Option<Message>) {
         use iced::mouse;
         // The canvas widget forwards every window event with window-level
-        // coordinates; only react when the pointer is over this canvas.
+        // coordinates; hover tracks enter/leave, the rest only fire inside.
+        if matches!(
+            event,
+            canvas::Event::Mouse(mouse::Event::CursorMoved { .. })
+        ) {
+            let over = cursor
+                .position_over(bounds)
+                .map(|p| Point::new(p.x - bounds.x, p.y - bounds.y));
+            return (
+                canvas::event::Status::Ignored,
+                Some(Message::EditorHover(over)),
+            );
+        }
         let Some(p) = cursor.position_over(bounds) else {
             return (canvas::event::Status::Ignored, None);
         };
@@ -145,6 +158,9 @@ impl canvas::Program<Message> for EditorView<'_> {
             }
         }
 
+        // error marks (squiggles + gutter dots + hover tooltip)
+        let marks = error_marks(app);
+
         // gutter + text, token-colored
         let src = app.source.as_str();
         // byte offset of each line start in `source` (highlight spans index it)
@@ -157,6 +173,12 @@ impl canvas::Program<Message> for EditorView<'_> {
         let mut y = -sub * LINE_HEIGHT;
         for (i, line) in lines.iter().enumerate().skip(first).take(visible.max(1)) {
             let text_y = y + LINE_HEIGHT * 0.5;
+            if marks.iter().any(|m| m.row == i) {
+                frame.fill(
+                    &canvas::Path::circle(Point::new(10.0, text_y), 2.5),
+                    theme::ERR,
+                );
+            }
             frame.fill_text(Text {
                 content: format!("{:>4}", i + 1),
                 position: Point::new(GUTTER - 8.0, text_y),
@@ -220,6 +242,79 @@ impl canvas::Program<Message> for EditorView<'_> {
             frame.fill_rectangle(p, rect, color);
         }
 
+        // squiggly underlines under error tokens
+        for m in &marks {
+            let top_y = (m.row as f32 - scroll) * LINE_HEIGHT;
+            if top_y < -LINE_HEIGHT || top_y > bounds.height {
+                continue;
+            }
+            let y = top_y + LINE_HEIGHT * 0.85;
+            let x0 = GUTTER + m.start as f32 * char_width();
+            let x1 = (GUTTER + m.end as f32 * char_width()).max(x0 + 3.0);
+            let path = canvas::Path::new(|b| {
+                b.move_to(Point::new(x0, y + 1.5));
+                let mut x = x0 + 2.5;
+                let mut down = false;
+                while x < x1 - 2.5 {
+                    b.line_to(Point::new(x, y + if down { 1.5 } else { -1.5 }));
+                    down = !down;
+                    x += 2.5;
+                }
+                b.line_to(Point::new(x1, y + 1.5));
+            });
+            frame.stroke(
+                &path,
+                canvas::Stroke {
+                    style: theme::ERR.into(),
+                    width: 1.2,
+                    ..Default::default()
+                },
+            );
+        }
+
+        // error tooltip on hover
+        if let Some(hover) = app.editor_hover {
+            let pos = px_to_pos(app, hover);
+            if let Some(m) = marks
+                .iter()
+                .find(|m| m.row == pos.row && pos.col >= m.start && pos.col <= m.end)
+            {
+                let (rect, lines) = tooltip_layout(hover, &m.message, bounds);
+                frame.fill(
+                    &canvas::Path::rounded_rectangle(
+                        rect.position(),
+                        rect.size(),
+                        iced::border::Radius::from(6.0),
+                    ),
+                    theme::PANEL,
+                );
+                frame.stroke(
+                    &canvas::Path::rounded_rectangle(
+                        rect.position(),
+                        rect.size(),
+                        iced::border::Radius::from(6.0),
+                    ),
+                    canvas::Stroke {
+                        style: theme::ERR.into(),
+                        width: 1.0,
+                        ..Default::default()
+                    },
+                );
+                for (i, line) in lines.iter().enumerate() {
+                    frame.fill_text(Text {
+                        content: line.clone(),
+                        position: Point::new(rect.x + 12.0, rect.y + 12.0 + i as f32 * 18.0),
+                        color: theme::TEXT,
+                        size: (FONT_SIZE - 1.0).into(),
+                        font: Font::MONOSPACE,
+                        horizontal_alignment: iced::alignment::Horizontal::Left,
+                        vertical_alignment: iced::alignment::Vertical::Top,
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+
         if let Some((prect, first_row, visible)) = popup_layout(app, bounds) {
             let c = app.completion.as_ref().unwrap();
             frame.fill(
@@ -272,6 +367,106 @@ impl canvas::Program<Message> for EditorView<'_> {
 pub const COMPLETION_ROWS: usize = 8;
 pub const ROW_H: f32 = 20.0;
 
+/// A squiggle underline: buffer row plus char-column range (end exclusive),
+/// with the parser's message. Feeds both drawing and hover hit-testing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Mark {
+    pub row: usize,
+    pub start: usize,
+    pub end: usize,
+    pub message: String,
+}
+
+/// Parse errors as per-line underline ranges: the token at the error
+/// offset, one char minimum (point errors still get a visible mark).
+pub fn error_marks(app: &App) -> Vec<Mark> {
+    let src = app.source.as_str();
+    let mut marks = Vec::new();
+    for e in &app.parse_errors {
+        let (row, byte_col) = dbml_ui::dbml::parser::line_col_at(src, e.offset);
+        let Some(line) = src.split('\n').nth(row) else {
+            continue;
+        };
+        let at = byte_col.min(line.len());
+        let start = line[..at].chars().count();
+        let end_byte = line[at..]
+            .char_indices()
+            .take_while(|(_, c)| c.is_alphanumeric() || *c == '_')
+            .last()
+            .map(|(i, c)| at + i + c.len_utf8())
+            .unwrap_or(at);
+        let mut end = line[..end_byte.min(line.len())].chars().count();
+        if end <= start {
+            end = start + 1;
+        }
+        marks.push(Mark {
+            row,
+            start,
+            end,
+            message: e.message.clone(),
+        });
+    }
+    marks
+}
+
+/// Error tooltip: geometry plus the message wrapped to fit the pane,
+/// clamped inside and flipped above when it would overflow the bottom.
+fn tooltip_layout(hover: Point, message: &str, bounds: Rectangle) -> (Rectangle, Vec<String>) {
+    let text_w = (FONT_SIZE - 1.0) * CHAR_RATIO;
+    let max_chars = (((bounds.width - 32.0) / text_w) as usize).max(10);
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    // hard-break words longer than a line so a single token can't escape
+    let mut words = Vec::new();
+    for word in message.split_whitespace() {
+        if word.chars().count() > max_chars {
+            let mut chunk = String::new();
+            for c in word.chars() {
+                chunk.push(c);
+                if chunk.chars().count() == max_chars {
+                    words.push(std::mem::take(&mut chunk));
+                }
+            }
+            if !chunk.is_empty() {
+                words.push(chunk);
+            }
+        } else {
+            words.push(word.to_string());
+        }
+    }
+    for word in words {
+        let candidate_len = current.chars().count() + word.chars().count() + 1;
+        if !current.is_empty() && candidate_len > max_chars {
+            lines.push(std::mem::take(&mut current));
+        }
+        if current.is_empty() {
+            current.push_str(&word);
+        } else {
+            current.push(' ');
+            current.push_str(&word);
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    if lines.len() > 8 {
+        lines.truncate(8);
+    }
+    let w = lines.iter().map(|l| l.chars().count()).max().unwrap_or(10) as f32 * text_w + 24.0;
+    let h = lines.len() as f32 * 18.0 + 12.0;
+    let mut x = hover.x + 14.0;
+    if x + w > bounds.x + bounds.width - 4.0 {
+        x = bounds.x + bounds.width - 4.0 - w;
+    }
+    x = x.max(bounds.x + 4.0);
+    let mut y = hover.y + LINE_HEIGHT + 4.0;
+    if y + h > bounds.y + bounds.height - 4.0 {
+        y = hover.y - h - 6.0;
+    }
+    y = y.max(bounds.y + 4.0);
+    (Rectangle::new(Point::new(x, y), Size::new(w, h)), lines)
+}
+
 /// Geometry of the open completion popup: rect, first visible row, visible
 /// count. Positioned under the caret, clamped/flipped to stay inside the
 /// pane. None when the popup is closed.
@@ -309,6 +504,102 @@ fn popup_layout(app: &App, bounds: Rectangle) -> Option<(Rectangle, usize, usize
         first_row,
         visible,
     ))
+}
+
+#[cfg(test)]
+mod error_tests {
+    use super::*;
+    use crate::app::{update, App};
+
+    fn broken_app() -> App {
+        // 'Table' with no name: error points at the '{'
+        let mut app = App::with_source("Table {\n  id integer [pk]\n}\n".into());
+        let _ = update(
+            &mut app,
+            crate::app::Message::KeyPressed(
+                crate::editor::KeyCode::Char('i'),
+                crate::editor::KeyModifiers::NONE,
+            ),
+        );
+        app
+    }
+
+    #[test]
+    fn parse_errors_become_line_marks() {
+        let app = broken_app();
+        assert!(!app.parse_errors.is_empty(), "fixture is broken");
+        let marks = error_marks(&app);
+        assert!(!marks.is_empty());
+        for m in &marks {
+            assert!(m.end > m.start, "non-empty: {m:?}");
+            let line_len = app.editor.buf.line(m.row).chars().count();
+            assert!(m.start <= line_len && m.end <= line_len + 1, "{m:?}");
+        }
+        // the sample's error sits on the first line
+        assert_eq!(marks[0].row, 0);
+    }
+
+    #[test]
+    fn hovering_a_mark_finds_its_message() {
+        let app = broken_app();
+        let marks = error_marks(&app);
+        let m = &marks[0];
+        // hover the squiggled char (left edge of its column)
+        let p = pos_to_px(
+            crate::editor::buffer::Pos {
+                row: m.row,
+                col: m.start,
+            },
+            app.editor_scroll,
+        );
+        let pos = px_to_pos(&app, p);
+        let hit = marks
+            .iter()
+            .find(|m| m.row == pos.row && pos.col >= m.start && pos.col <= m.end);
+        assert!(
+            hit.is_some(),
+            "hover at {p:?} -> {pos:?} hits none of {marks:?}"
+        );
+        assert!(!hit.unwrap().message.is_empty());
+    }
+
+    #[test]
+    fn hovering_elsewhere_misses() {
+        let app = broken_app();
+        let marks = error_marks(&app);
+        // hover a different line than any mark
+        let other = (0..app.editor.buf.line_count())
+            .find(|r| !marks.iter().any(|m| m.row == *r))
+            .expect("fixture has non-error lines");
+        let p = pos_to_px(
+            crate::editor::buffer::Pos { row: other, col: 0 },
+            app.editor_scroll,
+        );
+        let pos = px_to_pos(&app, p);
+        assert!(!marks
+            .iter()
+            .any(|m| m.row == pos.row && pos.col >= m.start && pos.col <= m.end));
+    }
+
+    #[test]
+    fn tooltip_wraps_and_clamps_into_pane() {
+        let bounds = Rectangle::new(Point::new(0.0, 0.0), Size::new(400.0, 300.0));
+        let long = "x".repeat(120);
+        let (r, lines) = tooltip_layout(Point::new(390.0, 280.0), &long, bounds);
+        assert!(lines.len() > 1, "long message wraps: {lines:?}");
+        assert!(
+            r.x >= bounds.x && r.x + r.width <= bounds.x + bounds.width + 0.5,
+            "{r:?}"
+        );
+        assert!(
+            r.y >= bounds.y && r.y + r.height <= bounds.y + bounds.height + 0.5,
+            "{r:?}"
+        );
+        // short message stays a single line
+        let (r, lines) = tooltip_layout(Point::new(20.0, 20.0), "expected name", bounds);
+        assert_eq!(lines, vec!["expected name".to_string()]);
+        assert!(r.y > 20.0, "below the cursor: {r:?}");
+    }
 }
 
 #[cfg(test)]
