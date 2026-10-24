@@ -227,6 +227,30 @@ fn draw_canvas(f: &mut Frame, app: &mut App, area: Rect) {
                 let para = Paragraph::new("rasterizing…").style(Style::new().fg(Color::DarkGray));
                 f.render_widget(para, view);
             }
+            // live drag feedback: a cell-drawn outline at the pending spot
+            // (kitty renders text over graphics fine; sixel does not)
+            if app.render_mode == crate::render::Mode::Kitty {
+                if let Some(drag) = &app.table_drag {
+                    if let Some((px, py)) = drag.pending {
+                        if let Some(b) = app
+                            .diagram
+                            .as_ref()
+                            .and_then(|l| l.boxes.iter().find(|b| b.title == drag.title))
+                        {
+                            let (sx, sy) = app.diagram_to_screen(px, py);
+                            draw_drag_outline(
+                                f,
+                                view,
+                                sx,
+                                sy,
+                                (b.w as f32 * app.zoom) as i32,
+                                (b.h as f32 * app.zoom) as i32,
+                                &b.title,
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
     draw_scrollbars(f, app, inner, view);
@@ -326,6 +350,34 @@ fn draw_scrollbars(f: &mut Frame, app: &App, inner: Rect, view: Rect) {
         if let Some(cell) = buf.cell_mut(Position { x: vx, y: hy }) {
             cell.set_char(' ').set_style(track_style);
         }
+    }
+}
+
+fn draw_drag_outline(f: &mut Frame, view: Rect, x: i32, y: i32, w: i32, h: i32, title: &str) {
+    let style = Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD);
+    let buf = f.buffer_mut();
+    let mut put = |x: i32, y: i32, ch: &str| {
+        if x >= 0 && y >= 0 && (x as u16) < view.right() && (y as u16) < view.bottom() {
+            if let Some(cell) = buf.cell_mut(Position::new(x as u16, y as u16)) {
+                cell.set_symbol(ch).set_style(style);
+            }
+        }
+    };
+    for dx in 0..w {
+        put(x + dx, y, "─");
+        put(x + dx, y + h - 1, "─");
+    }
+    for dy in 0..h {
+        put(x, y + dy, "│");
+        put(x + w - 1, y + dy, "│");
+    }
+    put(x, y, "┌");
+    put(x + w - 1, y, "┐");
+    put(x, y + h - 1, "└");
+    put(x + w - 1, y + h - 1, "┘");
+    let t: Vec<char> = title.chars().collect();
+    for (i, c) in t.iter().enumerate().take((w as usize).saturating_sub(2)) {
+        put(x + 1 + i as i32, y, &c.to_string());
     }
 }
 

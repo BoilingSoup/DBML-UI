@@ -207,7 +207,7 @@ pub fn layout_with_overrides(
     // routing and scrollbars reflect where boxes actually are.
     let mut max_right = 0;
     let mut max_bottom = 0;
-    for l in 0..cols.len() {
+    for (l, col) in cols.iter_mut().enumerate() {
         let mut start = i32::MAX;
         let mut end = i32::MIN;
         for b in placed.iter().filter(|b| layer[b.node] == l) {
@@ -217,7 +217,7 @@ pub fn layout_with_overrides(
             max_bottom = max_bottom.max(b.bottom());
         }
         if start != i32::MAX {
-            cols[l] = (start, end);
+            *col = (start, end);
         }
     }
 

@@ -68,6 +68,18 @@ pub enum Focus {
     Canvas,
 }
 
+/// A table drag in progress.
+#[derive(Debug, Clone)]
+pub struct TableDrag {
+    pub title: String,
+    /// Grab offset in diagram cells (cursor - box origin).
+    pub grab: (i32, i32),
+    /// Press position, for click-vs-drag discrimination.
+    pub origin: (u16, u16),
+    /// Live position while dragging (committed on release in image modes).
+    pub pending: Option<(i32, i32)>,
+}
+
 /// Screen rectangles of the main regions, refreshed each frame. Used for
 /// hit-testing mouse events between draws.
 #[derive(Debug, Default, Clone, Copy)]
@@ -126,8 +138,10 @@ pub struct App {
     /// User-dragged table positions (diagram coords, by table/enum name);
     /// survive re-parses while editing.
     pub table_pos: std::collections::HashMap<String, (i32, i32)>,
-    /// Table drag in flight: (title, grab offset in diagram cells, origin).
-    table_drag: Option<(String, (i32, i32), (u16, u16))>,
+    /// Table drag in flight. In image modes the position is only applied on
+    /// release (`pending`); per-tick re-transmission would flood the
+    /// terminal, so the UI draws a cheap outline instead.
+    pub table_drag: Option<TableDrag>,
     /// Help overlay visibility.
     pub show_help: bool,
 }
@@ -354,6 +368,28 @@ impl App {
                 (
                     (fx / (fw as f32 * self.zoom)).round() as i32 - m as i32,
                     (fy / (fh as f32 * self.zoom)).round() as i32 - m as i32,
+                )
+            }
+        }
+    }
+
+    /// Screen position of a diagram coordinate (forward of the renderers'
+    /// transforms). Inverse of `cursor_diagram_pos`.
+    pub fn diagram_to_screen(&self, x: i32, y: i32) -> (i32, i32) {
+        let view = self.view_rect();
+        match self.render_mode {
+            crate::render::Mode::Text => (
+                view.x as i32 + x + self.pan.0,
+                view.y as i32 + y + self.pan.1,
+            ),
+            _ => {
+                let (fw, fh) = self.font_px();
+                let m = crate::render::svg::MARGIN_CELLS as i32;
+                let px = (x + m) as f32 * fw as f32 * self.zoom - self.img_pan.0 as f32;
+                let py = (y + m) as f32 * fh as f32 * self.zoom - self.img_pan.1 as f32;
+                (
+                    view.x as i32 + (px / fw as f32) as i32,
+                    view.y as i32 + (py / fh as f32) as i32,
                 )
             }
         }
@@ -649,9 +685,14 @@ impl App {
                 self.dirty = false;
                 self.last_edit = None;
             }
-            let tx_ok = self
-                .last_tx
-                .is_none_or(|t| t.elapsed() >= IMAGE_TX_INTERVAL);
+            // While a drag is active, cut emissions to ~10/s: each one is a
+            // multi-MB image transmission and terminals fall behind quickly.
+            let interval = if self.pan_anchor.is_some() || self.table_drag.is_some() {
+                Duration::from_millis(100)
+            } else {
+                IMAGE_TX_INTERVAL
+            };
+            let tx_ok = self.last_tx.is_none_or(|t| t.elapsed() >= interval);
             if self.image_due && tx_ok {
                 self.refresh_image();
                 self.image_due = false;
@@ -721,6 +762,13 @@ impl App {
     }
 
     fn on_canvas_key(&mut self, key: KeyEvent) {
+        // the command line is reachable without switching focus back
+        if matches!(key.code, KeyCode::Char(':') | KeyCode::Char('/'))
+            && self.editor.mode == crate::editor::Mode::Normal
+        {
+            self.dispatch_editor_key(key);
+            return;
+        }
         if self.is_image_mode() {
             let (fw, fh) = self.font_px();
             let (dx, dy) = match key.code {
@@ -778,7 +826,12 @@ impl App {
                     let hit = self.table_at(col, row).map(|b| (b.title.clone(), b.x, b.y));
                     if let Some((title, bx, by)) = hit {
                         let (dx, dy) = self.cursor_diagram_pos(col, row);
-                        self.table_drag = Some((title, (dx - bx, dy - by), (col, row)));
+                        self.table_drag = Some(TableDrag {
+                            title,
+                            grab: (dx - bx, dy - by),
+                            origin: (col, row),
+                            pending: None,
+                        });
                     } else {
                         self.pan_anchor = Some((col, row));
                     }
@@ -788,14 +841,23 @@ impl App {
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
-                if let Some((title, grab, origin)) = self.table_drag.clone() {
-                    let moved = (col as i32 - origin.0 as i32).abs() > 0
-                        || (row as i32 - origin.1 as i32).abs() > 0;
+                if let Some(drag) = self.table_drag.clone() {
+                    let moved = (col as i32 - drag.origin.0 as i32).abs() > 0
+                        || (row as i32 - drag.origin.1 as i32).abs() > 0;
                     if moved {
                         let (dx, dy) = self.cursor_diagram_pos(col, row);
-                        self.table_pos
-                            .insert(title, ((dx - grab.0).max(0), (dy - grab.1).max(0)));
-                        self.relayout();
+                        let pos = ((dx - drag.grab.0).max(0), (dy - drag.grab.1).max(0));
+                        if self.is_image_mode() {
+                            // re-rasterizing per tick would flood the terminal
+                            // with multi-MB transmissions; commit on release
+                            self.table_drag = Some(TableDrag {
+                                pending: Some(pos),
+                                ..drag
+                            });
+                        } else {
+                            self.table_pos.insert(drag.title, pos);
+                            self.relayout();
+                        }
                     }
                 } else if let Some(vertical) = self.sb_drag {
                     let frac = self.track_frac(vertical, if vertical { row } else { col });
@@ -822,7 +884,12 @@ impl App {
             MouseEventKind::Up(MouseButton::Left) => {
                 self.divider_dragging = false;
                 self.sb_drag = None;
-                self.table_drag = None;
+                if let Some(drag) = self.table_drag.take() {
+                    if let Some(pos) = drag.pending {
+                        self.table_pos.insert(drag.title, pos);
+                        self.relayout();
+                    }
+                }
                 // click (no drag) on a table box jumps the editor to it
                 if let Some((dc, dr)) = self.click_origin {
                     if (col as i32 - dc as i32).abs() <= 1 && (row as i32 - dr as i32).abs() <= 1 {
@@ -1134,6 +1201,84 @@ mod tests {
         app.on_mouse(drag(view.x + 37, view.y + 28));
         app.on_mouse(up(view.x + 37, view.y + 28));
         assert!(app.pan != pan_before, "empty canvas drag pans");
+    }
+
+    #[test]
+    fn image_mode_table_at_hits_box() {
+        use ratatui_image::picker::{Picker, ProtocolType};
+        let mut app = App::with_sample_source();
+        app.panes.canvas = Rect::new(40, 0, 60, 38);
+        let mut picker = Picker::from_fontsize((10, 20));
+        picker.set_protocol_type(ProtocolType::Kitty);
+        app.picker = Some(picker);
+        app.render_mode = crate::render::Mode::Kitty;
+        app.refresh_image();
+
+        let view = app.view_rect();
+        let (sx, sy) = app.diagram_to_screen(0, 0);
+        assert!(
+            sx >= view.x as i32 && sx < view.right() as i32,
+            "users origin on screen at {sx},{sy} view {view:?}"
+        );
+        let hit = app.table_at((sx + 2) as u16, (sy + 1) as u16);
+        assert!(hit.is_some(), "hit at users box origin");
+        assert_eq!(hit.unwrap().title, "users");
+    }
+
+    #[test]
+    fn image_mode_table_drag_defers_to_release() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        use ratatui_image::picker::{Picker, ProtocolType};
+        let mut app = App::with_sample_source();
+        app.panes.canvas = Rect::new(40, 0, 60, 38);
+        let mut picker = Picker::from_fontsize((10, 20));
+        picker.set_protocol_type(ProtocolType::Kitty);
+        app.picker = Some(picker);
+        app.render_mode = crate::render::Mode::Kitty;
+        app.refresh_image();
+        assert!(!app.image_due, "settled after initial refresh");
+
+        let view = app.view_rect();
+        let down = |c, r| MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: c,
+            row: r,
+            modifiers: KeyModifiers::NONE,
+        };
+        let drag = |c, r| MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: c,
+            row: r,
+            modifiers: KeyModifiers::NONE,
+        };
+        let up = |c, r| MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: c,
+            row: r,
+            modifiers: KeyModifiers::NONE,
+        };
+
+        let before = app.diagram.as_ref().unwrap().boxes[0].clone();
+        app.on_mouse(down(view.x + 2, view.y + 2));
+        app.on_mouse(drag(view.x + 8, view.y + 5));
+        // mid-drag: pending position tracked, no re-layout, no emission
+        assert_eq!(app.table_drag.as_ref().unwrap().pending, Some((6, 3)));
+        assert_eq!(
+            app.diagram.as_ref().unwrap().boxes[0].x,
+            before.x,
+            "no re-layout mid-drag"
+        );
+        assert!(!app.image_due, "no image re-transmission mid-drag");
+
+        // release commits exactly once
+        app.on_mouse(up(view.x + 8, view.y + 5));
+        assert!(app.table_drag.is_none());
+        assert_eq!(
+            app.diagram.as_ref().unwrap().boxes[0].x,
+            before.x + 6,
+            "committed on release"
+        );
+        assert!(app.image_due, "single re-render scheduled");
     }
 
     #[test]
