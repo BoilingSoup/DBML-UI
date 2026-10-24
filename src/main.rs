@@ -1,5 +1,5 @@
 use tui_db::app::App;
 
 fn main() -> anyhow::Result<()> {
-    App::default().run()
+    App::with_sample_source().run()
 }

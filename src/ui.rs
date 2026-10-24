@@ -76,28 +76,14 @@ fn draw_canvas(f: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // Pannable dot grid: proves mouse pan + offscreen clipping before the
-    // real diagram renderer lands (M3).
-    let style = Style::new().fg(Color::DarkGray);
-    let buf = f.buffer_mut();
-    let step = 4u16;
-    let gx: i32 = -(app.pan.0.rem_euclid(step as i32));
-    let gy: i32 = -(app.pan.1.rem_euclid(step as i32));
-    let mut x = gx;
-    while x < inner.width as i32 {
-        let mut y = gy;
-        while y < inner.height as i32 {
-            let (cx, cy) = (x + inner.x as i32, y + inner.y as i32);
-            if cx >= inner.x as i32
-                && cx < inner.right() as i32
-                && cy >= inner.y as i32
-                && cy < inner.bottom() as i32
-            {
-                buf[(cx as u16, cy as u16)].set_char('·').set_style(style);
-            }
-            y += step as i32;
+    match &app.diagram {
+        Some(layout) => {
+            crate::render::text::render(f.buffer_mut(), inner, layout, app.pan);
         }
-        x += step as i32;
+        None => {
+            let para = Paragraph::new("no document").style(Style::new().fg(Color::DarkGray));
+            f.render_widget(para, inner);
+        }
     }
 }
 
@@ -114,6 +100,18 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         Span::raw(" tui-db "),
         Span::styled("render: text ", Style::new().fg(Color::DarkGray)),
         Span::styled(
+            format!(
+                "tables {} errors {} ",
+                app.diagram.as_ref().map_or(0, |l| l.boxes.len()),
+                app.parse_errors.len()
+            ),
+            Style::new().fg(if app.parse_errors.is_empty() {
+                Color::DarkGray
+            } else {
+                Color::Red
+            }),
+        ),
+        Span::styled(
             format!("pan {},{} ", app.pan.0, app.pan.1),
             Style::new().fg(Color::DarkGray),
         ),
@@ -122,11 +120,7 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
             Style::new().fg(Color::DarkGray),
         ),
         Span::styled(
-            format!("mouse {},{} ", app.last_mouse.0, app.last_mouse.1),
-            Style::new().fg(Color::DarkGray),
-        ),
-        Span::styled(
-            "q quit · Tab focus · drag pan",
+            "q quit · Tab focus · drag pan · wheel scroll",
             Style::new().fg(Color::Blue),
         ),
     ]);
