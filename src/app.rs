@@ -78,7 +78,6 @@ pub struct Panes {
     pub canvas: Rect,
 }
 
-#[derive(Debug, Default)]
 pub struct App {
     pub should_quit: bool,
     pub focus: Focus,
@@ -103,15 +102,181 @@ pub struct App {
     pub file: Option<std::path::PathBuf>,
     /// Buffer content as of the last load/save, for the modified flag.
     pub saved_text: String,
-    /// Renderer override from the CLI (`--render`).
-    pub render_pref: Option<crate::render::Mode>,
+    // --- image-mode rendering state ---
+    pub render_mode: crate::render::Mode,
+    pub picker: Option<ratatui_image::picker::Picker>,
+    /// Image zoom; 1.0 draws one diagram cell per terminal cell.
+    pub zoom: f32,
+    /// Viewport offset into the zoomed raster, in raster pixels.
+    pub img_pan: (i32, i32),
+    pub full_raster: Option<image::RgbaImage>,
+    /// Layout generation the raster was built for.
+    raster_gen: u64,
+    layout_gen: u64,
+    pub proto: Option<ratatui_image::protocol::Protocol>,
+    /// Crop + protocol rebuild needed (layout/zoom/pan/area changed).
+    pub image_due: bool,
+    last_tx: Option<Instant>,
+    /// Canvas inner size in pixels, tracked to detect resizes.
+    pub canvas_px: (u32, u32),
+}
+
+impl Default for App {
+    fn default() -> Self {
+        Self {
+            zoom: 1.0,
+            ..Self::empty()
+        }
+    }
+}
+
+impl App {
+    /// All-zero state except defaults that must not be zero.
+    fn empty() -> Self {
+        Self {
+            should_quit: false,
+            focus: Focus::default(),
+            split: 0.0,
+            divider_dragging: false,
+            pan: (0, 0),
+            pan_anchor: None,
+            last_mouse: (0, 0),
+            panes: Panes::default(),
+            source: String::new(),
+            diagram: None,
+            parse_errors: Vec::new(),
+            dangling: 0,
+            editor: crate::editor::Editor::default(),
+            dirty: false,
+            last_edit: None,
+            message: None,
+            file: None,
+            saved_text: String::new(),
+            render_mode: crate::render::Mode::Text,
+            picker: None,
+            zoom: 1.0,
+            img_pan: (0, 0),
+            full_raster: None,
+            raster_gen: 0,
+            layout_gen: 0,
+            proto: None,
+            image_due: false,
+            last_tx: None,
+            canvas_px: (0, 0),
+        }
+    }
 }
 
 const DEBOUNCE: Duration = Duration::from_millis(120);
+/// Minimum interval between image crop/transmit rebuilds while panning.
+const IMAGE_TX_INTERVAL: Duration = Duration::from_millis(33);
 
 impl App {
     pub fn is_modified(&self) -> bool {
         self.editor.text() != self.saved_text
+    }
+
+    pub fn font_px(&self) -> (u32, u32) {
+        self.picker
+            .as_ref()
+            .map(|p| (p.font_size().0 as u32, p.font_size().1 as u32))
+            .unwrap_or((10, 20))
+    }
+
+    /// Canvas inner rect (inside the block border).
+    pub fn canvas_inner(&self) -> Rect {
+        let c = self.panes.canvas;
+        Rect {
+            x: c.x.saturating_add(1),
+            y: c.y.saturating_add(1),
+            width: c.width.saturating_sub(2),
+            height: c.height.saturating_sub(2),
+        }
+    }
+
+    /// Rebuild the full raster (if stale) and re-crop/re-transmit the
+    /// viewport. Called from the event loop, throttled.
+    pub fn refresh_image(&mut self) {
+        use crate::render::{raster, svg};
+        let Some(picker) = &self.picker else { return };
+        let Some(layout) = &self.diagram else { return };
+        let inner = self.canvas_inner();
+        let (fw, fh) = self.font_px();
+        let aw = (inner.width as u32).saturating_mul(fw).max(1);
+        let ah = (inner.height as u32).saturating_mul(fh).max(1);
+        self.canvas_px = (aw, ah);
+
+        let want_w =
+            (((layout.extent.0 as f32 + 2.0 * svg::MARGIN_CELLS) * fw as f32) * self.zoom) as u32;
+        let want_h =
+            (((layout.extent.1 as f32 + 2.0 * svg::MARGIN_CELLS) * fh as f32) * self.zoom) as u32;
+        let want_w = want_w.max(aw);
+        let want_h = want_h.max(ah);
+        let stale = self.raster_gen != self.layout_gen
+            || self
+                .full_raster
+                .as_ref()
+                .is_none_or(|i| i.dimensions() != (want_w, want_h));
+        if stale {
+            let doc = svg::build_svg(layout);
+            let (sw, sh) = svg::svg_size(layout);
+            match raster::rasterize(&doc, want_w, want_h, want_w as f32 / sw, want_h as f32 / sh) {
+                Ok(img) => {
+                    self.full_raster = Some(img);
+                    self.raster_gen = self.layout_gen;
+                }
+                Err(e) => {
+                    self.message = Some(format!("image render failed: {e}"));
+                    return;
+                }
+            }
+        }
+
+        let Some(full) = &self.full_raster else {
+            return;
+        };
+        // clamp pan to the raster
+        let max_x = (full.width().saturating_sub(aw)) as i32;
+        let max_y = (full.height().saturating_sub(ah)) as i32;
+        self.img_pan.0 = self.img_pan.0.clamp(0, max_x.max(0));
+        self.img_pan.1 = self.img_pan.1.clamp(0, max_y.max(0));
+
+        // crop the viewport and pad to the exact area size so the protocol
+        // maps 1 image px row per cell row without resampling
+        let fx = (self.img_pan.0.max(0) as u32).min(full.width());
+        let fy = (self.img_pan.1.max(0) as u32).min(full.height());
+        let cw = (full.width() - fx).min(aw);
+        let ch = (full.height() - fy).min(ah);
+        let mut view = image::RgbaImage::new(aw, ah);
+        let crop = image::imageops::crop_imm(full, fx, fy, cw, ch);
+        image::imageops::overlay(&mut view, &crop.to_image(), 0, 0);
+
+        match picker.new_protocol(
+            image::DynamicImage::ImageRgba8(view),
+            inner,
+            ratatui_image::Resize::Fit(None),
+        ) {
+            Ok(proto) => self.proto = Some(proto),
+            Err(e) => self.message = Some(format!("image protocol failed: {e}")),
+        }
+    }
+
+    /// Zoom by one step, keeping the point under the cursor stationary.
+    pub fn zoom_at(&mut self, col: u16, row: u16, dir: i32) {
+        let old = self.zoom;
+        let new = (old * 1.25f32.powi(dir)).clamp(1.0, 8.0);
+        if (new - old).abs() < f32::EPSILON {
+            return;
+        }
+        let inner = self.canvas_inner();
+        let (fw, fh) = self.font_px();
+        let cx = col.saturating_sub(inner.x) as f32 * fw as f32;
+        let cy = row.saturating_sub(inner.y) as f32 * fh as f32;
+        let s = new / old;
+        self.img_pan.0 = ((self.img_pan.0 as f32 + cx) * s - cx) as i32;
+        self.img_pan.1 = ((self.img_pan.1 as f32 + cy) * s - cy) as i32;
+        self.zoom = new;
+        self.image_due = true;
     }
 
     /// Re-parse the document and rebuild the diagram preview.
@@ -122,6 +287,10 @@ impl App {
         self.diagram = Some(layout::layout(&schema));
         self.parse_errors = out.errors;
         self.dangling = schema.dangling;
+        self.layout_gen += 1;
+        if self.render_mode != crate::render::Mode::Text {
+            self.image_due = true;
+        }
     }
 
     /// Open a file into the editor.
@@ -258,6 +427,14 @@ impl App {
                 self.dirty = false;
                 self.last_edit = None;
             }
+            let tx_ok = self
+                .last_tx
+                .is_none_or(|t| t.elapsed() >= IMAGE_TX_INTERVAL);
+            if self.image_due && tx_ok {
+                self.refresh_image();
+                self.image_due = false;
+                self.last_tx = Some(Instant::now());
+            }
         }
         Ok(())
     }
@@ -307,7 +484,32 @@ impl App {
         }
     }
 
+    pub fn is_image_mode(&self) -> bool {
+        self.render_mode != crate::render::Mode::Text
+    }
+
     fn on_canvas_key(&mut self, key: KeyEvent) {
+        if self.is_image_mode() {
+            let (fw, fh) = self.font_px();
+            let (dx, dy) = match key.code {
+                KeyCode::Char('h') | KeyCode::Left => (-1, 0),
+                KeyCode::Char('l') | KeyCode::Right => (1, 0),
+                KeyCode::Char('j') | KeyCode::Down => (0, 1),
+                KeyCode::Char('k') | KeyCode::Up => (0, -1),
+                KeyCode::Char('H') => (-8, 0),
+                KeyCode::Char('L') => (8, 0),
+                KeyCode::Char('0') => {
+                    self.img_pan = (0, 0);
+                    self.image_due = true;
+                    return;
+                }
+                _ => return,
+            };
+            self.img_pan.0 -= dx * fw as i32;
+            self.img_pan.1 -= dy * fh as i32;
+            self.image_due = true;
+            return;
+        }
         let (dx, dy) = match key.code {
             KeyCode::Char('h') | KeyCode::Left => (-4, 0),
             KeyCode::Char('l') | KeyCode::Right => (4, 0),
@@ -351,8 +553,15 @@ impl App {
                         self.split = rel.clamp(0.15, 0.85);
                     }
                 } else if let Some((last_col, last_row)) = self.pan_anchor {
-                    self.pan.0 += col as i32 - last_col as i32;
-                    self.pan.1 += row as i32 - last_row as i32;
+                    if self.is_image_mode() {
+                        let (fw, fh) = self.font_px();
+                        self.img_pan.0 -= (col as i32 - last_col as i32) * fw as i32;
+                        self.img_pan.1 -= (row as i32 - last_row as i32) * fh as i32;
+                        self.image_due = true;
+                    } else {
+                        self.pan.0 += col as i32 - last_col as i32;
+                        self.pan.1 += row as i32 - last_row as i32;
+                    }
                     self.pan_anchor = Some((col, row));
                 }
             }
@@ -362,14 +571,22 @@ impl App {
             }
             MouseEventKind::ScrollUp => {
                 if rect_contains(panes.canvas, col, row) {
-                    self.pan.1 += 2;
+                    if self.is_image_mode() {
+                        self.zoom_at(col, row, 1);
+                    } else {
+                        self.pan.1 += 2;
+                    }
                 } else if rect_contains(panes.editor, col, row) {
                     self.editor.scroll(-2);
                 }
             }
             MouseEventKind::ScrollDown => {
                 if rect_contains(panes.canvas, col, row) {
-                    self.pan.1 -= 2;
+                    if self.is_image_mode() {
+                        self.zoom_at(col, row, -1);
+                    } else {
+                        self.pan.1 -= 2;
+                    }
                 } else if rect_contains(panes.editor, col, row) {
                     self.editor.scroll(2);
                 }
@@ -421,6 +638,51 @@ mod tests {
             .boxes
             .iter()
             .any(|b| b.title == "tmp"));
+    }
+
+    #[test]
+    fn image_pipeline_builds_raster_and_protocol() {
+        use ratatui_image::picker::{Picker, ProtocolType};
+        let mut app = App::with_sample_source();
+        app.panes.canvas = Rect::new(40, 0, 60, 38);
+        let mut picker = Picker::from_fontsize((10, 20));
+        picker.set_protocol_type(ProtocolType::Kitty);
+        app.picker = Some(picker);
+        app.render_mode = crate::render::Mode::Kitty;
+
+        app.refresh_image();
+        assert!(app.full_raster.is_some(), "raster built");
+        let (w, h) = app.full_raster.as_ref().unwrap().dimensions();
+        assert!(
+            w >= 58 * 10 && h >= 36 * 20,
+            "raster covers viewport: {w}x{h}"
+        );
+        assert!(app.proto.is_some(), "protocol created");
+        assert_eq!(app.canvas_px, (58 * 10, 36 * 20));
+
+        // zoom keeps the cursor point stationary and requests a refresh
+        app.zoom_at(50, 10, 1);
+        assert!(
+            (app.zoom - 1.25).abs() < 1e-6,
+            "zoom={} due={}",
+            app.zoom,
+            app.image_due
+        );
+        assert!(app.image_due);
+
+        // pan stays clamped to the (now larger, zoomed) raster after refresh
+        app.img_pan = (i32::MAX, i32::MAX);
+        app.refresh_image();
+        let (w2, h2) = app.full_raster.as_ref().unwrap().dimensions();
+        assert!(
+            w2 > w && h2 >= h,
+            "zoom enlarged raster: {w}x{h} -> {w2}x{h2}"
+        );
+        assert!(
+            app.img_pan.0 <= w2 as i32 - 58 * 10 && app.img_pan.1 <= h2 as i32 - 36 * 20,
+            "clamped: pan={:?} raster={w2}x{h2}",
+            app.img_pan
+        );
     }
 
     #[test]

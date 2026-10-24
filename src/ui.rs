@@ -73,20 +73,36 @@ fn draw_divider(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-fn draw_canvas(f: &mut Frame, app: &App, area: Rect) {
+fn draw_canvas(f: &mut Frame, app: &mut App, area: Rect) {
     let block = Block::bordered()
         .title(" canvas ")
         .border_style(focus_style(app.focus == Focus::Canvas));
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    match &app.diagram {
-        Some(layout) => {
-            crate::render::text::render(f.buffer_mut(), inner, layout, app.pan);
+    match app.render_mode {
+        crate::render::Mode::Text => {
+            if let Some(layout) = &app.diagram {
+                crate::render::text::render(f.buffer_mut(), inner, layout, app.pan);
+            }
         }
-        None => {
-            let para = Paragraph::new("no document").style(Style::new().fg(Color::DarkGray));
-            f.render_widget(para, inner);
+        crate::render::Mode::Kitty | crate::render::Mode::Sixel => {
+            // Detect viewport size changes (resize / divider drag) so the
+            // event loop re-crops.
+            let (fw, fh) = app.font_px();
+            let px = (
+                (inner.width as u32).saturating_mul(fw).max(1),
+                (inner.height as u32).saturating_mul(fh).max(1),
+            );
+            if px != app.canvas_px {
+                app.image_due = true;
+            }
+            if let Some(proto) = app.proto.as_mut() {
+                f.render_widget(ratatui_image::Image::new(&*proto), inner);
+            } else {
+                let para = Paragraph::new("rasterizing…").style(Style::new().fg(Color::DarkGray));
+                f.render_widget(para, inner);
+            }
         }
     }
 }
@@ -137,6 +153,27 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         ),
         Style::new().fg(Color::DarkGray),
     ));
+    match app.render_mode {
+        crate::render::Mode::Kitty | crate::render::Mode::Sixel => {
+            spans.push(Span::styled(
+                format!(
+                    "{} zoom {:.0}% ",
+                    match app.render_mode {
+                        crate::render::Mode::Kitty => "kitty",
+                        _ => "sixel",
+                    },
+                    app.zoom * 100.0
+                ),
+                Style::new().fg(Color::DarkGray),
+            ));
+        }
+        crate::render::Mode::Text => {
+            spans.push(Span::styled(
+                format!("pan {},{} ", app.pan.0, app.pan.1),
+                Style::new().fg(Color::DarkGray),
+            ));
+        }
+    }
     spans.push(Span::styled(
         format!("errors {} ", app.parse_errors.len()),
         Style::new().fg(if app.parse_errors.is_empty() {

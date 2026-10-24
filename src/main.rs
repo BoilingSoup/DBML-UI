@@ -1,5 +1,6 @@
 use clap::Parser;
 use tui_db::app::App;
+use tui_db::render::Mode;
 
 /// Terminal DBML diagram editor: vim editing on the left, live diagram on
 /// the right.
@@ -36,11 +37,40 @@ fn main() -> anyhow::Result<()> {
         }
         None => App::with_sample_source(),
     };
-    app.render_pref = match args.render {
-        RenderOpt::Auto => None,
-        RenderOpt::Kitty => Some(tui_db::render::Mode::Kitty),
-        RenderOpt::Sixel => Some(tui_db::render::Mode::Sixel),
-        RenderOpt::Text => Some(tui_db::render::Mode::Text),
-    };
+
+    setup_rendering(&mut app, args.render);
     app.run()
+}
+
+/// Detect terminal graphics support (kitty -> sixel -> text) or apply the
+/// CLI override. Must run before entering the alternate screen.
+fn setup_rendering(app: &mut App, pref: RenderOpt) {
+    use ratatui_image::picker::{Picker, ProtocolType};
+
+    let queried = Picker::from_query_stdio().ok();
+    let mode = match pref {
+        RenderOpt::Auto => match queried.as_ref().map(|p| p.protocol_type()) {
+            Some(ProtocolType::Kitty) => Mode::Kitty,
+            Some(ProtocolType::Sixel) => Mode::Sixel,
+            _ => Mode::Text,
+        },
+        RenderOpt::Kitty => Mode::Kitty,
+        RenderOpt::Sixel => Mode::Sixel,
+        RenderOpt::Text => Mode::Text,
+    };
+    app.render_mode = mode;
+
+    if mode == Mode::Text {
+        return;
+    }
+    // Image modes need a picker even when the query failed (e.g. piped
+    // stdout with a forced --render): fall back to a typical font size.
+    let mut picker = queried.unwrap_or_else(|| Picker::from_fontsize((10, 20)));
+    picker.set_protocol_type(match mode {
+        Mode::Kitty => ProtocolType::Kitty,
+        Mode::Sixel => ProtocolType::Sixel,
+        Mode::Text => ProtocolType::Halfblocks,
+    });
+    app.picker = Some(picker);
+    app.image_due = true;
 }
