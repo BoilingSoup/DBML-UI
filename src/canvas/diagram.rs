@@ -30,21 +30,24 @@ pub fn to_px(x: i32, y: i32, zoom: f32, pan: Vector) -> Point {
 }
 
 /// Inverse of `to_px`: diagram cell under a canvas point.
-#[allow(dead_code)] // consumed by the interaction milestone
+#[allow(dead_code)] // kept for callers that want cell granularity
 pub fn to_cell(p: Point, zoom: f32, pan: Vector) -> (i32, i32) {
+    let (fx, fy) = to_cell_f(p, zoom, pan);
+    (fx.floor() as i32, fy.floor() as i32)
+}
+
+/// Fractional diagram cell under a canvas point (for grab offsets).
+pub fn to_cell_f(p: Point, zoom: f32, pan: Vector) -> (f32, f32) {
     let s = cell_size(zoom);
     (
-        ((p.x - pan.x) / s.width - MARGIN_CELLS).floor() as i32,
-        ((p.y - pan.y) / s.height - MARGIN_CELLS).floor() as i32,
+        (p.x - pan.x) / s.width - MARGIN_CELLS,
+        (p.y - pan.y) / s.height - MARGIN_CELLS,
     )
 }
 
 /// Topmost table box containing the canvas point, if any.
-#[allow(dead_code)] // consumed by the interaction milestone
 pub fn hit_test(layout: &Layout, zoom: f32, pan: Vector, p: Point) -> Option<&TableBox> {
-    let s = cell_size(zoom);
-    let fx = (p.x - pan.x) / s.width - MARGIN_CELLS;
-    let fy = (p.y - pan.y) / s.height - MARGIN_CELLS;
+    let (fx, fy) = to_cell_f(p, zoom, pan);
     layout.boxes.iter().rev().find(|b| {
         fx >= b.x as f32 && fx < (b.x + b.w) as f32 && fy >= b.y as f32 && fy < (b.y + b.h) as f32
     })
@@ -67,10 +70,55 @@ pub struct Diagram<'a> {
     /// Pixels per diagram cell height.
     pub zoom: f32,
     pub pan: Vector,
+    /// Cursor position over the canvas (local px), for hover highlight.
+    pub hover: Option<Point>,
+    /// A drag is in flight (table or pan) — show the grab cursor.
+    pub dragging: bool,
 }
 
-impl<Message> canvas::Program<Message> for Diagram<'_> {
+impl canvas::Program<crate::app::Message> for Diagram<'_> {
     type State = ();
+
+    fn update(
+        &self,
+        _state: &mut Self::State,
+        event: canvas::Event,
+        bounds: Rectangle,
+        cursor: iced::mouse::Cursor,
+    ) -> (canvas::event::Status, Option<crate::app::Message>) {
+        use crate::app::Message;
+        use iced::mouse;
+
+        let local = |p: Point| Point::new(p.x - bounds.x, p.y - bounds.y);
+        let at_cursor = |f: &dyn Fn(Point) -> Message| cursor.position().map(|p| f(local(p)));
+
+        let (status, message) = match event {
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => (
+                canvas::event::Status::Captured,
+                at_cursor(&Message::CanvasPressed),
+            ),
+            canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => (
+                canvas::event::Status::Captured,
+                at_cursor(&Message::CanvasReleased),
+            ),
+            canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => (
+                canvas::event::Status::Ignored,
+                at_cursor(&Message::CanvasMoved),
+            ),
+            canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
+                let notches = match delta {
+                    mouse::ScrollDelta::Lines { y, .. } => y,
+                    mouse::ScrollDelta::Pixels { y, .. } => y / 40.0,
+                };
+                (
+                    canvas::event::Status::Captured,
+                    Some(Message::Wheel(notches)),
+                )
+            }
+            _ => (canvas::event::Status::Ignored, None),
+        };
+        (status, message)
+    }
 
     fn draw(
         &self,
@@ -82,17 +130,38 @@ impl<Message> canvas::Program<Message> for Diagram<'_> {
     ) -> Vec<canvas::Geometry> {
         let mut frame = canvas::Frame::new(renderer, bounds.size());
         frame.fill_rectangle(Point::ORIGIN, bounds.size(), theme::BG);
-        paint(&mut frame, self.layout, self.zoom, self.pan);
+        paint(&mut frame, self.layout, self.zoom, self.pan, self.hover);
         vec![frame.into_geometry()]
+    }
+
+    fn mouse_interaction(
+        &self,
+        _state: &Self::State,
+        bounds: Rectangle,
+        cursor: iced::mouse::Cursor,
+    ) -> iced::mouse::Interaction {
+        use iced::mouse::Interaction;
+        if self.dragging {
+            return Interaction::Grabbing;
+        }
+        if let Some(p) = cursor.position() {
+            let local = Point::new(p.x - bounds.x, p.y - bounds.y);
+            if hit_test(self.layout, self.zoom, self.pan, local).is_some() {
+                return Interaction::Pointer;
+            }
+        }
+        Interaction::default()
     }
 }
 
-fn paint(frame: &mut canvas::Frame, layout: &Layout, zoom: f32, pan: Vector) {
+fn paint(frame: &mut canvas::Frame, layout: &Layout, zoom: f32, pan: Vector, hover: Option<Point>) {
     for edge in &layout.edges {
         paint_edge(frame, edge, zoom, pan);
     }
+    let hovered = hover.and_then(|p| hit_test(layout, zoom, pan, p));
     for b in &layout.boxes {
-        paint_table(frame, b, zoom, pan);
+        let is_hovered = hovered.map(|h| h.title == b.title).unwrap_or(false);
+        paint_table(frame, b, zoom, pan, is_hovered);
     }
 }
 
@@ -116,7 +185,7 @@ fn paint_edge(frame: &mut canvas::Frame, edge: &EdgeRoute, zoom: f32, pan: Vecto
     );
 }
 
-fn paint_table(frame: &mut canvas::Frame, b: &TableBox, zoom: f32, pan: Vector) {
+fn paint_table(frame: &mut canvas::Frame, b: &TableBox, zoom: f32, pan: Vector, hovered: bool) {
     let s = cell_size(zoom);
     let top_left = to_px(b.x, b.y, zoom, pan);
     let size = Size::new(b.w as f32 * s.width, b.h as f32 * s.height);
@@ -131,8 +200,8 @@ fn paint_table(frame: &mut canvas::Frame, b: &TableBox, zoom: f32, pan: Vector) 
     frame.stroke(
         &Path::rounded_rectangle(top_left, size, radius),
         Stroke {
-            style: theme::BORDER.into(),
-            width: 1.0,
+            style: if hovered { theme::TEXT } else { theme::BORDER }.into(),
+            width: if hovered { 2.0 } else { 1.0 },
             ..Default::default()
         },
     );

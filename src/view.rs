@@ -25,6 +25,12 @@ pub fn root(app: &App) -> Element<'_, Message> {
             layout: &app.diagram,
             zoom: app.zoom,
             pan: app.pan,
+            hover: if app.drag == crate::app::Drag::None {
+                app.canvas_cursor
+            } else {
+                None
+            },
+            dragging: app.drag != crate::app::Drag::None,
         })
         .width(Fill)
         .height(Fill),
