@@ -2,12 +2,14 @@
 
 mod app;
 mod canvas;
+mod editor;
 mod theme;
 mod view;
 
 fn main() -> Result<(), iced::Error> {
     iced::application("dbml-ui", app::update, view::root)
         .theme(|_| theme::app())
+        .subscription(app::subscription)
         .window_size(iced::Size::new(1400.0, 900.0))
         .run()
 }

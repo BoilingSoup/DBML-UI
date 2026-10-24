@@ -1,9 +1,14 @@
 //! Application state and the iced update loop.
 
 use crate::canvas::diagram::{hit_test, to_cell_f};
+use crate::editor::{self, Action, Editor, KeyCode, KeyEvent, KeyModifiers};
 use dbml_ui::layout::{self, Layout};
 use dbml_ui::{dbml, model};
 use iced::{Point, Vector};
+
+/// Editor pane height in lines; updated by the view each frame when the
+/// pane is laid out (used to clamp scrolling).
+pub const EDITOR_VISIBLE_LINES: f32 = 40.0;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -12,6 +17,18 @@ pub enum Message {
     CanvasReleased(Point),
     /// Wheel notches (normalized: lines, or pixels / 40).
     Wheel(f32),
+    /// A keypress, mapped from iced's keyboard events.
+    KeyPressed(KeyCode, KeyModifiers),
+    /// Wheel notches over the editor pane.
+    EditorScrolled(f32),
+    /// Left-press in the editor pane (local px).
+    EditorPressed(Point),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Focus {
+    Editor,
+    Canvas,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -33,9 +50,14 @@ pub enum Drag {
 pub struct App {
     /// Raw DBML source shown in the editor.
     pub source: String,
+    /// Vim editor over the source.
+    pub editor: Editor,
+    /// Which pane receives keys.
+    pub focus: Focus,
+    /// Editor viewport scroll, in lines.
+    pub editor_scroll: f32,
     /// Parsed + laid out diagram for the current source.
     pub diagram: Layout,
-    #[allow(dead_code)] // consumed by the editor milestone
     pub parse_errors: Vec<dbml::parser::ParseError>,
     /// User-dragged table positions (diagram cells, by table/enum name);
     /// survive re-parses while editing.
@@ -48,9 +70,8 @@ pub struct App {
     pub drag: Drag,
     /// Last known cursor position over the diagram canvas (local px).
     pub canvas_cursor: Option<Point>,
-    /// Table that was clicked (no drag) — the editor consumes this to jump
-    /// to its definition.
-    #[allow(dead_code)] // consumed by the editor milestone
+    /// Table that was clicked (no drag) — the editor jumps to its
+    /// definition.
     pub pending_jump: Option<String>,
 }
 
@@ -64,6 +85,9 @@ impl App {
     pub fn with_source(source: String) -> Self {
         let mut app = Self {
             source: String::new(),
+            editor: Editor::default(),
+            focus: Focus::Editor,
+            editor_scroll: 0.0,
             diagram: layout::layout(&model::build(&dbml::parser::parse("").doc)),
             parse_errors: Vec::new(),
             table_pos: Default::default(),
@@ -73,6 +97,7 @@ impl App {
             canvas_cursor: None,
             pending_jump: None,
         };
+        app.editor.set_text(&source);
         app.set_source(&source);
         app
     }
@@ -166,12 +191,132 @@ impl App {
     }
 }
 
+pub fn subscription(_app: &App) -> iced::Subscription<Message> {
+    iced::keyboard::on_key_press(|key, mods| {
+        let code = match key {
+            iced::keyboard::Key::Character(c) => c.chars().next().map(KeyCode::Char),
+            iced::keyboard::Key::Named(n) => Some(match n {
+                iced::keyboard::key::Named::Escape => KeyCode::Esc,
+                iced::keyboard::key::Named::Enter => KeyCode::Enter,
+                iced::keyboard::key::Named::Backspace => KeyCode::Backspace,
+                iced::keyboard::key::Named::Tab => KeyCode::Tab,
+                iced::keyboard::key::Named::ArrowLeft => KeyCode::Left,
+                iced::keyboard::key::Named::ArrowRight => KeyCode::Right,
+                iced::keyboard::key::Named::ArrowUp => KeyCode::Up,
+                iced::keyboard::key::Named::ArrowDown => KeyCode::Down,
+                iced::keyboard::key::Named::Home => KeyCode::Home,
+                iced::keyboard::key::Named::End => KeyCode::End,
+                iced::keyboard::key::Named::PageUp => KeyCode::PageUp,
+                iced::keyboard::key::Named::PageDown => KeyCode::PageDown,
+                iced::keyboard::key::Named::Delete => KeyCode::Delete,
+                _ => return None,
+            }),
+            _ => None,
+        }?;
+        let m = KeyModifiers::new(mods.control(), mods.shift(), mods.alt());
+        Some(Message::KeyPressed(code, m))
+    })
+}
+
 pub fn update(app: &mut App, message: Message) {
     match message {
         Message::CanvasPressed(p) => app.canvas_pressed(p),
         Message::CanvasMoved(p) => app.canvas_moved(p),
-        Message::CanvasReleased(p) => app.canvas_released(p),
+        Message::CanvasReleased(p) => {
+            app.canvas_released(p);
+            app.consume_pending_jump();
+        }
         Message::Wheel(n) => app.wheel(n),
+        Message::KeyPressed(code, mods) => app.key_pressed(code, mods),
+        Message::EditorScrolled(n) => {
+            app.editor_scroll =
+                (app.editor_scroll + n).clamp(0.0, app.editor.buf.line_count() as f32 - 4.0);
+        }
+        Message::EditorPressed(p) => {
+            let pos = crate::canvas::editor::px_to_pos(app, p);
+            app.editor
+                .buf
+                .move_cursor(editor::buffer::Move::Jump(pos.row, pos.col));
+            if app.editor.mode == editor::Mode::Visual {
+                // clicking re-anchors the selection
+                app.editor.buf.cancel_selection();
+                app.editor.buf.start_selection();
+            }
+            app.focus = Focus::Editor;
+        }
+    }
+}
+
+impl App {
+    fn key_pressed(&mut self, code: KeyCode, mods: KeyModifiers) {
+        let key = KeyEvent::new(code, mods);
+        // Tab always toggles pane focus
+        if key.code == KeyCode::Tab {
+            self.focus = match self.focus {
+                Focus::Editor => Focus::Canvas,
+                Focus::Canvas => Focus::Editor,
+            };
+            return;
+        }
+        // the cmdline is reachable from either pane
+        if self.editor.cmdline.is_some() || self.focus == Focus::Editor {
+            let action = self.editor.handle_key(key);
+            self.after_edit(action);
+            return;
+        }
+        // canvas focus: hjkl/arrows pan, ':'/'/' open the cmdline
+        match key.code {
+            KeyCode::Char('h') | KeyCode::Left => self.pan.x += 60.0,
+            KeyCode::Char('l') | KeyCode::Right => self.pan.x -= 60.0,
+            KeyCode::Char('k') | KeyCode::Up => self.pan.y += 60.0,
+            KeyCode::Char('j') | KeyCode::Down => self.pan.y -= 60.0,
+            KeyCode::Char('0') => self.pan = Vector::new(40.0, 40.0),
+            KeyCode::Char(':') | KeyCode::Char('/') => {
+                self.focus = Focus::Editor;
+                let action = self.editor.handle_key(key);
+                self.after_edit(action);
+            }
+            _ => {}
+        }
+    }
+
+    fn after_edit(&mut self, action: Action) {
+        match action {
+            Action::None => {}
+            Action::Changed => {
+                let text = self.editor.text();
+                self.set_source(&text);
+                self.keep_cursor_visible();
+            }
+            // ex commands land with the file milestone
+            Action::Command(_) => {}
+        }
+    }
+
+    /// Scroll the editor viewport so the cursor stays on screen.
+    fn keep_cursor_visible(&mut self) {
+        let row = self.editor.buf.pos().row as f32;
+        let visible = EDITOR_VISIBLE_LINES - 3.0;
+        if row < self.editor_scroll + 1.0 {
+            self.editor_scroll = (row - 1.0).max(0.0);
+        } else if row > self.editor_scroll + visible {
+            self.editor_scroll = row - visible;
+        }
+    }
+
+    /// A click on a diagram table jumps the editor to its definition.
+    fn consume_pending_jump(&mut self) {
+        if let Some(title) = self.pending_jump.take() {
+            if let Some(b) = self.diagram.boxes.iter().find(|b| b.title == title) {
+                if let Some(span) = b.name_span.clone() {
+                    let (row, col) = dbml::parser::line_col_at(&self.source, span.start);
+                    self.editor.jump(row, col);
+                    self.focus = Focus::Editor;
+                    self.editor_scroll = (row as f32 - 2.0).max(0.0);
+                    self.keep_cursor_visible();
+                }
+            }
+        }
     }
 }
 
@@ -268,11 +413,16 @@ mod tests {
     }
 
     #[test]
-    fn click_without_drag_flags_jump() {
+    fn click_without_drag_jumps_editor_to_definition() {
         let mut app = app();
+        let before = app.editor.buf.cursor();
         let p = over_box(&app, "posts", 4.0, 4.0);
         update(&mut app, Message::CanvasPressed(p));
         update(&mut app, Message::CanvasReleased(p));
-        assert_eq!(app.pending_jump.as_deref(), Some("posts"));
+        assert_eq!(app.focus, Focus::Editor);
+        let after = app.editor.buf.cursor();
+        assert_ne!(before, after, "cursor moved to the definition");
+        let line = app.editor.buf.line(after.0);
+        assert!(line.contains("posts"), "on the posts line: {line:?}");
     }
 }
