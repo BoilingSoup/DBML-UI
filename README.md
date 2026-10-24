@@ -1,19 +1,12 @@
-# tui-db
+# dbml-ui
 
-A terminal DBML diagram editor — vim-style editing on the left, a live
-[dbdiagram](https://dbdiagram.io)-style ER diagram on the right.
+A desktop DBML diagram editor — vim-style editing on the left, a live
+[dbdiagram](https://dbdiagram.io)-style ER diagram on the right, rendered
+on the GPU with [iced](https://iced.rs).
 
-```
-┌─ editor ──────────────┐│┌─ canvas ───────────────────────┐
-│ Table users as U {    │││ ┌─users──────────┐             │
-│   id integer [pk]     │││ │ ◆ id integer   │             │
-│   username varchar    │││ │   username ... │──┐          │
-│ }                     │││ └────────────────┘  │          │
-│ Table posts {         │││       ┌─posts───────┴──┐       │
-│   user_id integer ... │││       │ ◇ user_id ...  │       │
-└───────────────────────┘││       └────────────────┘       │
- NORMAL  file.dbml  Ln 3, Col 5  tables 2 errors 0
-```
+Previously a terminal app (`tui-db`); migrated to a native window where
+the diagram is a real canvas: continuous zoom, pixel-precise pan, and
+crisp text at any scale — no terminal graphics protocols involved.
 
 ## Features
 
@@ -23,78 +16,64 @@ A terminal DBML diagram editor — vim-style editing on the left, a live
   (`d3w 2dd 2d2w d$ c0 dG cG dgg ggdG diw ciw daw caw cc dd C D yy p P x`),
   undo/redo, `/` search with `n`/`N`, and ex commands (`:w :q :wq :q!
   :e! :o <file> :export <f.svg|f.png>`).
-- **Live preview**: the diagram re-renders ~120ms after you stop typing;
-  parse errors are reported in the status bar with the offending line.
-- **Renderers** (auto-detected, override with `--render`):
-  1. **kitty graphics protocol** — vector-rendered via SVG. Pixels are
-     transmitted once per layout/zoom change (zlib+base64); panning and
-     table-drag feedback re-place the uploaded image with ~60-byte
-     commands, so drag/pan/zoom stay fluid with no per-frame image
-     traffic. Zoom ×1.25 steps (1.0–8.0), pan by drag or `hjkl`.
-  2. **sixel** — same raster pipeline, sixel encoding
-  3. **text fallback** — box-drawing tables with `◆` pk / `◇` fk markers
-     at 1:1 (native terminal resolution). Wheel-down zooms out to 0.25 via
-     a halfblocks outline minimap (works over plain SSH): raster labels
-     are dropped below 1:1 because a text cell can only carry 2
-     pseudo-pixels, but bold table titles are overlaid as crisp real text,
-     so the outline view still tells you which box is which. Zoom-in is
-     disabled in text mode — the cell renderer is already at maximum
-     terminal resolution and magnifying it through halfblocks could only
-     blur it.
-- **Full mouse support**: drag to pan (tables slide offscreen edges just
-  like the browser), wheel to zoom (image modes) or scroll (text), drag
-  the divider to resize panes, click a table to jump the editor to its
-  definition, drag a table to reposition it (kept per-name across edits;
-  in kitty/sixel the move applies on release with a live outline —
-  per-tick image re-transmission would flood the terminal).
-  Virtual scrollbars on the canvas show how much of the diagram is
-  offscreen and are draggable to reposition the view.
-- **Fast**: a 200-table document parses + lays out in ~0.2ms; the image
-  pipeline re-rasterizes only on zoom/layout changes and crops on pan.
+- **Live preview**: the diagram re-parses and re-renders on every
+  keystroke (a 200-table document parses + lays out in ~0.2ms).
+- **Fluid canvas**: wheel zoom anchored at the cursor (continuous,
+  25%–800%), drag to pan (content moves offscreen freely), hover
+  highlights tables, drag a table to reposition it **live** (positions
+  survive edits for the session). Click a table to jump the editor to
+  its definition.
+- **Files**: open via `dbml-ui <file>` or `:o`; saves round-trip
+  byte-identical; `:export` writes the dark-themed SVG or a 2x PNG.
+- **Status bar**: mode chip, cmdline + showcmd, filename with `[+]`
+  modified flag, Ln/Col, table count, zoom, parse errors.
+- Draggable divider between the panes; `?` opens the key reference.
 
 ## Usage
 
 ```
-tui-db                    # sample document
-tui-db schema.dbml        # open a file
-tui-db --render sixel     # force a renderer (auto|kitty|sixel|text)
+cargo run --release -- [file.dbml]
 ```
 
-Press `?` inside the app for the keymap. `Ctrl-s` saves, `Ctrl-c` quits.
-
-## Build
-
-```
-cargo build --release
-```
-
-MSRV: rustc 1.84 (dependency pins in `Cargo.toml` respect it).
+| Interaction | Action |
+|---|---|
+| wheel | zoom at cursor |
+| drag empty canvas | pan |
+| drag a table | move it (live re-layout) |
+| click a table | editor jumps to its definition |
+| click editor | place the cursor |
+| Tab | switch pane focus |
+| Ctrl-s / Ctrl-c | save / quit |
+| ? | key reference |
 
 ## Architecture
 
 ```
-crossterm events -> app event loop (UI thread)
-      edits debounced 120ms -> parse -> model -> layout -> render
-                                              text renderer (cells)
-                                              svg -> resvg raster -> kitty/sixel
+src/
+  main.rs        iced entry (window, theme, subscriptions, CLI arg)
+  app.rs         state + update loop (pan/zoom/drag, keys, files, commands)
+  view.rs        pane split + divider + status bar + help overlay
+  canvas/
+    diagram.rs   ER diagram renderer (boxes/headers/rows/edges at zoom)
+    editor.rs    code editor renderer (gutter, cursor, selection)
+  editor/
+    buffer.rs    text buffer (motions/edits/undo/search, tui-textarea semantics)
+    mod.rs        vim engine (modes, operators, counts, registers, cmdline)
+lib (dbml-ui):
+  dbml/          parser (spans, error recovery) + AST
+  model.rs       AST -> schema (refs, fk marking, dangling count)
+  layout.rs      layered auto-layout + user position overrides
+  commands.rs    ex-command parsing
+  render/        SVG builder + PNG rasterizer (:export)
 ```
 
-- `dbml/` — hand-written recursive-descent parser with byte spans and
-  error recovery (broken constructs are skipped, the rest still renders)
-- `model.rs` — resolves refs against tables/aliases, marks FKs
-- `layout.rs` — deterministic layered layout (referenced tables first),
-  orthogonal edge routing that never crosses a table box
-- `render/` — `text` (box-drawing into the ratatui buffer), `svg`
-  (dbdiagram-style SVG), `raster` (resvg → RGBA at font-size × zoom)
-- `editor.rs` — vim modal layer over [tui-textarea]
-- `app.rs` — event loop, mouse/keys, pan/zoom state, file I/O, ex commands
+The parser, model, layout, vim engine, and exporters are pure library
+code with thorough unit tests (62+); the GUI layer is thin on top.
 
-## Testing
+## MSRV / dependencies
 
-```
-cargo test          # 44 unit + fixture tests
-cargo run --example dump_diagram   # render the sample to stdout
-cargo run --example perf_check     # pipeline timings
-```
-
-[tui-textarea]: https://github.com/rhysd/tui-textarea
+Built against rustc 1.84 with iced 0.13 (MSRV 1.80). A few transitive
+dependencies are pinned in the lockfile to versions that predate
+edition-2024/MSRV-1.85 releases (calloop, smithay-clipboard,
+proc-macro-crate, wayland-protocols, indexmap, async-lock). On a newer
+toolchain, iced 0.14 should be a mechanical upgrade.

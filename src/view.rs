@@ -1,10 +1,11 @@
-//! Window layout: editor pane | diagram pane, status bar underneath.
+//! Window layout: editor pane | divider | diagram pane, status bar below,
+//! help overlay on top.
 
-use crate::app::{App, Focus, Message};
+use crate::app::{App, Drag, Focus, Message};
 use crate::canvas::diagram::Diagram;
 use crate::canvas::editor::EditorView;
 use crate::theme;
-use iced::widget::{canvas, column, container, row, text};
+use iced::widget::{canvas, column, container, row, stack, text};
 use iced::{Color, Element, Fill, Length};
 
 /// Zoom at which one diagram cell maps 1:1 to a text line (~20px).
@@ -13,7 +14,7 @@ pub const BASE_ZOOM: f32 = 20.0;
 pub fn root(app: &App) -> Element<'_, Message> {
     let editor_pane = container(canvas(EditorView { app }).width(Fill).height(Fill))
         .padding(1.0)
-        .width(Length::FillPortion(2))
+        .width(Fill)
         .height(Fill)
         .style(move |_t| panel_style(app.focus == Focus::Editor));
 
@@ -22,28 +23,140 @@ pub fn root(app: &App) -> Element<'_, Message> {
             layout: &app.diagram,
             zoom: app.zoom,
             pan: app.pan,
-            hover: if app.drag == crate::app::Drag::None {
+            hover: if app.drag == Drag::None {
                 app.canvas_cursor
             } else {
                 None
             },
-            dragging: app.drag != crate::app::Drag::None,
+            dragging: app.drag != Drag::None,
         })
         .width(Fill)
         .height(Fill),
     )
     .padding(1.0)
-    .width(Length::FillPortion(3))
+    .width(Fill)
     .height(Fill)
     .style(move |_t| panel_style(app.focus == Focus::Canvas));
 
-    column![
-        row![editor_pane, diagram_pane].spacing(8).height(Fill),
-        status_bar(app),
+    let editor = container(editor_pane)
+        .width(Length::FillPortion((app.split * 1000.0) as u16))
+        .height(Fill);
+    let diagram = container(diagram_pane)
+        .width(Length::FillPortion(((1.0 - app.split) * 1000.0) as u16))
+        .height(Fill);
+
+    let panes = row![editor, divider(), diagram].spacing(4).height(Fill);
+
+    let base = column![panes, status_bar(app)].spacing(8).padding(8);
+
+    if app.show_help {
+        stack![base, help_overlay()].into()
+    } else {
+        base.into()
+    }
+}
+
+/// The draggable split handle; pressing it starts a resize drag tracked
+/// window-wide via the event subscription.
+fn divider() -> Element<'static, Message> {
+    canvas(DividerHandle)
+        .width(Length::Fixed(6.0))
+        .height(Fill)
+        .into()
+}
+
+struct DividerHandle;
+
+impl canvas::Program<Message> for DividerHandle {
+    type State = ();
+
+    fn update(
+        &self,
+        _state: &mut Self::State,
+        event: canvas::Event,
+        _bounds: iced::Rectangle,
+        _cursor: iced::mouse::Cursor,
+    ) -> (canvas::event::Status, Option<Message>) {
+        match event {
+            canvas::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => (
+                canvas::event::Status::Captured,
+                Some(Message::DividerPressed),
+            ),
+            _ => (canvas::event::Status::Ignored, None),
+        }
+    }
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &iced::Renderer,
+        _theme: &iced::Theme,
+        bounds: iced::Rectangle,
+        _cursor: iced::mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        frame.fill_rectangle(
+            iced::Point::new(2.0, 0.0),
+            iced::Size::new(2.0, bounds.height),
+            theme::BORDER,
+        );
+        vec![frame.into_geometry()]
+    }
+
+    fn mouse_interaction(
+        &self,
+        _state: &Self::State,
+        _bounds: iced::Rectangle,
+        _cursor: iced::mouse::Cursor,
+    ) -> iced::mouse::Interaction {
+        iced::mouse::Interaction::ResizingHorizontally
+    }
+}
+
+fn help_overlay() -> Element<'static, Message> {
+    let line = |key: &str, desc: &str| -> Element<'static, Message> {
+        row![
+            text(key.to_string())
+                .size(13.0)
+                .color(theme::FK)
+                .width(Length::Fixed(210.0)),
+            text(desc.to_string()).size(13.0).color(theme::TEXT),
+        ]
+        .spacing(8)
+        .into()
+    };
+    let help = column![
+        text("dbml-ui — keys").size(16.0).color(theme::TEXT),
+        line("i a o O / Esc", "enter / leave insert mode"),
+        line(
+            "hjkl w b e 0 $ ^ gg G { }",
+            "motions (counts work: 3w, 2gg, ...)"
+        ),
+        line("x dd dw cw cc d$ c0 yy p P diw ciw", "operators"),
+        line("v + motions, y / d / o", "visual mode"),
+        line("u Ctrl-r / pattern n N", "undo redo / search next prev"),
+        line(":w :q :q! :wq :o file :export f.svg", "ex commands"),
+        line("Ctrl-s / Ctrl-c", "save / quit"),
+        line(
+            "wheel / drag / drag a table",
+            "zoom at cursor / pan / move table (live)"
+        ),
+        line("click a table", "jump the editor to its definition"),
+        line("Tab / ?", "switch pane focus / close this help"),
     ]
-    .spacing(8)
-    .padding(8)
-    .into()
+    .spacing(6)
+    .padding(20);
+    container(help)
+        .style(|_t| container::Style {
+            background: Some(iced::Background::Color(iced::Color::from_rgba(
+                0.08, 0.09, 0.11, 0.96,
+            ))),
+            border: iced::border::rounded(10).color(theme::BORDER),
+            ..Default::default()
+        })
+        .width(Length::Fixed(580.0))
+        .height(Length::Shrink)
+        .into()
 }
 
 fn panel_style(focused: bool) -> container::Style {
@@ -81,7 +194,7 @@ fn status_bar(app: &App) -> Element<'_, Message> {
             .into()
     };
 
-    // leading segment: the cmdline when open, else mode + showcmd
+    // leading segment: the cmdline when open, else mode + showcmd + focus
     let mut items: Vec<Element<'_, Message>> = Vec::new();
     if let Some(cmd) = &app.editor.cmdline {
         items.push(seg(
@@ -108,7 +221,17 @@ fn status_bar(app: &App) -> Element<'_, Message> {
         }
     }
     items.push(seg("·", theme::DIM));
-    items.push(seg("sample", theme::DIM));
+    if let Some(msg) = &app.message {
+        items.push(seg(msg, theme::FK));
+    } else {
+        let name = app
+            .file
+            .as_ref()
+            .map(|f| f.display().to_string())
+            .unwrap_or_else(|| "[No Name]".to_string());
+        let modified = if app.is_modified() { " [+]" } else { "" };
+        items.push(seg(&format!("{name}{modified}"), theme::TEXT));
+    }
     items.push(seg("·", theme::DIM));
     items.push(seg(
         &format!("Ln {}, Col {}", crow + 1, ccol + 1),

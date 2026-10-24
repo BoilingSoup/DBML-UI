@@ -23,6 +23,14 @@ pub enum Message {
     EditorScrolled(f32),
     /// Left-press in the editor pane (local px).
     EditorPressed(Point),
+    /// The divider between the panes was pressed; drag to resize.
+    DividerPressed,
+    /// Window-relative mouse move (drives divider drags).
+    MouseMovedWindow(f32, f32),
+    /// Left button released anywhere.
+    MouseReleased,
+    /// Window resized.
+    WindowResized(f32, f32),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +53,8 @@ pub enum Drag {
         press: Point,
         moved: bool,
     },
+    /// Dragging the pane divider.
+    Divider,
 }
 
 pub struct App {
@@ -81,6 +91,12 @@ pub struct App {
     pub should_quit: bool,
     /// Status-bar toast.
     pub message: Option<String>,
+    /// Help overlay visibility.
+    pub show_help: bool,
+    /// Pane split fraction (editor share), driven by divider drags.
+    pub split: f32,
+    /// Window size for split math.
+    pub window_size: (f32, f32),
 }
 
 impl Default for App {
@@ -108,6 +124,9 @@ impl App {
             saved_text: String::new(),
             should_quit: false,
             message: None,
+            show_help: false,
+            split: 0.4,
+            window_size: (1400.0, 900.0),
         };
         app.editor.set_text(&source);
         app.set_source(&source);
@@ -168,7 +187,7 @@ impl App {
                     moved,
                 };
             }
-            Drag::None => {}
+            Drag::Divider | Drag::None => {}
         }
     }
 
@@ -204,7 +223,16 @@ impl App {
 }
 
 pub fn subscription(_app: &App) -> iced::Subscription<Message> {
-    iced::keyboard::on_key_press(|key, mods| {
+    let mouse = iced::event::listen_with(|event, _status, _id| match event {
+        iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+            Some(Message::MouseMovedWindow(position.x, position.y))
+        }
+        iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
+            Some(Message::MouseReleased)
+        }
+        _ => None,
+    });
+    let keys = iced::keyboard::on_key_press(|key, mods| {
         let code = match key {
             iced::keyboard::Key::Character(c) => c.chars().next().map(KeyCode::Char),
             iced::keyboard::Key::Named(n) => Some(match n {
@@ -227,6 +255,14 @@ pub fn subscription(_app: &App) -> iced::Subscription<Message> {
         }?;
         let m = KeyModifiers::new(mods.control(), mods.shift(), mods.alt());
         Some(Message::KeyPressed(code, m))
+    });
+    iced::Subscription::batch([mouse, keys, window_resize()])
+}
+
+fn window_resize() -> iced::Subscription<Message> {
+    iced::window::resize_events().map(|(id, size)| {
+        let _ = id;
+        Message::WindowResized(size.width, size.height)
     })
 }
 
@@ -252,6 +288,20 @@ fn handle_message(app: &mut App, message: Message) {
             app.editor_scroll =
                 (app.editor_scroll + n).clamp(0.0, app.editor.buf.line_count() as f32 - 4.0);
         }
+        Message::DividerPressed => app.drag = Drag::Divider,
+        Message::MouseMovedWindow(x, _y) => {
+            if app.drag == Drag::Divider {
+                const PAD: f32 = 16.0;
+                let usable = (app.window_size.0 - 2.0 * PAD).max(1.0);
+                app.split = ((x - PAD) / usable).clamp(0.15, 0.85);
+            }
+        }
+        Message::MouseReleased => {
+            if app.drag == Drag::Divider {
+                app.drag = Drag::None;
+            }
+        }
+        Message::WindowResized(w, h) => app.window_size = (w, h),
         Message::EditorPressed(p) => {
             let pos = crate::canvas::editor::px_to_pos(app, p);
             app.editor
@@ -396,6 +446,18 @@ impl App {
                 }
                 _ => {}
             }
+        }
+        // '?' toggles the help overlay (unless typing text)
+        let typing = self.focus == Focus::Editor
+            && (self.editor.mode == editor::Mode::Insert || self.editor.cmdline.is_some());
+        if key.code == KeyCode::Char('?') && !typing {
+            self.show_help = !self.show_help;
+            return;
+        }
+        if self.show_help {
+            // any other key closes the overlay first
+            self.show_help = false;
+            return;
         }
         // Tab always toggles pane focus
         if key.code == KeyCode::Tab {
