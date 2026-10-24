@@ -230,9 +230,7 @@ fn value(input: &mut &str, base: usize) -> R<String> {
         *input = &rest[end + 1..];
         return Ok(v);
     }
-    let end = input
-        .find(|c: char| matches!(c, ',' | ']' | '\n' | '\r'))
-        .unwrap_or(input.len());
+    let end = input.find([',', ']', '\n', '\r']).unwrap_or(input.len());
     let v = input[..end].trim();
     if v.is_empty() {
         return fail(offset(input, base), "expected value");

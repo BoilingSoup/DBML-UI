@@ -1,4 +1,4 @@
-use tui_db::dbml::parser::{self, ParseOutput};
+use tui_db::dbml::parser::{self};
 
 macro_rules! parse_fixture {
     ($name:literal) => {
