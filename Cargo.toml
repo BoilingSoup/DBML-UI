@@ -13,4 +13,3 @@ ratatui = "0.29"
 ratatui-image = { version = "=8.0.1", default-features = false }
 resvg = "0.45.1"
 tui-textarea = "0.7"
-winnow = "1.0"

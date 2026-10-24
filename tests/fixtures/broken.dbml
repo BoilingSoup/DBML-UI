@@ -1,0 +1,24 @@
+Table good1 {
+  id integer [pk]
+}
+
+Tabl oops {
+
+Table good2 {
+  id integer [pk]
+  !!!broken-line
+  name varchar
+}
+
+Ref: good2.id > good1.id
+
+Table "quoted table" {
+  id integer [pk
+  label varchar
+}
+
+Enum broken_enum {
+  a
+  !!!bad
+  b
+}
