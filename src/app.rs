@@ -190,13 +190,48 @@ impl App {
     }
 
     /// Canvas inner rect (inside the block border).
-    pub fn canvas_inner(&self) -> Rect {
+    /// Diagram viewport: canvas inner minus the block border AND the
+    /// scrollbar gutters (right column + bottom row).
+    pub fn view_rect(&self) -> Rect {
         let c = self.panes.canvas;
         Rect {
             x: c.x.saturating_add(1),
             y: c.y.saturating_add(1),
-            width: c.width.saturating_sub(2),
-            height: c.height.saturating_sub(2),
+            width: c.width.saturating_sub(3),
+            height: c.height.saturating_sub(3),
+        }
+    }
+
+    /// Vertical scrollbar geometry: (content, viewport, offset). Content and
+    /// viewport in diagram cells (text mode) or raster pixels (image mode).
+    pub fn scroll_v(&self) -> (u32, u32, i32) {
+        match (&self.diagram, self.render_mode) {
+            (Some(l), crate::render::Mode::Text) => (
+                (l.extent.1 + 1) as u32,
+                self.view_rect().height as u32,
+                self.pan.1,
+            ),
+            _ => (
+                self.full_raster.as_ref().map_or(1, |i| i.height()),
+                self.canvas_px.1,
+                self.img_pan.1,
+            ),
+        }
+    }
+
+    /// Horizontal scrollbar geometry; see `scroll_v`.
+    pub fn scroll_h(&self) -> (u32, u32, i32) {
+        match (&self.diagram, self.render_mode) {
+            (Some(l), crate::render::Mode::Text) => (
+                (l.extent.0 + 1) as u32,
+                self.view_rect().width as u32,
+                self.pan.0,
+            ),
+            _ => (
+                self.full_raster.as_ref().map_or(1, |i| i.width()),
+                self.canvas_px.0,
+                self.img_pan.0,
+            ),
         }
     }
 
@@ -206,7 +241,7 @@ impl App {
         use crate::render::{raster, svg};
         let Some(picker) = &self.picker else { return };
         let Some(layout) = &self.diagram else { return };
-        let inner = self.canvas_inner();
+        let inner = self.view_rect();
         let (fw, fh) = self.font_px();
         let aw = (inner.width as u32).saturating_mul(fw).max(1);
         let ah = (inner.height as u32).saturating_mul(fh).max(1);
@@ -274,7 +309,7 @@ impl App {
         if (new - old).abs() < f32::EPSILON {
             return;
         }
-        let inner = self.canvas_inner();
+        let inner = self.view_rect();
         let (fw, fh) = self.font_px();
         let cx = col.saturating_sub(inner.x) as f32 * fw as f32;
         let cy = row.saturating_sub(inner.y) as f32 * fh as f32;
@@ -288,7 +323,7 @@ impl App {
     /// Find the table box under a screen position, if any.
     pub fn table_at(&self, col: u16, row: u16) -> Option<&crate::layout::TableBox> {
         let layout = self.diagram.as_ref()?;
-        let inner = self.canvas_inner();
+        let inner = self.view_rect();
         let (cx, cy) = (col as i32, row as i32);
         for b in &layout.boxes {
             let (bx, by, bw, bh) = match self.render_mode {
@@ -755,11 +790,11 @@ mod tests {
         assert!(app.full_raster.is_some(), "raster built");
         let (w, h) = app.full_raster.as_ref().unwrap().dimensions();
         assert!(
-            w >= 58 * 10 && h >= 36 * 20,
+            w >= 57 * 10 && h >= 35 * 20,
             "raster covers viewport: {w}x{h}"
         );
         assert!(app.proto.is_some(), "protocol created");
-        assert_eq!(app.canvas_px, (58 * 10, 36 * 20));
+        assert_eq!(app.canvas_px, (57 * 10, 35 * 20));
 
         // zoom keeps the cursor point stationary and requests a refresh
         app.zoom_at(50, 10, 1);
@@ -780,7 +815,7 @@ mod tests {
             "zoom enlarged raster: {w}x{h} -> {w2}x{h2}"
         );
         assert!(
-            app.img_pan.0 <= w2 as i32 - 58 * 10 && app.img_pan.1 <= h2 as i32 - 36 * 20,
+            app.img_pan.0 <= w2 as i32 - 57 * 10 && app.img_pan.1 <= h2 as i32 - 35 * 20,
             "clamped: pan={:?} raster={w2}x{h2}",
             app.img_pan
         );
@@ -791,7 +826,7 @@ mod tests {
         let mut app = App::with_sample_source();
         app.panes.canvas = Rect::new(40, 0, 60, 38);
         // "users" is the first box at diagram (0,0)
-        let inner = app.canvas_inner();
+        let inner = app.view_rect();
         let hit = app.table_at(inner.x, inner.y);
         assert!(hit.is_some(), "box at canvas origin");
         assert_eq!(hit.unwrap().title, "users");

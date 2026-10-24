@@ -1,4 +1,4 @@
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols;
 use ratatui::text::{Line, Span};
@@ -193,12 +193,13 @@ fn draw_canvas(f: &mut Frame, app: &mut App, area: Rect) {
         .title(" canvas ")
         .border_style(focus_style(app.focus == Focus::Canvas));
     let inner = block.inner(area);
+    let view = app.view_rect();
     f.render_widget(block, area);
 
     match app.render_mode {
         crate::render::Mode::Text => {
             if let Some(layout) = &app.diagram {
-                crate::render::text::render(f.buffer_mut(), inner, layout, app.pan);
+                crate::render::text::render(f.buffer_mut(), view, layout, app.pan);
             }
         }
         crate::render::Mode::Kitty | crate::render::Mode::Sixel => {
@@ -206,18 +207,116 @@ fn draw_canvas(f: &mut Frame, app: &mut App, area: Rect) {
             // event loop re-crops.
             let (fw, fh) = app.font_px();
             let px = (
-                (inner.width as u32).saturating_mul(fw).max(1),
-                (inner.height as u32).saturating_mul(fh).max(1),
+                (view.width as u32).saturating_mul(fw).max(1),
+                (view.height as u32).saturating_mul(fh).max(1),
             );
             if px != app.canvas_px {
                 app.image_due = true;
             }
             if let Some(proto) = app.proto.as_mut() {
-                f.render_widget(ratatui_image::Image::new(&*proto), inner);
+                f.render_widget(ratatui_image::Image::new(&*proto), view);
             } else {
                 let para = Paragraph::new("rasterizing…").style(Style::new().fg(Color::DarkGray));
-                f.render_widget(para, inner);
+                f.render_widget(para, view);
             }
+        }
+    }
+    draw_scrollbars(f, app, inner, view);
+}
+
+/// Proportional-thumb geometry: (thumb_start, thumb_len) as fractions of
+/// the track, for a content size, viewport size, and scroll offset.
+/// Content that fits shows a full-track thumb.
+fn thumb(content: u32, viewport: u32, offset: i32) -> (f32, f32) {
+    if content <= viewport {
+        return (0.0, 1.0);
+    }
+    let content = content as f32;
+    let viewport = viewport as f32;
+    let offset = offset.clamp(0, (content - viewport) as i32) as f32;
+    let size = (viewport / content).clamp(0.05, 1.0);
+    let pos = offset / (content - viewport);
+    (pos * (1.0 - size), size)
+}
+
+/// Inverse of `thumb`: the scroll offset that puts the thumb center at
+/// `frac` along the track.
+pub fn offset_at(content: u32, viewport: u32, frac: f32) -> i32 {
+    if content <= viewport {
+        return 0;
+    }
+    let max = (content - viewport) as f32;
+    (frac.clamp(0.0, 1.0) * max).round() as i32
+}
+
+/// Scrollbar geometry on screen: track column/row plus the inclusive cell
+/// range of each thumb. Shared by drawing and mouse hit-testing.
+pub struct ScrollBars {
+    /// Vertical: (track_col, thumb_start_row, thumb_end_row).
+    pub v: Option<(u16, u16, u16)>,
+    /// Horizontal: (track_row, thumb_start_col, thumb_end_col).
+    pub h: Option<(u16, u16, u16)>,
+}
+
+pub fn scrollbar_rects(app: &App, inner: Rect, view: Rect) -> ScrollBars {
+    let mut bars = ScrollBars { v: None, h: None };
+    if inner.width < 4 || inner.height < 4 {
+        return bars;
+    }
+    let vx = view.right(); // inner.right() - 1
+    let hy = view.bottom();
+
+    let track_h = inner.height.saturating_sub(1); // exclude the h-track row
+    let (cv, vv, ov) = app.scroll_v();
+    let (s, l) = thumb(cv, vv, ov);
+    let len = ((l * track_h as f32).ceil() as u16).clamp(1, track_h);
+    let start = ((s * track_h as f32).round() as u16).min(track_h - len);
+    let t0 = inner.y + start;
+    bars.v = Some((vx, t0, t0 + len - 1));
+
+    let track_w = inner.width.saturating_sub(1); // exclude the v-track col
+    let (ch, vh, oh) = app.scroll_h();
+    let (s, l) = thumb(ch, vh, oh);
+    let len = ((l * track_w as f32).ceil() as u16).clamp(1, track_w);
+    let start = ((s * track_w as f32).round() as u16).min(track_w - len);
+    let t0 = inner.x + start;
+    bars.h = Some((hy, t0, t0 + len - 1));
+    bars
+}
+
+fn draw_scrollbars(f: &mut Frame, app: &App, inner: Rect, view: Rect) {
+    let bars = scrollbar_rects(app, inner, view);
+    let buf = f.buffer_mut();
+    let track_style = Style::new().bg(Color::Rgb(31, 34, 46));
+    let thumb_style = Style::new().bg(Color::Rgb(90, 98, 120));
+    if let Some((vx, t0, t1)) = bars.v {
+        for y in inner.y..view.bottom() {
+            let style = if (t0..=t1).contains(&y) {
+                thumb_style
+            } else {
+                track_style
+            };
+            if let Some(cell) = buf.cell_mut(Position { x: vx, y }) {
+                cell.set_char(' ').set_style(style);
+            }
+        }
+    }
+    if let Some((hy, t0, t1)) = bars.h {
+        for x in inner.x..view.right() {
+            let style = if (t0..=t1).contains(&x) {
+                thumb_style
+            } else {
+                track_style
+            };
+            if let Some(cell) = buf.cell_mut(Position { x, y: hy }) {
+                cell.set_char(' ').set_style(style);
+            }
+        }
+    }
+    // corner where the tracks meet
+    if let (Some((vx, _, _)), Some((hy, _, _))) = (bars.v, bars.h) {
+        if let Some(cell) = buf.cell_mut(Position { x: vx, y: hy }) {
+            cell.set_char(' ').set_style(track_style);
         }
     }
 }
@@ -332,4 +431,59 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         Paragraph::new(Line::from(spans)).style(Style::new().bg(Color::Black)),
         area,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thumb_math() {
+        // content that fits shows a full-track thumb
+        assert_eq!(thumb(10, 20, 0), (0.0, 1.0));
+        assert_eq!(thumb(20, 20, 5), (0.0, 1.0));
+        // half the content visible, scrolled a quarter: thumb at 1/4..3/4
+        let (s, l) = thumb(200, 100, 25);
+        assert!((l - 0.5).abs() < 1e-6);
+        assert!((s - 0.125).abs() < 1e-6);
+        // at max offset the thumb sits flush at the end
+        let (s, l) = thumb(200, 100, 100);
+        assert!((s - (1.0 - l)).abs() < 1e-6);
+        // tiny viewports clamp to a minimum thumb
+        let (_, l) = thumb(1000, 10, 0);
+        assert!((l - 0.05).abs() < 1e-6);
+        // negative or overflowing offsets clamp
+        assert_eq!(thumb(200, 100, -50).0, 0.0);
+        assert_eq!(thumb(200, 100, 500).0, 1.0 - thumb(200, 100, 500).1);
+    }
+
+    #[test]
+    fn offset_math() {
+        assert_eq!(offset_at(200, 100, 0.0), 0);
+        assert_eq!(offset_at(200, 100, 0.5), 50);
+        assert_eq!(offset_at(200, 100, 1.0), 100);
+        // content that fits never scrolls
+        assert_eq!(offset_at(10, 20, 1.0), 0);
+    }
+
+    #[test]
+    fn scrollbar_rects_stay_in_track() {
+        let mut app = App::with_sample_source();
+        app.panes.canvas = Rect::new(40, 0, 60, 38);
+        let c = app.panes.canvas;
+        let inner = Rect {
+            x: c.x + 1,
+            y: c.y + 1,
+            width: c.width - 2,
+            height: c.height - 2,
+        };
+        let view = app.view_rect();
+        let bars = scrollbar_rects(&app, inner, view);
+        let (vx, t0, t1) = bars.v.expect("vertical bar");
+        assert_eq!(vx, view.right());
+        assert!(t0 >= inner.y && t1 < view.bottom(), "{t0}..{t1}");
+        let (hy, s0, s1) = bars.h.expect("horizontal bar");
+        assert_eq!(hy, view.bottom());
+        assert!(s0 >= inner.x && s1 < view.right(), "{s0}..{s1}");
+    }
 }
