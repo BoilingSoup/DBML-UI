@@ -100,9 +100,9 @@ pub fn layout(schema: &Schema) -> Layout {
     }
     // Cycle members never entered the queue: park them after everything.
     let max_layer = layer.iter().copied().max().unwrap_or(0);
-    for i in 0..n {
+    for (i, l) in layer.iter_mut().enumerate() {
         if !order.contains(&i) {
-            layer[i] = max_layer + 1;
+            *l = max_layer + 1;
         }
     }
 
@@ -220,7 +220,7 @@ fn fk_ref(e: &Edge) -> (usize, usize) {
     }
 }
 
-fn find_box<'a>(boxes: &'a [TableBox], node: usize) -> &'a TableBox {
+fn find_box(boxes: &[TableBox], node: usize) -> &TableBox {
     boxes.iter().find(|b| b.node == node).expect("box for node")
 }
 
