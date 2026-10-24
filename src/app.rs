@@ -146,8 +146,9 @@ impl App {
     fn empty() -> Self {
         Self {
             should_quit: false,
+            // editor/canvas width fraction (f32's derived default would be 0)
+            split: 0.4,
             focus: Focus::default(),
-            split: 0.0,
             divider_dragging: false,
             pan: (0, 0),
             pan_anchor: None,
@@ -426,7 +427,8 @@ impl App {
         let layout = self.diagram.as_ref()?;
         let inner = self.view_rect();
         let (cx, cy) = (col as i32, row as i32);
-        for b in &layout.boxes {
+        // reverse: later boxes are drawn last, so the topmost wins overlaps
+        for b in layout.boxes.iter().rev() {
             let (bx, by, bw, bh) = match self.render_mode {
                 crate::render::Mode::Text => (
                     inner.x as i32 + b.x + self.pan.0,

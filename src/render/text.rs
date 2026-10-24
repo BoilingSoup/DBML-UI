@@ -82,7 +82,12 @@ fn draw_route(buf: &mut Buffer, area: Rect, pts: &[(i32, i32)], pan: (i32, i32))
     if pts.len() < 2 {
         return;
     }
-    let pts: Vec<(i32, i32)> = pts.iter().map(|&(x, y)| (x + pan.0, y + pan.1)).collect();
+    // diagram coords -> absolute buffer coords (view origin + pan)
+    let (ox, oy) = (area.x as i32, area.y as i32);
+    let pts: Vec<(i32, i32)> = pts
+        .iter()
+        .map(|&(x, y)| (ox + x + pan.0, oy + y + pan.1))
+        .collect();
     // Corners first (they need both segment directions).
     for w in pts.windows(2) {
         let (x1, y1) = w[0];
@@ -155,8 +160,8 @@ fn put_str(buf: &mut Buffer, area: Rect, x: i32, y: i32, s: &str, style: Style) 
 }
 
 fn draw_table(buf: &mut Buffer, area: Rect, b: &TableBox, pan: (i32, i32)) {
-    let x0 = b.x + pan.0;
-    let y0 = b.y + pan.1;
+    let x0 = area.x as i32 + b.x + pan.0;
+    let y0 = area.y as i32 + b.y + pan.1;
     // Offscreen in either axis: skip entirely.
     if x0 >= area.right() as i32 || x0 + b.w <= area.x as i32 {
         return;
@@ -250,6 +255,22 @@ mod tests {
         // marker sits at x0 + 2
         assert_eq!(sym(&buf, 2, 1), "◆");
         assert_eq!(sym(&buf, 0, 2), "└");
+    }
+
+    #[test]
+    fn renders_relative_to_area_origin() {
+        // regression: the canvas pane sits mid-screen; boxes must be drawn
+        // relative to the view rect, not at absolute buffer origin
+        let src = "Table users { id integer [pk] }";
+        let (buf, _) = rendered(src, Rect::new(20, 5, 40, 10), (0, 0));
+        assert_eq!(sym(&buf, 20, 5), "┌", "box corner at the view origin");
+        let top: String = (20..34).map(|x| sym(&buf, x, 5)).collect();
+        assert!(top.contains("users"), "{top:?}");
+        assert_eq!(sym(&buf, 20, 6), "│");
+        // and pan still shifts within the offset area
+        let (buf, _) = rendered(src, Rect::new(20, 5, 40, 10), (3, 2));
+        assert_eq!(sym(&buf, 23, 7), "┌");
+        assert_eq!(sym(&buf, 20, 5), " ", "old position cleared by diff");
     }
 
     #[test]
