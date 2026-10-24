@@ -45,15 +45,19 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_status(f, app, rows[1]);
 }
 
-fn draw_editor(f: &mut Frame, app: &App, area: Rect) {
+fn draw_editor(f: &mut Frame, app: &mut App, area: Rect) {
     let block = Block::bordered()
         .title(" editor ")
         .border_style(focus_style(app.focus == Focus::Editor));
     let inner = block.inner(area);
     f.render_widget(block, area);
-    let placeholder = "// DBML editor arrives in M4\nTable users {\n  id integer [pk]\n}";
-    let para = Paragraph::new(placeholder).style(Style::new().fg(Color::Gray));
-    f.render_widget(para, inner);
+
+    // Fake cursor via cell style (like tui-textarea's own examples).
+    app.editor.ta.set_cursor_style(match app.editor.mode {
+        crate::editor::Mode::Insert => Style::new().bg(Color::Cyan).fg(Color::Black),
+        crate::editor::Mode::Normal => Style::new().bg(Color::DarkGray).fg(Color::White),
+    });
+    f.render_widget(&app.editor.ta, inner);
 }
 
 fn draw_divider(f: &mut Frame, app: &App, area: Rect) {
@@ -88,44 +92,71 @@ fn draw_canvas(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_status(f: &mut Frame, app: &App, area: Rect) {
-    let mode = match app.focus {
-        Focus::Editor => "EDITOR",
-        Focus::Canvas => "CANVAS",
-    };
-    let line = Line::from(vec![
-        Span::styled(
-            format!(" -- {mode} -- "),
-            Style::new().fg(Color::Black).bg(Color::Cyan),
+    let mut spans: Vec<Span> = Vec::new();
+
+    if let Some(cmd) = &app.editor.cmdline {
+        spans.push(Span::styled(
+            format!(" {}{}▏ ", cmd.kind, cmd.input),
+            Style::new().fg(Color::Black).bg(Color::Yellow),
+        ));
+    } else {
+        let (label, style) = match app.focus {
+            Focus::Canvas => (" CANVAS ", Style::new().fg(Color::Black).bg(Color::Cyan)),
+            Focus::Editor => match app.editor.mode {
+                crate::editor::Mode::Insert => (
+                    " INSERT ",
+                    Style::new().fg(Color::Black).bg(Color::LightGreen),
+                ),
+                crate::editor::Mode::Normal => {
+                    (" NORMAL ", Style::new().fg(Color::Black).bg(Color::White))
+                }
+            },
+        };
+        spans.push(Span::styled(label, style));
+    }
+
+    let (row, col) = app.editor.cursor();
+    spans.push(Span::styled(
+        format!(" tui-db  Ln {}, Col {} ", row + 1, col + 1),
+        Style::new().fg(Color::DarkGray),
+    ));
+    spans.push(Span::styled(
+        format!(
+            "tables {} ",
+            app.diagram.as_ref().map_or(0, |l| l.boxes.len())
         ),
-        Span::raw(" tui-db "),
-        Span::styled("render: text ", Style::new().fg(Color::DarkGray)),
-        Span::styled(
-            format!(
-                "tables {} errors {} ",
-                app.diagram.as_ref().map_or(0, |l| l.boxes.len()),
-                app.parse_errors.len()
-            ),
-            Style::new().fg(if app.parse_errors.is_empty() {
-                Color::DarkGray
-            } else {
-                Color::Red
-            }),
-        ),
-        Span::styled(
-            format!("pan {},{} ", app.pan.0, app.pan.1),
-            Style::new().fg(Color::DarkGray),
-        ),
-        Span::styled(
-            format!("split {:.0}% ", app.split * 100.0),
-            Style::new().fg(Color::DarkGray),
-        ),
-        Span::styled(
-            "q quit · Tab focus · drag pan · wheel scroll",
+        Style::new().fg(Color::DarkGray),
+    ));
+    spans.push(Span::styled(
+        format!("errors {} ", app.parse_errors.len()),
+        Style::new().fg(if app.parse_errors.is_empty() {
+            Color::DarkGray
+        } else {
+            Color::Red
+        }),
+    ));
+    if let Some(first) = app.parse_errors.first() {
+        let (ln, _) = crate::dbml::parser::line_col_at(&app.source, first.offset);
+        spans.push(Span::styled(
+            format!("E{}: {} ", ln + 1, first.message),
+            Style::new().fg(Color::Red),
+        ));
+    }
+
+    if let Some(msg) = &app.message {
+        spans.push(Span::styled(
+            msg.clone(),
+            Style::new().fg(Color::Yellow).bg(Color::Black),
+        ));
+    } else {
+        spans.push(Span::styled(
+            " Ctrl-c quit · Tab focus · :cmd · /search",
             Style::new().fg(Color::Blue),
-        ),
-    ]);
+        ));
+    }
+
     f.render_widget(
-        Paragraph::new(line).style(Style::new().bg(Color::Black)),
+        Paragraph::new(Line::from(spans)).style(Style::new().bg(Color::Black)),
         area,
     );
 }

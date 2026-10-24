@@ -11,6 +11,7 @@ crossterm = "0.28.1"
 image = { version = "=0.25.6", default-features = false, features = ["png"] }
 ratatui = "0.29"
 ratatui-image = { version = "=8.0.1", default-features = false }
+regex = "1.13.1"
 resvg = "0.45.1"
-tui-textarea = "0.7"
+tui-textarea = { version = "0.7", features = ["search"] }
 unicode-width = "=0.2.0"
