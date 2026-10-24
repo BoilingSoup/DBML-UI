@@ -51,6 +51,11 @@ pub struct Editor {
     pub mode: Mode,
     /// Operator-pending / multi-key sequences in flight.
     pending: Option<Pending>,
+    /// Count typed before the current key ([count]motion, [count]operator).
+    count: Option<u32>,
+    /// Count captured when the operator key itself was pressed; multiplies
+    /// with `count` (vim: 2d3w == 6w).
+    op_count: Option<u32>,
     pub cmdline: Option<CmdLine>,
     register: Vec<String>,
     /// Source ended with a newline; preserved by `text()` for byte-identical
@@ -83,6 +88,8 @@ impl Editor {
             ta,
             mode: Mode::Normal,
             pending: None,
+            count: None,
+            op_count: None,
             cmdline: None,
             register: Vec::new(),
             trailing_newline: source.ends_with('\n'),
@@ -114,6 +121,34 @@ impl Editor {
             Mode::Normal => "NORMAL",
             Mode::Insert => "INSERT",
             Mode::Visual => "VISUAL",
+        }
+    }
+
+    /// Vim-style showcmd: the in-progress count and pending operator, e.g.
+    /// "2d3".
+    pub fn showcmd(&self) -> Option<String> {
+        let mut s = String::new();
+        if let Some(c) = self.count {
+            s.push_str(&c.to_string());
+        }
+        let p = match self.pending {
+            Some(Pending::G) => "g",
+            Some(Pending::D) => "d",
+            Some(Pending::C) => "c",
+            Some(Pending::Y) => "y",
+            Some(Pending::Di) => "di",
+            Some(Pending::Ci) => "ci",
+            Some(Pending::Da) => "da",
+            Some(Pending::Ca) => "ca",
+            Some(Pending::Dg) => "dg",
+            Some(Pending::Cg) => "cg",
+            None => "",
+        };
+        s.push_str(p);
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
         }
     }
 
@@ -189,20 +224,59 @@ impl Editor {
         if self.mode == Mode::Visual {
             return self.handle_visual_key(key);
         }
+        if self.accumulate_count(key.code) {
+            return Action::None;
+        }
         if let Some(p) = self.pending.take() {
-            return self.handle_sequence(p, key.code);
+            let action = self.handle_sequence(p, key.code);
+            if self.pending.is_none() {
+                self.count = None;
+                self.op_count = None;
+            }
+            return action;
         }
 
         let m = key.modifiers;
         if let Some(action) = self.apply_motion(key.code) {
+            self.count = None;
             return action;
         }
+        let action = self.dispatch_normal(key, m);
+        if self.pending.is_none() {
+            self.count = None;
+            self.op_count = None;
+        }
+        action
+    }
+
+    /// Digits accumulate a count; a leading `0` stays the head-of-line
+    /// motion. Returns true when the key was consumed as a count digit.
+    fn accumulate_count(&mut self, code: KeyCode) -> bool {
+        match code {
+            KeyCode::Char(d @ '1'..='9') => {
+                let v = (d as u8 - b'0') as u32;
+                self.count = Some((self.count.unwrap_or(0) * 10 + v).min(999_999));
+                true
+            }
+            KeyCode::Char('0') if self.count.is_some() => {
+                self.count = Some(self.count.unwrap_or(0) * 10);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn dispatch_normal(&mut self, key: KeyEvent, m: KeyModifiers) -> Action {
         match key.code {
             KeyCode::Char('r') if m.contains(KeyModifiers::CONTROL) => {
-                let _ = self.ta.redo();
+                let n = self.count.take().unwrap_or(1).max(1);
+                for _ in 0..n {
+                    let _ = self.ta.redo();
+                }
                 Action::Changed
             }
             KeyCode::Char('g') => {
+                self.op_count = self.count.take();
                 self.pending = Some(Pending::G);
                 Action::None
             }
@@ -244,8 +318,22 @@ impl Editor {
                 Action::Changed
             }
             KeyCode::Char('x') => {
-                let _ = self.ta.delete_next_char();
-                Action::Changed
+                let n = self.count.take().unwrap_or(1).max(1) as usize;
+                // x never crosses the line end
+                let (row, col) = self.ta.cursor();
+                let remain = self
+                    .ta
+                    .lines()
+                    .get(row)
+                    .map(|l| l.chars().count().saturating_sub(col))
+                    .unwrap_or(0);
+                let n = n.min(remain);
+                if n > 0 {
+                    let _ = self.ta.delete_str(n);
+                    Action::Changed
+                } else {
+                    Action::None
+                }
             }
             KeyCode::Char('D') => {
                 let _ = self.ta.delete_line_by_end();
@@ -257,21 +345,33 @@ impl Editor {
                 Action::Changed
             }
             KeyCode::Char('c') => {
+                self.op_count = self.count.take();
                 self.pending = Some(Pending::C);
                 Action::None
             }
             KeyCode::Char('d') => {
+                self.op_count = self.count.take();
                 self.pending = Some(Pending::D);
                 Action::None
             }
             KeyCode::Char('y') => {
+                self.op_count = self.count.take();
                 self.pending = Some(Pending::Y);
                 Action::None
             }
-            KeyCode::Char('p') => self.paste(false),
-            KeyCode::Char('P') => self.paste(true),
+            KeyCode::Char('p') => {
+                let n = self.count.take().unwrap_or(1).max(1);
+                self.paste_n(false, n)
+            }
+            KeyCode::Char('P') => {
+                let n = self.count.take().unwrap_or(1).max(1);
+                self.paste_n(true, n)
+            }
             KeyCode::Char('u') => {
-                let _ = self.ta.undo();
+                let n = self.count.take().unwrap_or(1).max(1);
+                for _ in 0..n {
+                    let _ = self.ta.undo();
+                }
                 Action::Changed
             }
             KeyCode::Char('/') => {
@@ -301,6 +401,17 @@ impl Editor {
     }
 
     fn handle_visual_key(&mut self, key: KeyEvent) -> Action {
+        if self.accumulate_count(key.code) {
+            return Action::None;
+        }
+        let action = self.dispatch_visual(key);
+        if self.pending.is_none() {
+            self.count = None;
+        }
+        action
+    }
+
+    fn dispatch_visual(&mut self, key: KeyEvent) -> Action {
         match key.code {
             KeyCode::Esc => {
                 self.ta.cancel_selection();
@@ -352,94 +463,147 @@ impl Editor {
     /// Motions shared by normal and visual mode; Some(action) when handled.
     /// Selections extend automatically while `is_selecting`.
     fn apply_motion(&mut self, code: KeyCode) -> Option<Action> {
-        let m = match code {
-            KeyCode::Char('h') | KeyCode::Left => CursorMove::Back,
-            KeyCode::Char('l') | KeyCode::Right => CursorMove::Forward,
-            KeyCode::Char('j') | KeyCode::Down => CursorMove::Down,
-            KeyCode::Char('k') | KeyCode::Up => CursorMove::Up,
-            KeyCode::Char('w') => CursorMove::WordForward,
-            KeyCode::Char('b') => CursorMove::WordBack,
-            KeyCode::Char('e') => CursorMove::WordEnd,
-            KeyCode::Char('0') | KeyCode::Home => CursorMove::Head,
-            KeyCode::Char('$') | KeyCode::End => CursorMove::End,
-            KeyCode::Char('^') => CursorMove::Head,
-            KeyCode::Char('G') => CursorMove::Bottom,
-            KeyCode::Char('{') => CursorMove::ParagraphBack,
-            KeyCode::Char('}') => CursorMove::ParagraphForward,
-            _ => return None,
-        };
-        self.ta.move_cursor(m);
+        let count = self.count.take();
+        let n = count.unwrap_or(1).max(1) as usize;
+        match code {
+            // count is an absolute line number for G
+            KeyCode::Char('G') => match count {
+                Some(line) => {
+                    let rows = self.ta.lines().len().max(1);
+                    let row = (line as usize).saturating_sub(1).min(rows - 1);
+                    self.ta.move_cursor(CursorMove::Jump(row as u16, 0));
+                }
+                None => self.ta.move_cursor(CursorMove::Bottom),
+            },
+            // n$ moves to the end of the (n-1)th line below
+            KeyCode::Char('$') | KeyCode::End => {
+                for _ in 1..n {
+                    self.ta.move_cursor(CursorMove::Down);
+                }
+                self.ta.move_cursor(CursorMove::End);
+            }
+            // counts don't repeat line-head motions
+            KeyCode::Char('0') | KeyCode::Home | KeyCode::Char('^') => {
+                self.ta.move_cursor(CursorMove::Head);
+            }
+            KeyCode::Char('h') | KeyCode::Left => self.repeat(CursorMove::Back, n),
+            KeyCode::Char('l') | KeyCode::Right => self.repeat(CursorMove::Forward, n),
+            KeyCode::Char('j') | KeyCode::Down => self.repeat(CursorMove::Down, n),
+            KeyCode::Char('k') | KeyCode::Up => self.repeat(CursorMove::Up, n),
+            KeyCode::Char('w') => self.repeat(CursorMove::WordForward, n),
+            KeyCode::Char('b') => self.repeat(CursorMove::WordBack, n),
+            KeyCode::Char('e') => self.repeat(CursorMove::WordEnd, n),
+            KeyCode::Char('{') => self.repeat(CursorMove::ParagraphBack, n),
+            KeyCode::Char('}') => self.repeat(CursorMove::ParagraphForward, n),
+            _ => {
+                self.count = count; // not a motion; keep the count
+                return None;
+            }
+        }
         Some(Action::None)
+    }
+
+    fn repeat(&mut self, m: CursorMove, n: usize) {
+        for _ in 0..n {
+            self.ta.move_cursor(m);
+        }
     }
 
     fn handle_sequence(&mut self, leader: Pending, code: KeyCode) -> Action {
         use Pending::*;
+        // vim multiplies leading and trailing counts: 2d3w == 6w
+        let rep = (self.op_count.unwrap_or(1).max(1) as usize)
+            .saturating_mul(self.count.unwrap_or(1).max(1) as usize);
         match (leader, code) {
             (G, KeyCode::Char('g')) => {
-                self.ta.move_cursor(CursorMove::Jump(0, 0));
+                // [count]gg jumps to line N
+                if let Some(line) = self.count.or(self.op_count) {
+                    let rows = self.ta.lines().len().max(1);
+                    let row = (line as usize).saturating_sub(1).min(rows - 1);
+                    self.ta.move_cursor(CursorMove::Jump(row as u16, 0));
+                } else {
+                    self.ta.move_cursor(CursorMove::Jump(0, 0));
+                }
                 Action::None
             }
             (Y, KeyCode::Char('y')) => {
-                let (row, _) = self.ta.cursor();
-                if let Some(line) = self.ta.lines().get(row) {
-                    self.register = vec![line.to_string()];
-                }
+                self.yank_lines(rep);
                 Action::None
             }
             (D, KeyCode::Char('d')) => {
-                let (row, _) = self.ta.cursor();
-                if let Some(line) = self.ta.lines().get(row) {
-                    self.register = vec![line.to_string()];
-                    let len = line.chars().count();
-                    self.ta.move_cursor(CursorMove::Jump(row as u16, 0));
-                    let _ = self.ta.delete_str(len + 1); // also eats the newline
-                }
+                self.yank_lines(rep);
+                self.delete_lines(rep);
                 Action::Changed
             }
             (C, KeyCode::Char('c')) => {
-                // cc: clear the line, keep it, and edit
-                let (row, _) = self.ta.cursor();
-                self.ta.move_cursor(CursorMove::Jump(row as u16, 0));
-                let _ = self.ta.delete_line_by_end();
+                // [count]cc deletes the lines and edits one empty line
+                self.yank_lines(rep);
+                self.delete_lines(rep);
+                self.ta.insert_newline();
+                self.ta.move_cursor(CursorMove::Up);
                 self.mode = Mode::Insert;
                 Action::Changed
             }
             // operator + motions; cw follows vim's cw == ce special case
-            (D, KeyCode::Char('w')) => self.operate(&[CursorMove::WordForward], false, true, false),
-            (C, KeyCode::Char('w')) => self.operate(&[CursorMove::WordEnd], true, true, true),
-            (D, KeyCode::Char('e')) => self.operate(&[CursorMove::WordEnd], true, false, false),
-            (C, KeyCode::Char('e')) => self.operate(&[CursorMove::WordEnd], true, false, true),
-            (D, KeyCode::Char('b')) => self.operate(&[CursorMove::WordBack], false, false, false),
-            (C, KeyCode::Char('b')) => self.operate(&[CursorMove::WordBack], false, false, true),
+            (D, KeyCode::Char('w')) => {
+                self.operate(&vec![CursorMove::WordForward; rep], false, true, false)
+            }
+            (C, KeyCode::Char('w')) => {
+                self.operate(&vec![CursorMove::WordEnd; rep], true, true, true)
+            }
+            (D, KeyCode::Char('e')) => {
+                self.operate(&vec![CursorMove::WordEnd; rep], true, false, false)
+            }
+            (C, KeyCode::Char('e')) => {
+                self.operate(&vec![CursorMove::WordEnd; rep], true, false, true)
+            }
+            (D, KeyCode::Char('b')) => {
+                self.operate(&vec![CursorMove::WordBack; rep], false, false, false)
+            }
+            (C, KeyCode::Char('b')) => {
+                self.operate(&vec![CursorMove::WordBack; rep], false, false, true)
+            }
             (D, KeyCode::Char('0') | KeyCode::Home | KeyCode::Char('^')) => {
                 self.operate(&[CursorMove::Head], false, false, false)
             }
             (C, KeyCode::Char('0') | KeyCode::Home | KeyCode::Char('^')) => {
                 self.operate(&[CursorMove::Head], false, false, true)
             }
+            // n$ operates to the end of the (n-1)th line below; the End
+            // position already sits past the last char, so this is exclusive
             (D, KeyCode::Char('$') | KeyCode::End) => {
-                self.operate(&[CursorMove::End], true, false, false)
+                let mut ms = vec![CursorMove::Down; rep.saturating_sub(1)];
+                ms.push(CursorMove::End);
+                self.operate(&ms, false, false, false)
             }
             (C, KeyCode::Char('$') | KeyCode::End) => {
-                self.operate(&[CursorMove::End], true, false, true)
+                let mut ms = vec![CursorMove::Down; rep.saturating_sub(1)];
+                ms.push(CursorMove::End);
+                self.operate(&ms, false, false, true)
             }
+            // [count]G targets an absolute line, linewise (like vim)
             (D, KeyCode::Char('G')) => {
-                self.operate(&[CursorMove::Bottom, CursorMove::End], false, false, false)
+                let target = self.line_target_row(false);
+                self.operate_lines(target, false)
             }
             (C, KeyCode::Char('G')) => {
-                self.operate(&[CursorMove::Bottom, CursorMove::End], false, false, true)
+                let target = self.line_target_row(false);
+                self.operate_lines(target, true)
             }
             (D, KeyCode::Char('{')) => {
-                self.operate(&[CursorMove::ParagraphBack], false, false, false)
+                self.operate(&vec![CursorMove::ParagraphBack; rep], false, false, false)
             }
             (C, KeyCode::Char('{')) => {
-                self.operate(&[CursorMove::ParagraphBack], false, false, true)
+                self.operate(&vec![CursorMove::ParagraphBack; rep], false, false, true)
             }
-            (D, KeyCode::Char('}')) => {
-                self.operate(&[CursorMove::ParagraphForward], false, false, false)
-            }
+            (D, KeyCode::Char('}')) => self.operate(
+                &vec![CursorMove::ParagraphForward; rep],
+                false,
+                false,
+                false,
+            ),
             (C, KeyCode::Char('}')) => {
-                self.operate(&[CursorMove::ParagraphForward], false, false, true)
+                self.operate(&vec![CursorMove::ParagraphForward; rep], false, false, true)
             }
             (D, KeyCode::Char('g')) => {
                 self.pending = Some(Dg);
@@ -450,9 +614,13 @@ impl Editor {
                 Action::None
             }
             (Dg, KeyCode::Char('g')) => {
-                self.operate(&[CursorMove::Jump(0, 0)], false, false, false)
+                let target = self.line_target_row(true);
+                self.operate_lines(target, false)
             }
-            (Cg, KeyCode::Char('g')) => self.operate(&[CursorMove::Jump(0, 0)], false, false, true),
+            (Cg, KeyCode::Char('g')) => {
+                let target = self.line_target_row(true);
+                self.operate_lines(target, true)
+            }
             // text objects
             (D, KeyCode::Char('i')) => {
                 self.pending = Some(Di);
@@ -476,6 +644,54 @@ impl Editor {
             (Ca, KeyCode::Char('w')) => self.operate_word(true, true),
             _ => Action::None,
         }
+    }
+
+    /// Target row for G/gg operators: `[count]` is an absolute line number
+    /// (1-based); without one, G means the last row and gg the first.
+    fn line_target_row(&self, from_gg: bool) -> usize {
+        if let Some(line) = self.count.or(self.op_count) {
+            let rows = self.ta.lines().len().max(1);
+            (line as usize).saturating_sub(1).min(rows - 1)
+        } else if from_gg {
+            0
+        } else {
+            self.ta.lines().len().saturating_sub(1)
+        }
+    }
+
+    /// Linewise d/c to a target row (for G/gg): whole lines from the cursor
+    /// row through the target row.
+    fn operate_lines(&mut self, target: usize, insert: bool) -> Action {
+        let (row, _) = self.ta.cursor();
+        let from = row.min(target);
+        let n = row.abs_diff(target) + 1;
+        self.ta.move_cursor(CursorMove::Jump(from as u16, 0));
+        self.yank_lines(n);
+        self.delete_lines(n);
+        if insert {
+            self.ta.insert_newline();
+            self.ta.move_cursor(CursorMove::Up);
+            self.mode = Mode::Insert;
+        }
+        Action::Changed
+    }
+
+    /// Yank `n` lines from the cursor row into the register.
+    fn yank_lines(&mut self, n: usize) {
+        let (row, _) = self.ta.cursor();
+        let lines = self.ta.lines();
+        let end = (row + n.max(1)).min(lines.len());
+        self.register = lines[row..end].to_vec();
+    }
+
+    /// Delete `n` lines starting at the cursor row.
+    fn delete_lines(&mut self, n: usize) {
+        let (row, _) = self.ta.cursor();
+        let lines = self.ta.lines();
+        let end = (row + n.max(1)).min(lines.len());
+        let total: usize = lines[row..end].iter().map(|l| l.chars().count() + 1).sum();
+        self.ta.move_cursor(CursorMove::Jump(row as u16, 0));
+        let _ = self.ta.delete_str(total);
     }
 
     /// Apply the pending `d`/`c` operator over a cursor motion: delete the
@@ -597,7 +813,7 @@ impl Editor {
         Some((s, e))
     }
 
-    fn paste(&mut self, before: bool) -> Action {
+    fn paste_n(&mut self, before: bool, times: u32) -> Action {
         if self.register.is_empty() {
             return Action::None;
         }
@@ -609,12 +825,17 @@ impl Editor {
             self.ta.move_cursor(CursorMove::End);
         }
         self.ta.insert_newline();
-        for (i, line) in self.register.iter().enumerate() {
-            if i > 0 {
+        for c in 0..times {
+            if c > 0 {
                 self.ta.insert_newline();
             }
-            if !line.is_empty() {
-                let _ = self.ta.insert_str(line);
+            for (i, line) in self.register.iter().enumerate() {
+                if i > 0 {
+                    self.ta.insert_newline();
+                }
+                if !line.is_empty() {
+                    let _ = self.ta.insert_str(line);
+                }
             }
         }
         Action::Changed
@@ -914,13 +1135,111 @@ mod tests {
         // dG from the middle keeps everything before the cursor
         let (_, t) = typed("one\ntwo\nthree", "jdG");
         assert_eq!(t, "one\n");
-        // dgg deletes everything before the cursor
-        let (_, t) = typed("one\ntwo\nthree", "jlldgg");
-        assert_eq!(t, "o\nthree");
-        // cG clears forward and inserts
+        // dgg deletes whole lines up to and including the cursor line
+        let (_, t) = typed("one\ntwo\nthree", "jdgg");
+        assert_eq!(t, "three");
+        // cG clears forward and leaves an empty line to edit
         let (e, t) = typed("one\ntwo", "jcG");
-        assert_eq!(t, "one\n");
+        assert_eq!(t, "one\n\n");
         assert_eq!(e.mode, Mode::Insert);
+    }
+
+    #[test]
+    fn counts_with_motions() {
+        // 3j
+        let mut e = editor("a\nb\nc\nd");
+        e.handle_key(key('3'));
+        e.handle_key(key('j'));
+        assert_eq!(e.cursor().0, 3);
+        // 2w
+        let mut e = editor("one two three");
+        e.handle_key(key('2'));
+        e.handle_key(key('w'));
+        assert_eq!(e.cursor(), (0, 8));
+        // 10l clamps at EOL
+        let mut e = editor("hello");
+        e.handle_key(key('1'));
+        e.handle_key(key('0'));
+        e.handle_key(key('l'));
+        assert_eq!(e.cursor(), (0, 5));
+        // 2$ goes to the end of the next line
+        let mut e = editor("hello\nworld!");
+        e.handle_key(key('2'));
+        e.handle_key(key('$'));
+        assert_eq!(e.cursor(), (1, 6));
+        // 3gg / 4G absolute line jumps (clamped)
+        let mut e = editor("a\nb\nc\nd\ne");
+        e.handle_key(key('3'));
+        e.handle_key(key('g'));
+        e.handle_key(key('g'));
+        assert_eq!(e.cursor().0, 2);
+        e.handle_key(key('4'));
+        e.handle_key(key('G'));
+        assert_eq!(e.cursor().0, 3);
+        e.handle_key(key('9'));
+        e.handle_key(key('G'));
+        assert_eq!(e.cursor().0, 4, "clamped to last line");
+        // count does not leak into the next command
+        e.handle_key(key('j'));
+        assert_eq!(e.cursor().0, 4, "plain j moves one");
+    }
+
+    #[test]
+    fn counts_with_operators() {
+        // d3w deletes three words
+        let (_, t) = typed("one two three four", "d3w");
+        assert_eq!(t, "four");
+        // 2dd deletes two lines
+        let (_, t) = typed("a\nb\nc", "2dd");
+        assert_eq!(t, "c");
+        // 2d2w == d4w (counts multiply)
+        let (_, t) = typed("one two three four five", "2d2w");
+        assert_eq!(t, "five");
+        // 3x deletes three chars as one undo unit
+        let mut e = editor("abcdef");
+        e.handle_key(key('3'));
+        e.handle_key(key('x'));
+        assert_eq!(e.text(), "def");
+        e.handle_key(key('u'));
+        assert_eq!(e.text(), "abcdef");
+        // 3x clamps at EOL
+        let (_, t) = typed("ab", "5x");
+        assert_eq!(t, "");
+        // d2$ deletes to end of next line
+        let (_, t) = typed("hello\nworld\n!", "ld2$");
+        assert_eq!(t, "h\n!");
+        // 2yy then 3p pastes twice, thrice
+        let mut e = editor("x\ny");
+        e.handle_key(key('2'));
+        e.handle_key(key('y'));
+        e.handle_key(key('y'));
+        e.handle_key(key('G'));
+        e.handle_key(key('3'));
+        e.handle_key(key('p'));
+        assert_eq!(e.text(), "x\ny\nx\ny\nx\ny\nx\ny");
+        // d2G from line 4 deletes lines 2-4
+        let (_, t) = typed("l1\nl2\nl3\nl4\nl5", "3jd2G");
+        assert_eq!(t, "l1\nl5");
+        // 3cc clears 3 lines into one editable empty line
+        let (e, t) = typed("a\nb\nc\nd", "3cc");
+        assert_eq!(t, "\nd");
+        assert_eq!(e.mode, Mode::Insert);
+    }
+
+    #[test]
+    fn zero_is_motion_until_count_started() {
+        // leading 0 = head of line (cursor at col 3)
+        let (_, t) = typed("hello", "llld0");
+        assert_eq!(t, "lo");
+        // 0 after a count is a digit: 10l
+        let mut e = editor("0123456789abc");
+        e.handle_key(key('1'));
+        e.handle_key(key('0'));
+        e.handle_key(key('l'));
+        assert_eq!(e.cursor(), (0, 10));
+        // d0 keeps working with a fresh count: 2d0 deletes [head, cursor)
+        let (_, t) = typed("hello", "lll2d0");
+        assert_eq!(t, "lo", "count before d0 is ignored, not typed");
     }
 
     #[test]

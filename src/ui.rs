@@ -91,8 +91,20 @@ fn draw_help(f: &mut Frame, area: Rect) {
             Span::raw("   visual select, yank/delete"),
         ]),
         Line::from(vec![
-            Span::styled("  x dd dw yy p P D", dim),
+            Span::styled("  d/c + w b e 0 $ G gg", dim),
+            Span::raw("  operator + motion"),
+        ]),
+        Line::from(vec![
+            Span::styled("  diw ciw daw caw cc C", dim),
+            Span::raw("  word objects / line"),
+        ]),
+        Line::from(vec![
+            Span::styled("  x dd yy p P D", dim),
             Span::raw("  edits"),
+        ]),
+        Line::from(vec![
+            Span::styled("  3x d3w 2dd 5G 2d2w", dim),
+            Span::raw("  counts (2d3w == 6w)"),
         ]),
         Line::from(vec![
             Span::styled("  u  Ctrl-r", dim),
@@ -235,6 +247,14 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
             },
         };
         spans.push(Span::styled(label, style));
+    }
+
+    // vim-style showcmd: in-progress count / pending operator
+    if let Some(sc) = app.editor.showcmd() {
+        spans.push(Span::styled(
+            format!(" {sc}▏ "),
+            Style::new().fg(Color::Black).bg(Color::DarkGray),
+        ));
     }
 
     let (row, col) = app.editor.cursor();
