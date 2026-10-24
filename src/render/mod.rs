@@ -1,3 +1,4 @@
+pub mod kitty;
 pub mod raster;
 pub mod svg;
 pub mod text;

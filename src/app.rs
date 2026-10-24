@@ -1,4 +1,4 @@
-use std::io;
+use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
@@ -80,6 +80,15 @@ pub struct TableDrag {
     pub pending: Option<(i32, i32)>,
 }
 
+/// Live table-drag outline geometry in screen cells.
+pub struct DragOutline {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    pub title: String,
+}
+
 /// Screen rectangles of the main regions, refreshed each frame. Used for
 /// hit-testing mouse events between draws.
 #[derive(Debug, Default, Clone, Copy)]
@@ -142,6 +151,16 @@ pub struct App {
     /// release (`pending`); per-tick re-transmission would flood the
     /// terminal, so the UI draws a cheap outline instead.
     pub table_drag: Option<TableDrag>,
+    /// Kitty graphics: id of the transmitted raster (0 = none) and the id
+    /// allocator. Pixels are transmitted once per layout/zoom change; pans
+    /// re-place the same id with a source crop.
+    pub kitty_id: u32,
+    kitty_next_id: u32,
+    /// Kitty protocol bytes (transmit/put/delete) pending write before the
+    /// next frame, so buffer text lands on top of the placement.
+    pub kitty_out: Vec<u8>,
+    /// Placement-only refresh needed (e.g. the drag outline moved).
+    pub kitty_put_due: bool,
     /// Help overlay visibility.
     pub show_help: bool,
 }
@@ -193,6 +212,10 @@ impl App {
             sb_drag: None,
             table_pos: std::collections::HashMap::new(),
             table_drag: None,
+            kitty_id: 0,
+            kitty_next_id: 1,
+            kitty_out: Vec::new(),
+            kitty_put_due: false,
             show_help: false,
         }
     }
@@ -272,7 +295,7 @@ impl App {
     /// Rebuild the full raster (if stale) and re-crop/re-transmit the
     /// viewport. Called from the event loop, throttled.
     pub fn refresh_image(&mut self) {
-        use crate::render::{raster, svg};
+        use crate::render::{kitty, raster, svg};
         let Some(picker) = &self.picker else { return };
         let Some(layout) = &self.diagram else { return };
         let inner = self.view_rect();
@@ -292,6 +315,7 @@ impl App {
                 .full_raster
                 .as_ref()
                 .is_none_or(|i| i.dimensions() != (want_w, want_h));
+        let mut old_kitty = None;
         if stale {
             // Text-mode zoom renders a label-free outline: at 1x2
             // pseudo-pixels per cell, labels are unreadable noise anyway.
@@ -299,6 +323,16 @@ impl App {
             let (sw, sh) = svg::svg_size(layout);
             match raster::rasterize(&doc, want_w, want_h, want_w as f32 / sw, want_h as f32 / sh) {
                 Ok(img) => {
+                    if self.render_mode == crate::render::Mode::Kitty {
+                        // transmit pixels once; panning afterwards only
+                        // re-places this id with a new source crop
+                        let id = self.kitty_next_id;
+                        self.kitty_next_id += 1;
+                        let bytes = kitty::transmit(id, &img);
+                        self.kitty_out.extend_from_slice(&bytes);
+                        old_kitty = (self.kitty_id != 0).then_some(self.kitty_id);
+                        self.kitty_id = id;
+                    }
                     self.full_raster = Some(img);
                     self.raster_gen = self.layout_gen;
                 }
@@ -307,6 +341,17 @@ impl App {
                     return;
                 }
             }
+        }
+
+        if self.render_mode == crate::render::Mode::Kitty {
+            // place, then retire the replaced id (its placement is fully
+            // covered by the new one)
+            self.kitty_put();
+            if let Some(old) = old_kitty {
+                let bytes = kitty::delete(old);
+                self.kitty_out.extend_from_slice(&bytes);
+            }
+            return;
         }
 
         let Some(full) = &self.full_raster else {
@@ -353,6 +398,102 @@ impl App {
             Ok(proto) => self.proto = Some(proto),
             Err(e) => self.message = Some(format!("image protocol failed: {e}")),
         }
+    }
+
+    /// Queue a placement of the transmitted raster into the view (kitty
+    /// only). Cheap by design — one CUP plus one `a=p` carrying a pixel
+    /// source crop — so pan frames never re-send pixels.
+    pub fn kitty_put(&mut self) {
+        if self.kitty_id == 0 {
+            return;
+        }
+        let (aw, ah) = self.canvas_px;
+        if aw == 0 || ah == 0 {
+            return;
+        }
+        let Some(full) = &self.full_raster else {
+            return;
+        };
+        // clamp pan to the raster
+        let max_x = (full.width().saturating_sub(aw)) as i32;
+        let max_y = (full.height().saturating_sub(ah)) as i32;
+        self.img_pan.0 = self.img_pan.0.clamp(0, max_x.max(0));
+        self.img_pan.1 = self.img_pan.1.clamp(0, max_y.max(0));
+        let fx = self.img_pan.0.max(0) as u32;
+        let fy = self.img_pan.1.max(0) as u32;
+        let sw = full.width().saturating_sub(fx).min(aw);
+        let sh = full.height().saturating_sub(fy).min(ah);
+        let inner = self.view_rect();
+        let bytes = crate::render::kitty::put(crate::render::kitty::Put {
+            id: self.kitty_id,
+            cell: (inner.x, inner.y),
+            cells: (inner.width, inner.height),
+            src: &(fx, fy, sw, sh),
+        });
+        self.kitty_out.extend_from_slice(&bytes);
+    }
+
+    /// Live table-drag outline in screen cells, if a drag is pending.
+    pub fn drag_outline(&self) -> Option<DragOutline> {
+        let drag = self.table_drag.as_ref()?;
+        let pos = drag.pending?;
+        let b = self
+            .diagram
+            .as_ref()?
+            .boxes
+            .iter()
+            .find(|b| b.title == drag.title)?;
+        let (x, y) = self.diagram_to_screen(pos.0, pos.1);
+        Some(DragOutline {
+            x,
+            y,
+            w: (b.w as f32 * self.zoom) as i32,
+            h: (b.h as f32 * self.zoom) as i32,
+            title: b.title.clone(),
+        })
+    }
+
+    /// The drag outline as raw escapes (kitty). Emitted after each image
+    /// placement so it floats above the image: writing it through the
+    /// ratatui buffer would erase the image cells beneath.
+    fn kitty_outline_bytes(&self) -> Vec<u8> {
+        fn cell(out: &mut Vec<u8>, view: Rect, x: i32, y: i32, ch: &str) {
+            if x >= view.x as i32
+                && y >= view.y as i32
+                && x < view.right() as i32
+                && y < view.bottom() as i32
+            {
+                out.extend_from_slice(
+                    format!("\x1b[{};{}H\x1b[1;33m{ch}\x1b[0m", y + 1, x + 1).as_bytes(),
+                );
+            }
+        }
+        let Some(o) = self.drag_outline() else {
+            return Vec::new();
+        };
+        let view = self.view_rect();
+        let mut out = Vec::new();
+        for dx in 0..o.w {
+            cell(&mut out, view, o.x + dx, o.y, "─");
+            cell(&mut out, view, o.x + dx, o.y + o.h - 1, "─");
+        }
+        for dy in 0..o.h {
+            cell(&mut out, view, o.x, o.y + dy, "│");
+            cell(&mut out, view, o.x + o.w - 1, o.y + dy, "│");
+        }
+        cell(&mut out, view, o.x, o.y, "┌");
+        cell(&mut out, view, o.x + o.w - 1, o.y, "┐");
+        cell(&mut out, view, o.x, o.y + o.h - 1, "└");
+        cell(&mut out, view, o.x + o.w - 1, o.y + o.h - 1, "┘");
+        for (i, c) in o
+            .title
+            .chars()
+            .enumerate()
+            .take((o.w as usize).saturating_sub(2))
+        {
+            cell(&mut out, view, o.x + 1 + i as i32, o.y, &c.to_string());
+        }
+        out
     }
 
     /// Zoom by one step, keeping the point under the cursor stationary.
@@ -698,6 +839,11 @@ impl App {
         let result = self.event_loop(&mut terminal);
 
         disable_raw_mode()?;
+        if self.render_mode == crate::render::Mode::Kitty {
+            // free terminal-side image memory
+            let _ = io::stdout().write_all(&crate::render::kitty::delete_all());
+            let _ = io::stdout().flush();
+        }
         execute!(
             terminal.backend_mut(),
             LeaveAlternateScreen,
@@ -730,9 +876,13 @@ impl App {
                 self.dirty = false;
                 self.last_edit = None;
             }
-            // While a drag is active, cut emissions to ~10/s: each one is a
-            // multi-MB image transmission and terminals fall behind quickly.
-            let interval = if self.pan_anchor.is_some() || self.table_drag.is_some() {
+            // Kitty placements are ~60 bytes and run unthrottled; sixel and
+            // halfblocks still re-encode multi-KB frames, and while a drag
+            // is active those are cut to ~10/s so terminals keep up.
+            let is_kitty = self.render_mode == crate::render::Mode::Kitty;
+            let interval = if is_kitty {
+                Duration::ZERO
+            } else if self.pan_anchor.is_some() || self.table_drag.is_some() {
                 Duration::from_millis(100)
             } else {
                 IMAGE_TX_INTERVAL
@@ -742,6 +892,22 @@ impl App {
                 self.refresh_image();
                 self.image_due = false;
                 self.last_tx = Some(Instant::now());
+            } else if is_kitty && self.kitty_put_due {
+                self.kitty_put();
+                self.kitty_put_due = false;
+            }
+            if is_kitty {
+                // written after the handlers and before the next frame's
+                // buffer flush, so buffer text never erases the placement
+                let mut out = std::mem::take(&mut self.kitty_out);
+                if self.table_drag.is_some() {
+                    out.extend_from_slice(&self.kitty_outline_bytes());
+                }
+                if !out.is_empty() {
+                    let mut so = io::stdout();
+                    so.write_all(&out)?;
+                    so.flush()?;
+                }
             }
         }
         Ok(())
@@ -901,6 +1067,9 @@ impl App {
                                 pending: Some(pos),
                                 ..drag
                             });
+                            // kitty: re-place so the raw-outline stays on top
+                            // (a placement is ~60 bytes)
+                            self.kitty_put_due = self.render_mode == crate::render::Mode::Kitty;
                         } else {
                             self.table_pos.insert(drag.title, pos);
                             self.relayout();
@@ -1026,8 +1195,27 @@ mod tests {
             w >= 57 * 10 && h >= 35 * 20,
             "raster covers viewport: {w}x{h}"
         );
-        assert!(app.proto.is_some(), "protocol created");
+        assert!(
+            app.proto.is_none(),
+            "kitty renders via direct protocol commands, not ratatui-image"
+        );
         assert_eq!(app.canvas_px, (57 * 10, 35 * 20));
+
+        // first refresh transmitted the raster once and placed it
+        let cmds = String::from_utf8_lossy(&app.kitty_out).to_string();
+        assert!(cmds.contains("a=t,f=24"), "transmit: {cmds}");
+        assert!(cmds.contains("a=p,i=1,"), "placed: {cmds}");
+        assert!(!cmds.contains("a=d,"), "no old id to delete: {cmds}");
+        app.kitty_out.clear();
+
+        // panning re-places only: no pixel re-transmission
+        app.img_pan.0 += 120;
+        app.refresh_image();
+        let cmds = String::from_utf8_lossy(&app.kitty_out).to_string();
+        assert!(cmds.contains("a=p,i=1,c=57,"), "put: {cmds}");
+        assert!(!cmds.contains("a=t,"), "pan must not re-transmit: {cmds}");
+        assert!(cmds.len() < 200, "pan frame is tiny: {cmds}");
+        app.kitty_out.clear();
 
         // zoom keeps the cursor point stationary and requests a refresh
         app.zoom_at(50, 10, 1);
@@ -1052,6 +1240,12 @@ mod tests {
             "clamped: pan={:?} raster={w2}x{h2}",
             app.img_pan
         );
+        // zoom re-transmits under a new id and retires the old one after
+        // placing its replacement
+        let cmds = String::from_utf8_lossy(&app.kitty_out).to_string();
+        assert!(cmds.contains("a=t,f=24"), "re-transmit on zoom: {cmds}");
+        assert!(cmds.contains("a=p,i=2,"), "new id placed: {cmds}");
+        assert!(cmds.contains("a=d,d=I,i=1,"), "old id deleted: {cmds}");
     }
 
     #[test]

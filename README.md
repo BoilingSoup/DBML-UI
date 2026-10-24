@@ -26,17 +26,21 @@ A terminal DBML diagram editor — vim-style editing on the left, a live
 - **Live preview**: the diagram re-renders ~120ms after you stop typing;
   parse errors are reported in the status bar with the offending line.
 - **Renderers** (auto-detected, override with `--render`):
-  1. **kitty graphics protocol** — vector-rendered via SVG, zoom ×1.25
-     steps (1.0–8.0), pan by drag or `hjkl`
-  2. **sixel** — same pipeline, sixel encoding
+  1. **kitty graphics protocol** — vector-rendered via SVG. Pixels are
+     transmitted once per layout/zoom change (zlib+base64); panning and
+     table-drag feedback re-place the uploaded image with ~60-byte
+     commands, so drag/pan/zoom stay fluid with no per-frame image
+     traffic. Zoom ×1.25 steps (1.0–8.0), pan by drag or `hjkl`.
+  2. **sixel** — same raster pipeline, sixel encoding
   3. **text fallback** — box-drawing tables with `◆` pk / `◇` fk markers
      at 1:1 (native terminal resolution). Wheel-down zooms out to 0.25 via
-     a halfblocks outline minimap (works over plain SSH): labels are
-     dropped below 1:1 because a text cell can only carry 2 pseudo-pixels,
-     so the zoomed-out view shows crisp shapes and edges instead of
-     smeared text. Zoom-in is disabled in text mode — the cell renderer is
-     already at maximum terminal resolution and magnifying it through
-     halfblocks could only blur it.
+     a halfblocks outline minimap (works over plain SSH): raster labels
+     are dropped below 1:1 because a text cell can only carry 2
+     pseudo-pixels, but bold table titles are overlaid as crisp real text,
+     so the outline view still tells you which box is which. Zoom-in is
+     disabled in text mode — the cell renderer is already at maximum
+     terminal resolution and magnifying it through halfblocks could only
+     blur it.
 - **Full mouse support**: drag to pan (tables slide offscreen edges just
   like the browser), wheel to zoom (image modes) or scroll (text), drag
   the divider to resize panes, click a table to jump the editor to its

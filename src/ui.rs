@@ -221,39 +221,74 @@ fn draw_canvas(f: &mut Frame, app: &mut App, area: Rect) {
             if px != app.canvas_px {
                 app.image_due = true;
             }
-            if let Some(proto) = app.proto.as_mut() {
-                f.render_widget(ratatui_image::Image::new(&*proto), view);
-            } else {
-                let para = Paragraph::new("rasterizing…").style(Style::new().fg(Color::DarkGray));
-                f.render_widget(para, view);
-            }
-            // live drag feedback: a cell-drawn outline at the pending spot
-            // (kitty renders text over graphics fine; sixel does not)
-            if app.render_mode != crate::render::Mode::Sixel {
-                if let Some(drag) = &app.table_drag {
-                    if let Some((px, py)) = drag.pending {
-                        if let Some(b) = app
-                            .diagram
-                            .as_ref()
-                            .and_then(|l| l.boxes.iter().find(|b| b.title == drag.title))
-                        {
-                            let (sx, sy) = app.diagram_to_screen(px, py);
-                            draw_drag_outline(
-                                f,
-                                view,
-                                sx,
-                                sy,
-                                (b.w as f32 * app.zoom) as i32,
-                                (b.h as f32 * app.zoom) as i32,
-                                &b.title,
-                            );
-                        }
+            if app.render_mode != crate::render::Mode::Kitty {
+                // kitty images are placed by raw protocol commands between
+                // frames; rendering cells here would only erase them
+                if let Some(proto) = app.proto.as_mut() {
+                    f.render_widget(ratatui_image::Image::new(&*proto), view);
+                } else {
+                    let para =
+                        Paragraph::new("rasterizing…").style(Style::new().fg(Color::DarkGray));
+                    f.render_widget(para, view);
+                }
+                // live drag feedback via buffer cells (halfblocks zoom);
+                // kitty draws its outline as raw escapes after the placement
+                if app.render_mode == crate::render::Mode::Text {
+                    if let Some(o) = app.drag_outline() {
+                        draw_drag_outline(f, view, o.x, o.y, o.w, o.h, &o.title);
                     }
+                }
+                // table titles as real text over the halfblocks minimap:
+                // crisp at any zoom, unlike rasterized labels
+                if app.render_mode == crate::render::Mode::Text {
+                    draw_minimap_titles(f, app, view);
                 }
             }
         }
     }
     draw_scrollbars(f, app, inner, view);
+}
+
+/// Bold table titles drawn over the zoomed-out halfblocks minimap, so the
+/// outline view still tells you which box is which. Truncated to the box's
+/// width at the current zoom.
+fn draw_minimap_titles(f: &mut Frame, app: &App, view: Rect) {
+    use crate::model::NodeKind;
+    let Some(layout) = &app.diagram else { return };
+    let buf = f.buffer_mut();
+    for b in &layout.boxes {
+        let budget = (b.w as f32 * app.zoom).floor() as i32;
+        if budget < 4 {
+            continue;
+        }
+        let (sx, sy) = app.diagram_to_screen(b.x, b.y);
+        if sx < 0 || sy < 0 || sy >= view.bottom() as i32 || sx >= view.right() as i32 {
+            continue;
+        }
+        let fg = b
+            .header_color
+            .as_deref()
+            .and_then(crate::render::svg::parse_hex)
+            .map(|(r, g, b_)| Color::Rgb(r, g, b_))
+            .unwrap_or(match b.kind {
+                NodeKind::Table => Color::Rgb(79, 140, 247),
+                NodeKind::Enum => Color::Rgb(161, 120, 217),
+            });
+        let style = Style::new()
+            .fg(fg)
+            .bg(Color::Rgb(16, 18, 22))
+            .add_modifier(Modifier::BOLD);
+        let max_chars = (budget as usize - 2).min(b.title.chars().count());
+        for (i, c) in b.title.chars().take(max_chars).enumerate() {
+            let x = sx + 1 + i as i32;
+            if x >= view.right() as i32 {
+                break;
+            }
+            if let Some(cell) = buf.cell_mut(Position::new(x as u16, sy as u16)) {
+                cell.set_symbol(&c.to_string()).set_style(style);
+            }
+        }
+    }
 }
 
 /// Proportional-thumb geometry: (thumb_start, thumb_len) as fractions of
