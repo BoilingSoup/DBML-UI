@@ -4,6 +4,7 @@
 use unicode_width::UnicodeWidthStr;
 
 use crate::dbml::ast::Cardinality;
+use crate::dbml::ast::Span;
 use crate::model::{Edge, NodeKind, Schema};
 
 pub const GAP_X: i32 = 5;
@@ -36,6 +37,8 @@ pub struct TableBox {
     pub title: String,
     pub header_color: Option<String>,
     pub rows: Vec<Row>,
+    /// Span of the table/enum name in the source (click-to-jump target).
+    pub name_span: Option<Span>,
 }
 
 impl TableBox {
@@ -139,6 +142,7 @@ pub fn layout(schema: &Schema) -> Layout {
                 title,
                 header_color: node.header_color.clone(),
                 rows,
+                name_span: node.name_span.clone(),
             }
         })
         .collect();

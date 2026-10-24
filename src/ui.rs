@@ -43,6 +43,108 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_divider(f, app, divider);
     draw_canvas(f, app, canvas);
     draw_status(f, app, rows[1]);
+    if app.show_help {
+        draw_help(f, area);
+    }
+}
+
+fn draw_help(f: &mut Frame, area: Rect) {
+    let w = 64u16.min(area.width);
+    let h = 26u16.min(area.height);
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    let popup = Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
+    f.render_widget(ratatui::widgets::Clear, popup);
+    let block = Block::bordered()
+        .title(" help — press ? to close ")
+        .border_style(Style::new().fg(Color::Yellow));
+    let inner = block.inner(popup);
+    f.render_widget(block, popup);
+
+    let key = Style::new().fg(Color::Cyan);
+    let dim = Style::new().fg(Color::DarkGray);
+    let lines: Vec<Line> = vec![
+        Line::from(vec![Span::styled("editor (vim)", key), Span::raw("")]),
+        Line::from(vec![
+            Span::styled("  i a o O I A", dim),
+            Span::raw("  enter insert mode"),
+        ]),
+        Line::from(vec![
+            Span::styled("  Esc", dim),
+            Span::raw("           back to normal"),
+        ]),
+        Line::from(vec![
+            Span::styled("  h j k l w b e", dim),
+            Span::raw("  motions"),
+        ]),
+        Line::from(vec![
+            Span::styled("  0 $ ^ gg G { }", dim),
+            Span::raw("  line/paragraph motions"),
+        ]),
+        Line::from(vec![
+            Span::styled("  v  y / d / x", dim),
+            Span::raw("   visual select, yank/delete"),
+        ]),
+        Line::from(vec![
+            Span::styled("  x dd dw yy p P D", dim),
+            Span::raw("  edits"),
+        ]),
+        Line::from(vec![
+            Span::styled("  u  Ctrl-r", dim),
+            Span::raw("       undo / redo"),
+        ]),
+        Line::from(vec![
+            Span::styled("  /pat  n  N", dim),
+            Span::raw("      search"),
+        ]),
+        Line::from(vec![
+            Span::styled("  :w :q :wq :q! :e!", dim),
+            Span::raw(" file commands"),
+        ]),
+        Line::from(vec![
+            Span::styled("  :export f.svg|png", dim),
+            Span::raw(" export diagram"),
+        ]),
+        Line::from(vec![Span::raw("")]),
+        Line::from(vec![Span::styled("canvas", key)]),
+        Line::from(vec![
+            Span::styled("  Tab", dim),
+            Span::raw("            focus editor/canvas"),
+        ]),
+        Line::from(vec![
+            Span::styled("  drag / hjkl", dim),
+            Span::raw("      pan (tables slide offscreen)"),
+        ]),
+        Line::from(vec![
+            Span::styled("  wheel", dim),
+            Span::raw("          zoom (kitty/sixel) or scroll (text)"),
+        ]),
+        Line::from(vec![
+            Span::styled("  0", dim),
+            Span::raw("                reset pan"),
+        ]),
+        Line::from(vec![
+            Span::styled("  click table", dim),
+            Span::raw("      jump editor to its definition"),
+        ]),
+        Line::from(vec![Span::raw("")]),
+        Line::from(vec![Span::styled("other", key)]),
+        Line::from(vec![
+            Span::styled("  Ctrl-s", dim),
+            Span::raw("          save   ·   Ctrl-c quit"),
+        ]),
+        Line::from(vec![
+            Span::styled("  drag divider", dim),
+            Span::raw("    resize panes"),
+        ]),
+    ];
+    let para = Paragraph::new(lines);
+    f.render_widget(para, inner);
 }
 
 fn draw_editor(f: &mut Frame, app: &mut App, area: Rect) {
@@ -56,6 +158,7 @@ fn draw_editor(f: &mut Frame, app: &mut App, area: Rect) {
     app.editor.ta.set_cursor_style(match app.editor.mode {
         crate::editor::Mode::Insert => Style::new().bg(Color::Cyan).fg(Color::Black),
         crate::editor::Mode::Normal => Style::new().bg(Color::DarkGray).fg(Color::White),
+        crate::editor::Mode::Visual => Style::new().bg(Color::Magenta).fg(Color::Black),
     });
     f.render_widget(&app.editor.ta, inner);
 }
@@ -125,6 +228,9 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
                 ),
                 crate::editor::Mode::Normal => {
                     (" NORMAL ", Style::new().fg(Color::Black).bg(Color::White))
+                }
+                crate::editor::Mode::Visual => {
+                    (" VISUAL ", Style::new().fg(Color::Black).bg(Color::Magenta))
                 }
             },
         };

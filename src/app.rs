@@ -119,6 +119,10 @@ pub struct App {
     last_tx: Option<Instant>,
     /// Canvas inner size in pixels, tracked to detect resizes.
     pub canvas_px: (u32, u32),
+    /// Press position for click-vs-drag discrimination on the canvas.
+    click_origin: Option<(u16, u16)>,
+    /// Help overlay visibility.
+    pub show_help: bool,
 }
 
 impl Default for App {
@@ -163,6 +167,8 @@ impl App {
             image_due: false,
             last_tx: None,
             canvas_px: (0, 0),
+            click_origin: None,
+            show_help: false,
         }
     }
 }
@@ -279,6 +285,55 @@ impl App {
         self.image_due = true;
     }
 
+    /// Find the table box under a screen position, if any.
+    pub fn table_at(&self, col: u16, row: u16) -> Option<&crate::layout::TableBox> {
+        let layout = self.diagram.as_ref()?;
+        let inner = self.canvas_inner();
+        let (cx, cy) = (col as i32, row as i32);
+        for b in &layout.boxes {
+            let (bx, by, bw, bh) = match self.render_mode {
+                crate::render::Mode::Text => (
+                    inner.x as i32 + b.x + self.pan.0,
+                    inner.y as i32 + b.y + self.pan.1,
+                    b.w,
+                    b.h,
+                ),
+                _ => {
+                    let (fw, fh) = self.font_px();
+                    let m = crate::render::svg::MARGIN_CELLS;
+                    let px = ((b.x as f32 + m) * fw as f32 * self.zoom) as i32 - self.img_pan.0;
+                    let py = ((b.y as f32 + m) * fh as f32 * self.zoom) as i32 - self.img_pan.1;
+                    let sx = inner.x as i32 + (px as f32 / fw as f32) as i32;
+                    let sy = inner.y as i32 + (py as f32 / fh as f32) as i32;
+                    (
+                        sx,
+                        sy,
+                        (b.w as f32 * self.zoom) as i32,
+                        (b.h as f32 * self.zoom) as i32,
+                    )
+                }
+            };
+            if cx >= bx && cx < bx + bw && cy >= by && cy < by + bh {
+                return Some(b);
+            }
+        }
+        None
+    }
+
+    /// Click-to-jump: move the editor cursor to a table's definition.
+    fn jump_to_table_at(&mut self, col: u16, row: u16) {
+        let Some((title, span)) = self
+            .table_at(col, row)
+            .and_then(|b| b.name_span.clone().map(|span| (b.title.clone(), span)))
+        else {
+            return;
+        };
+        let (line, c) = parser::line_col_at(&self.source, span.start);
+        self.editor.jump(line, c);
+        self.focus = Focus::Editor;
+        self.message = Some(format!("jumped to {title}"));
+    }
+
     /// Re-parse the document and rebuild the diagram preview.
     pub fn set_source(&mut self, src: &str) {
         self.source = src.to_string();
@@ -336,6 +391,26 @@ impl App {
         Ok(())
     }
 
+    /// Export the current diagram to `.svg` or `.png` (2x scale).
+    pub fn export_diagram(&self, path: &str) -> anyhow::Result<String> {
+        use crate::render::{raster, svg};
+        let layout = self
+            .diagram
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("nothing to export"))?;
+        if path.ends_with(".png") {
+            let doc = svg::build_svg(layout);
+            let (sw, sh) = svg::svg_size(layout);
+            let scale = 2.0;
+            let img =
+                raster::rasterize(&doc, (sw * scale) as u32, (sh * scale) as u32, scale, scale)?;
+            img.save(path)?;
+        } else {
+            std::fs::write(path, svg::build_svg(layout))?;
+        }
+        Ok(format!("exported {path}"))
+    }
+
     /// Execute an ex command (already stripped of ':').
     pub fn handle_command(&mut self, input: &str) {
         use crate::commands::ExCommand;
@@ -370,7 +445,15 @@ impl App {
                 }
             }
             ExCommand::Export(arg) => {
-                self.message = Some(format!(":export {arg} arrives in a later milestone"));
+                let path = if arg.is_empty() {
+                    "diagram.svg".to_string()
+                } else {
+                    arg
+                };
+                match self.export_diagram(&path) {
+                    Ok(msg) => self.message = Some(msg),
+                    Err(e) => self.message = Some(format!("export failed: {e}")),
+                }
             }
             ExCommand::Unknown(why) => self.message = Some(why),
         }
@@ -467,6 +550,16 @@ impl App {
             };
             return;
         }
+        let typing = self.focus == Focus::Editor && self.editor.mode == crate::editor::Mode::Insert;
+        if key.code == KeyCode::Char('?') && !typing {
+            self.show_help = !self.show_help;
+            return;
+        }
+        if self.show_help && key.code != KeyCode::Tab {
+            // any other key closes the overlay first
+            self.show_help = false;
+            return;
+        }
         match self.focus {
             Focus::Editor => self.dispatch_editor_key(key),
             Focus::Canvas => self.on_canvas_key(key),
@@ -541,6 +634,7 @@ impl App {
                 } else if rect_contains(panes.canvas, col, row) {
                     self.focus = Focus::Canvas;
                     self.pan_anchor = Some((col, row));
+                    self.click_origin = Some((col, row));
                 } else if rect_contains(panes.editor, col, row) {
                     self.focus = Focus::Editor;
                 }
@@ -567,7 +661,14 @@ impl App {
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 self.divider_dragging = false;
+                // click (no drag) on a table box jumps the editor to it
+                if let Some((dc, dr)) = self.click_origin {
+                    if (col as i32 - dc as i32).abs() <= 1 && (row as i32 - dr as i32).abs() <= 1 {
+                        self.jump_to_table_at(col, row);
+                    }
+                }
                 self.pan_anchor = None;
+                self.click_origin = None;
             }
             MouseEventKind::ScrollUp => {
                 if rect_contains(panes.canvas, col, row) {
@@ -683,6 +784,44 @@ mod tests {
             "clamped: pan={:?} raster={w2}x{h2}",
             app.img_pan
         );
+    }
+
+    #[test]
+    fn click_jumps_to_table_definition() {
+        let mut app = App::with_sample_source();
+        app.panes.canvas = Rect::new(40, 0, 60, 38);
+        // "users" is the first box at diagram (0,0)
+        let inner = app.canvas_inner();
+        let hit = app.table_at(inner.x, inner.y);
+        assert!(hit.is_some(), "box at canvas origin");
+        assert_eq!(hit.unwrap().title, "users");
+
+        let before = app.editor.cursor();
+        app.jump_to_table_at(inner.x, inner.y);
+        let after = app.editor.cursor();
+        assert_ne!(before, after);
+        let (line, col) = after;
+        assert_eq!(app.editor.ta.lines()[line].get(col..col + 5), Some("users"));
+        assert_eq!(app.focus, Focus::Editor);
+    }
+
+    #[test]
+    fn export_writes_svg_and_png() {
+        let dir = std::env::temp_dir().join(format!("tui-db-export-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let app = App::with_sample_source();
+        let svg_path = dir.join("d.svg");
+        app.export_diagram(svg_path.to_str().unwrap()).unwrap();
+        let svg = std::fs::read_to_string(&svg_path).unwrap();
+        assert!(svg.starts_with("<svg"));
+
+        let png_path = dir.join("d.png");
+        app.export_diagram(png_path.to_str().unwrap()).unwrap();
+        let png = std::fs::read(&png_path).unwrap();
+        assert_eq!(&png[1..4], b"PNG");
+        assert!(png.len() > 10_000, "non-trivial png: {} bytes", png.len());
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

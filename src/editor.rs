@@ -7,6 +7,7 @@ use tui_textarea::{CursorMove, TextArea};
 pub enum Mode {
     Normal,
     Insert,
+    Visual,
 }
 
 /// Result of handling a key in the editor.
@@ -93,6 +94,7 @@ impl Editor {
         match self.mode {
             Mode::Normal => "NORMAL",
             Mode::Insert => "INSERT",
+            Mode::Visual => "VISUAL",
         }
     }
 
@@ -106,7 +108,7 @@ impl Editor {
         }
         match self.mode {
             Mode::Insert => self.handle_insert_key(key),
-            Mode::Normal => self.handle_normal_key(key),
+            Mode::Normal | Mode::Visual => self.handle_normal_key(key),
         }
     }
 
@@ -165,70 +167,29 @@ impl Editor {
     }
 
     fn handle_normal_key(&mut self, key: KeyEvent) -> Action {
+        if self.mode == Mode::Visual {
+            return self.handle_visual_key(key);
+        }
         if let Some(p) = self.pending.take() {
             return self.handle_sequence(p, key.code);
         }
 
         let m = key.modifiers;
+        if let Some(action) = self.apply_motion(key.code) {
+            return action;
+        }
         match key.code {
             KeyCode::Char('r') if m.contains(KeyModifiers::CONTROL) => {
                 let _ = self.ta.redo();
                 Action::Changed
             }
-            KeyCode::Char('h') | KeyCode::Left => {
-                self.ta.move_cursor(CursorMove::Back);
-                Action::None
-            }
-            KeyCode::Char('l') | KeyCode::Right => {
-                self.ta.move_cursor(CursorMove::Forward);
-                Action::None
-            }
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.ta.move_cursor(CursorMove::Down);
-                Action::None
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.ta.move_cursor(CursorMove::Up);
-                Action::None
-            }
-            KeyCode::Char('w') => {
-                self.ta.move_cursor(CursorMove::WordForward);
-                Action::None
-            }
-            KeyCode::Char('b') => {
-                self.ta.move_cursor(CursorMove::WordBack);
-                Action::None
-            }
-            KeyCode::Char('e') => {
-                self.ta.move_cursor(CursorMove::WordEnd);
-                Action::None
-            }
-            KeyCode::Char('0') | KeyCode::Home => {
-                self.ta.move_cursor(CursorMove::Head);
-                Action::None
-            }
-            KeyCode::Char('$') | KeyCode::End => {
-                self.ta.move_cursor(CursorMove::End);
-                Action::None
-            }
-            KeyCode::Char('^') => {
-                self.ta.move_cursor(CursorMove::Head);
-                Action::None
-            }
             KeyCode::Char('g') => {
                 self.pending = Some('g');
                 Action::None
             }
-            KeyCode::Char('G') => {
-                self.ta.move_cursor(CursorMove::Bottom);
-                Action::None
-            }
-            KeyCode::Char('{') => {
-                self.ta.move_cursor(CursorMove::ParagraphBack);
-                Action::None
-            }
-            KeyCode::Char('}') => {
-                self.ta.move_cursor(CursorMove::ParagraphForward);
+            KeyCode::Char('v') => {
+                self.mode = Mode::Visual;
+                self.ta.start_selection();
                 Action::None
             }
             KeyCode::Char('i') => {
@@ -309,6 +270,78 @@ impl Editor {
             }
             _ => Action::None,
         }
+    }
+
+    fn handle_visual_key(&mut self, key: KeyEvent) -> Action {
+        match key.code {
+            KeyCode::Esc => {
+                self.ta.cancel_selection();
+                self.mode = Mode::Normal;
+                Action::None
+            }
+            KeyCode::Char('y') => {
+                self.ta.copy();
+                self.register = self
+                    .ta
+                    .yank_text()
+                    .split('\n')
+                    .map(str::to_string)
+                    .collect();
+                // copy() leaves selection_start set, which would make later
+                // normal-mode motions extend an invisible selection
+                self.ta.cancel_selection();
+                self.mode = Mode::Normal;
+                Action::None
+            }
+            KeyCode::Char('d') | KeyCode::Char('x') => {
+                self.ta.cut();
+                self.register = self
+                    .ta
+                    .yank_text()
+                    .split('\n')
+                    .map(str::to_string)
+                    .collect();
+                self.ta.cancel_selection();
+                self.mode = Mode::Normal;
+                Action::Changed
+            }
+            KeyCode::Char('o') => {
+                // swap selection ends (vim vo); approximate by cancelling and
+                // restarting from the current cursor
+                self.ta.cancel_selection();
+                self.ta.start_selection();
+                Action::None
+            }
+            _ => {
+                if let Some(action) = self.apply_motion(key.code) {
+                    return action;
+                }
+                Action::None
+            }
+        }
+    }
+
+    /// Motions shared by normal and visual mode; Some(action) when handled.
+    /// Selections extend automatically while `is_selecting`.
+    fn apply_motion(&mut self, code: KeyCode) -> Option<Action> {
+        let m = match code {
+            KeyCode::Char('h') | KeyCode::Left => CursorMove::Back,
+            KeyCode::Char('l') | KeyCode::Right => CursorMove::Forward,
+            KeyCode::Char('j') | KeyCode::Down => CursorMove::Down,
+            KeyCode::Char('k') | KeyCode::Up => CursorMove::Up,
+            KeyCode::Char('w') => CursorMove::WordForward,
+            KeyCode::Char('b') => CursorMove::WordBack,
+            KeyCode::Char('e') => CursorMove::WordEnd,
+            KeyCode::Char('0') | KeyCode::Home => CursorMove::Head,
+            KeyCode::Char('$') | KeyCode::End => CursorMove::End,
+            KeyCode::Char('^') => CursorMove::Head,
+            KeyCode::Char('G') => CursorMove::Bottom,
+            KeyCode::Char('{') => CursorMove::ParagraphBack,
+            KeyCode::Char('}') => CursorMove::ParagraphForward,
+            _ => return None,
+        };
+        self.ta.move_cursor(m);
+        Some(Action::None)
     }
 
     fn handle_sequence(&mut self, leader: char, code: KeyCode) -> Action {
@@ -520,6 +553,53 @@ mod tests {
         let a = e.handle_key(enter());
         assert_eq!(a, Action::Command("w".to_string()));
         assert!(e.cmdline.is_none());
+    }
+
+    #[test]
+    fn visual_mode_yank_and_delete() {
+        let mut e = editor("one two three");
+        for _ in 0..4 {
+            e.handle_key(key('l'));
+        } // cursor at 't' of two (col 4)
+        e.handle_key(key('v'));
+        assert_eq!(e.mode, Mode::Visual);
+        e.handle_key(key('e')); // extend to end of "two"
+        e.handle_key(key('y'));
+        assert_eq!(e.mode, Mode::Normal);
+        assert_eq!(e.text(), "one two three"); // yank only
+
+        // visual y then p pastes the yanked text below
+        e.handle_key(key('$'));
+        e.handle_key(key('v'));
+        e.handle_key(key('b'));
+        e.handle_key(key('y'));
+        e.handle_key(key('p'));
+        let pasted = e.text().lines().nth(1).unwrap_or("").to_string();
+        assert!(
+            pasted.len() >= 3 && "three".contains(&pasted),
+            "pasted {pasted:?} from {}",
+            e.text()
+        );
+
+        // visual d deletes the selection (cursor sits on the pasted line)
+        e.handle_key(key('0'));
+        e.handle_key(key('v'));
+        e.handle_key(key('l'));
+        e.handle_key(key('d'));
+        assert_eq!(e.text().lines().nth(1), Some("hree"), "{}", e.text());
+        assert!(e.text().starts_with("one two"));
+    }
+
+    #[test]
+    fn visual_esc_cancels() {
+        let mut e = editor("abcdef");
+        e.handle_key(key('v'));
+        e.handle_key(key('l'));
+        e.handle_key(esc());
+        assert_eq!(e.mode, Mode::Normal);
+        // x deletes the char under the cursor (col 1 after the motion)
+        e.handle_key(key('x'));
+        assert_eq!(e.text(), "acdef");
     }
 
     #[test]
