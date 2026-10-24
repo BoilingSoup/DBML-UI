@@ -36,8 +36,8 @@ fn header_rgb(b: &TableBox) -> (u8, u8, u8) {
         .as_deref()
         .and_then(parse_hex)
         .unwrap_or(match b.kind {
-            NodeKind::Table => (47, 105, 212),
-            NodeKind::Enum => (122, 86, 168),
+            NodeKind::Table => (47, 122, 220),
+            NodeKind::Enum => (145, 104, 219),
         })
 }
 
@@ -54,7 +54,7 @@ pub fn build_svg(layout: &Layout) -> String {
     let mut s = format!(
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">"#
     );
-    s.push_str(r##"<rect width="100%" height="100%" fill="#f6f8fa"/>"##);
+    s.push_str(r##"<rect width="100%" height="100%" fill="#101216"/>"##);
     for r in &layout.edges {
         push_edge(&mut s, r);
     }
@@ -78,7 +78,7 @@ fn push_edge(s: &mut String, r: &EdgeRoute) {
         })
         .collect();
     s.push_str(&format!(
-        r##"<polyline points="{}" fill="none" stroke="#8b949e" stroke-width="1.5"/>"##,
+        r##"<polyline points="{}" fill="none" stroke="#6e7681" stroke-width="1.5"/>"##,
         pts.join(" ")
     ));
 }
@@ -92,7 +92,7 @@ fn push_table(s: &mut String, b: &TableBox) {
 
     // body with rounded corners
     s.push_str(&format!(
-        r##"<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="7" fill="#ffffff" stroke="#d0d7de"/>"##
+        r##"<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="7" fill="#1c2128" stroke="#444c56"/>"##
     ));
     // header band (rounded on top)
     let r = 7.0f32.min(w / 2.0).min(CELL_H / 2.0);
@@ -119,11 +119,11 @@ fn push_table(s: &mut String, b: &TableBox) {
     for (i, row) in b.rows.iter().enumerate() {
         let ry = y + (i as f32 + 1.0) * CELL_H + CELL_H * 0.70;
         let (marker, mfill) = if row.pk {
-            ("\u{25c6}", "#b08800") // ◆
+            ("\u{25c6}", "#d29922") // ◆
         } else if row.fk {
-            ("\u{25c7}", "#0969da") // ◇
+            ("\u{25c7}", "#4493f8") // ◇
         } else {
-            ("", "#ffffff")
+            ("", "#e6edf3")
         };
         if !marker.is_empty() {
             s.push_str(&format!(
@@ -132,13 +132,13 @@ fn push_table(s: &mut String, b: &TableBox) {
             ));
         }
         s.push_str(&format!(
-            r##"<text x="{}" y="{ry:.1}" font-family="monospace" font-size="{row_size}" fill="#1f2328">{}</text>"##,
+            r##"<text x="{}" y="{ry:.1}" font-family="monospace" font-size="{row_size}" fill="#e6edf3">{}</text>"##,
             x + 3.2 * CELL_W,
             escape(&row.name)
         ));
         if !row.ty.is_empty() {
             s.push_str(&format!(
-                r##"<text x="{}" y="{ry:.1}" font-family="monospace" font-size="{row_size}" fill="#656d76">{}</text>"##,
+                r##"<text x="{}" y="{ry:.1}" font-family="monospace" font-size="{row_size}" fill="#8b949e">{}</text>"##,
                 x + (3.2 + row.name.width() as f32 + 0.8) * CELL_W,
                 escape(&row.ty)
             ));
