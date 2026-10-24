@@ -74,6 +74,17 @@ pub struct Layout {
 /// Longest-path layering over ref edges (cycles tolerated: Kahn order, with
 /// cycle members appended after the last layer), then column packing.
 pub fn layout(schema: &Schema) -> Layout {
+    layout_with_overrides(schema, &std::collections::HashMap::new())
+}
+
+/// Layout with user-dragged table positions (diagram coordinates, keyed by
+/// table/enum name). Overridden boxes keep their dragged position; column
+/// extents, content bounds, and edge routes are computed from the final
+/// positions. New/renamed tables fall back to the automatic placement.
+pub fn layout_with_overrides(
+    schema: &Schema,
+    overrides: &std::collections::HashMap<String, (i32, i32)>,
+) -> Layout {
     let n = schema.nodes.len();
 
     let mut indeg = vec![0usize; n];
@@ -182,6 +193,31 @@ pub fn layout(schema: &Schema) -> Layout {
         cols.push((x, x + col_w));
         if count > 0 {
             x += col_w + GAP_X;
+        }
+    }
+
+    // Dragged positions win over the automatic packing.
+    for b in &mut placed {
+        if let Some((x, y)) = overrides.get(&b.title) {
+            b.x = (*x).max(0);
+            b.y = (*y).max(0);
+        }
+    }
+    // Recompute column extents and bounds from the final positions so
+    // routing and scrollbars reflect where boxes actually are.
+    let mut max_right = 0;
+    let mut max_bottom = 0;
+    for l in 0..cols.len() {
+        let mut start = i32::MAX;
+        let mut end = i32::MIN;
+        for b in placed.iter().filter(|b| layer[b.node] == l) {
+            start = start.min(b.x);
+            end = end.max(b.right());
+            max_right = max_right.max(b.right());
+            max_bottom = max_bottom.max(b.bottom());
+        }
+        if start != i32::MAX {
+            cols[l] = (start, end);
         }
     }
 
@@ -360,6 +396,35 @@ Ref: b.ra > a.id
             "route {r:?} boxes {:?}",
             l.boxes
         );
+    }
+
+    #[test]
+    fn overrides_move_boxes_and_recompute_extent() {
+        let src = "
+Table a { id integer [pk] }
+Table b { id integer [pk] b_ref integer }
+Ref: b.b_ref > a.id
+";
+        let out = parser::parse(src);
+        let schema = crate::model::build(&out.doc);
+        let auto = layout(&schema);
+        let a_auto = auto.boxes.iter().find(|b| b.title == "a").unwrap().clone();
+
+        let mut ov = std::collections::HashMap::new();
+        ov.insert("a".to_string(), (40, 12));
+        let moved = layout_with_overrides(&schema, &ov);
+        let a_moved = moved.boxes.iter().find(|b| b.title == "a").unwrap();
+        assert_eq!((a_moved.x, a_moved.y), (40, 12), "override applied");
+        assert_ne!((a_moved.x, a_moved.y), (a_auto.x, a_auto.y));
+        // extent covers the dragged position
+        assert!(moved.extent.0 >= a_moved.right() && moved.extent.1 >= a_moved.bottom());
+        // the edge between b and a now routes around the moved box: it uses
+        // the below-channel path since b's column is no longer adjacent
+        assert_eq!(moved.edges.len(), 1);
+        // unnamed tables keep automatic placement
+        let b_moved = moved.boxes.iter().find(|b| b.title == "b").unwrap().clone();
+        let b_auto = auto.boxes.iter().find(|b| b.title == "b").unwrap().clone();
+        assert_eq!((b_moved.x, b_moved.y), (b_auto.x, b_auto.y));
     }
 
     #[test]

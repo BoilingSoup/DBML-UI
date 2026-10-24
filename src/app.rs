@@ -123,6 +123,11 @@ pub struct App {
     click_origin: Option<(u16, u16)>,
     /// Scrollbar drag in flight: Some(true) vertical, Some(false) horizontal.
     sb_drag: Option<bool>,
+    /// User-dragged table positions (diagram coords, by table/enum name);
+    /// survive re-parses while editing.
+    pub table_pos: std::collections::HashMap<String, (i32, i32)>,
+    /// Table drag in flight: (title, grab offset in diagram cells, origin).
+    table_drag: Option<(String, (i32, i32), (u16, u16))>,
     /// Help overlay visibility.
     pub show_help: bool,
 }
@@ -171,6 +176,8 @@ impl App {
             canvas_px: (0, 0),
             click_origin: None,
             sb_drag: None,
+            table_pos: std::collections::HashMap::new(),
+            table_drag: None,
             show_help: false,
         }
     }
@@ -323,6 +330,34 @@ impl App {
         self.image_due = true;
     }
 
+    /// Re-run the pipeline for the current source (keeps dragged positions).
+    pub fn relayout(&mut self) {
+        let src = self.source.clone();
+        self.set_source(&src);
+    }
+
+    /// Diagram coordinates under a screen position (inverse of the
+    /// renderers' transforms).
+    fn cursor_diagram_pos(&self, col: u16, row: u16) -> (i32, i32) {
+        let view = self.view_rect();
+        match self.render_mode {
+            crate::render::Mode::Text => (
+                col as i32 - view.x as i32 - self.pan.0,
+                row as i32 - view.y as i32 - self.pan.1,
+            ),
+            _ => {
+                let (fw, fh) = self.font_px();
+                let m = crate::render::svg::MARGIN_CELLS;
+                let fx = (col as i32 - view.x as i32) as f32 * fw as f32 + self.img_pan.0 as f32;
+                let fy = (row as i32 - view.y as i32) as f32 * fh as f32 + self.img_pan.1 as f32;
+                (
+                    (fx / (fw as f32 * self.zoom)).round() as i32 - m as i32,
+                    (fy / (fh as f32 * self.zoom)).round() as i32 - m as i32,
+                )
+            }
+        }
+    }
+
     /// If the press lands on a scrollbar track, jump the view to that
     /// position and begin a thumb drag. Returns true when consumed.
     fn try_scrollbar_press(&mut self, col: u16, row: u16) -> bool {
@@ -440,7 +475,7 @@ impl App {
         self.source = src.to_string();
         let out = parser::parse(src);
         let schema = model::build(&out.doc);
-        self.diagram = Some(layout::layout(&schema));
+        self.diagram = Some(layout::layout_with_overrides(&schema, &self.table_pos));
         self.parse_errors = out.errors;
         self.dangling = schema.dangling;
         self.layout_gen += 1;
@@ -452,6 +487,7 @@ impl App {
     /// Open a file into the editor.
     pub fn open_file(&mut self, path: &str) -> std::io::Result<()> {
         let content = std::fs::read_to_string(path)?;
+        self.table_pos.clear();
         self.file = Some(std::path::PathBuf::from(path));
         self.saved_text = content.clone();
         self.editor.set_text(&content);
@@ -736,14 +772,30 @@ impl App {
                     && !self.try_scrollbar_press(col, row)
                 {
                     self.focus = Focus::Canvas;
-                    self.pan_anchor = Some((col, row));
+                    // pressing a table box drags the table; empty space pans
+                    let hit = self.table_at(col, row).map(|b| (b.title.clone(), b.x, b.y));
+                    if let Some((title, bx, by)) = hit {
+                        let (dx, dy) = self.cursor_diagram_pos(col, row);
+                        self.table_drag = Some((title, (dx - bx, dy - by), (col, row)));
+                    } else {
+                        self.pan_anchor = Some((col, row));
+                    }
                     self.click_origin = Some((col, row));
                 } else if rect_contains(panes.editor, col, row) {
                     self.focus = Focus::Editor;
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
-                if let Some(vertical) = self.sb_drag {
+                if let Some((title, grab, origin)) = self.table_drag.clone() {
+                    let moved = (col as i32 - origin.0 as i32).abs() > 0
+                        || (row as i32 - origin.1 as i32).abs() > 0;
+                    if moved {
+                        let (dx, dy) = self.cursor_diagram_pos(col, row);
+                        self.table_pos
+                            .insert(title, ((dx - grab.0).max(0), (dy - grab.1).max(0)));
+                        self.relayout();
+                    }
+                } else if let Some(vertical) = self.sb_drag {
                     let frac = self.track_frac(vertical, if vertical { row } else { col });
                     self.scroll_to(vertical, frac);
                 } else if self.divider_dragging {
@@ -768,6 +820,7 @@ impl App {
             MouseEventKind::Up(MouseButton::Left) => {
                 self.divider_dragging = false;
                 self.sb_drag = None;
+                self.table_drag = None;
                 // click (no drag) on a table box jumps the editor to it
                 if let Some((dc, dr)) = self.click_origin {
                     if (col as i32 - dc as i32).abs() <= 1 && (row as i32 - dr as i32).abs() <= 1 {
@@ -993,6 +1046,92 @@ mod tests {
         app.on_mouse(drag(view.x + 3, view.y + 2));
         assert_eq!(app.sb_drag, None);
         assert!(app.pan.0 >= 3);
+    }
+
+    #[test]
+    fn drag_table_moves_it_and_survives_reparse() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let mut app = App::with_sample_source();
+        app.panes.canvas = Rect::new(40, 0, 60, 38);
+        let view = app.view_rect();
+        let down = |c, r| MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: c,
+            row: r,
+            modifiers: KeyModifiers::NONE,
+        };
+        let drag = |c, r| MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: c,
+            row: r,
+            modifiers: KeyModifiers::NONE,
+        };
+        let up = |c, r| MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: c,
+            row: r,
+            modifiers: KeyModifiers::NONE,
+        };
+
+        // users box sits at the view origin; grab and drag it +6/+3
+        let users_before = app
+            .diagram
+            .as_ref()
+            .unwrap()
+            .boxes
+            .iter()
+            .find(|b| b.title == "users")
+            .unwrap()
+            .clone();
+        app.on_mouse(down(view.x + 2, view.y + 2));
+        assert!(app.table_drag.is_some(), "press on a table starts a drag");
+        assert!(app.pan_anchor.is_none(), "no pan while on a table");
+        app.on_mouse(drag(view.x + 8, view.y + 5));
+        app.on_mouse(up(view.x + 8, view.y + 5));
+        assert!(app.table_drag.is_none());
+
+        let users_after = app
+            .diagram
+            .as_ref()
+            .unwrap()
+            .boxes
+            .iter()
+            .find(|b| b.title == "users")
+            .unwrap()
+            .clone();
+        assert_eq!(
+            (
+                users_after.x - users_before.x,
+                users_after.y - users_before.y
+            ),
+            (6, 3)
+        );
+
+        // a stationary click on the moved box still jumps to the definition
+        let before = app.editor.cursor();
+        app.on_mouse(down(view.x + 9, view.y + 4));
+        app.on_mouse(up(view.x + 9, view.y + 4));
+        assert_ne!(app.editor.cursor(), before);
+
+        // positions survive a re-parse (simulated edit)
+        let pos = *app.table_pos.get("users").unwrap();
+        app.relayout();
+        let users = app
+            .diagram
+            .as_ref()
+            .unwrap()
+            .boxes
+            .iter()
+            .find(|b| b.title == "users")
+            .unwrap();
+        assert_eq!((users.x, users.y), pos);
+
+        // empty-space drag still pans and does not touch tables
+        let pan_before = app.pan;
+        app.on_mouse(down(view.x + 40, view.y + 30));
+        app.on_mouse(drag(view.x + 37, view.y + 28));
+        app.on_mouse(up(view.x + 37, view.y + 28));
+        assert!(app.pan != pan_before, "empty canvas drag pans");
     }
 
     #[test]

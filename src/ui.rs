@@ -148,6 +148,10 @@ fn draw_help(f: &mut Frame, area: Rect) {
             Span::styled("  drag scrollbar", dim),
             Span::raw("    pan to position; shows offscreen content"),
         ]),
+        Line::from(vec![
+            Span::styled("  drag table", dim),
+            Span::raw("       move a table; click jumps to source"),
+        ]),
         Line::from(vec![Span::raw("")]),
         Line::from(vec![Span::styled("other", key)]),
         Line::from(vec![

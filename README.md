@@ -34,8 +34,9 @@ A terminal DBML diagram editor — vim-style editing on the left, a live
 - **Full mouse support**: drag to pan (tables slide offscreen edges just
   like the browser), wheel to zoom (image modes) or scroll (text), drag
   the divider to resize panes, click a table to jump the editor to its
-  definition. Virtual scrollbars on the canvas show how much of the
-  diagram is offscreen and are draggable to reposition the view.
+  definition, drag a table to reposition it (kept per-name across edits).
+  Virtual scrollbars on the canvas show how much of the diagram is
+  offscreen and are draggable to reposition the view.
 - **Fast**: a 200-table document parses + lays out in ~0.2ms; the image
   pipeline re-rasterizes only on zoom/layout changes and crops on pan.
 
