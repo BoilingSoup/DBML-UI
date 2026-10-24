@@ -1,6 +1,5 @@
 //! Application state and the iced update loop.
 
-use crate::theme;
 use dbml_ui::layout::{self, Layout};
 use dbml_ui::{dbml, model};
 
@@ -22,11 +21,9 @@ pub struct App {
     /// survive re-parses while editing.
     #[allow(dead_code)] // consumed by the interaction milestone
     pub table_pos: std::collections::HashMap<String, (i32, i32)>,
-    /// Diagram zoom: pixels per diagram cell unit.
-    #[allow(dead_code)] // consumed by the canvas milestone
+    /// Diagram zoom: pixels per diagram cell height.
     pub zoom: f32,
     /// Viewport offset into the zoomed diagram, in pixels.
-    #[allow(dead_code)] // consumed by the canvas milestone
     pub pan: iced::Vector,
     /// Last known cursor position within the window (for anchored zoom).
     #[allow(dead_code)] // consumed by the interaction milestone
@@ -46,7 +43,7 @@ impl App {
             diagram: layout::layout(&model::build(&dbml::parser::parse("").doc)),
             parse_errors: Vec::new(),
             table_pos: Default::default(),
-            zoom: 20.0,
+            zoom: crate::view::BASE_ZOOM,
             pan: iced::Vector::default(),
             cursor: iced::Point::default(),
         };
@@ -68,16 +65,4 @@ pub fn update(app: &mut App, message: Message) {
     match message {
         Message::MouseMoved(p) => app.cursor = p,
     }
-}
-
-pub fn view(app: &App) -> iced::Element<'_, Message> {
-    let _ = app;
-    iced::widget::container(iced::widget::text("dbml-ui").color(theme::TEXT))
-        .width(iced::Fill)
-        .height(iced::Fill)
-        .style(|_t| iced::widget::container::Style {
-            background: Some(iced::Background::Color(theme::BG)),
-            ..Default::default()
-        })
-        .into()
 }

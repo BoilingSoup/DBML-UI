@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.104"
-iced = "0.13.1"
+iced = { version = "0.13.1", features = ["canvas"] }
 # MSRV pins for rustc 1.84: newer releases of these crates require 1.85+.
 image = { version = "=0.25.6", default-features = false, features = ["png"] }
 regex = "1.13.1"
