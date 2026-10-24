@@ -1,22 +1,15 @@
 [package]
-name = "tui-db"
+name = "dbml-ui"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 anyhow = "1.0.104"
-# already in the lockfile as transitive deps of ratatui-image/resvg
-base64 = "0.22"
+iced = "0.13.1"
 # MSRV pins for rustc 1.84: newer releases of these crates require 1.85+.
-clap = { version = "=4.5.40", features = ["derive"] }
-crossterm = "0.28.1"
-flate2 = "1.1"
 image = { version = "=0.25.6", default-features = false, features = ["png"] }
-ratatui = "0.29"
-ratatui-image = { version = "=8.0.1", default-features = false }
 regex = "1.13.1"
 resvg = { version = "0.45.1", features = ["raster-images", "text"] }
 tiny-skia = "0.11.4"
-tui-textarea = { version = "0.7", features = ["search"] }
 unicode-width = "=0.2.0"
 usvg = "0.45.1"

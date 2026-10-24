@@ -1,71 +1,59 @@
-# tui-db — Terminal DBML Diagram Editor
+# tui-db → **dbml-ui**: migrate to an iced desktop app
 
-## Goal
-A fast ratatui TUI with a vim-mode DBML editor on one side and a live dbdiagram-style ER diagram on the other. Reads/writes `.dbml` files. Full mouse support: drag to pan (tables slide offscreen edges, like the browser app), wheel to zoom when the terminal can render images, draggable pane divider, click a table to jump to its source. Render backend auto-detects in order: **kitty → sixel → text fallback** (zoom disabled in text mode; pan still works).
+## Decisions (locked in with user)
+- **Replace in place + rename** to `dbml-ui` (crate and binary). TUI code is deleted in the first milestone — recoverable from git history if ever needed.
+- **iced 0.13.1** (MSRV 1.80 — fits the installed rustc 1.84; iced 0.14 requires 1.88). If transitive deps drift above 1.84, pin them the same way the current Cargo.toml already does. A later 0.14 bump is a mechanical follow-up if the toolchain is ever updated.
+- Vim engine is **ported onto a custom buffer**, not iced's `text_editor` widget (its docs confirm no programmatic cursor/selection control — it would fight vim mode).
 
-Git repo is already initialized on `master` (done before planning).
+## What carries over unchanged vs. what dies
 
-## Dependency stack (verified on crates.io against rustc 1.84)
+**Carries (moved as-is, tests intact):** `dbml/` parser + AST (~2k lines, 12 tests), `model.rs`, `layout.rs` (incl. `layout_with_overrides` for dragged tables), `commands.rs` (ex `:w/:q/:o/:export`), `render/svg.rs` + `render/raster.rs` (kept for `:export svg|png`; its dark palette becomes the shared theme module), `SAMPLE_DBML`.
 
-The critical finding: current `ratatui` is 0.30, but `tui-textarea` 0.7 requires ratatui `^0.29`, while `ratatui-image` 11.x requires ratatui `^0.30` — they can't share a widget tree. The clean all-off-the-shelf pairing is the **ratatui 0.29 line**:
+**Dies:** ratatui/crossterm/tui-textarea/ratatui-image/base64/flate2 deps, `render/text.rs`, `render/kitty.rs`, the entire kitty/halfblocks pipeline, `ui.rs`, old `app.rs`/`main.rs`, scrollbars/throttles/debounce (parse is 0.2ms — reparse every keystroke, no debounce).
 
-| Crate | Version | Role |
-|---|---|---|
-| ratatui | 0.29 | TUI framework, diffed rendering |
-| crossterm | 0.28 | events + full mouse (drag/wheel/motion) |
-| ratatui-image | 9.0.0 | kitty + sixel backends, terminal capability detection (`Picker::from_query_stdio`) |
-| tui-textarea | 0.7.0 | editor engine (built for ratatui 0.29; its repo ships a vim-mode example) |
-| resvg | **0.45.1** | SVG → PNG rasterization. (0.48 needs MSRV 1.85/1.89 > installed rustc 1.84; 0.45.1 MSRV is 1.67. Bump later if you `rustup update`.) |
-| image | 0.25 (`png` feature) | decode/copy RGBA buffers |
-| winnow | 1.0 (fallback 0.7 if its MSRV exceeds 1.84 — verify at scaffold) | hand-written DBML parser with spans |
-| clap | 4 | CLI |
+**Ports (copy + adapt, tests carried as the spec):** `editor.rs` vim engine (modes, Pending ops, counts, registers, search, cmdline) onto a new custom `Buffer` that mirrors the tui-textarea API surface it used (lines/cursor/insert/delete/CursorMove-like enum/selection/search).
 
-## Architecture (single binary `tui-db`, worker-thread pipeline)
+## Target layout (single crate `dbml-ui`)
 
 ```
-crossterm events ──► app event loop (UI thread, ratatui draw)
-     │  edits debounced ~120ms
-     ▼
- worker thread: parse (winnow) → model → layout → render
-     ├─ text mode: cell grid (box-drawing chars)
-     └─ image mode: SVG string → resvg PNG at viewport_px × zoom
- results tagged with generation counter; UI drops stale ones
+src/
+  main.rs           iced entry: application(title, update, view).theme().subscription().run();
+                    manual CLI arg parse (FILE) — clap dropped
+  app.rs            State (source, layout, table_pos, zoom, pan_px, focus, editor,
+                    cmdline, errors, file/saved_text) + Message enum + update()
+  view.rs           row![editor canvas, divider, diagram canvas] + status bar + help overlay
+  theme.rs          shared dark palette (extracted from svg.rs constants)
+  canvas/
+    diagram.rs      canvas::Program: boxes/header bands/rows/◆◇/edges from Layout × scale;
+                    two canvas::Cache (content, hover/drag overlay); hit-test helpers
+    editor.rs       canvas::Program: gutter, lines, fake cursor (mode-colored),
+                    visual-selection spans, search highlights
+  interaction.rs    mouse_area + event::listen plumbing: wheel zoom (cursor-anchored,
+                    continuous), drag pan, table drag, click-to-jump / click-to-position
+  editor/
+    buffer.rs       custom Buffer (Vec<String>, cursor, selection) + its tests
+    mod.rs          vim engine port (from src/editor.rs) + ported tests
+  dbml/ model.rs layout.rs commands.rs render/{svg,raster}.rs   moved as-is
 ```
 
-Modules:
-- `dbml/` — lexer+parser → AST with byte spans; error recovery (collect all errors, keep going); supports Project, Table (+aliases, settings `pk increment unique not null default note ref color`), Ref (`< > - <>`, composite, inline `[ref: > ...]`), Enum, TableGroup, notes, `//` comments.
-- `model/` — AST → normalized schema (tables, columns, refs with cardinality, enums, groups).
-- `layout/` — schema → geometry: table boxes (x, y, w, h in abstract units), column-row anchors, edge routing waypoints. Deterministic auto-layout (dependency-BFS layering + row packing) so it's unit-testable; **shared by both renderers** (also powers mouse hit-testing).
-- `render/text.rs` — diagram → ratatui widgets: box-drawing borders, column lists, relationship lines (crow's-foot-ish ASCII). Pan = render offset; offscreen clipping falls out of ratatui clipping for free.
-- `render/svg.rs` — diagram → SVG (dbdiagram-like styling); doubles as `:export diagram.svg` output.
-- `render/raster.rs` — resvg → RGBA sized to `viewport_px × zoom`; cache keyed `(layout_hash, zoom)`. **Pan between zooms is a pure crop of the cached raster — no re-render.** Zoom steps (×1.25, clamp 0.25–8) trigger one re-raster, centered on the cursor.
-- `editor/` — tui-textarea + custom vim layer: normal/insert/visual modes; motions `h j k l w b e 0 $ ^ g g G { }`, operators `x dd dw yy p P c?`, insert entries `i a o O`, undo/redo, `/` search with `n N`, and ex commands `:w :q :q! :wq :o <file> :e <file> :export <file.svg|png>`.
-- `ui/` — split panes with draggable divider, status bar (filename, modified `●`, render mode, cursor pos, zoom), parser errors surfaced in editor gutter via spans, `?` help overlay.
-- `app/` — event loop, debounce, worker orchestration, pan/zoom state (viewport origin + scale), hit-testing for click-to-jump.
+## Key mechanics
+- **Zoom:** continuous `scale *= exp(wheel_delta)`, clamp [0.25, 8], cursor-anchored (port `zoom_at` math to pixel space). Wheel deltas from the event subscription; last cursor position tracked via `mouse_area::on_move`.
+- **Pan:** drag on empty canvas moves `pan_px` freely; content can go offscreen (same UX as before).
+- **Table drag:** hit-test via inverse transform; **live** re-layout per mouse move (`layout_with_overrides` ≈0.2ms — no more deferring to release), committed to `table_pos` on release (survives edits, in-memory).
+- **Diagram drawing:** mirrors svg.rs geometry (CELL_W/CELL_H units × scale px; rounded-rect paths, polyline edges, monospace canvas Text sized by scale — crisp at every zoom, no frame.scale trickery).
+- **Editor rendering:** monospace char metrics measured once at startup (not hardcoded), gutter numbers, Ln/Col tracking, `?` help overlay.
+- **Live preview/errors:** parse per keystroke; errors in status bar + gutter marks on offending lines.
+- **Click-to-jump:** existing `name_span`s → editor cursor; unchanged logic.
 
-## Mouse & key interaction spec
-- Left-drag on canvas = pan (both modes; content clips at edges exactly like dbdiagram's browser pan).
-- Wheel = zoom at cursor (kitty/sixel only); in text mode wheel scrolls vertically instead, zoom disabled.
-- Drag the divider = resize panes; Tab = cycle focus editor ↔ canvas; Ctrl-s = save.
-- Click a table = editor cursor jumps to that table's DBML block (hit-test through the shared layout + viewport transform).
-- Backend selection: query terminal at startup → kitty → sixel → text. `--render auto|kitty|sixel|text` overrides; `--dump-png out.png` headless export for debugging.
+## Milestones (each ends with a green build + commit)
+1. **Rename + purge + skeleton** — Cargo.toml → `dbml-ui`, delete all TUI modules/deps, move surviving modules, add iced 0.13.1, empty window titled dbml-ui. Moved-module tests green.
+2. **Diagram canvas** — static dark-theme render of SAMPLE_DBML (boxes, headers, rows, markers, edges) + split panes + status bar placeholders.
+3. **Interactions** — wheel zoom (anchored, continuous), drag pan, hover highlight, live table drag, click-to-jump.
+4. **Editor** — Buffer + vim engine port with all tests; editor canvas (gutter/cursor/selection/search); keyboard routing + Tab focus; live reparse + error display.
+5. **Files & commands** — CLI file arg, `:w :q :q! :wq :o :e :export`, Ctrl-s, modified flag, byte-identical round-trip test.
+6. **Polish** — help overlay, draggable divider, README rewrite, fmt/clippy/full suite.
 
-## Performance plan
-- UI thread never parses or rasters: debounced worker pipeline, stale generations dropped.
-- Structural hashing: skip re-layout when only notes/comments changed; PNG cache reused across pans.
-- ratatui diffed buffer redraw; pan updates only dirty cells.
-
-## Milestones (each ends in a working build + git commit on master)
-1. **Scaffold** — `cargo init`, deps pinned as above, `.gitignore`, ratatui shell: two panes + status bar + raw mouse plumbing. Verify whole dep graph compiles on rustc 1.84 before proceeding.
-2. **DBML parser** — full subset above + golden-file unit tests (valid & invalid fixtures), span-accurate errors.
-3. **Layout + text renderer** — first end-to-end: typed DBML → boxes/lines in terminal; pan with offscreen clipping. The app is usable here.
-4. **Editor integration** — tui-textarea + vim normal/insert modes, debounced live preview, error gutter, syntax highlighting for DBML keywords.
-5. **Files & ex commands** — open/save/save-as round-trip byte-identical, modified flag, CLI flags.
-6. **Image mode** — SVG renderer + resvg + ratatui-image; auto-detect kitty→sixel; wheel zoom at cursor + drag pan + raster cache; text fallback intact.
-7. **Vim extras & polish** — visual mode, yank/paste, undo/redo, search; click-to-jump; `?` help overlay; `:export`; clippy + fmt + perf pass.
-
-**Stretch (flagged droppable):** drag tables to reposition with positions saved in a `*.dbml.layout.json` sidecar.
-
-## Testing & verification
-- `cargo test`: parser fixture corpus, layout determinism, vim keymap state transitions, ex command parsing, raster cache behavior.
-- Manual matrix: kitty terminal (images + zoom), sixel terminal, plain terminal (text mode, zoom disabled) — confirm pan moves tables offscreen, `:w`/`:o` round-trips files unchanged, typing latency stays imperceptible on a ~50-table schema.
+## Verification & risks
+- `cargo test` after every milestone (parser/model/layout/command suites unchanged; editor tests ported; new tests for zoom-anchor math, hit-test transforms, Buffer ops).
+- **Honest limitation:** this sandbox has no display — I can compile and unit-test but not open the window. Visual/interaction verification happens on your desktop via `cargo run -- file.dbml`; I'll flag anything I couldn't exercise.
+- Risks: iced 0.13 is mature but its API is exacting — expect small adjustments during implementation; transitive MSRV drift handled by pinning as today.

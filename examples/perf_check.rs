@@ -1,8 +1,8 @@
+use dbml_ui::dbml::parser;
+use dbml_ui::layout::layout;
+use dbml_ui::model::build;
+use dbml_ui::render::{raster, svg};
 use std::time::Instant;
-use tui_db::dbml::parser;
-use tui_db::layout::layout;
-use tui_db::model::build;
-use tui_db::render::{raster, svg};
 
 fn main() {
     let mut src = String::new();

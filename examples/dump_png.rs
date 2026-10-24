@@ -7,11 +7,11 @@
 //! - `outline`: label-free, rasterized at 1x2 px per diagram cell — exactly
 //!   what the halfblocks minimap builds for text-mode zoom-out
 
-use tui_db::dbml::parser;
-use tui_db::layout::layout;
-use tui_db::model::build;
-use tui_db::render::raster::rasterize;
-use tui_db::render::svg::{build_svg_with, svg_size, MARGIN_CELLS};
+use dbml_ui::dbml::parser;
+use dbml_ui::layout::layout;
+use dbml_ui::model::build;
+use dbml_ui::render::raster::rasterize;
+use dbml_ui::render::svg::{build_svg_with, svg_size, MARGIN_CELLS};
 
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
