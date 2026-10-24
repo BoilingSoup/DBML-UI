@@ -27,11 +27,30 @@ pub struct CmdLine {
     pub input: String,
 }
 
+/// In-flight key sequences: `g`…, and the `d`/`c`/`y` operators awaiting a
+/// motion or text object (`w b e 0 ^ $ G gg { }`, `iw`/`aw`, line doubling).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pending {
+    G,
+    D,
+    C,
+    Y,
+    /// `d i…` / `c i…` awaiting `w`
+    Di,
+    Ci,
+    /// `d a…` / `c a…` awaiting `w`
+    Da,
+    Ca,
+    /// `d g…` / `c g…` awaiting `g`
+    Dg,
+    Cg,
+}
+
 pub struct Editor {
     pub ta: TextArea<'static>,
     pub mode: Mode,
-    /// Multi-key sequences in flight: pending 'g' (gg), 'd' (dd/dw), 'y' (yy).
-    pending: Option<char>,
+    /// Operator-pending / multi-key sequences in flight.
+    pending: Option<Pending>,
     pub cmdline: Option<CmdLine>,
     register: Vec<String>,
     /// Source ended with a newline; preserved by `text()` for byte-identical
@@ -184,7 +203,7 @@ impl Editor {
                 Action::Changed
             }
             KeyCode::Char('g') => {
-                self.pending = Some('g');
+                self.pending = Some(Pending::G);
                 Action::None
             }
             KeyCode::Char('v') => {
@@ -232,12 +251,21 @@ impl Editor {
                 let _ = self.ta.delete_line_by_end();
                 Action::Changed
             }
+            KeyCode::Char('C') => {
+                let _ = self.ta.delete_line_by_end();
+                self.mode = Mode::Insert;
+                Action::Changed
+            }
+            KeyCode::Char('c') => {
+                self.pending = Some(Pending::C);
+                Action::None
+            }
             KeyCode::Char('d') => {
-                self.pending = Some('d');
+                self.pending = Some(Pending::D);
                 Action::None
             }
             KeyCode::Char('y') => {
-                self.pending = Some('y');
+                self.pending = Some(Pending::Y);
                 Action::None
             }
             KeyCode::Char('p') => self.paste(false),
@@ -344,13 +372,21 @@ impl Editor {
         Some(Action::None)
     }
 
-    fn handle_sequence(&mut self, leader: char, code: KeyCode) -> Action {
+    fn handle_sequence(&mut self, leader: Pending, code: KeyCode) -> Action {
+        use Pending::*;
         match (leader, code) {
-            ('g', KeyCode::Char('g')) => {
+            (G, KeyCode::Char('g')) => {
                 self.ta.move_cursor(CursorMove::Jump(0, 0));
                 Action::None
             }
-            ('d', KeyCode::Char('d')) => {
+            (Y, KeyCode::Char('y')) => {
+                let (row, _) = self.ta.cursor();
+                if let Some(line) = self.ta.lines().get(row) {
+                    self.register = vec![line.to_string()];
+                }
+                Action::None
+            }
+            (D, KeyCode::Char('d')) => {
                 let (row, _) = self.ta.cursor();
                 if let Some(line) = self.ta.lines().get(row) {
                     self.register = vec![line.to_string()];
@@ -360,19 +396,205 @@ impl Editor {
                 }
                 Action::Changed
             }
-            ('d', KeyCode::Char('w')) => {
-                let _ = self.ta.delete_next_word();
+            (C, KeyCode::Char('c')) => {
+                // cc: clear the line, keep it, and edit
+                let (row, _) = self.ta.cursor();
+                self.ta.move_cursor(CursorMove::Jump(row as u16, 0));
+                let _ = self.ta.delete_line_by_end();
+                self.mode = Mode::Insert;
                 Action::Changed
             }
-            ('y', KeyCode::Char('y')) => {
-                let (row, _) = self.ta.cursor();
-                if let Some(line) = self.ta.lines().get(row) {
-                    self.register = vec![line.to_string()];
-                }
+            // operator + motions; cw follows vim's cw == ce special case
+            (D, KeyCode::Char('w')) => self.operate(&[CursorMove::WordForward], false, true, false),
+            (C, KeyCode::Char('w')) => self.operate(&[CursorMove::WordEnd], true, true, true),
+            (D, KeyCode::Char('e')) => self.operate(&[CursorMove::WordEnd], true, false, false),
+            (C, KeyCode::Char('e')) => self.operate(&[CursorMove::WordEnd], true, false, true),
+            (D, KeyCode::Char('b')) => self.operate(&[CursorMove::WordBack], false, false, false),
+            (C, KeyCode::Char('b')) => self.operate(&[CursorMove::WordBack], false, false, true),
+            (D, KeyCode::Char('0') | KeyCode::Home | KeyCode::Char('^')) => {
+                self.operate(&[CursorMove::Head], false, false, false)
+            }
+            (C, KeyCode::Char('0') | KeyCode::Home | KeyCode::Char('^')) => {
+                self.operate(&[CursorMove::Head], false, false, true)
+            }
+            (D, KeyCode::Char('$') | KeyCode::End) => {
+                self.operate(&[CursorMove::End], true, false, false)
+            }
+            (C, KeyCode::Char('$') | KeyCode::End) => {
+                self.operate(&[CursorMove::End], true, false, true)
+            }
+            (D, KeyCode::Char('G')) => {
+                self.operate(&[CursorMove::Bottom, CursorMove::End], false, false, false)
+            }
+            (C, KeyCode::Char('G')) => {
+                self.operate(&[CursorMove::Bottom, CursorMove::End], false, false, true)
+            }
+            (D, KeyCode::Char('{')) => {
+                self.operate(&[CursorMove::ParagraphBack], false, false, false)
+            }
+            (C, KeyCode::Char('{')) => {
+                self.operate(&[CursorMove::ParagraphBack], false, false, true)
+            }
+            (D, KeyCode::Char('}')) => {
+                self.operate(&[CursorMove::ParagraphForward], false, false, false)
+            }
+            (C, KeyCode::Char('}')) => {
+                self.operate(&[CursorMove::ParagraphForward], false, false, true)
+            }
+            (D, KeyCode::Char('g')) => {
+                self.pending = Some(Dg);
                 Action::None
             }
+            (C, KeyCode::Char('g')) => {
+                self.pending = Some(Cg);
+                Action::None
+            }
+            (Dg, KeyCode::Char('g')) => {
+                self.operate(&[CursorMove::Jump(0, 0)], false, false, false)
+            }
+            (Cg, KeyCode::Char('g')) => self.operate(&[CursorMove::Jump(0, 0)], false, false, true),
+            // text objects
+            (D, KeyCode::Char('i')) => {
+                self.pending = Some(Di);
+                Action::None
+            }
+            (C, KeyCode::Char('i')) => {
+                self.pending = Some(Ci);
+                Action::None
+            }
+            (D, KeyCode::Char('a')) => {
+                self.pending = Some(Da);
+                Action::None
+            }
+            (C, KeyCode::Char('a')) => {
+                self.pending = Some(Ca);
+                Action::None
+            }
+            (Di, KeyCode::Char('w')) => self.operate_word(false, false),
+            (Ci, KeyCode::Char('w')) => self.operate_word(false, true),
+            (Da, KeyCode::Char('w')) => self.operate_word(true, false),
+            (Ca, KeyCode::Char('w')) => self.operate_word(true, true),
             _ => Action::None,
         }
+    }
+
+    /// Apply the pending `d`/`c` operator over a cursor motion: delete the
+    /// characters between the cursor and wherever the motions land, then
+    /// optionally enter insert mode. `inclusive` covers the landing char
+    /// (for `e`/`$`); `clamp_line` keeps `dw`/`cw` from eating the newline
+    /// (vim's last-word special case).
+    fn operate(
+        &mut self,
+        motions: &[CursorMove],
+        inclusive: bool,
+        clamp_line: bool,
+        insert: bool,
+    ) -> Action {
+        let start = self.ta.cursor();
+        for m in motions {
+            self.ta.move_cursor(*m);
+        }
+        let mut end = self.ta.cursor();
+        if clamp_line && end.0 != start.0 {
+            self.ta.move_cursor(CursorMove::Jump(start.0 as u16, 0));
+            self.ta.move_cursor(CursorMove::End);
+            end = self.ta.cursor();
+        }
+        let forward = end > start;
+        let (from, to) = if forward { (start, end) } else { (end, start) };
+        let mut n = self.chars_between(from, to);
+        if inclusive && forward {
+            n += 1;
+        }
+        if n > 0 {
+            self.ta
+                .move_cursor(CursorMove::Jump(from.0 as u16, from.1 as u16));
+            let _ = self.ta.delete_str(n);
+        }
+        if insert {
+            self.mode = Mode::Insert;
+        }
+        if n > 0 {
+            Action::Changed
+        } else {
+            Action::None
+        }
+    }
+
+    /// Number of characters strictly between two positions, `to > from`
+    /// (newlines count as one character).
+    fn chars_between(&self, from: (usize, usize), to: (usize, usize)) -> usize {
+        let lines = self.ta.lines();
+        if from == to || to < from {
+            return 0;
+        }
+        if from.0 == to.0 {
+            return to.1.saturating_sub(from.1);
+        }
+        let mut n = 0;
+        if let Some(l) = lines.get(from.0) {
+            n += l.chars().count().saturating_sub(from.1) + 1; // to EOL + newline
+        }
+        for r in from.0 + 1..to.0 {
+            if let Some(l) = lines.get(r) {
+                n += l.chars().count() + 1;
+            }
+        }
+        n += to.1;
+        n
+    }
+
+    /// `diw`/`ciw`/`daw`/`caw` over the word span at the cursor.
+    fn operate_word(&mut self, a_word: bool, insert: bool) -> Action {
+        let Some((s, e)) = self.word_span(a_word) else {
+            return Action::None;
+        };
+        let (row, _) = self.ta.cursor();
+        self.ta.move_cursor(CursorMove::Jump(row as u16, s as u16));
+        let _ = self.ta.delete_str(e - s);
+        if insert {
+            self.mode = Mode::Insert;
+        }
+        Action::Changed
+    }
+
+    /// Char-index range of the word at the cursor: the contiguous run with
+    /// the same whitespace-ness. `a_word` extends over adjacent whitespace
+    /// (trailing, else leading).
+    fn word_span(&self, a_word: bool) -> Option<(usize, usize)> {
+        let (row, col) = self.ta.cursor();
+        let chars: Vec<char> = self.ta.lines().get(row)?.chars().collect();
+        if chars.is_empty() {
+            return None;
+        }
+        let probe = col.min(chars.len() - 1);
+        let ws = chars[probe].is_whitespace();
+        let mut s = probe;
+        while s > 0 && chars[s - 1].is_whitespace() == ws {
+            s -= 1;
+        }
+        let mut e = probe;
+        while e + 1 < chars.len() && chars[e + 1].is_whitespace() == ws {
+            e += 1;
+        }
+        let e = e + 1; // exclusive
+        if a_word && !ws {
+            let mut ne = e;
+            while ne < chars.len() && chars[ne].is_whitespace() {
+                ne += 1;
+            }
+            if ne > e {
+                return Some((s, ne));
+            }
+            let mut ns = s;
+            while ns > 0 && chars[ns - 1].is_whitespace() {
+                ns -= 1;
+            }
+            if ns < s {
+                return Some((ns, e));
+            }
+        }
+        Some((s, e))
     }
 
     fn paste(&mut self, before: bool) -> Action {
@@ -600,6 +822,105 @@ mod tests {
         // x deletes the char under the cursor (col 1 after the motion)
         e.handle_key(key('x'));
         assert_eq!(e.text(), "acdef");
+    }
+
+    fn typed(text: &str, keys: &str) -> (Editor, String) {
+        let mut e = editor(text);
+        for c in keys.chars() {
+            e.handle_key(key(c));
+        }
+        let t = e.text();
+        (e, t)
+    }
+
+    #[test]
+    fn word_object_ops() {
+        // diw from the middle of a word
+        let (_, t) = typed("one two three", "lllllldiw");
+        assert_eq!(t, "one  three");
+        // diw from the word start
+        let (_, t) = typed("one two three", "llllldiw");
+        assert_eq!(t, "one  three");
+        // diw on a whitespace run selects the blanks
+        let (_, t) = typed("a   b", "ldiw");
+        assert_eq!(t, "ab");
+        // ciw deletes and enters insert
+        let (e, t) = typed("one two three", "lllllciw");
+        assert_eq!(t, "one  three");
+        assert_eq!(e.mode, Mode::Insert);
+        // daw eats trailing whitespace
+        let (_, t) = typed("one two three", "daw");
+        assert_eq!(t, "two three");
+        // daw with no trailing ws falls back to leading ws
+        let (_, t) = typed("one two", "lllldaw");
+        assert_eq!(t, "one");
+    }
+
+    #[test]
+    fn change_word_ops() {
+        // cw == ce: delete to end of word, insert
+        let (e, t) = typed("hello world", "cw");
+        assert_eq!(t, " world");
+        assert_eq!(e.mode, Mode::Insert);
+        // cw from the middle of a word changes to its end
+        let (_, t) = typed("hello world", "llcw");
+        assert_eq!(t, "he world");
+        // ce from the middle
+        let (_, t) = typed("hello world", "llce");
+        assert_eq!(t, "he world");
+        // de deletes to end of word
+        let (_, t) = typed("hello world", "de");
+        assert_eq!(t, " world");
+        // de from whitespace eats blanks + the word (inclusive motion)
+        let (_, t) = typed("a   b", "lde");
+        assert_eq!(t, "a");
+        // cb changes back to word start (cursor on 'o', col 4)
+        let (e, t) = typed("hello world", "llllcb");
+        assert_eq!(t, "o world");
+        assert_eq!(e.mode, Mode::Insert);
+    }
+
+    #[test]
+    fn line_and_range_ops() {
+        // d0 / c0 (cursor at col 3; the char under the cursor stays)
+        let (_, t) = typed("hello", "llld0");
+        assert_eq!(t, "lo");
+        let (e, t) = typed("hello", "lllc0");
+        assert_eq!(t, "lo");
+        assert_eq!(e.mode, Mode::Insert);
+        // d$ / c$ / C
+        let (_, t) = typed("hello world", "lld$");
+        assert_eq!(t, "he");
+        let (e, t) = typed("hello world", "llc$");
+        assert_eq!(t, "he");
+        assert_eq!(e.mode, Mode::Insert);
+        let (e, t) = typed("hello world", "llC");
+        assert_eq!(t, "he");
+        assert_eq!(e.mode, Mode::Insert);
+        // cc clears the line in place
+        let (e, t) = typed("one\ntwo\nthree", "jcc");
+        assert_eq!(t, "one\n\nthree");
+        assert_eq!(e.mode, Mode::Insert);
+        // dw on the last word must not eat the newline (cursor on 'b')
+        let (_, t) = typed("a b\nc", "lldw");
+        assert_eq!(t, "a \nc");
+    }
+
+    #[test]
+    fn buffer_range_ops() {
+        // ggdG wipes the document
+        let (_, t) = typed("one\ntwo\nthree", "ggdG");
+        assert_eq!(t, "");
+        // dG from the middle keeps everything before the cursor
+        let (_, t) = typed("one\ntwo\nthree", "jdG");
+        assert_eq!(t, "one\n");
+        // dgg deletes everything before the cursor
+        let (_, t) = typed("one\ntwo\nthree", "jlldgg");
+        assert_eq!(t, "o\nthree");
+        // cG clears forward and inserts
+        let (e, t) = typed("one\ntwo", "jcG");
+        assert_eq!(t, "one\n");
+        assert_eq!(e.mode, Mode::Insert);
     }
 
     #[test]

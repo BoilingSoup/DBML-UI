@@ -18,9 +18,10 @@ A terminal DBML diagram editor — vim-style editing on the left, a live
 ## Features
 
 - **DBML editing with vim controls**: normal / insert / visual modes,
-  motions (`h j k l w b e 0 $ ^ gg G { }`), operators (`x dd dw yy p P D`),
-  undo/redo, `/` search with `n`/`N`, and ex commands (`:w :q :wq :q! :e!
-  :o <file> :export <f.svg|f.png>`).
+  motions (`h j k l w b e 0 $ ^ gg G { }`), the `d`/`c` operators composed
+  with motions and text objects (`dw cw de ce db c0 d$ c$ dG cG dgg ggdG
+  diw ciw daw caw cc dd C D yy p P x`), undo/redo, `/` search with `n`/`N`,
+  and ex commands (`:w :q :wq :q! :e! :o <file> :export <f.svg|f.png>`).
 - **Live preview**: the diagram re-renders ~120ms after you stop typing;
   parse errors are reported in the status bar with the offending line.
 - **Renderers** (auto-detected, override with `--render`):
