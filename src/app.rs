@@ -99,11 +99,21 @@ pub struct App {
     pub last_edit: Option<Instant>,
     /// Transient status message (command feedback, errors).
     pub message: Option<String>,
+    /// File backing the buffer, if any.
+    pub file: Option<std::path::PathBuf>,
+    /// Buffer content as of the last load/save, for the modified flag.
+    pub saved_text: String,
+    /// Renderer override from the CLI (`--render`).
+    pub render_pref: Option<crate::render::Mode>,
 }
 
 const DEBOUNCE: Duration = Duration::from_millis(120);
 
 impl App {
+    pub fn is_modified(&self) -> bool {
+        self.editor.text() != self.saved_text
+    }
+
     /// Re-parse the document and rebuild the diagram preview.
     pub fn set_source(&mut self, src: &str) {
         self.source = src.to_string();
@@ -112,6 +122,89 @@ impl App {
         self.diagram = Some(layout::layout(&schema));
         self.parse_errors = out.errors;
         self.dangling = schema.dangling;
+    }
+
+    /// Open a file into the editor.
+    pub fn open_file(&mut self, path: &str) -> std::io::Result<()> {
+        let content = std::fs::read_to_string(path)?;
+        self.file = Some(std::path::PathBuf::from(path));
+        self.saved_text = content.clone();
+        self.editor.set_text(&content);
+        self.set_source(&content);
+        self.message = Some(format!(
+            "\"{path}\" {}L, {}B",
+            content.lines().count(),
+            content.len()
+        ));
+        Ok(())
+    }
+
+    /// Write the buffer to disk.
+    pub fn save_file(&mut self, path: Option<&str>) -> std::io::Result<()> {
+        let target = match path {
+            Some(p) => {
+                self.file = Some(std::path::PathBuf::from(p));
+                std::path::PathBuf::from(p)
+            }
+            None => match self.file.clone() {
+                Some(f) => f,
+                None => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "no file name (use :w <file>)",
+                    ))
+                }
+            },
+        };
+        let text = self.editor.text();
+        std::fs::write(&target, &text)?;
+        self.saved_text = text;
+        self.message = Some(format!(
+            "\"{}\" written, {}B",
+            target.display(),
+            self.saved_text.len()
+        ));
+        Ok(())
+    }
+
+    /// Execute an ex command (already stripped of ':').
+    pub fn handle_command(&mut self, input: &str) {
+        use crate::commands::ExCommand;
+        match crate::commands::parse_ex(input) {
+            ExCommand::Write(path) => {
+                if let Err(e) = self.save_file(path.as_deref()) {
+                    self.message = Some(format!(":w failed: {e}"));
+                }
+            }
+            ExCommand::Quit { force } => {
+                if self.is_modified() && !force {
+                    self.message = Some("No write since last change (use :w or :q!)".to_string());
+                } else {
+                    self.should_quit = true;
+                }
+            }
+            ExCommand::WriteQuit => {
+                if self.file.is_none() {
+                    self.message = Some("no file name (use :w <file>)".to_string());
+                } else if let Err(e) = self.save_file(None) {
+                    self.message = Some(format!(":wq failed: {e}"));
+                } else {
+                    self.should_quit = true;
+                }
+            }
+            ExCommand::Open { path, force } => {
+                if self.is_modified() && !force {
+                    self.message =
+                        Some("No write since last change (use :e! or :w first)".to_string());
+                } else if let Err(e) = self.open_file(&path) {
+                    self.message = Some(format!("cannot open \"{path}\": {e}"));
+                }
+            }
+            ExCommand::Export(arg) => {
+                self.message = Some(format!(":export {arg} arrives in a later milestone"));
+            }
+            ExCommand::Unknown(why) => self.message = Some(why),
+        }
     }
 
     pub fn with_sample_source() -> Self {
@@ -170,9 +263,20 @@ impl App {
     }
 
     fn on_key(&mut self, key: KeyEvent) {
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-            self.should_quit = true;
-            return;
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            match key.code {
+                KeyCode::Char('c') => {
+                    self.should_quit = true;
+                    return;
+                }
+                KeyCode::Char('s') => {
+                    if let Err(e) = self.save_file(None) {
+                        self.message = Some(format!("save failed: {e}"));
+                    }
+                    return;
+                }
+                _ => {}
+            }
         }
         // The command-line prompt always receives keys, regardless of focus.
         if self.editor.cmdline.is_some() {
@@ -198,10 +302,7 @@ impl App {
                 self.dirty = true;
                 self.last_edit = Some(Instant::now());
             }
-            crate::editor::Action::Command(cmd) => {
-                // Full ex commands arrive in M5; acknowledge for now.
-                self.message = Some(format!(":{cmd} (not implemented yet)"));
-            }
+            crate::editor::Action::Command(cmd) => self.handle_command(&cmd),
             crate::editor::Action::None => {}
         }
     }
@@ -326,5 +427,45 @@ mod tests {
     fn editor_sample_matches_app_source() {
         let app = App::with_sample_source();
         assert_eq!(app.editor.text(), app.source);
+    }
+
+    #[test]
+    fn file_round_trip_is_byte_identical() {
+        let dir = std::env::temp_dir().join(format!("tui-db-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src_path = dir.join("a.dbml");
+        let dst_path = dir.join("b.dbml");
+        std::fs::write(&src_path, "Table t {\n  id integer [pk]\n}\n").unwrap();
+
+        let mut app = App::default();
+        app.open_file(src_path.to_str().unwrap()).unwrap();
+        assert!(!app.is_modified());
+
+        // modify, then save-as and confirm the modified content landed
+        app.editor.handle_key(key('G'));
+        app.editor
+            .handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
+        for c in "Table extra { id integer }".chars() {
+            app.editor.handle_key(key(c));
+        }
+        app.editor.handle_key(esc());
+        assert!(app.is_modified());
+        app.save_file(Some(dst_path.to_str().unwrap())).unwrap();
+        assert!(!app.is_modified());
+        assert_eq!(
+            std::fs::read_to_string(&dst_path).unwrap(),
+            "Table t {\n  id integer [pk]\n}\nTable extra { id integer }\n"
+        );
+
+        // :q refuses while modified, :q! quits
+        app.editor.handle_key(key('A'));
+        app.editor.handle_key(key('z'));
+        app.editor.handle_key(esc());
+        app.handle_command("q");
+        assert!(!app.should_quit, ":q must refuse when modified");
+        app.handle_command("q!");
+        assert!(app.should_quit);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -116,8 +116,18 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     }
 
     let (row, col) = app.editor.cursor();
+    let name = app
+        .file
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "[No Name]".to_string());
+    let modified = if app.is_modified() { " [+]" } else { "" };
     spans.push(Span::styled(
-        format!(" tui-db  Ln {}, Col {} ", row + 1, col + 1),
+        format!(
+            " tui-db  {name}{modified}  Ln {}, Col {} ",
+            row + 1,
+            col + 1
+        ),
         Style::new().fg(Color::DarkGray),
     ));
     spans.push(Span::styled(
