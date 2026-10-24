@@ -230,8 +230,8 @@ impl App {
     /// Vertical scrollbar geometry: (content, viewport, offset). Content and
     /// viewport in diagram cells (text mode) or raster pixels (image mode).
     pub fn scroll_v(&self) -> (u32, u32, i32) {
-        match (&self.diagram, self.render_mode) {
-            (Some(l), crate::render::Mode::Text) => (
+        match (&self.diagram, self.is_image_mode()) {
+            (Some(l), false) => (
                 (l.extent.1 + 1) as u32,
                 self.view_rect().height as u32,
                 self.pan.1,
@@ -246,8 +246,8 @@ impl App {
 
     /// Horizontal scrollbar geometry; see `scroll_v`.
     pub fn scroll_h(&self) -> (u32, u32, i32) {
-        match (&self.diagram, self.render_mode) {
-            (Some(l), crate::render::Mode::Text) => (
+        match (&self.diagram, self.is_image_mode()) {
+            (Some(l), false) => (
                 (l.extent.0 + 1) as u32,
                 self.view_rect().width as u32,
                 self.pan.0,
@@ -330,7 +330,7 @@ impl App {
     /// Zoom by one step, keeping the point under the cursor stationary.
     pub fn zoom_at(&mut self, col: u16, row: u16, dir: i32) {
         let old = self.zoom;
-        let new = (old * 1.25f32.powi(dir)).clamp(1.0, 8.0);
+        let new = (old * 1.25f32.powi(dir)).clamp(0.25, 8.0);
         if (new - old).abs() < f32::EPSILON {
             return;
         }
@@ -355,8 +355,8 @@ impl App {
     /// renderers' transforms).
     fn cursor_diagram_pos(&self, col: u16, row: u16) -> (i32, i32) {
         let view = self.view_rect();
-        match self.render_mode {
-            crate::render::Mode::Text => (
+        match self.is_image_mode() {
+            false => (
                 col as i32 - view.x as i32 - self.pan.0,
                 row as i32 - view.y as i32 - self.pan.1,
             ),
@@ -377,8 +377,8 @@ impl App {
     /// transforms). Inverse of `cursor_diagram_pos`.
     pub fn diagram_to_screen(&self, x: i32, y: i32) -> (i32, i32) {
         let view = self.view_rect();
-        match self.render_mode {
-            crate::render::Mode::Text => (
+        match self.is_image_mode() {
+            false => (
                 view.x as i32 + x + self.pan.0,
                 view.y as i32 + y + self.pan.1,
             ),
@@ -465,7 +465,11 @@ impl App {
         let (cx, cy) = (col as i32, row as i32);
         // reverse: later boxes are drawn last, so the topmost wins overlaps
         for b in layout.boxes.iter().rev() {
-            let (bx, by, bw, bh) = match self.render_mode {
+            let (bx, by, bw, bh) = match if self.is_image_mode() {
+                crate::render::Mode::Kitty // any non-cell pipeline
+            } else {
+                crate::render::Mode::Text
+            } {
                 crate::render::Mode::Text => (
                     inner.x as i32 + b.x + self.pan.0,
                     inner.y as i32 + b.y + self.pan.1,
@@ -517,7 +521,7 @@ impl App {
         self.parse_errors = out.errors;
         self.dangling = schema.dangling;
         self.layout_gen += 1;
-        if self.render_mode != crate::render::Mode::Text {
+        if self.is_image_mode() {
             self.image_due = true;
         }
     }
@@ -757,8 +761,10 @@ impl App {
         }
     }
 
+    /// True when the diagram renders through the raster pipeline: kitty,
+    /// sixel, or text mode zoomed away from 1.0 (halfblocks).
     pub fn is_image_mode(&self) -> bool {
-        self.render_mode != crate::render::Mode::Text
+        self.render_mode != crate::render::Mode::Text || (self.zoom - 1.0).abs() > f32::EPSILON
     }
 
     fn on_canvas_key(&mut self, key: KeyEvent) {
@@ -901,22 +907,14 @@ impl App {
             }
             MouseEventKind::ScrollUp => {
                 if rect_contains(panes.canvas, col, row) {
-                    if self.is_image_mode() {
-                        self.zoom_at(col, row, 1);
-                    } else {
-                        self.pan.1 += 2;
-                    }
+                    self.zoom_at(col, row, 1);
                 } else if rect_contains(panes.editor, col, row) {
                     self.editor.scroll(-2);
                 }
             }
             MouseEventKind::ScrollDown => {
                 if rect_contains(panes.canvas, col, row) {
-                    if self.is_image_mode() {
-                        self.zoom_at(col, row, -1);
-                    } else {
-                        self.pan.1 -= 2;
-                    }
+                    self.zoom_at(col, row, -1);
                 } else if rect_contains(panes.editor, col, row) {
                     self.editor.scroll(2);
                 }
@@ -1279,6 +1277,53 @@ mod tests {
             "committed on release"
         );
         assert!(app.image_due, "single re-render scheduled");
+    }
+
+    #[test]
+    fn text_mode_zooms_through_halfblocks() {
+        use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+        use ratatui_image::picker::{Picker, ProtocolType};
+        let mut app = App::with_sample_source();
+        app.panes.canvas = Rect::new(40, 0, 60, 38);
+        let mut picker = Picker::from_fontsize((10, 20));
+        picker.set_protocol_type(ProtocolType::Halfblocks);
+        app.picker = Some(picker);
+        assert!(!app.is_image_mode(), "cell renderer at zoom 1.0");
+
+        // wheel up over the canvas zooms in text mode too
+        let wheel = |dir_col: u16| MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: dir_col,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        };
+        app.on_mouse(wheel(50));
+        assert!((app.zoom - 1.25).abs() < 1e-6);
+        assert!(app.is_image_mode(), "zoomed text uses the raster pipeline");
+        assert!(app.image_due);
+
+        app.refresh_image();
+        assert!(app.full_raster.is_some(), "raster built for halfblocks");
+        assert!(app.proto.is_some(), "halfblocks protocol created");
+
+        // wheel down past 1.0 zooms OUT into the minimap range
+        for _ in 0..8 {
+            app.on_mouse(MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                column: 50,
+                row: 5,
+                modifiers: KeyModifiers::NONE,
+            });
+        }
+        assert!(
+            (app.zoom - 0.25).abs() < 1e-6 || app.zoom < 1.0,
+            "zoom out allowed below 1.0, got {}",
+            app.zoom
+        );
+
+        // back to exactly 1.0: crisp cell renderer again
+        app.zoom = 1.0;
+        assert!(!app.is_image_mode());
     }
 
     #[test]

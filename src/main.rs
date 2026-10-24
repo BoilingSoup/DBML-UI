@@ -60,11 +60,9 @@ fn setup_rendering(app: &mut App, pref: RenderOpt) {
     };
     app.render_mode = mode;
 
-    if mode == Mode::Text {
-        return;
-    }
-    // Image modes need a picker even when the query failed (e.g. piped
-    // stdout with a forced --render): fall back to a typical font size.
+    // Text mode keeps the crisp cell renderer at zoom 1.0 but zooms via
+    // halfblocks through the raster pipeline; prefer a queried picker for
+    // real font metrics, else guess a typical cell size.
     let mut picker = queried.unwrap_or_else(|| Picker::from_fontsize((10, 20)));
     picker.set_protocol_type(match mode {
         Mode::Kitty => ProtocolType::Kitty,
@@ -72,5 +70,7 @@ fn setup_rendering(app: &mut App, pref: RenderOpt) {
         Mode::Text => ProtocolType::Halfblocks,
     });
     app.picker = Some(picker);
-    app.image_due = true;
+    if mode != Mode::Text {
+        app.image_due = true;
+    }
 }

@@ -134,7 +134,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
         ]),
         Line::from(vec![
             Span::styled("  wheel", dim),
-            Span::raw("          zoom (kitty/sixel) or scroll (text)"),
+            Span::raw("          zoom (halfblocks in text mode)"),
         ]),
         Line::from(vec![
             Span::styled("  0", dim),
@@ -205,12 +205,12 @@ fn draw_canvas(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(block, area);
 
     match app.render_mode {
-        crate::render::Mode::Text => {
+        crate::render::Mode::Text if (app.zoom - 1.0).abs() <= f32::EPSILON => {
             if let Some(layout) = &app.diagram {
                 crate::render::text::render(f.buffer_mut(), view, layout, app.pan);
             }
         }
-        crate::render::Mode::Kitty | crate::render::Mode::Sixel => {
+        _ => {
             // Detect viewport size changes (resize / divider drag) so the
             // event loop re-crops.
             let (fw, fh) = app.font_px();
@@ -229,7 +229,7 @@ fn draw_canvas(f: &mut Frame, app: &mut App, area: Rect) {
             }
             // live drag feedback: a cell-drawn outline at the pending spot
             // (kitty renders text over graphics fine; sixel does not)
-            if app.render_mode == crate::render::Mode::Kitty {
+            if app.render_mode != crate::render::Mode::Sixel {
                 if let Some(drag) = &app.table_drag {
                     if let Some((px, py)) = drag.pending {
                         if let Some(b) = app
@@ -438,21 +438,22 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         ),
         Style::new().fg(Color::DarkGray),
     ));
-    match app.render_mode {
-        crate::render::Mode::Kitty | crate::render::Mode::Sixel => {
+    match app.is_image_mode() {
+        true => {
             spans.push(Span::styled(
                 format!(
                     "{} zoom {:.0}% ",
                     match app.render_mode {
                         crate::render::Mode::Kitty => "kitty",
-                        _ => "sixel",
+                        crate::render::Mode::Sixel => "sixel",
+                        crate::render::Mode::Text => "halfblocks",
                     },
                     app.zoom * 100.0
                 ),
                 Style::new().fg(Color::DarkGray),
             ));
         }
-        crate::render::Mode::Text => {
+        false => {
             spans.push(Span::styled(
                 format!("pan {},{} ", app.pan.0, app.pan.1),
                 Style::new().fg(Color::DarkGray),

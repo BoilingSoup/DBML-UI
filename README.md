@@ -29,8 +29,9 @@ A terminal DBML diagram editor — vim-style editing on the left, a live
   1. **kitty graphics protocol** — vector-rendered via SVG, zoom ×1.25
      steps (1.0–8.0), pan by drag or `hjkl`
   2. **sixel** — same pipeline, sixel encoding
-  3. **text fallback** — box-drawing tables with `◆` pk / `◇` fk markers;
-     zoom disabled, pan + wheel scroll
+  3. **text fallback** — box-drawing tables with `◆` pk / `◇` fk markers
+     at 1:1; wheel zoom switches to a halfblocks raster (works over plain
+     SSH, includes minimap-style zoom-out below 1.0)
 - **Full mouse support**: drag to pan (tables slide offscreen edges just
   like the browser), wheel to zoom (image modes) or scroll (text), drag
   the divider to resize panes, click a table to jump the editor to its
