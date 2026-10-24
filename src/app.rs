@@ -91,6 +91,8 @@ pub struct App {
     pub should_quit: bool,
     /// Status-bar toast.
     pub message: Option<String>,
+    /// Syntax-highlight tokens for `source` (byte spans), rebuilt with it.
+    pub highlights: Vec<dbml_ui::dbml::highlight::Token>,
     /// Help overlay visibility.
     pub show_help: bool,
     /// Pane split fraction (editor share), driven by divider drags.
@@ -124,6 +126,7 @@ impl App {
             saved_text: String::new(),
             should_quit: false,
             message: None,
+            highlights: Vec::new(),
             show_help: false,
             split: 0.4,
             window_size: (1400.0, 900.0),
@@ -136,6 +139,7 @@ impl App {
     /// Re-parse + re-layout (keeps dragged table positions).
     pub fn set_source(&mut self, src: &str) {
         self.source = src.to_string();
+        self.highlights = dbml_ui::dbml::highlight::highlight(src);
         let out = dbml::parser::parse(src);
         let schema = model::build(&out.doc);
         self.diagram = layout::layout_with_overrides(&schema, &self.table_pos);

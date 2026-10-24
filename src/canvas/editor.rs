@@ -132,7 +132,15 @@ impl canvas::Program<Message> for EditorView<'_> {
             }
         }
 
-        // gutter + text
+        // gutter + text, token-colored
+        let src = app.source.as_str();
+        // byte offset of each line start in `source` (highlight spans index it)
+        let mut line_start = 0usize;
+        let mut line_starts = Vec::with_capacity(lines.len());
+        for l in lines {
+            line_starts.push(line_start);
+            line_start += l.len() + 1;
+        }
         let mut y = -sub * LINE_HEIGHT;
         for (i, line) in lines.iter().enumerate().skip(first).take(visible.max(1)) {
             let text_y = y + LINE_HEIGHT * 0.5;
@@ -147,16 +155,32 @@ impl canvas::Program<Message> for EditorView<'_> {
                 ..Default::default()
             });
             if !line.is_empty() {
-                frame.fill_text(Text {
-                    content: line.clone(),
-                    position: Point::new(GUTTER, text_y),
-                    color: theme::TEXT,
-                    size: FONT_SIZE.into(),
-                    font: Font::MONOSPACE,
-                    horizontal_alignment: iced::alignment::Horizontal::Left,
-                    vertical_alignment: iced::alignment::Vertical::Center,
-                    ..Default::default()
-                });
+                let ls = line_starts[i];
+                let le = ls + line.len();
+                // token chunks intersecting this line, drawn at their char
+                // column on the same monospace grid the cursor math uses
+                let first_tok = app.highlights.partition_point(|t| t.end <= ls);
+                for t in &app.highlights[first_tok..] {
+                    if t.start >= le {
+                        break;
+                    }
+                    let s = t.start.max(ls);
+                    let e = t.end.min(le);
+                    let content = &src[s..e];
+                    if content.chars().any(|c| !c.is_whitespace()) {
+                        let col = src[ls..s].chars().count();
+                        frame.fill_text(Text {
+                            content: content.to_string(),
+                            position: Point::new(GUTTER + col as f32 * char_width(), text_y),
+                            color: token_color(t.kind),
+                            size: FONT_SIZE.into(),
+                            font: Font::MONOSPACE,
+                            horizontal_alignment: iced::alignment::Horizontal::Left,
+                            vertical_alignment: iced::alignment::Vertical::Center,
+                            ..Default::default()
+                        });
+                    }
+                }
             }
             y += LINE_HEIGHT;
         }
@@ -183,6 +207,19 @@ impl canvas::Program<Message> for EditorView<'_> {
             frame.fill_rectangle(p, rect, color);
         }
         vec![frame.into_geometry()]
+    }
+}
+
+fn token_color(kind: dbml_ui::dbml::highlight::Kind) -> Color {
+    use dbml_ui::dbml::highlight::Kind;
+    match kind {
+        Kind::Keyword => theme::SYN_KEYWORD,
+        Kind::Name => theme::SYN_NAME,
+        Kind::Type => theme::SYN_TYPE,
+        Kind::String => theme::SYN_STRING,
+        Kind::Number => theme::SYN_NUMBER,
+        Kind::Comment | Kind::Punct => theme::DIM,
+        Kind::Ident | Kind::Plain => theme::TEXT,
     }
 }
 

@@ -21,3 +21,10 @@ pub const EDGE: iced::Color = iced::Color::from_rgb(0.431, 0.463, 0.506); // #6e
 pub fn app() -> iced::Theme {
     iced::Theme::Dark
 }
+
+// Syntax colors (GitHub-dark flavored), used by the editor canvas.
+pub const SYN_KEYWORD: iced::Color = iced::Color::from_rgb(1.0, 0.482, 0.447); // #ff7b72
+pub const SYN_NAME: iced::Color = iced::Color::from_rgb(0.824, 0.659, 1.0); // #d2a8ff
+pub const SYN_TYPE: iced::Color = iced::Color::from_rgb(1.0, 0.651, 0.341); // #ffa657
+pub const SYN_STRING: iced::Color = iced::Color::from_rgb(0.647, 0.839, 1.0); // #a5d6ff
+pub const SYN_NUMBER: iced::Color = iced::Color::from_rgb(0.475, 0.753, 1.0); // #79c0ff
