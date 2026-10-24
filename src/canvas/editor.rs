@@ -56,7 +56,12 @@ impl canvas::Program<Message> for EditorView<'_> {
         cursor: iced::mouse::Cursor,
     ) -> (canvas::event::Status, Option<Message>) {
         use iced::mouse;
-        let local = |p: Point| Point::new(p.x - bounds.x, p.y - bounds.y);
+        // The canvas widget forwards every window event with window-level
+        // coordinates; only react when the pointer is over this canvas.
+        let Some(p) = cursor.position_over(bounds) else {
+            return (canvas::event::Status::Ignored, None);
+        };
+        let local = Point::new(p.x - bounds.x, p.y - bounds.y);
         match event {
             canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
                 let notches = match delta {
@@ -68,15 +73,10 @@ impl canvas::Program<Message> for EditorView<'_> {
                     Some(Message::EditorScrolled(notches)),
                 )
             }
-            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
-                match cursor.position() {
-                    Some(p) => (
-                        canvas::event::Status::Captured,
-                        Some(Message::EditorPressed(local(p))),
-                    ),
-                    _ => (canvas::event::Status::Ignored, None),
-                }
-            }
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => (
+                canvas::event::Status::Captured,
+                Some(Message::EditorPressed(local)),
+            ),
             _ => (canvas::event::Status::Ignored, None),
         }
     }
@@ -183,5 +183,67 @@ impl canvas::Program<Message> for EditorView<'_> {
             frame.fill_rectangle(p, rect, color);
         }
         vec![frame.into_geometry()]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::App;
+    use iced::mouse::{self, Cursor};
+    use iced::widget::canvas::Program as _;
+
+    const BOUNDS: Rectangle = Rectangle::new(Point::new(100.0, 50.0), Size::new(400.0, 300.0));
+
+    #[test]
+    fn press_outside_editor_does_not_move_cursor() {
+        // regression: presses in the diagram pane used to leak into the
+        // editor canvas and jump the caret
+        let app = App::default();
+        let view = EditorView { app: &app };
+        let outside = Point::new(900.0, 100.0); // diagram-pane territory
+        let (status, message) = view.update(
+            &mut (),
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+            BOUNDS,
+            Cursor::Available(outside),
+        );
+        assert!(message.is_none(), "{message:?}");
+        assert_eq!(status, canvas::event::Status::Ignored);
+    }
+
+    #[test]
+    fn press_inside_places_cursor_at_local_position() {
+        let app = App::default();
+        let view = EditorView { app: &app };
+        let (_, message) = view.update(
+            &mut (),
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+            BOUNDS,
+            Cursor::Available(Point::new(100.0 + GUTTER + 30.0, 50.0 + 40.0)),
+        );
+        match message {
+            Some(Message::EditorPressed(p)) => {
+                assert!((p.x - (GUTTER + 30.0)).abs() < 0.01);
+                assert!((p.y - 40.0).abs() < 0.01);
+            }
+            other => panic!("expected EditorPressed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn wheel_outside_editor_does_not_scroll() {
+        // regression: zooming the diagram scrolled the editor pane
+        let app = App::default();
+        let view = EditorView { app: &app };
+        let (_, message) = view.update(
+            &mut (),
+            canvas::Event::Mouse(mouse::Event::WheelScrolled {
+                delta: mouse::ScrollDelta::Lines { x: 0.0, y: -3.0 },
+            }),
+            BOUNDS,
+            Cursor::Available(Point::new(900.0, 100.0)),
+        );
+        assert!(message.is_none(), "{message:?}");
     }
 }

@@ -89,21 +89,30 @@ impl canvas::Program<crate::app::Message> for Diagram<'_> {
         use crate::app::Message;
         use iced::mouse;
 
+        // The canvas widget forwards every window event with window-level
+        // coordinates; only react when the pointer is over this canvas.
+        // Exception: while a drag is in flight, keep tracking moves and the
+        // release outside the canvas so pans continue past the edges.
         let local = |p: Point| Point::new(p.x - bounds.x, p.y - bounds.y);
-        let at_cursor = |f: &dyn Fn(Point) -> Message| cursor.position().map(|p| f(local(p)));
+        let over = cursor.position_over(bounds).map(local);
+        let tracked = if self.dragging {
+            over.or_else(|| cursor.position().map(local))
+        } else {
+            over
+        };
 
         let (status, message) = match event {
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => (
                 canvas::event::Status::Captured,
-                at_cursor(&Message::CanvasPressed),
+                over.map(Message::CanvasPressed),
             ),
             canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => (
                 canvas::event::Status::Captured,
-                at_cursor(&Message::CanvasReleased),
+                tracked.map(Message::CanvasReleased),
             ),
             canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => (
                 canvas::event::Status::Ignored,
-                at_cursor(&Message::CanvasMoved),
+                tracked.map(Message::CanvasMoved),
             ),
             canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
                 let notches = match delta {
@@ -112,7 +121,7 @@ impl canvas::Program<crate::app::Message> for Diagram<'_> {
                 };
                 (
                     canvas::event::Status::Captured,
-                    Some(Message::Wheel(notches)),
+                    over.map(|_| Message::Wheel(notches)),
                 )
             }
             _ => (canvas::event::Status::Ignored, None),
@@ -144,7 +153,7 @@ impl canvas::Program<crate::app::Message> for Diagram<'_> {
         if self.dragging {
             return Interaction::Grabbing;
         }
-        if let Some(p) = cursor.position() {
+        if let Some(p) = cursor.position_over(bounds) {
             let local = Point::new(p.x - bounds.x, p.y - bounds.y);
             if hit_test(self.layout, self.zoom, self.pan, local).is_some() {
                 return Interaction::Pointer;
@@ -313,5 +322,85 @@ mod tests {
         assert_eq!(hit.map(|b| b.title.as_str()), Some("a"));
         let miss = Point::new(5000.0, 5000.0);
         assert!(hit_test(&l, zoom, Vector::new(50.0, 50.0), miss).is_none());
+    }
+}
+
+#[cfg(test)]
+mod interaction_tests {
+    use super::*;
+    use crate::app::Message;
+    use iced::mouse::{self, Cursor};
+    use iced::widget::canvas::Program as _;
+
+    const BOUNDS: Rectangle = Rectangle::new(Point::new(500.0, 0.0), Size::new(600.0, 400.0));
+
+    fn diagram() -> Diagram<'static> {
+        let layout: &'static dbml_ui::layout::Layout =
+            Box::leak(Box::new(dbml_ui::layout::layout(&dbml_ui::model::build(
+                &dbml_ui::dbml::parser::parse(dbml_ui::SAMPLE_DBML).doc,
+            ))));
+        Diagram {
+            layout,
+            zoom: 20.0,
+            pan: Vector::default(),
+            hover: None,
+            dragging: false,
+        }
+    }
+
+    #[test]
+    fn press_and_wheel_outside_bounds_are_ignored() {
+        // regression: presses/wheels over the editor pane leaked in here
+        let d = diagram();
+        let outside = Point::new(100.0, 100.0);
+        for event in [
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+            canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+            canvas::Event::Mouse(mouse::Event::WheelScrolled {
+                delta: mouse::ScrollDelta::Lines { x: 0.0, y: 2.0 },
+            }),
+        ] {
+            let (_, message) = d.update(&mut (), event, BOUNDS, Cursor::Available(outside));
+            assert!(message.is_none(), "{message:?}");
+        }
+    }
+
+    #[test]
+    fn events_inside_are_localized() {
+        let d = diagram();
+        let (_, message) = d.update(
+            &mut (),
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+            BOUNDS,
+            Cursor::Available(Point::new(550.0, 30.0)),
+        );
+        match message {
+            Some(Message::CanvasPressed(p)) => {
+                assert_eq!(p, Point::new(50.0, 30.0), "bounds-relative");
+            }
+            other => panic!("expected CanvasPressed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn drag_keeps_tracking_outside_bounds() {
+        // pan continues past the canvas edge; release outside still lands
+        let mut d = diagram();
+        d.dragging = true;
+        let outside = Point::new(100.0, 100.0);
+        let (_, moved) = d.update(
+            &mut (),
+            canvas::Event::Mouse(mouse::Event::CursorMoved { position: outside }),
+            BOUNDS,
+            Cursor::Available(outside),
+        );
+        assert!(moved.is_some(), "drag tracks outside");
+        let (_, released) = d.update(
+            &mut (),
+            canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+            BOUNDS,
+            Cursor::Available(outside),
+        );
+        assert!(released.is_some(), "release outside ends the drag");
     }
 }
