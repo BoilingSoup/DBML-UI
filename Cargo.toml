@@ -1,0 +1,16 @@
+[package]
+name = "tui-db"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.104"
+# MSRV pins for rustc 1.84: newer releases of these crates require 1.85+.
+clap = { version = "=4.5.40", features = ["derive"] }
+crossterm = "0.28.1"
+image = { version = "=0.25.6", default-features = false, features = ["png"] }
+ratatui = "0.29"
+ratatui-image = { version = "=8.0.1", default-features = false }
+resvg = "0.45.1"
+tui-textarea = "0.7"
+winnow = "1.0"
