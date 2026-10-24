@@ -121,6 +121,8 @@ pub struct App {
     pub canvas_px: (u32, u32),
     /// Press position for click-vs-drag discrimination on the canvas.
     click_origin: Option<(u16, u16)>,
+    /// Scrollbar drag in flight: Some(true) vertical, Some(false) horizontal.
+    sb_drag: Option<bool>,
     /// Help overlay visibility.
     pub show_help: bool,
 }
@@ -168,6 +170,7 @@ impl App {
             last_tx: None,
             canvas_px: (0, 0),
             click_origin: None,
+            sb_drag: None,
             show_help: false,
         }
     }
@@ -318,6 +321,69 @@ impl App {
         self.img_pan.1 = ((self.img_pan.1 as f32 + cy) * s - cy) as i32;
         self.zoom = new;
         self.image_due = true;
+    }
+
+    /// If the press lands on a scrollbar track, jump the view to that
+    /// position and begin a thumb drag. Returns true when consumed.
+    fn try_scrollbar_press(&mut self, col: u16, row: u16) -> bool {
+        let c = self.panes.canvas;
+        let inner = Rect {
+            x: c.x.saturating_add(1),
+            y: c.y.saturating_add(1),
+            width: c.width.saturating_sub(2),
+            height: c.height.saturating_sub(2),
+        };
+        let view = self.view_rect();
+        let bars = crate::ui::scrollbar_rects(self, inner, view);
+        let vertical = match (bars.v, bars.h) {
+            (Some((vx, _, _)), _) if vx == col && row < view.bottom() => Some(true),
+            (_, Some((hy, _, _))) if hy == row && col < view.right() => Some(false),
+            _ => None,
+        };
+        match vertical {
+            Some(v) => {
+                self.sb_drag = Some(v);
+                let frac = self.track_frac(v, if v { row } else { col });
+                self.scroll_to(v, frac);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Track fraction (0..=1) for a position along a scrollbar track. The
+    /// first and last track cells map exactly to 0.0 and 1.0.
+    fn track_frac(&self, vertical: bool, pos: u16) -> f32 {
+        let c = self.panes.canvas;
+        let (start, len) = if vertical {
+            (c.y.saturating_add(1), c.height.saturating_sub(3).max(1))
+        } else {
+            (c.x.saturating_add(1), c.width.saturating_sub(3).max(1))
+        };
+        let span = (len - 1).max(1) as f32;
+        ((pos.saturating_sub(start)) as f32 / span).clamp(0.0, 1.0)
+    }
+
+    /// Scroll the canvas so the thumb sits at `frac` along the track.
+    fn scroll_to(&mut self, vertical: bool, frac: f32) {
+        let (content, viewport, _) = if vertical {
+            self.scroll_v()
+        } else {
+            self.scroll_h()
+        };
+        let off = crate::ui::offset_at(content, viewport, frac);
+        if self.is_image_mode() {
+            if vertical {
+                self.img_pan.1 = off;
+            } else {
+                self.img_pan.0 = off;
+            }
+            self.image_due = true;
+        } else if vertical {
+            self.pan.1 = off;
+        } else {
+            self.pan.0 = off;
+        }
     }
 
     /// Find the table box under a screen position, if any.
@@ -666,7 +732,9 @@ impl App {
                     && row >= panes.body.top()
                 {
                     self.divider_dragging = true;
-                } else if rect_contains(panes.canvas, col, row) {
+                } else if rect_contains(panes.canvas, col, row)
+                    && !self.try_scrollbar_press(col, row)
+                {
                     self.focus = Focus::Canvas;
                     self.pan_anchor = Some((col, row));
                     self.click_origin = Some((col, row));
@@ -675,7 +743,10 @@ impl App {
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
-                if self.divider_dragging {
+                if let Some(vertical) = self.sb_drag {
+                    let frac = self.track_frac(vertical, if vertical { row } else { col });
+                    self.scroll_to(vertical, frac);
+                } else if self.divider_dragging {
                     if panes.body.width > 0 {
                         let rel = (col.saturating_sub(panes.body.left())) as f32
                             / panes.body.width as f32;
@@ -696,6 +767,7 @@ impl App {
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 self.divider_dragging = false;
+                self.sb_drag = None;
                 // click (no drag) on a table box jumps the editor to it
                 if let Some((dc, dr)) = self.click_origin {
                     if (col as i32 - dc as i32).abs() <= 1 && (row as i32 - dr as i32).abs() <= 1 {
@@ -857,6 +929,70 @@ mod tests {
         assert!(png.len() > 10_000, "non-trivial png: {} bytes", png.len());
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn scrollbar_press_and_drag_pans() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let mut app = App::with_sample_source();
+        // small canvas so the diagram overflows vertically
+        app.panes.canvas = Rect::new(40, 0, 30, 12); // inner 28x10, view 27x9
+        let view = app.view_rect();
+        assert!(view.height == 9 && view.width == 27);
+        let vx = view.right(); // vertical track column
+
+        let down = |c, r| MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: c,
+            row: r,
+            modifiers: KeyModifiers::NONE,
+        };
+        let drag = |c, r| MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: c,
+            row: r,
+            modifiers: KeyModifiers::NONE,
+        };
+        let up = |c, r| MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: c,
+            row: r,
+            modifiers: KeyModifiers::NONE,
+        };
+
+        let (_, content, viewport) = app.scroll_v();
+        assert!(
+            content > viewport as u32,
+            "diagram must overflow the small canvas"
+        );
+        let max_off = content - viewport as u32;
+
+        // press mid-track: view jumps halfway
+        let mid_row = view.y + view.height / 2;
+        app.on_mouse(down(vx, mid_row));
+        assert_eq!(app.sb_drag, Some(true));
+        let half = (max_off as f32 / 2.0).round() as i32;
+        assert!(
+            (app.pan.1 - half).abs() <= 1,
+            "pan {} ~ {}",
+            app.pan.1,
+            half
+        );
+
+        // drag to the track end: max offset
+        let end_row = view.bottom() - 1;
+        app.on_mouse(drag(vx, end_row));
+        assert_eq!(app.pan.1, max_off as i32);
+
+        // release clears the drag mode
+        app.on_mouse(up(vx, end_row));
+        assert_eq!(app.sb_drag, None);
+
+        // dragging on the canvas body afterwards still pans normally
+        app.on_mouse(down(view.x, view.y));
+        app.on_mouse(drag(view.x + 3, view.y + 2));
+        assert_eq!(app.sb_drag, None);
+        assert!(app.pan.0 >= 3);
     }
 
     #[test]
