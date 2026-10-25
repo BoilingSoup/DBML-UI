@@ -612,12 +612,36 @@ impl Editor {
                 self.visual_linewise = false;
                 Action::Changed
             }
+            // linewise c: replace the rows with one empty line to edit (cc)
+            KeyCode::Char('c') if self.visual_linewise => {
+                let lines = self.selection_lines();
+                self.buf.cancel_selection();
+                if let Some((from, n)) = lines {
+                    self.buf.move_cursor(CursorMove::Jump(from, 0));
+                    self.yank_lines(n);
+                    self.delete_lines(n);
+                    self.buf.insert_newline();
+                    self.buf.move_cursor(CursorMove::Up);
+                }
+                self.mode = Mode::Insert;
+                self.visual_linewise = false;
+                Action::Changed
+            }
             KeyCode::Char('d') | KeyCode::Char('x') => {
                 if let Some(t) = self.buf.cut_selection() {
                     self.register = t.split('\n').map(str::to_string).collect();
                 }
                 self.buf.cancel_selection();
                 self.mode = Mode::Normal;
+                Action::Changed
+            }
+            // c (and s, vim's alias): delete the selection and edit
+            KeyCode::Char('c') | KeyCode::Char('s') => {
+                if let Some(t) = self.buf.cut_selection() {
+                    self.register = t.split('\n').map(str::to_string).collect();
+                }
+                self.buf.cancel_selection();
+                self.mode = Mode::Insert;
                 Action::Changed
             }
             KeyCode::Char('o') => {
@@ -1907,6 +1931,34 @@ mod polish_tests {
         assert_eq!((x.row, x.col), (0, 7), "two, exclusive end");
         e.handle_key(key('d'));
         assert_eq!(e.text(), "one  three\n");
+    }
+
+    #[test]
+    fn visual_c_deletes_and_inserts() {
+        let mut e = editor("one two three\n");
+        for c in "vllc".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), " two three\n", "only \"one\" is deleted");
+        assert_eq!(e.mode, Mode::Insert, "c concludes visual into insert");
+        e.handle_key(key('X'));
+        assert_eq!(e.text(), "X two three\n");
+        // s behaves the same (vim alias)
+        let mut e = editor("one two three\n");
+        for c in "lves".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "o two three\n");
+        assert_eq!(e.mode, Mode::Insert);
+        // linewise: rows collapse to one editable empty line (cc-style)
+        let mut e = editor("a\nb\nc\n");
+        for c in "Vjc".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "\nc\n", "rows a+b collapse to one empty line");
+        assert_eq!(e.mode, Mode::Insert);
+        e.handle_key(key('Z'));
+        assert_eq!(e.text(), "Z\nc\n");
     }
 
     #[test]
