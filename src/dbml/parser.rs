@@ -91,8 +91,13 @@ fn peek_is(input: &str, lit: &str) -> bool {
 /// case-insensitive so keyword eats match `table`/`TABLE`/...; punctuation
 /// literals have no case).
 fn eat(input: &mut &str, lit: &str) -> bool {
-    if input.len() >= lit.len() && input[..lit.len()].eq_ignore_ascii_case(lit) {
-        *input = &input[lit.len()..];
+    let b = input.as_bytes();
+    let l = lit.as_bytes();
+    if b.len() >= l.len()
+        && input.is_char_boundary(l.len())
+        && input[..l.len()].eq_ignore_ascii_case(lit)
+    {
+        *input = &input[l.len()..];
         true
     } else {
         false
@@ -104,14 +109,18 @@ fn eat(input: &mut &str, lit: &str) -> bool {
 /// identifier characters (so "Table" does not match "TableGroup").
 fn peek_kw(input: &str, kw: &str) -> bool {
     input.len() >= kw.len()
+        && input.is_char_boundary(kw.len())
         && input[..kw.len()].eq_ignore_ascii_case(kw)
-        && !input[kw.len()..].starts_with(is_bare_ident)
+        && input[kw.len()..].starts_with(|c: char| !is_bare_ident(c))
 }
 
 /// Keyword followed (after same-line spaces) by `next` — distinguishes the
 /// `indexes {` block from a column that happens to be named "indexes".
 fn peek_kw_then(input: &str, kw: &str, next: char) -> bool {
     if !peek_kw(input, kw) {
+        return false;
+    }
+    if !input.is_char_boundary(kw.len()) {
         return false;
     }
     input[kw.len()..]
