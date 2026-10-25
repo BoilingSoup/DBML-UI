@@ -737,12 +737,15 @@ fn char_off(s: &str, col: usize) -> usize {
     s.char_indices().nth(col).map(|(i, _)| i).unwrap_or(s.len())
 }
 
-// ---- vim-style word scanning (ported from tui-textarea's semantics) ----
+// ---- vim-style word scanning ----
 
+/// Word-motion character class. Whitespace is the ONLY separator: runs of
+/// non-whitespace form one word, so `snake_case` and `[pk]` each move as a
+/// single `w`/`e`/`b` unit (vim's `iskeyword` with `_`, tuned for DBML
+/// identifiers).
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum CharKind {
     Space,
-    Punct,
     Other,
 }
 
@@ -750,8 +753,6 @@ impl CharKind {
     fn new(c: char) -> Self {
         if c.is_whitespace() {
             Self::Space
-        } else if c.is_ascii_punctuation() {
-            Self::Punct
         } else {
             Self::Other
         }
@@ -861,8 +862,9 @@ mod tests {
         b.move_cursor(Move::WordBack);
         assert_eq!(b.cursor().1, 4);
 
+        // whitespace is the only separator: `[[[ccc]]]` is one word
         let mut b = buf("aaa bbb [[[ccc]]]\n\n ddd");
-        for expect in [2, 6, 10, 13, 16] {
+        for expect in [2, 6, 16] {
             b.move_cursor(Move::WordEnd);
             assert_eq!(
                 b.pos(),
@@ -874,6 +876,26 @@ mod tests {
         }
         b.move_cursor(Move::WordEnd);
         assert_eq!(b.pos(), Pos { row: 2, col: 3 }, "crosses lines");
+    }
+
+    #[test]
+    fn underscore_is_a_word_character() {
+        // one press of e/w/b spans a whole snake_case identifier
+        let mut b = buf("user_id created_at tx");
+        b.move_cursor(Move::WordEnd);
+        assert_eq!(b.cursor().1, 6, "e lands on the final _ of user_id");
+        b.move_cursor(Move::WordEnd);
+        assert_eq!(b.cursor().1, 17, "e spans created_at in one hop");
+        b.move_cursor(Move::WordForward);
+        assert_eq!(b.cursor().1, 19, "w starts tx (space at 18)");
+        b.move_cursor(Move::WordEnd);
+        assert_eq!(b.cursor().1, 20);
+        b.move_cursor(Move::WordBack);
+        assert_eq!(b.cursor().1, 19, "cursor was on x: b goes to word start");
+        b.move_cursor(Move::WordBack);
+        assert_eq!(b.cursor().1, 8, "b spans created_at in one hop");
+        b.move_cursor(Move::WordBack);
+        assert_eq!(b.cursor().1, 0, "b spans user_id in one hop");
     }
 
     #[test]
