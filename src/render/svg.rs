@@ -139,17 +139,36 @@ fn push_table(s: &mut String, b: &TableBox, show_text: bool) {
             continue;
         }
         let ry = y + (i as f32 + 1.0) * CELL_H + CELL_H * 0.70;
-        let (marker, mfill) = if row.pk {
-            ("\u{25c6}", "#d29922") // ◆
-        } else if row.fk {
-            ("\u{25c7}", "#4493f8") // ◇
-        } else {
-            ("", "#e6edf3")
-        };
-        if !marker.is_empty() {
+        // dbdiagram-style markers: key icon (pk) / chain link (fk),
+        // matching the on-screen canvas
+        let cx = x + 1.6 * CELL_W + 2.0;
+        let cy = ry - row_size * 0.35;
+        if row.pk {
+            let (color, w) = ("#d29922", (0.085 * row_size).max(1.0));
+            let r = 0.30 * row_size;
+            let bx = cx - 0.18 * row_size;
+            let x0 = bx + r * 0.72;
+            let x1 = cx + 0.45 * row_size;
             s.push_str(&format!(
-                r#"<text x="{}" y="{ry:.1}" font-family="monospace" font-size="{row_size}" fill="{mfill}">{marker}</text>"#,
-                x + 1.6 * CELL_W
+                r#"<circle cx="{bx:.1}" cy="{cy:.1}" r="{r:.1}" fill="none" stroke="{color}" stroke-width="{w:.1}"/>"#
+            ));
+            s.push_str(&format!(
+                r#"<path d="M {x0:.1} {cy:.1} L {x1:.1} {cy:.1} M {t1:.1} {cy:.1} V {te:.1} M {t2:.1} {cy:.1} V {te:.1}" fill="none" stroke="{color}" stroke-width="{w:.1}"/>"#,
+                t1 = x1 - 0.16 * row_size,
+                t2 = x1 - 0.02 * row_size,
+                te = cy + 0.26 * row_size,
+            ));
+        } else if row.fk {
+            let (color, w) = ("#4493f8", (0.085 * row_size).max(1.0));
+            let r = 0.26 * row_size;
+            let off = 0.30 * row_size;
+            s.push_str(&format!(
+                r#"<circle cx="{:.1}" cy="{cy:.1}" r="{r:.1}" fill="none" stroke="{color}" stroke-width="{w:.1}"/>"#,
+                cx - off
+            ));
+            s.push_str(&format!(
+                r#"<circle cx="{:.1}" cy="{cy:.1}" r="{r:.1}" fill="none" stroke="{color}" stroke-width="{w:.1}"/>"#,
+                cx + off
             ));
         }
         s.push_str(&format!(
@@ -187,7 +206,7 @@ mod tests {
         assert!(svg.contains(">a</text>"), "table title");
         assert!(svg.contains(">b&lt;x&gt;</text>"), "escaped title");
         assert!(svg.contains("<polyline"), "edge route");
-        assert!(svg.contains("\u{25c6}"), "pk marker");
+        assert!(svg.contains("<circle"), "pk key icon marker");
     }
 
     #[test]
@@ -202,7 +221,7 @@ mod tests {
         let l = layout(&build(&out.doc));
         let outline = build_svg_with(&l, false);
         assert!(!outline.contains("<text"), "no labels: {outline}");
-        assert!(!outline.contains('\u{25c6}'), "no pk markers");
+        assert!(!outline.contains("<circle"), "no pk markers");
         assert!(outline.contains("<rect"), "boxes still drawn");
         assert!(outline.contains(&format!("fill=\"{BG_COLOR}\"")));
         let full = build_svg_with(&l, true);

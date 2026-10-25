@@ -110,6 +110,8 @@ enum Pending {
 pub struct Editor {
     pub buf: Buffer,
     pub mode: Mode,
+    /// Visual-line (V) selection: whole rows, regardless of column.
+    pub visual_linewise: bool,
     /// Operator-pending / multi-key sequences in flight.
     pending: Option<Pending>,
     /// Count typed before the current key ([count]motion, [count]operator).
@@ -147,6 +149,7 @@ impl Editor {
         Self {
             buf: Buffer::from_lines(source.lines().map(|l| l.to_string())),
             mode: Mode::Normal,
+            visual_linewise: false,
             pending: None,
             count: None,
             op_count: None,
@@ -371,6 +374,13 @@ impl Editor {
             }
             KeyCode::Char('v') => {
                 self.mode = Mode::Visual;
+                self.visual_linewise = false;
+                self.buf.start_selection();
+                Action::None
+            }
+            KeyCode::Char('V') => {
+                self.mode = Mode::Visual;
+                self.visual_linewise = true;
                 self.buf.start_selection();
                 Action::None
             }
@@ -493,6 +503,31 @@ impl Editor {
             KeyCode::Esc => {
                 self.buf.cancel_selection();
                 self.mode = Mode::Normal;
+                self.visual_linewise = false;
+                Action::None
+            }
+            // v/V switch selection kinds; same-kind toggles off (vim)
+            KeyCode::Char('v') if self.visual_linewise => {
+                self.visual_linewise = false;
+                Action::None
+            }
+            KeyCode::Char('V') if !self.visual_linewise => {
+                self.visual_linewise = true;
+                Action::None
+            }
+            KeyCode::Char('V') => {
+                self.buf.cancel_selection();
+                self.mode = Mode::Normal;
+                self.visual_linewise = false;
+                Action::None
+            }
+            KeyCode::Char('y') if self.visual_linewise => {
+                if let Some((from, n)) = self.selection_lines() {
+                    self.buf.move_cursor(CursorMove::Jump(from, 0));
+                    self.yank_lines(n);
+                }
+                self.buf.cancel_selection();
+                self.mode = Mode::Normal;
                 Action::None
             }
             KeyCode::Char('y') => {
@@ -504,6 +539,20 @@ impl Editor {
                 self.buf.cancel_selection();
                 self.mode = Mode::Normal;
                 Action::None
+            }
+            KeyCode::Char('d') | KeyCode::Char('x') if self.visual_linewise => {
+                // cancel FIRST: delete_lines -> delete_str would otherwise
+                // consume the still-active selection instead
+                let lines = self.selection_lines();
+                self.buf.cancel_selection();
+                if let Some((from, n)) = lines {
+                    self.buf.move_cursor(CursorMove::Jump(from, 0));
+                    self.yank_lines(n);
+                    self.delete_lines(n);
+                }
+                self.mode = Mode::Normal;
+                self.visual_linewise = false;
+                Action::Changed
             }
             KeyCode::Char('d') | KeyCode::Char('x') => {
                 if let Some(t) = self.buf.cut_selection() {
@@ -520,12 +569,28 @@ impl Editor {
                 self.buf.start_selection();
                 Action::None
             }
+            KeyCode::Char('u') if self.visual_linewise => {
+                if let Some((from, n)) = self.selection_lines() {
+                    if self.buf.apply_lines_case(from, n, false) {
+                        return Action::Changed;
+                    }
+                }
+                Action::None
+            }
             KeyCode::Char('u') => {
                 if self.buf.apply_selection_case(false) {
                     Action::Changed
                 } else {
                     Action::None
                 }
+            }
+            KeyCode::Char('U') if self.visual_linewise => {
+                if let Some((from, n)) = self.selection_lines() {
+                    if self.buf.apply_lines_case(from, n, true) {
+                        return Action::Changed;
+                    }
+                }
+                Action::None
             }
             KeyCode::Char('U') => {
                 if self.buf.apply_selection_case(true) {
@@ -773,6 +838,16 @@ impl Editor {
             self.mode = Mode::Insert;
         }
         Action::Changed
+    }
+
+    /// Rows covered by a visual-line selection: (first_row, count),
+    /// anchor row through cursor row inclusive.
+    fn selection_lines(&self) -> Option<(usize, usize)> {
+        let anchor = self.buf.selection_anchor()?;
+        let cursor = self.buf.pos();
+        let from = anchor.row.min(cursor.row);
+        let to = anchor.row.max(cursor.row);
+        Some((from, to - from + 1))
     }
 
     /// `x`: delete up to [count] chars, never crossing the line end.
@@ -1445,5 +1520,84 @@ mod polish_tests {
         e.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
         e.handle_key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
         assert_eq!(e.text(), "abcd\n", "Delete at EOL joins (GUI behavior)");
+    }
+}
+
+#[cfg(test)]
+mod vline_tests {
+    use super::tests::{editor, key};
+    use super::*;
+
+    #[test]
+    fn capital_v_selects_lines_and_d_deletes_them() {
+        let mut e = editor("one\ntwo\nthree\n");
+        e.handle_key(key('V'));
+        assert_eq!(e.mode, Mode::Visual);
+        assert!(e.visual_linewise, "linewise");
+        e.handle_key(key('j'));
+        e.handle_key(key('d'));
+        assert_eq!(e.mode, Mode::Normal);
+        assert_eq!(e.text(), "three\n");
+        assert_eq!(e.register, vec!["one".to_string(), "two".to_string()]);
+        // linewise p pastes below
+        e.handle_key(key('p'));
+        assert_eq!(e.text(), "three\none\ntwo\n");
+    }
+
+    #[test]
+    fn v_line_y_yanks_whole_lines() {
+        let mut e = editor("aaa\nbbb\nccc\n");
+        e.handle_key(key('j')); // row 1
+        e.handle_key(key('V'));
+        e.handle_key(key('j')); // extend to row 2
+        e.handle_key(key('y'));
+        assert_eq!(e.text(), "aaa\nbbb\nccc\n", "yank only");
+        assert_eq!(e.register, vec!["bbb".to_string(), "ccc".to_string()]);
+    }
+
+    #[test]
+    fn v_line_u_uppercases_rows_and_stays_visual() {
+        let mut e = editor("abc\ndef\nghi\n");
+        e.handle_key(key('V'));
+        e.handle_key(key('j'));
+        e.handle_key(KeyEvent::new(KeyCode::Char('U'), KeyModifiers::SHIFT));
+        assert_eq!(e.text(), "ABC\nDEF\nghi\n");
+        assert_eq!(e.mode, Mode::Visual, "stays in visual");
+        e.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
+        assert_eq!(e.text(), "abc\ndef\nghi\n", "back to lowercase");
+        // each re-case is exactly one undo unit
+        e.buf.undo();
+        assert_eq!(e.text(), "ABC\nDEF\nghi\n", "first undo reverts the u");
+        e.buf.undo();
+        assert_eq!(e.text(), "abc\ndef\nghi\n", "second undo reverts the U");
+    }
+
+    #[test]
+    fn v_and_capital_v_switch_kinds_and_toggle_off() {
+        let mut e = editor("x\n");
+        e.handle_key(key('v'));
+        assert!(!e.visual_linewise, "charwise");
+        e.handle_key(KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SHIFT));
+        assert!(e.visual_linewise, "switched to linewise");
+        e.handle_key(KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SHIFT));
+        assert_eq!(e.mode, Mode::Normal, "V in linewise exits visual");
+        assert!(!e.visual_linewise);
+        // and the flag resets through Esc
+        e.handle_key(KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SHIFT));
+        assert!(e.visual_linewise);
+        e.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(e.mode, Mode::Normal);
+        assert!(!e.visual_linewise, "reset for the next v");
+    }
+
+    #[test]
+    fn v_line_motions_ignore_columns() {
+        let mut e = editor("hello world\nsecond\n");
+        e.handle_key(key('V'));
+        e.handle_key(key('e')); // word motion within the line
+        e.handle_key(key('$')); // end of line
+                                // still exactly one row selected
+        e.handle_key(key('d'));
+        assert_eq!(e.text(), "second\n", "whole first line gone");
     }
 }

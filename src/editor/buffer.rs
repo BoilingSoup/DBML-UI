@@ -457,6 +457,27 @@ impl Buffer {
         true
     }
 
+    /// vim V-u / V-U: re-case `n` whole lines starting at `from` as one
+    /// undo unit; the cursor lands on the first changed line.
+    pub fn apply_lines_case(&mut self, from: usize, n: usize, upper: bool) -> bool {
+        if n == 0 || from >= self.lines.len() {
+            return false;
+        }
+        self.push_history();
+        let end = (from + n).min(self.lines.len());
+        for line in &mut self.lines[from..end] {
+            *line = if upper {
+                line.chars().flat_map(|c| c.to_uppercase()).collect()
+            } else {
+                line.chars().flat_map(|c| c.to_lowercase()).collect()
+            };
+        }
+        // the cursor stays put so a live visual-line selection keeps its
+        // extent across repeated u/U
+        self.cursor.col = self.cursor.col.min(self.line_len(self.cursor.row));
+        true
+    }
+
     /// vim `r<CR>`: replace the char under the cursor with a newline
     /// (single undo unit).
     pub fn replace_with_newline(&mut self) -> bool {

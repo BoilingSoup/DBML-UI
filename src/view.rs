@@ -189,10 +189,16 @@ fn panel_style(focused: bool) -> container::Style {
     }
 }
 
-fn mode_chip(mode: &crate::editor::Mode) -> (&'static str, Color) {
+fn mode_chip(mode: &crate::editor::Mode, linewise: bool) -> (&'static str, Color) {
     match mode {
         crate::editor::Mode::Insert => (" INSERT ", Color::from_rgb(0.30, 0.75, 0.95)),
-        crate::editor::Mode::Visual => (" VISUAL ", Color::from_rgb(0.98, 0.75, 0.30)),
+        crate::editor::Mode::Visual => {
+            if linewise {
+                (" V-LINE ", Color::from_rgb(0.98, 0.62, 0.80))
+            } else {
+                (" VISUAL ", Color::from_rgb(0.98, 0.75, 0.30))
+            }
+        }
         crate::editor::Mode::Normal => (" NORMAL ", Color::from_rgb(0.55, 0.90, 0.55)),
     }
 }
@@ -224,7 +230,7 @@ fn status_bar(app: &App) -> Element<'_, Message> {
             iced::Color::BLACK,
         ));
     } else {
-        let (mode, color) = mode_chip(&app.editor.mode);
+        let (mode, color) = mode_chip(&app.editor.mode, app.editor.visual_linewise);
         items.push(
             container(seg(mode, Color::BLACK))
                 .style(move |_t| container::Style {

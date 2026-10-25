@@ -321,6 +321,56 @@ fn edge_stroke_width(zoom: f32) -> f32 {
     (1.5 * zoom / 20.0).clamp(1.0, 12.0)
 }
 
+/// Key icon (dbdiagram pk): circular bow, shaft, two teeth — stroked.
+fn draw_key_icon(frame: &mut canvas::Frame, center: Point, size: f32, color: Color) {
+    let w = (0.085 * size).max(1.0);
+    let stroke = canvas::Stroke {
+        style: color.into(),
+        width: w,
+        ..Default::default()
+    };
+    let r = 0.30 * size;
+    let bow = Path::circle(Point::new(center.x - 0.18 * size, center.y), r);
+    frame.stroke(&bow, stroke);
+    let shaft_y = center.y;
+    let x0 = center.x - 0.18 * size + r * 0.72;
+    let x1 = center.x + 0.45 * size;
+    frame.stroke(
+        &Path::new(|b| {
+            b.move_to(Point::new(x0, shaft_y));
+            b.line_to(Point::new(x1, shaft_y));
+            // two teeth
+            let t1 = x1 - 0.16 * size;
+            let t2 = x1 - 0.02 * size;
+            b.move_to(Point::new(t1, shaft_y));
+            b.line_to(Point::new(t1, shaft_y + 0.26 * size));
+            b.move_to(Point::new(t2, shaft_y));
+            b.line_to(Point::new(t2, shaft_y + 0.26 * size));
+        }),
+        stroke,
+    );
+}
+
+/// Chain-link icon (dbdiagram fk): two interlocking rings — stroked.
+fn draw_link_icon(frame: &mut canvas::Frame, center: Point, size: f32, color: Color) {
+    let w = (0.085 * size).max(1.0);
+    let stroke = canvas::Stroke {
+        style: color.into(),
+        width: w,
+        ..Default::default()
+    };
+    let r = 0.26 * size;
+    let off = 0.30 * size;
+    frame.stroke(
+        &Path::circle(Point::new(center.x - off, center.y), r),
+        stroke,
+    );
+    frame.stroke(
+        &Path::circle(Point::new(center.x + off, center.y), r),
+        stroke,
+    );
+}
+
 fn paint_table(frame: &mut canvas::Frame, b: &TableBox, zoom: f32, pan: Vector, hovered: bool) {
     let s = cell_size(zoom);
     let top_left = to_px(b.x, b.y, zoom, pan);
@@ -376,24 +426,14 @@ fn paint_table(frame: &mut canvas::Frame, b: &TableBox, zoom: f32, pan: Vector, 
     for (i, row) in b.rows.iter().enumerate() {
         let y = top_left.y + (i as f32 + 1.0) * s.height + s.height * 0.5;
         let baseline = |x: f32| Point::new(x, y);
-        let (marker, mcolor) = if row.pk {
-            (Some("\u{25c6}"), theme::PK) // ◆
+        // dbdiagram-style markers: a key icon for primary keys, a chain
+        // link for foreign keys (stroke-drawn so they stay crisp at any
+        // zoom; the old diamond glyphs were text and scaled poorly)
+        let center = baseline(top_left.x + 1.6 * s.width);
+        if row.pk {
+            draw_key_icon(frame, center, 0.62 * s.height, theme::PK);
         } else if row.fk {
-            (Some("\u{25c7}"), theme::FK) // ◇
-        } else {
-            (None, Color::WHITE)
-        };
-        if let Some(m) = marker {
-            frame.fill_text(Text {
-                content: m.to_string(),
-                position: baseline(top_left.x + 1.6 * s.width),
-                color: mcolor,
-                size: row_size.into(),
-                font: Font::MONOSPACE,
-                horizontal_alignment: iced::alignment::Horizontal::Left,
-                vertical_alignment: iced::alignment::Vertical::Center,
-                ..Default::default()
-            });
+            draw_link_icon(frame, center, 0.58 * s.height, theme::FK);
         }
         frame.fill_text(Text {
             content: row.name.clone(),

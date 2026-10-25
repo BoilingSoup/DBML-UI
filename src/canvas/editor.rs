@@ -126,8 +126,25 @@ impl canvas::Program<Message> for EditorView<'_> {
         let first = scroll.floor() as usize;
         let sub = scroll - first as f32;
 
-        // selection spans (visual mode)
-        if let Some((start, end)) = app.editor.buf.selection_range() {
+        // selection spans (visual mode); V paints whole rows regardless
+        // of column
+        if app.editor.visual_linewise && app.editor.mode == crate::editor::Mode::Visual {
+            if let Some(anchor) = app.editor.buf.selection_anchor() {
+                let cursor = app.editor.buf.pos();
+                let from = anchor.row.min(cursor.row);
+                let to = anchor.row.max(cursor.row);
+                for r in from..=to {
+                    let y = (r as f32 - scroll) * LINE_HEIGHT;
+                    if y > -LINE_HEIGHT && y < bounds.height {
+                        frame.fill_rectangle(
+                            Point::new(GUTTER, y),
+                            Size::new(bounds.width - GUTTER, LINE_HEIGHT * 0.9),
+                            Color::from_rgba(0.3, 0.5, 0.9, 0.35),
+                        );
+                    }
+                }
+            }
+        } else if let Some((start, end)) = app.editor.buf.selection_range() {
             let top = pos_to_px(start, scroll);
             let bottom = pos_to_px(end, scroll);
             let full_rows = end.row.saturating_sub(start.row + 1);
