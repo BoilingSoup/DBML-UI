@@ -27,15 +27,6 @@ impl Tok {
     fn is_w(&self, kw: &str) -> bool {
         matches!(self, Tok::W(w, _) if w.eq_ignore_ascii_case(kw))
     }
-
-    fn text(&self) -> String {
-        match self {
-            Tok::W(w, _) => w.clone(),
-            Tok::N(n) => n.clone(),
-            Tok::S(v) => v.clone(),
-            Tok::P(c) => c.to_string(),
-        }
-    }
 }
 
 fn tokenize(src: &str) -> Result<Vec<Tok>, String> {
@@ -551,23 +542,41 @@ impl Importer {
                     i = skip_group(s, i);
                 }
             } else if t.is_w("GENERATED") {
-                // GENERATED [BY DEFAULT | ALWAYS] AS IDENTITY / serial
-                col.increment = true;
-                i += 1;
-                while i < s.len() && !s[i].is_w("IDENTITY") && !matches!(s[i], Tok::P(',')) {
-                    if s[i].is_w("serial")
-                        || s[i].is_w("SERIAL")
-                        || s[i].is_w("bigserial")
-                        || s[i].is_w("smallserial")
-                    {
-                        col.ty = s[i].text().to_uppercase();
+                // GENERATED [BY DEFAULT|ALWAYS] AS IDENTITY -> increment;
+                // GENERATED ... AS (expr) STORED/VIRTUAL -> computed, skip
+                let mut j = i + 1;
+                let mut identity = false;
+                let mut stored = false;
+                let constraint_kw = |t: &Tok| {
+                    matches!(t, Tok::W(w, _)
+                        if w.eq_ignore_ascii_case("PRIMARY")
+                            || w.eq_ignore_ascii_case("NOT")
+                            || w.eq_ignore_ascii_case("NULL")
+                            || w.eq_ignore_ascii_case("UNIQUE")
+                            || w.eq_ignore_ascii_case("DEFAULT")
+                            || w.eq_ignore_ascii_case("REFERENCES")
+                            || w.eq_ignore_ascii_case("CHECK")
+                            || w.eq_ignore_ascii_case("COMMENT")
+                            || w.eq_ignore_ascii_case("CONSTRAINT"))
+                };
+                // stop at real constraint keywords, but only once the
+                // IDENTITY token has been seen ("BY DEFAULT AS" inside the
+                // clause must not stop the scan)
+                while j < s.len() && !matches!(s[j], Tok::P(',')) {
+                    if s[j].is_w("IDENTITY") {
+                        identity = true;
+                    } else if identity && constraint_kw(&s[j]) {
+                        break;
                     }
-                    i += 1;
+                    if s[j].is_w("STORED") || s[j].is_w("VIRTUAL") {
+                        stored = true;
+                    }
+                    j += 1;
                 }
-                i += 1;
-                if matches!(s.get(i), Some(Tok::P('('))) {
-                    i = skip_group(s, i);
+                if identity && !stored {
+                    col.increment = true;
                 }
+                i = j;
             } else if t.is_w("UNIQUE") {
                 col.unique = true;
                 i += 1;
@@ -670,8 +679,12 @@ impl Importer {
         if !s.get(1).is_some_and(|t| t.is_w("TABLE")) {
             return;
         }
-        let (schema, name, mut i) = self.qual_name(&s[2..]);
-        i += 2;
+        let mut off = 2;
+        if s.get(2).is_some_and(|t| t.is_w("ONLY")) {
+            off = 3; // pg_dump: ALTER TABLE ONLY schema.table
+        }
+        let (schema, name, mut i) = self.qual_name(&s[off..]);
+        i += off;
         let Some(ti) = self.table_index(&schema, &name) else {
             return;
         };
@@ -991,10 +1004,21 @@ fn default_value(s: &[Tok], mut i: usize) -> (String, usize) {
         Some(Tok::W(w, _)) => {
             let mut v = w.clone();
             i += 1;
-            // function call: name ( ... )
+            // dotted name: public.uuid_generate_v1()
+            while matches!(s.get(i), Some(Tok::P('.'))) {
+                if let Some(Tok::W(next, _)) = s.get(i + 1) {
+                    v.push('.');
+                    v.push_str(next);
+                    i += 2;
+                } else {
+                    break;
+                }
+            }
+            // function call: name(...)
             if matches!(s.get(i), Some(Tok::P('('))) {
                 let end = skip_group(s, i);
-                v = format!("`{}`", tokens_text(&s[i..end]).replace(' ', ""));
+                let args = tokens_text(&s[i + 1..end - 1]).replace(' ', "");
+                v = format!("`{v}({args})`");
                 i = end;
             }
             (v, i)
@@ -1056,7 +1080,11 @@ fn join_type(toks: &[String]) -> String {
         match t.as_str() {
             "(" | ")" | "," => out.push_str(t),
             _ => {
-                if !out.is_empty() && !out.ends_with('(') && !out.ends_with(',') {
+                if !out.is_empty()
+                    && !out.ends_with('(')
+                    && !out.ends_with(',')
+                    && !out.ends_with('.')
+                {
                     out.push(' ');
                 }
                 out.push_str(t);
