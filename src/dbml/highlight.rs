@@ -177,17 +177,17 @@ pub fn highlight(src: &str) -> Vec<Token> {
                 rest,
             );
             // state updates
-            if TOP_KWS.contains(&word) {
-                if word == "Ref" {
+            if TOP_KWS.iter().any(|kw| word.eq_ignore_ascii_case(kw)) {
+                if word.eq_ignore_ascii_case("Ref") {
                     name_mode = true;
                 } else {
                     expect_name = true;
                     opened = None;
                 }
-            } else if word == "as" {
+            } else if word.eq_ignore_ascii_case("as") {
                 // `Table users as U` — the alias is another name
                 expect_name = true;
-            } else if word == "ref" {
+            } else if word.eq_ignore_ascii_case("ref") {
                 // inline `[ref: > a.b]` — targets color as names
                 name_mode = true;
             } else if kind == Kind::Name {
@@ -255,14 +255,16 @@ fn classify(
     if expect_name || name_mode {
         return Kind::Name;
     }
-    if word == "as" {
+    if word.eq_ignore_ascii_case("as") {
         return Kind::Keyword;
     }
-    if TOP_KWS.contains(&word) || BLOCK_KWS.contains(&word) {
+    if TOP_KWS.iter().any(|kw| word.eq_ignore_ascii_case(kw))
+        || BLOCK_KWS.iter().any(|kw| word.eq_ignore_ascii_case(kw))
+    {
         return Kind::Keyword;
     }
     if in_settings {
-        if SETTING_KWS.contains(&word) {
+        if SETTING_KWS.iter().any(|kw| word.eq_ignore_ascii_case(kw)) {
             return Kind::Keyword;
         }
         return Kind::Plain;

@@ -87,19 +87,25 @@ fn peek_is(input: &str, lit: &str) -> bool {
     input.starts_with(lit)
 }
 
+/// Consume the literal `lit` at the start of `input` (ASCII
+/// case-insensitive so keyword eats match `table`/`TABLE`/...; punctuation
+/// literals have no case).
 fn eat(input: &mut &str, lit: &str) -> bool {
-    if let Some(rest) = input.strip_prefix(lit) {
-        *input = rest;
+    if input.len() >= lit.len() && input[..lit.len()].eq_ignore_ascii_case(lit) {
+        *input = &input[lit.len()..];
         true
     } else {
         false
     }
 }
 
-/// Keyword `kw` at the start of `input`, not followed by more identifier
-/// characters (so "Table" does not match "TableGroup").
+/// Keyword `kw` at the start of `input`, ASCII case-insensitive (dbdiagram
+/// accepts `table`, `TABLE`, `TaBlE`, ...), and not followed by more
+/// identifier characters (so "Table" does not match "TableGroup").
 fn peek_kw(input: &str, kw: &str) -> bool {
-    input.starts_with(kw) && !input[kw.len()..].starts_with(is_bare_ident)
+    input.len() >= kw.len()
+        && input[..kw.len()].eq_ignore_ascii_case(kw)
+        && !input[kw.len()..].starts_with(is_bare_ident)
 }
 
 /// Keyword followed (after same-line spaces) by `next` — distinguishes the
@@ -319,7 +325,7 @@ fn settings_list(input: &mut &str, base: usize) -> R<Vec<(String, Option<Setting
         let end = input
             .find(|c: char| !(c.is_alphanumeric() || c == '_' || c == ' ' || c == '\t'))
             .unwrap_or(input.len());
-        let key = input[..end].trim().to_string();
+        let key = input[..end].trim().to_ascii_lowercase();
         if key.is_empty() {
             return fail(offset(input, base), "expected setting key");
         }
@@ -1045,5 +1051,70 @@ Table good2 {
         assert_eq!(line_col_at(src, 6), (1, 2));
         assert_eq!(line_col_at(src, 8), (2, 0));
         assert_eq!(line_col_at(src, 999), (2, 2));
+    }
+}
+
+#[cfg(test)]
+mod case_tests {
+    use super::*;
+
+    #[test]
+    fn top_level_keywords_accept_any_case() {
+        for kw in ["table", "TABLE", "TaBlE"] {
+            let out = parse(&format!("{kw} users {{ id integer [pk] }}"));
+            assert!(out.errors.is_empty(), "{kw}: {:?}", out.errors);
+            assert_eq!(out.doc.tables.len(), 1);
+            assert_eq!(out.doc.tables[0].name, "users");
+        }
+        for kw in ["ref", "REF", "Ref"] {
+            let src = format!("Table a {{ id integer }}\n{kw}: a.id > a.id");
+            let out = parse(&src);
+            assert!(out.errors.is_empty(), "{kw}: {:?}", out.errors);
+            assert_eq!(out.doc.refs.len(), 1);
+        }
+    }
+
+    #[test]
+    fn settings_accept_any_case() {
+        let src = "TABLE users {\n  id INTEGER [PK, NOT NULL, UNIQUE, DEFAULT: 'x']\n}";
+        let out = parse(src);
+        assert!(out.errors.is_empty(), "{:?}", out.errors);
+        let col = &out.doc.tables[0].columns[0];
+        assert!(col.settings.pk);
+        assert_eq!(col.settings.not_null, Some(true));
+        assert!(col.settings.unique);
+    }
+
+    #[test]
+    fn mixed_case_fixture_matches_canonical_layout() {
+        let mixed = "project blog {
+  database_type: 'PostgreSQL'
+  note: 'A small blog schema'
+}
+
+TABLE users AS U [NOTE: 'Registered accounts'] {
+  ID integer [PK, increment]
+  username varchar(80) [Not Null, Unique]
+  email varchar(255) [not null]
+}
+
+Table posts {
+  id integer [pk]
+  user_id integer [not null, REF: > U.id]
+}
+
+Ref: posts.user_id > users.id
+
+ENUM post_status {
+  draft
+  published
+}
+";
+        let canonical = crate::layout::layout(&crate::model::build(&parse(mixed).doc));
+        assert!(parse(mixed).errors.is_empty(), "{:?}", parse(mixed).errors);
+        assert_eq!(canonical.boxes.len(), 3);
+        assert_eq!(canonical.edges.len(), 2, "inline + top-level Ref");
+        let users = canonical.boxes.iter().find(|b| b.title == "users").unwrap();
+        assert_eq!((users.x, users.y), (0, 0));
     }
 }
