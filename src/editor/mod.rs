@@ -569,9 +569,14 @@ impl Editor {
                 self.buf.start_selection();
                 Action::None
             }
+            // operators conclude visual mode (vim): after u/U the session
+            // returns to normal so motions extend nothing
             KeyCode::Char('u') if self.visual_linewise => {
                 if let Some((from, n)) = self.selection_lines() {
                     if self.buf.apply_lines_case(from, n, false) {
+                        self.buf.cancel_selection();
+                        self.mode = Mode::Normal;
+                        self.visual_linewise = false;
                         return Action::Changed;
                     }
                 }
@@ -579,6 +584,8 @@ impl Editor {
             }
             KeyCode::Char('u') => {
                 if self.buf.apply_selection_case(false) {
+                    self.buf.cancel_selection();
+                    self.mode = Mode::Normal;
                     Action::Changed
                 } else {
                     Action::None
@@ -587,6 +594,9 @@ impl Editor {
             KeyCode::Char('U') if self.visual_linewise => {
                 if let Some((from, n)) = self.selection_lines() {
                     if self.buf.apply_lines_case(from, n, true) {
+                        self.buf.cancel_selection();
+                        self.mode = Mode::Normal;
+                        self.visual_linewise = false;
                         return Action::Changed;
                     }
                 }
@@ -594,6 +604,8 @@ impl Editor {
             }
             KeyCode::Char('U') => {
                 if self.buf.apply_selection_case(true) {
+                    self.buf.cancel_selection();
+                    self.mode = Mode::Normal;
                     Action::Changed
                 } else {
                     Action::None
@@ -1480,16 +1492,17 @@ mod polish_tests {
     }
 
     #[test]
-    fn visual_u_lowercases_and_keeps_selection() {
+    fn visual_u_lowercases_and_concludes() {
         let mut e = editor("Hello World\n");
         e.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
         e.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
         e.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
         assert_eq!(e.text(), "hello World\n");
-        assert_eq!(e.mode, Mode::Visual, "stays in visual");
-        let (start, end) = e.buf.selection_range().unwrap();
-        assert_eq!((start.row, start.col), (0, 0));
-        assert_eq!((end.row, end.col), (0, 5));
+        assert_eq!(e.mode, Mode::Normal, "operator concludes visual");
+        assert!(e.buf.selection_range().is_none(), "no lingering selection");
+        // motions after the op extend nothing
+        e.handle_key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+        assert!(e.buf.selection_range().is_none());
         // one undo unit restores both cases
         e.buf.undo();
         assert_eq!(e.text(), "Hello World\n");
@@ -1504,6 +1517,8 @@ mod polish_tests {
         e.handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
         e.handle_key(KeyEvent::new(KeyCode::Char('U'), KeyModifiers::NONE));
         assert_eq!(e.text(), "ABC\nDEF\n");
+        assert_eq!(e.mode, Mode::Normal, "U concludes visual");
+        assert!(e.buf.selection_range().is_none());
     }
 
     #[test]
@@ -1556,13 +1571,17 @@ mod vline_tests {
     }
 
     #[test]
-    fn v_line_u_uppercases_rows_and_stays_visual() {
+    fn v_line_case_ops_conclude_visual() {
         let mut e = editor("abc\ndef\nghi\n");
         e.handle_key(key('V'));
         e.handle_key(key('j'));
         e.handle_key(KeyEvent::new(KeyCode::Char('U'), KeyModifiers::SHIFT));
         assert_eq!(e.text(), "ABC\nDEF\nghi\n");
-        assert_eq!(e.mode, Mode::Visual, "stays in visual");
+        assert_eq!(e.mode, Mode::Normal, "operator concludes visual");
+        assert!(e.buf.selection_range().is_none(), "no lingering selection");
+        // re-select the two rows and lowercase them again
+        e.handle_key(key('V'));
+        e.handle_key(key('k'));
         e.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
         assert_eq!(e.text(), "abc\ndef\nghi\n", "back to lowercase");
         // each re-case is exactly one undo unit
