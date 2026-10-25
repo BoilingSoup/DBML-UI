@@ -203,6 +203,17 @@ type FkDef = (
     Vec<String>,
 );
 
+/// A queued PK/UNIQUE constraint merge: (table, cols, is_pk, name, type,
+/// declared in a CREATE TABLE body vs ALTER TABLE).
+type PendingUnique = (
+    String,
+    Vec<String>,
+    bool,
+    Option<String>,
+    Option<String>,
+    bool,
+);
+
 #[derive(Debug, Default, Clone)]
 struct ITable {
     schema: Option<String>,
@@ -222,8 +233,8 @@ struct Importer {
     enums: Vec<(Option<String>, String, Vec<String>)>,
     /// (name, fk_table, fk_cols, ref_table, ref_cols)
     fks: Vec<FkDef>,
-    /// Uniques/PKs to merge: (table, cols, is_pk, constraint name)
-    pending_uniques: Vec<(String, Vec<String>, bool, Option<String>)>,
+    /// Uniques/PKs to merge (see PendingUnique)
+    pending_uniques: Vec<PendingUnique>,
 }
 
 pub fn import(source: &str, dialect: Dialect) -> Result<String, String> {
@@ -336,17 +347,19 @@ impl Importer {
                 // (not yet in self.tables) — route them locally
                 // mysql inline KEY/UNIQUE KEY entries belong to the table
                 // being built (not yet in self.tables)
+                let fulltext = s[i].is_w("FULLTEXT") || s[i].is_w("SPATIAL");
                 let is_index_kw = s[i].is_w("KEY")
+                    || fulltext
                     || (s[i].is_w("INDEX")
                         && s.get(i + 2).is_some_and(|t| matches!(t, Tok::P('(')))
                         && s.get(i + 3).is_some_and(|t| !matches!(t, Tok::P(')'))));
+                let mut key_is_column = false;
                 if self.dialect == Dialect::MySQL && is_index_kw {
-                    // [KEY|INDEX] name [USING t1] (cols) [USING t2] — the
-                    // LAST USING wins (golden rule). A `key` followed by a
-                    // TYPE is a column named key, not an index.
-                    let kw_is_index = s[i].is_w("INDEX");
-                    let _ = kw_is_index;
-                    let mut j = i + 1; // past KEY
+                    // [FULLTEXT|SPATIAL] KEY|INDEX name [USING t1] (cols)
+                    // [USING t2] — the LAST USING wins (golden rule). A
+                    // `key` followed by a TYPE is a column named key, not
+                    // an index.
+                    let mut j = if fulltext { i + 2 } else { i + 1 }; // past KEY
                     let mut iname = None;
                     if let Some(Tok::W(n, _)) = s.get(j) {
                         // only an index when '(' or USING follows the name
@@ -355,6 +368,15 @@ impl Importer {
                             iname = Some(n.clone());
                             j += 1;
                         }
+                    }
+                    if !fulltext
+                        && iname.is_none()
+                        && s.get(j)
+                            .is_some_and(|t| matches!(t, Tok::W(_, _)) && !t.is_w("USING"))
+                    {
+                        // `key` followed by a type word (not '(' / USING):
+                        // a column named `key`, not an index
+                        key_is_column = true;
                     }
                     let mut ity = None;
                     let take_using = |j: &mut usize, ity: &mut Option<String>| {
@@ -366,7 +388,7 @@ impl Importer {
                         }
                     };
                     take_using(&mut j, &mut ity);
-                    if iname.is_some() && matches!(s.get(j), Some(Tok::P('('))) {
+                    if (iname.is_some() || fulltext) && matches!(s.get(j), Some(Tok::P('('))) {
                         let (icols, jj) = ident_list(s, j + 1);
                         j = jj;
                         take_using(&mut j, &mut ity);
@@ -438,7 +460,11 @@ impl Importer {
                         }
                     }
                 }
-                let consumed = self.table_constraint(&s[i..], &table.name);
+                let consumed = if key_is_column {
+                    0 // a column named `key` — parse it as a column below
+                } else {
+                    self.table_constraint(&s[i..], &table.name, true)
+                };
                 if consumed > 0 {
                     i += consumed;
                     if i < s.len() && s[i] == Tok::P(',') {
@@ -447,25 +473,102 @@ impl Importer {
                     continue;
                 }
             }
+            // LIKE "src" [INCLUDING/EXCLUDING ...] and EXCLUDE USING ...
+            // table elements produce no columns — skip the whole element
+            if matches!(&s[i], Tok::W(w, false) if w.eq_ignore_ascii_case("LIKE")
+                || w.eq_ignore_ascii_case("EXCLUDE"))
+            {
+                i = item_end(s, i);
+                if i < s.len() && s[i] == Tok::P(',') {
+                    i += 1;
+                }
+                continue;
+            }
             // column def: name type... until ',' at depth 1
             let start = i;
             let end = item_end(s, i);
             if end > start {
                 self.column_def(&mut table, &s[start..end]);
+                // inline `REFERENCES t (c)` renders as a top-level
+                // unnamed Ref (golden rule), in statement order
+                if let Some(col) = table.cols.last_mut() {
+                    if col.fk.as_ref().is_some_and(|(_, _, rc)| !rc.is_empty()) {
+                        if let Some((rs, rt, rc)) = col.fk.take() {
+                            self.fks.push((
+                                None,
+                                table.name.clone(),
+                                vec![col.name.clone()],
+                                rs,
+                                rt,
+                                rc,
+                            ));
+                        }
+                    }
+                }
             }
             i = end;
             if i < s.len() && s[i] == Tok::P(',') {
                 i += 1;
             }
         }
-        // mysql table trailer: ) ... COMMENT = '...' — scan the whole
-        // statement (constraint consumed-counts can overshoot the paren)
-        for j in 0..s.len() {
-            if s[j].is_w("COMMENT") && s.get(j + 1) == Some(&Tok::P('=')) {
-                if let Some(Tok::S(c)) = s.get(j + 2) {
+        // fold table_constraint-queued pendings for THIS table in now, so
+        // index order matches the source item order (finish() handles
+        // only ALTER-time pendings)
+        let pend: Vec<_> = std::mem::take(&mut self.pending_uniques);
+        for (tname, cols, is_pk, name, ity, _from_create) in pend {
+            if tname != table.name {
+                self.pending_uniques
+                    .push((tname, cols, is_pk, name, ity, true));
+                continue;
+            }
+            if is_pk && cols.len() == 1 {
+                if let Some(col) = table.cols.iter_mut().find(|x| x.name == cols[0]) {
+                    col.pk = true;
+                }
+            } else if is_pk {
+                table.indexes.insert(0, (cols, name, false, ity, true));
+            } else if cols.len() == 1 && name.is_none() {
+                if let Some(col) = table.cols.iter_mut().find(|x| x.name == cols[0]) {
+                    col.unique = true;
+                }
+            } else {
+                table.indexes.push((cols, name, true, ity, false));
+            }
+        }
+        // mysql table trailer: ) ... COMMENT[=]'...' or COMMENT "..." —
+        // table options live after the column list's closing paren, so
+        // find it with a fresh depth scan (item consumed-counts can
+        // overshoot the paren)
+        let mut depth = 0i32;
+        let mut close = s.len();
+        for (j, t) in s.iter().enumerate() {
+            match t {
+                Tok::P('(') => depth += 1,
+                Tok::P(')') => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = j;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        for j in close..s.len() {
+            if !s[j].is_w("COMMENT") {
+                continue;
+            }
+            let mut k = j + 1;
+            if s.get(k) == Some(&Tok::P('=')) {
+                k += 1;
+            }
+            // COMMENT 'x' (single-quoted) or COMMENT "x" (double-quoted)
+            match s.get(k) {
+                Some(Tok::S(c)) | Some(Tok::W(c, true)) if !c.is_empty() => {
                     table.note = Some(c.clone());
                     break;
                 }
+                _ => {}
             }
         }
         self.tables.push(table);
@@ -477,7 +580,9 @@ impl Importer {
         if kw(i, "CONSTRAINT") {
             return Some(2); // CONSTRAINT name <kind>
         }
-        for k in ["PRIMARY", "FOREIGN", "UNIQUE", "CHECK", "KEY"] {
+        for k in [
+            "PRIMARY", "FOREIGN", "UNIQUE", "CHECK", "KEY", "INDEX", "FULLTEXT", "SPATIAL",
+        ] {
             if kw(i, k) {
                 return Some(1);
             }
@@ -486,14 +591,23 @@ impl Importer {
     }
 
     /// Parse a table-level constraint; returns consumed token count.
-    fn table_constraint(&mut self, s: &[Tok], table: &str) -> usize {
+    fn table_constraint(&mut self, s: &[Tok], table: &str, from_create: bool) -> usize {
         let mut i = 0;
         let mut name: Option<String> = None;
         if s.first().is_some_and(|t| t.is_w("CONSTRAINT")) {
             i = 1;
+            // `CONSTRAINT PRIMARY KEY ...` (unnamed constraint): the next
+            // word is the constraint KIND, not its name
             if let Some(Tok::W(n, _)) = s.get(i) {
-                name = Some(n.clone());
-                i += 1;
+                if !n.eq_ignore_ascii_case("PRIMARY")
+                    && !n.eq_ignore_ascii_case("FOREIGN")
+                    && !n.eq_ignore_ascii_case("UNIQUE")
+                    && !n.eq_ignore_ascii_case("CHECK")
+                    && !n.eq_ignore_ascii_case("KEY")
+                {
+                    name = Some(n.clone());
+                    i += 1;
+                }
             }
         }
         let Some(t) = s.get(i) else { return 0 };
@@ -505,36 +619,89 @@ impl Importer {
         if t.is_w("PRIMARY") || t.is_w("KEY") || t.is_w("UNIQUE") {
             let is_pk = t.is_w("PRIMARY") || t.is_w("KEY");
             i += if t.is_w("PRIMARY") { 2 } else { 1 };
+            // `UNIQUE KEY (...)`: KEY is a connector, not an index name
+            if t.is_w("UNIQUE") && s.get(i).is_some_and(|t| t.is_w("KEY")) {
+                i += 1;
+            }
             // pg: UNIQUE NULLS [NOT] DISTINCT precedes the column list
             if s.get(i).is_some_and(|t| t.is_w("NULLS")) {
                 i += 3; // NULLS [NOT] DISTINCT
+            }
+            let mut index_type = None;
+            // mysql: [CONSTRAINT n] PRIMARY KEY <index_name> [USING t]
+            // (cols) — tolerate a stray index name and/or USING type
+            // before the column list
+            while !matches!(s.get(i), Some(Tok::P('('))) {
+                let Some(tok) = s.get(i) else { break };
+                if tok.is_w("USING") {
+                    if let Some(Tok::W(tyw, _)) = s.get(i + 1) {
+                        index_type = Some(tyw.to_ascii_lowercase());
+                    }
+                    i += 2;
+                } else if matches!(tok, Tok::W(_, _))
+                    && !tok.is_w("CONSTRAINT")
+                    && !tok.is_w("PRIMARY")
+                    && !tok.is_w("FOREIGN")
+                    && !tok.is_w("UNIQUE")
+                    && !tok.is_w("CHECK")
+                {
+                    if name.is_none() {
+                        // bare `CONSTRAINT PRIMARY KEY idx (cols)`: the
+                        // stray word is the index name (golden rule)
+                        if let Tok::W(w, _) = tok {
+                            name = Some(w.clone());
+                        }
+                    }
+                    i += 1;
+                } else {
+                    break;
+                }
             }
             if let Some(Tok::P('(')) = s.get(i) {
                 i += 1;
                 (cols, i) = ident_list(s, i);
             }
-            // optional USING BTREE/HASH and other tail tokens
-            while i < s.len()
-                && !matches!(s[i], Tok::P(','))
-                && !s[i].is_w("CONSTRAINT")
-                && !s[i].is_w("PRIMARY")
-                && !s[i].is_w("FOREIGN")
-                && !s[i].is_w("UNIQUE")
-                && !s[i].is_w("CHECK")
-            {
+            // optional USING BTREE/HASH, INCLUDE (cols) and other tail
+            // tokens — nested groups hold commas, so track depth and stop
+            // only at a top-level ',' / ')' / next constraint keyword
+            let mut depth = 0i32;
+            while i < s.len() {
+                match &s[i] {
+                    Tok::P('(') => depth += 1,
+                    Tok::P(')') => {
+                        if depth == 0 {
+                            break;
+                        }
+                        depth -= 1;
+                    }
+                    Tok::P(',') if depth == 0 => break,
+                    t if depth == 0
+                        && (t.is_w("CONSTRAINT")
+                            || t.is_w("PRIMARY")
+                            || t.is_w("FOREIGN")
+                            || t.is_w("UNIQUE")
+                            || t.is_w("CHECK")) =>
+                    {
+                        break;
+                    }
+                    _ => {}
+                }
+                if s[i].is_w("USING") {
+                    if let Some(Tok::W(tyw, _)) = s.get(i + 1) {
+                        index_type = Some(tyw.to_ascii_lowercase());
+                    }
+                }
                 i += 1;
             }
             if !cols.is_empty() {
-                self.pending_uniques
-                    .push((table.to_string(), cols.clone(), is_pk, name.clone()));
-                if self.dialect == Dialect::MySQL {
-                    // mysql KEY/UNIQUE indexes render as an indexes block
-                    if let Some(ti) = self.tables.iter().position(|t| t.name == table) {
-                        self.tables[ti]
-                            .indexes
-                            .push((cols, name, !is_pk, None, false));
-                    }
-                }
+                self.pending_uniques.push((
+                    table.to_string(),
+                    cols.clone(),
+                    is_pk,
+                    name.clone(),
+                    index_type,
+                    from_create,
+                ));
             }
             consumed = i;
         } else if t.is_w("CHECK") {
@@ -628,7 +795,7 @@ impl Importer {
             let stop = type_depth == 0
                 && !close
                 && !is_array_kw
-                && matches!(t, Tok::W(w, _)
+                && (matches!(t, Tok::W(w, _)
                 if w.eq_ignore_ascii_case("NOT")
                     || w.eq_ignore_ascii_case("NULL")
                     || w.eq_ignore_ascii_case("DEFAULT")
@@ -644,11 +811,19 @@ impl Importer {
                     || w.eq_ignore_ascii_case("UNSIGNED")
                     || w.eq_ignore_ascii_case("SIGNED")
                     || w.eq_ignore_ascii_case("ZEROFILL")
+                    // bare BINARY attribute after a type (varchar(22)
+                    // binary) — but `binary` and binary(16) ARE types
+                    || (w.eq_ignore_ascii_case("BINARY")
+                        && !ty.is_empty()
+                        && !matches!(s.get(i + 1), Some(Tok::P('('))))
                     || w.eq_ignore_ascii_case("ON")
                     || w.eq_ignore_ascii_case("COLLATE")
-                    || w.eq_ignore_ascii_case("CHARACTER")
                     || w.eq_ignore_ascii_case("ENCODED")
-                    || w.eq_ignore_ascii_case("NULLS"));
+                    || w.eq_ignore_ascii_case("NULLS"))
+                // mysql `... CHARACTER SET x` attribute stops the type —
+                // `character varying` is a type and must be collected
+                || (t.is_w("CHARACTER")
+                    && s.get(i + 1).is_some_and(|x| x.is_w("SET"))));
             if stop || (*t == Tok::P(',') && type_depth == 0) {
                 break;
             }
@@ -661,12 +836,14 @@ impl Importer {
                 }
                 // quoted [N] from the tokenizer (bracket-ident) after a
                 // base type is an array subscript
-                Tok::W(w, true) if !ty.is_empty() && w.chars().all(|c| c.is_ascii_digit()) => {
+                Tok::W(w, true)
+                    if !ty.is_empty() && w.trim().chars().all(|c| c.is_ascii_digit()) =>
+                {
                     if array_pending {
                         array_pending = false;
                         ty.pop(); // drop the bare []
                     }
-                    ty.push(format!("[{w}]"));
+                    ty.push(format!("[{}]", w.trim()));
                 }
                 Tok::W(w, _) => ty.push(w.clone()),
                 Tok::N(n) => ty.push(n.clone()),
@@ -695,9 +872,13 @@ impl Importer {
             }
             let enum_name = format!("{}_{}_enum", table.name, name);
             if !values.is_empty() && !self.enums.iter().any(|(_, n, _)| *n == enum_name) {
-                self.enums.push((None, enum_name.clone(), values));
+                self.enums
+                    .push((table.schema.clone(), enum_name.clone(), values));
             }
-            col.ty = enum_name;
+            col.ty = match &table.schema {
+                Some(sc) => format!("{sc}.{enum_name}"),
+                None => enum_name,
+            };
             col.ty_quoted = false;
             // skip the type tokens entirely; options start after the group
             let rest_opts = &s[end..];
@@ -711,8 +892,9 @@ impl Importer {
         col.ty_quoted = ty_quoted || joined.contains('[');
         if joined.contains('[') {
             // array types (TEXT[], timetz(2)[]) are quoted in DBML —
-            // never double-quote an already-quoted type
-            let inner = joined.trim_matches('"');
+            // never double-quote an already-quoted type; normalize the
+            // base type first (goldens drop with/without time zone)
+            let inner = normalize_type(joined.trim_matches('"'), self.dialect);
             col.ty = format!("\"{inner}\"");
         } else {
             col.ty = normalize_type(&joined, self.dialect);
@@ -866,9 +1048,10 @@ impl Importer {
         if matches!(s.get(i), Some(Tok::P('('))) {
             (cols, _) = ident_list(s, i + 1);
         }
-        // USING <type> after the column list
+        // USING <type> — appears after cols (mysql) or between table and
+        // cols (postgres: CREATE INDEX ... ON t USING HASH (cols))
         let mut index_type = None;
-        let mut k = i;
+        let mut k = 0;
         while k < s.len() {
             if s[k].is_w("USING") {
                 if let Some(Tok::W(t, _)) = s.get(k + 1) {
@@ -880,7 +1063,11 @@ impl Importer {
         if cols.is_empty() {
             return;
         }
-        let Some(ti) = self.tables.iter().position(|t| t.name == table) else {
+        let Some(ti) = self
+            .tables
+            .iter()
+            .position(|t| t.name == table && (_schema.is_none() || t.schema == _schema))
+        else {
             return;
         };
         // single-column unnamed unique folds onto the column
@@ -947,7 +1134,7 @@ impl Importer {
                     continue;
                 }
                 let table_name = self.tables[ti].name.clone();
-                let consumed = self.table_constraint(&s[i..], &table_name);
+                let consumed = self.table_constraint(&s[i..], &table_name, false);
                 i += consumed.max(1);
             } else if s[i].is_w("ALTER") {
                 // ALTER [COLUMN] x SET NOT NULL | SET DEFAULT v | DROP NOT NULL
@@ -1127,6 +1314,45 @@ impl Importer {
                 }
             }
         }
+        // merge pending PK/UNIQUE constraints FIRST: bare REFERENCES t
+        // resolves against the target's pk, and composite table-level
+        // PKs only become visible to pk_of here
+        for (table, cols, is_pk, name, ity, from_create) in
+            std::mem::take(&mut self.pending_uniques)
+        {
+            let Some(ti) = self.tables.iter().position(|t| t.name == table) else {
+                continue;
+            };
+            // single-column constraints fold onto the column — except in
+            // Postgres CREATE TABLE bodies, where PK/UNIQUE constraints
+            // always render as indexes-block entries (golden rule); pg
+            // ALTER-added ones fold inline (name dropped)
+            let fold = cols.len() == 1
+                && match (self.dialect, from_create) {
+                    (Dialect::Postgres, true) => false,
+                    (Dialect::Postgres, false) => true,
+                    _ => is_pk || name.is_none(),
+                };
+            if fold && is_pk && cols.len() == 1 {
+                if let Some(col) = self.tables[ti].cols.iter_mut().find(|x| x.name == cols[0]) {
+                    col.pk = true;
+                }
+            } else if fold && !is_pk && cols.len() == 1 && name.is_none() {
+                if let Some(col) = self.tables[ti].cols.iter_mut().find(|x| x.name == cols[0]) {
+                    col.unique = true;
+                }
+            } else if is_pk {
+                // composite PK: an indexes-block [pk] entry (golden rule)
+                self.tables[ti]
+                    .indexes
+                    .insert(0, (cols, name, false, ity, true));
+            } else {
+                // composite/named constraints render as an indexes block
+                self.tables[ti]
+                    .indexes
+                    .push((cols, name, !is_pk, ity, false));
+            }
+        }
         let mut fks = std::mem::take(&mut self.fks);
         for fk in &mut fks {
             if fk.5.is_empty() {
@@ -1137,30 +1363,6 @@ impl Importer {
         // dangling reference would break the output
         fks.retain(|fk| !fk.5.is_empty());
         self.fks = fks;
-        for (table, cols, is_pk, name) in std::mem::take(&mut self.pending_uniques) {
-            let Some(ti) = self.tables.iter().position(|t| t.name == table) else {
-                continue;
-            };
-            if is_pk && cols.len() == 1 {
-                if let Some(col) = self.tables[ti].cols.iter_mut().find(|x| x.name == cols[0]) {
-                    col.pk = true;
-                }
-            } else if is_pk {
-                // composite PK: an indexes-block [pk] entry (golden rule)
-                self.tables[ti]
-                    .indexes
-                    .insert(0, (cols, name, false, None, true));
-            } else if cols.len() == 1 && name.is_none() {
-                if let Some(col) = self.tables[ti].cols.iter_mut().find(|x| x.name == cols[0]) {
-                    col.unique = true;
-                }
-            } else {
-                // composite/named constraints render as an indexes block
-                self.tables[ti]
-                    .indexes
-                    .push((cols, name, !is_pk, None, false));
-            }
-        }
     }
 
     /// Emit DBML (always quoted identifiers; semantic comparison makes the
@@ -1210,7 +1412,11 @@ impl Importer {
             }
             out.push_str("}\n\n");
         }
-        for t in &self.tables {
+        // golden rule: default-schema tables first (creation order), then
+        // other schemas' tables in creation order
+        let mut ordered: Vec<&ITable> = self.tables.iter().collect();
+        ordered.sort_by_key(|t| t.schema.is_some());
+        for t in ordered {
             let head = match &t.schema {
                 Some(s) => format!("Table {}.{} {{\n", q(s), q(&t.name)),
                 None => format!("Table {} {{\n", q(&t.name)),
