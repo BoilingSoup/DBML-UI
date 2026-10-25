@@ -53,6 +53,60 @@ pub fn hit_test(layout: &Layout, zoom: f32, pan: Vector, p: Point) -> Option<&Ta
     })
 }
 
+/// The pk/fk marker under a canvas point, if any: the icon band sits
+/// between the box edge and the column name, on a row that has a marker.
+pub fn marker_hit(layout: &Layout, zoom: f32, pan: Vector, p: Point) -> Option<(&TableBox, usize)> {
+    let b = hit_test(layout, zoom, pan, p)?;
+    let top_left = to_px(b.x, b.y, zoom, pan);
+    let s = cell_size(zoom);
+    let row = (((p.y - top_left.y) / s.height) as usize).saturating_sub(1);
+    if row >= b.rows.len() {
+        return None;
+    }
+    // the glyph starts at 1.6*sw (advance ~1.1*sw wide); the band hugs it
+    // and stops before the column name at 3.2*sw
+    let x0 = top_left.x + 0.8 * s.width;
+    let x1 = top_left.x + 2.9 * s.width;
+    (p.x >= x0 && p.x < x1 && (b.rows[row].pk || b.rows[row].fk)).then_some((b, row))
+}
+
+/// The hover label for a pk/fk marker row.
+pub fn marker_label(pk: bool) -> &'static str {
+    if pk {
+        "Primary Key"
+    } else {
+        "Foreign Key"
+    }
+}
+
+/// Tooltip geometry for a marker: just below the hovered box, aligned
+/// with the marker column — the route channel below a box carries only
+/// edge lines (mesh over mesh), never row text, because iced defers all
+/// text after all meshes within a layer and a tooltip could never hide
+/// row text drawn over it. Flips above the box when the pane bottom is
+/// close. Clamped inside the frame-local pane rect.
+fn marker_tooltip_rect(
+    marker_x: f32,
+    box_top: f32,
+    box_bottom: f32,
+    text: &str,
+    zoom: f32,
+    local: Rectangle,
+) -> Rectangle {
+    let text_w = 0.5 * zoom * 0.6;
+    let w = text.chars().count() as f32 * text_w + 16.0;
+    let h = 0.5 * zoom + 10.0;
+    let mut x = marker_x - 0.2 * zoom;
+    x = x.max(local.x + 2.0);
+    x = x.min(local.x + local.width - w - 2.0);
+    let mut y = box_bottom + 4.0;
+    if y + h > local.y + local.height - 2.0 {
+        y = box_top - h - 4.0;
+    }
+    y = y.max(local.y + 2.0);
+    Rectangle::new(Point::new(x, y), Size::new(w, h))
+}
+
 fn header_color(b: &TableBox) -> Color {
     b.header_color
         .as_deref()
@@ -145,7 +199,67 @@ impl canvas::Program<crate::app::Message> for Diagram<'_> {
         // use Frame::with_clip here — its draft/paste misplaces mesh
         // geometry on the wgpu backend in 0.13.
         paint(&mut frame, self.layout, self.zoom, self.pan, self.hover);
-        vec![frame.into_geometry()]
+
+        // pk/fk marker tooltip (dbdiagram-style), as a SECOND geometry:
+        // within one geometry, text renders after meshes, so a tooltip
+        // mesh could never cover the row text beneath it
+        let mut tooltip_frame = None;
+        if let Some(p) = self.hover {
+            if let Some((b, row)) = marker_hit(self.layout, self.zoom, self.pan, p) {
+                let rowd = &b.rows[row];
+                let label = marker_label(rowd.pk);
+                let top_left = to_px(b.x, b.y, self.zoom, self.pan);
+                let s = cell_size(self.zoom);
+                // the tooltip rect is frame-local: clamp against the pane
+                // size, not the window-space widget bounds
+                let local = Rectangle::new(Point::ORIGIN, bounds.size());
+                let rect = marker_tooltip_rect(
+                    top_left.x + 1.6 * s.width,
+                    top_left.y,
+                    top_left.y + b.h as f32 * s.height,
+                    label,
+                    self.zoom,
+                    local,
+                );
+                let accent = if rowd.pk { theme::PK } else { theme::FK };
+                let mut tframe = canvas::Frame::new(renderer, bounds.size());
+                tframe.fill(
+                    &Path::rounded_rectangle(
+                        rect.position(),
+                        rect.size(),
+                        iced::border::Radius::from(4.0),
+                    ),
+                    theme::TOOLTIP,
+                );
+                tframe.stroke(
+                    &Path::rounded_rectangle(
+                        rect.position(),
+                        rect.size(),
+                        iced::border::Radius::from(4.0),
+                    ),
+                    Stroke {
+                        style: accent.into(),
+                        width: 1.0,
+                        ..Default::default()
+                    },
+                );
+                tframe.fill_text(Text {
+                    content: label.to_string(),
+                    position: Point::new(rect.x + 8.0, rect.y + rect.height * 0.5),
+                    color: theme::TEXT,
+                    size: (0.5 * self.zoom).into(),
+                    font: Font::MONOSPACE,
+                    horizontal_alignment: iced::alignment::Horizontal::Left,
+                    vertical_alignment: iced::alignment::Vertical::Center,
+                    ..Default::default()
+                });
+                tooltip_frame = Some(tframe);
+            }
+        }
+        match tooltip_frame {
+            Some(t) => vec![frame.into_geometry(), t.into_geometry()],
+            None => vec![frame.into_geometry()],
+        }
     }
 
     fn mouse_interaction(
@@ -314,6 +428,30 @@ mod tests {
         dbml_ui::layout::layout(&dbml_ui::model::build(
             &dbml_ui::dbml::parser::parse("Table a { id integer [pk] }").doc,
         ))
+    }
+
+    #[test]
+    fn marker_hit_tests_the_icon_band() {
+        // fixture: Table a { id integer [pk] } — one pk row
+        let l = layout();
+        let zoom = 20.0;
+        let pan = Vector::new(50.0, 50.0);
+        let b = &l.boxes[0];
+        let top_left = to_px(b.x, b.y, zoom, pan);
+        let s = cell_size(zoom);
+        let row_top = top_left.y + s.height;
+        // dead center of the marker band on that row (glyph at 1.6*sw)
+        let p = Point::new(top_left.x + 1.9 * s.width, row_top + s.height * 0.5);
+        let hit = marker_hit(&l, zoom, pan, p).expect("pk marker hit");
+        assert_eq!(hit.0.title, "a");
+        assert!(hit.0.rows[hit.1].pk);
+        assert_eq!(marker_label(true), "Primary Key");
+        // the name column is NOT the marker band
+        let name_p = Point::new(top_left.x + 3.5 * s.width, row_top + s.height * 0.5);
+        assert!(marker_hit(&l, zoom, pan, name_p).is_none());
+        // left of the band (before the glyph) misses too
+        let left_p = Point::new(top_left.x + 0.3 * s.width, row_top + s.height * 0.5);
+        assert!(marker_hit(&l, zoom, pan, left_p).is_none());
     }
 
     #[test]

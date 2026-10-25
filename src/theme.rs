@@ -30,3 +30,7 @@ pub const SYN_STRING: iced::Color = iced::Color::from_rgb(0.647, 0.839, 1.0); //
 pub const SYN_NUMBER: iced::Color = iced::Color::from_rgb(0.475, 0.753, 1.0); // #79c0ff
 
 pub const ERR: iced::Color = iced::Color::from_rgb(0.945, 0.298, 0.298); // #f14c4c
+
+/// Elevated surface for hover tooltips — distinct from PANEL so a tooltip
+/// stays visible when it overlaps a table body.
+pub const TOOLTIP: iced::Color = iced::Color::from_rgb(0.231, 0.251, 0.278); // #3b4047
