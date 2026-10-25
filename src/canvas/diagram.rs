@@ -1,7 +1,7 @@
 //! The diagram canvas: draws the laid-out schema as dbdiagram.io-style
 //! table boxes — monochrome charcoal with soft drop shadows, near-black
 //! header bands, gray outline key/link markers after each column name —
-//! and gray orthogonal relationship lines with crow's-foot/tick end
+//! and gray curved relationship lines (side-anchored beziers) with
 //! markers. Mirrors the SVG exporter's geometry, but sized by `zoom`
 //! (pixels per diagram cell) so text stays crisp at every scale.
 
@@ -363,10 +363,18 @@ fn paint(frame: &mut canvas::Frame, layout: &Layout, zoom: f32, pan: Vector, hov
 }
 
 fn paint_edge(frame: &mut canvas::Frame, edge: &EdgeRoute, zoom: f32, pan: Vector) {
+    let s = cell_size(zoom);
+    // pts are f32 cell coords (sampled bezier); rows anchor at their
+    // vertical center, which the router bakes in
     let pts: Vec<Point> = edge
         .pts
         .iter()
-        .map(|&(x, y)| to_px(x, y, zoom, pan))
+        .map(|&(x, y)| {
+            Point::new(
+                (x + MARGIN_CELLS) * s.width + pan.x,
+                (y + MARGIN_CELLS) * s.height + pan.y,
+            )
+        })
         .collect();
     let path = Path::new(|builder| {
         if let Some(&p) = pts.first() {

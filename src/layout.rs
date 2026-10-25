@@ -80,18 +80,28 @@ impl TableBox {
     pub fn col_row_y(&self, col: usize) -> i32 {
         self.y + 1 + col.min(self.rows.len().saturating_sub(1)) as i32
     }
+
+    /// Vertical center of a column row in cell coords.
+    pub fn col_row_center(&self, col: usize) -> f32 {
+        self.col_row_y(col) as f32 + 0.5
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct EdgeRoute {
     /// Index into `Schema::edges`.
     pub edge: usize,
-    pub pts: Vec<(i32, i32)>,
+    /// Sampled bezier in cell coords (row-anchored, side-exit points).
+    pub pts: Vec<(f32, f32)>,
+    /// The true curve: [start, cp1, cp2, end] in cell coords. Both control
+    /// points share the y of their endpoint, so the curve leaves and enters
+    /// tables horizontally (dbdiagram's sankey-style look).
+    pub curve: [(f32, f32); 4],
     /// Cardinality, for the crow's-foot / tick end markers.
     pub card: Cardinality,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Layout {
     pub boxes: Vec<TableBox>,
     pub edges: Vec<EdgeRoute>,
@@ -123,7 +133,9 @@ pub fn layout_with_overrides(
     // diagrams read left-to-right like dbdiagram's.
     for e in &schema.edges {
         let (fk, rf) = fk_ref(e);
-        if !adj[rf].contains(&fk) {
+        // self-references don't order layers (a table always comes before
+        // itself); counting them made Kahn treat the whole graph as cyclic
+        if fk != rf && !adj[rf].contains(&fk) {
             adj[rf].push(fk);
             indeg[fk] += 1;
         }
@@ -264,20 +276,18 @@ pub fn layout_with_overrides(
         }
     }
 
-    let channel_base = max_bottom + 1;
-    let ctx = RouteCtx {
-        cols: cols.clone(),
-        layer: layer.clone(),
-        channel_base,
-    };
     let edges = schema
         .edges
         .iter()
         .enumerate()
-        .map(|(ei, e)| EdgeRoute {
-            edge: ei,
-            pts: route(&placed, e, ei, &ctx),
-            card: e.card,
+        .map(|(ei, e)| {
+            let (pts, curve) = route(&placed, e);
+            EdgeRoute {
+                edge: ei,
+                pts,
+                curve,
+                card: e.card,
+            }
         })
         .collect();
 
@@ -285,14 +295,88 @@ pub fn layout_with_overrides(
         boxes: placed,
         edges,
         cols,
-        extent: (max_right, channel_base + 2),
+        extent: (max_right, max_bottom + 1),
     }
 }
 
-struct RouteCtx {
-    cols: Vec<(i32, i32)>,
-    layer: Vec<usize>,
-    channel_base: i32,
+/// How many segments a bezier is sampled into for the canvas polyline.
+const CURVE_SAMPLES: usize = 24;
+
+/// dbdiagram-style routing: each end anchors at the row's vertical center
+/// on the box side FACING the other table (nearest sides when the boxes
+/// overlap horizontally), joined by a horizontal-tangent cubic bezier.
+fn route(boxes: &[TableBox], e: &Edge) -> (Vec<(f32, f32)>, Curve) {
+    let (fk_idx, rf_idx) = fk_ref(e);
+    let (fk_col_idx, rf_col_idx) = match e.card {
+        Cardinality::OneToMany => (e.to_col, e.from_col),
+        _ => (e.from_col, e.to_col),
+    };
+    let fk = find_box(boxes, fk_idx);
+    let rf = find_box(boxes, rf_idx);
+    let fy = fk.col_row_center(fk_col_idx);
+    let ry = rf.col_row_center(rf_col_idx);
+
+    // side choice: right side of the leftmost box, left side of the
+    // rightmost; on horizontal overlap the nearer sides by center
+    let (start_x, end_x) = if fk_idx == rf_idx {
+        // self-reference: a loop out of and back into the right side
+        (fk.right() as f32, fk.right() as f32)
+    } else if (fk.right() as f32) <= rf.x as f32 {
+        (fk.right() as f32, rf.x as f32)
+    } else if (rf.right() as f32) <= fk.x as f32 {
+        (fk.x as f32, rf.right() as f32)
+    } else if fk.x as f32 + fk.w as f32 / 2.0 <= rf.x as f32 + rf.w as f32 / 2.0 {
+        (fk.right() as f32, rf.x as f32)
+    } else {
+        (fk.x as f32, rf.right() as f32)
+    };
+
+    let mut curve = [(0.0f32, 0.0f32); 4];
+    curve[0] = (start_x, fy);
+    curve[3] = (end_x, ry);
+    if fk_idx == rf_idx {
+        // loop: both control points bulge out the same side
+        let bulge = 3.0 + (index_of(e) as f32 % 3.0);
+        curve[1] = (start_x + bulge, fy);
+        curve[2] = (end_x + bulge, ry);
+    } else {
+        // tangent length scales with distance (clamped) for a natural arc
+        let dx = ((end_x - start_x).abs() * 0.5).clamp(1.5, 6.0);
+        let dir = if end_x >= start_x { 1.0 } else { -1.0 };
+        curve[1] = (start_x + dir * dx, fy);
+        curve[2] = (end_x - dir * dx, ry);
+    }
+    let pts: Vec<(f32, f32)> = (0..=CURVE_SAMPLES)
+        .map(|i| {
+            let t = i as f32 / CURVE_SAMPLES as f32;
+            bezier_at(&curve, t)
+        })
+        .collect();
+    (pts, curve)
+}
+
+fn index_of(e: &Edge) -> usize {
+    // stable per-edge jitter for self-loop spread; Edge has no id field,
+    // so hash the endpoint identity
+    let mut h = e.from;
+    h = h.wrapping_mul(31).wrapping_add(e.to);
+    h.wrapping_mul(31).wrapping_add(e.from_col)
+}
+
+/// A cubic bezier in cell coords: [start, cp1, cp2, end].
+pub type Curve = [(f32, f32); 4];
+
+/// Point on a cubic bezier at parameter t.
+fn bezier_at(c: &Curve, t: f32) -> (f32, f32) {
+    let u = 1.0 - t;
+    let a = u * u * u;
+    let b = 3.0 * u * u * t;
+    let d = 3.0 * u * t * t;
+    let e = t * t * t;
+    (
+        a * c[0].0 + b * c[1].0 + d * c[2].0 + e * c[3].0,
+        a * c[0].1 + b * c[1].1 + d * c[2].1 + e * c[3].1,
+    )
 }
 
 /// FK/referenced node pair for an edge, normalizing `<` refs so the FK side
@@ -317,62 +401,6 @@ pub fn many_ends(card: Cardinality) -> (bool, bool) {
 
 fn find_box(boxes: &[TableBox], node: usize) -> &TableBox {
     boxes.iter().find(|b| b.node == node).expect("box for node")
-}
-
-/// Orthogonal routes that never cross a table box:
-/// - adjacent columns: short jog through the shared gap
-/// - anything else: bus route down a clear channel below all content,
-///   with vertical trunks in the column gaps
-fn route(boxes: &[TableBox], e: &Edge, index: usize, ctx: &RouteCtx) -> Vec<(i32, i32)> {
-    let (fk_idx, rf_idx) = fk_ref(e);
-    let (fk_col_idx, rf_col_idx) = match e.card {
-        Cardinality::OneToMany => (e.to_col, e.from_col),
-        _ => (e.from_col, e.to_col),
-    };
-    let fk = find_box(boxes, fk_idx);
-    let rf = find_box(boxes, rf_idx);
-    let fy = fk.col_row_y(fk_col_idx);
-    let ry = rf.col_row_y(rf_col_idx);
-    let lane = (index as i32 % 3) - 1;
-    let channel_y = ctx.channel_base + (index as i32 % 3);
-
-    let (fk_col, rf_col) = (ctx.layer[fk_idx], ctx.layer[rf_idx]);
-    if fk_col == rf_col + 1 {
-        // short jog through the gap between the two columns
-        let sx = fk.x - 1;
-        let ex = rf.right();
-        let mid = ex + (sx - ex) / 2 + lane;
-        vec![(sx, fy), (mid, fy), (mid, ry), (ex, ry)]
-    } else if fk_col > rf_col {
-        // FK column right of referenced: exit FK's left gap, approach the
-        // referenced table's right side
-        let (fk_start, _) = ctx.cols[fk_col];
-        let (_, rf_end) = ctx.cols[rf_col];
-        let trunk = fk_start - 2 - lane;
-        let approach = rf_end + 2 + lane;
-        vec![
-            (fk.x - 1, fy),
-            (trunk, fy),
-            (trunk, channel_y),
-            (approach, channel_y),
-            (approach, ry),
-            (rf.right(), ry),
-        ]
-    } else {
-        // same column (cycles) or anomalous layout: exit right, approach left
-        let (_, fk_end) = ctx.cols[fk_col];
-        let (rf_start, _) = ctx.cols[rf_col];
-        let trunk = fk_end + 2 + lane;
-        let approach = rf_start - 2 - lane;
-        vec![
-            (fk.right(), fy),
-            (trunk, fy),
-            (trunk, channel_y),
-            (approach, channel_y),
-            (approach, ry),
-            (rf.x - 1, ry),
-        ]
-    }
 }
 
 #[cfg(test)]
@@ -409,12 +437,18 @@ Ref: c.id > b.id
         // all three in distinct layers -> left-to-right ordering
         let xs: Vec<i32> = l.boxes.iter().map(|b| b.x).collect();
         assert!(xs.windows(2).all(|w| w[0] < w[1]), "{xs:?}");
-        // every edge route has 4 points inside extent
+        // every curve is anchored on the two box edges facing each other,
+        // with horizontal tangents, and stays inside the extent
         for r in &l.edges {
-            assert_eq!(r.pts.len(), 4);
+            assert_eq!(r.pts.len(), 25, "sampled bezier");
             for (x, y) in &r.pts {
-                assert!(*x >= 0 && *y >= 0 && *x <= l.extent.0 && *y <= l.extent.1);
+                assert!(
+                    *x >= 0.0 && *y >= 0.0 && *x <= l.extent.0 as f32 && *y <= l.extent.1 as f32
+                );
             }
+            // tangents horizontal at both ends
+            assert_eq!(r.curve[0].1, r.curve[1].1);
+            assert_eq!(r.curve[2].1, r.curve[3].1);
         }
     }
 
@@ -432,7 +466,7 @@ Ref: b.b_ref > a.id
     }
 
     #[test]
-    fn same_column_refs_route_below() {
+    fn same_column_refs_curve_between_nearest_sides() {
         // cycle: neither table can be layered before the other
         let src = "
 Table a { id integer [pk] rb integer }
@@ -443,14 +477,84 @@ Ref: b.ra > a.id
         let l = layout_of(src);
         // both are cycle members -> same layer -> vertical stack
         assert_eq!(l.boxes[0].x, l.boxes[1].x);
-        let r = &l.edges[0];
-        // bus route dips below all content: channel y past both bottoms
-        let channel_y = r.pts[2].1;
-        assert!(
-            channel_y > l.boxes[0].bottom() && channel_y > l.boxes[1].bottom(),
-            "route {r:?} boxes {:?}",
-            l.boxes
+        // same-x boxes: centers tie, so both ends use the nearer sides by
+        // center comparison — one exits right into the other's left
+        for r in &l.edges {
+            let (sx, sy) = r.curve[0];
+            let (ex, ey) = r.curve[3];
+            assert!(
+                (sx - ex).abs() > 0.5 || (sy - ey).abs() > 0.5,
+                "endpoints distinct: {r:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn side_choice_follows_table_positions() {
+        // in `Ref: b.a_id > a.id`, b (fk) lays out RIGHT of a (referenced):
+        // b exits its LEFT edge, a enters its RIGHT edge
+        let l = layout_of(
+            "Table a { id integer [pk] }\nTable b { a_id integer }\nRef: b.a_id > a.id\n",
         );
+        let (a, b) = (&l.boxes[0], &l.boxes[1]);
+        assert!(a.right() <= b.x, "a left of b");
+        let r = &l.edges[0];
+        assert_eq!(r.curve[0].0, b.x as f32, "fk exits its left edge");
+        assert_eq!(
+            r.curve[3].0,
+            a.right() as f32,
+            "referenced enters its right edge"
+        );
+
+        // dragged so b sits LEFT of a: sides flip
+        let out = parser::parse(
+            "Table a { id integer [pk] }\nTable b { a_id integer }\nRef: b.a_id > a.id\n",
+        );
+        let schema = crate::model::build(&out.doc);
+        let mut ov = std::collections::HashMap::new();
+        ov.insert("b".to_string(), (-30, 0));
+        let l2 = layout_with_overrides(&schema, &ov);
+        let r2 = &l2.edges[0];
+        assert_eq!(
+            r2.curve[0].0,
+            l2.boxes.iter().find(|x| x.title == "b").unwrap().right() as f32,
+            "fk exits its right edge"
+        );
+        assert_eq!(
+            r2.curve[3].0,
+            l2.boxes.iter().find(|x| x.title == "a").unwrap().x as f32,
+            "referenced enters its left edge"
+        );
+
+        // horizontally overlapping boxes anchor at the nearest sides
+        let mut ov2 = std::collections::HashMap::new();
+        ov2.insert("b".to_string(), (2, 8)); // overlaps a's x range
+        let l3 = layout_with_overrides(&schema, &ov2);
+        let r3 = &l3.edges[0];
+        let bk = l3.boxes.iter().find(|x| x.title == "b").unwrap();
+        let ak = l3.boxes.iter().find(|x| x.title == "a").unwrap();
+        assert!(
+            r3.curve[0].0 == bk.right() as f32 || r3.curve[0].0 == bk.x as f32,
+            "anchored on a box edge"
+        );
+        assert!(r3.curve[3].0 == ak.x as f32 || r3.curve[3].0 == ak.right() as f32);
+        // and the anchors face each other (start >= end when b is right...)
+        // centers: a at x=0..w, b at x=2..w+2 -> b center greater -> b exits left
+        assert_eq!(r3.curve[0].0, bk.x as f32, "b exits its left edge");
+        assert_eq!(r3.curve[3].0, ak.right() as f32, "a enters its right edge");
+    }
+
+    #[test]
+    fn self_reference_loops_out_one_side() {
+        let l = layout_of(
+            "Table u { id integer [pk] referrer_id integer }\nRef: u.referrer_id > u.id\n",
+        );
+        let r = &l.edges[0];
+        let b = &l.boxes[0];
+        // both ends on the right edge, control points bulge right
+        assert_eq!(r.curve[0].0, b.right() as f32);
+        assert_eq!(r.curve[3].0, b.right() as f32);
+        assert!(r.curve[1].0 > b.right() as f32 && r.curve[2].0 > b.right() as f32);
     }
 
     #[test]

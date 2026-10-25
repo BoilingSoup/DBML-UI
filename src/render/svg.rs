@@ -80,11 +80,8 @@ pub fn build_svg_with(layout: &Layout, show_text: bool) -> String {
 }
 
 /// Route point in SVG units.
-fn pt_px(x: i32, y: i32) -> (f32, f32) {
-    (
-        (x as f32 + MARGIN_CELLS + 0.5) * CELL_W,
-        (y as f32 + MARGIN_CELLS + 0.5) * CELL_H,
-    )
+fn pt_px(x: f32, y: f32) -> (f32, f32) {
+    ((x + MARGIN_CELLS) * CELL_W, (y + MARGIN_CELLS) * CELL_H)
 }
 
 /// Unit direction `a -> b` and its perpendicular, in SVG units.
@@ -133,36 +130,24 @@ fn crow_foot_path(end: (f32, f32), inner: (f32, f32)) -> String {
 }
 
 fn push_edge(s: &mut String, r: &EdgeRoute) {
-    let pts: Vec<String> = r
-        .pts
-        .iter()
-        .map(|&(x, y)| {
-            let (px, py) = pt_px(x, y);
-            format!("{px:.1},{py:.1}")
-        })
-        .collect();
+    let (x0, y0) = pt_px(r.curve[0].0, r.curve[0].1);
+    let (x1, y1) = pt_px(r.curve[1].0, r.curve[1].1);
+    let (x2, y2) = pt_px(r.curve[2].0, r.curve[2].1);
+    let (x3, y3) = pt_px(r.curve[3].0, r.curve[3].1);
     s.push_str(&format!(
-        r##"<polyline points="{}" fill="none" stroke="#7f838d" stroke-width="1.5"/>"##,
-        pts.join(" ")
+        r##"<path d="M {x0:.1} {y0:.1} C {x1:.1} {y1:.1} {x2:.1} {y2:.1} {x3:.1} {y3:.1}" fill="none" stroke="#7f838d" stroke-width="1.5"/>"##
     ));
-    if r.pts.len() < 2 {
-        return;
-    }
-    let first = pt_px(r.pts[0].0, r.pts[0].1);
-    let second = pt_px(r.pts[1].0, r.pts[1].1);
-    let last = pt_px(r.pts[r.pts.len() - 1].0, r.pts[r.pts.len() - 1].1);
-    let penult = pt_px(r.pts[r.pts.len() - 2].0, r.pts[r.pts.len() - 2].1);
-    // fk end first, referenced end last (see layout::fk_ref)
+    // cardinality end markers, oriented along the (horizontal) end tangents
     let (many_fk, many_ref) = many_ends(r.card);
     if many_fk {
-        s.push_str(&crow_foot_path(first, second));
+        s.push_str(&crow_foot_path((x0, y0), (x1, y1)));
     } else {
-        s.push_str(&one_tick_path(first, second));
+        s.push_str(&one_tick_path((x0, y0), (x1, y1)));
     }
     if many_ref {
-        s.push_str(&crow_foot_path(last, penult));
+        s.push_str(&crow_foot_path((x3, y3), (x2, y2)));
     } else {
-        s.push_str(&one_tick_path(last, penult));
+        s.push_str(&one_tick_path((x3, y3), (x2, y2)));
     }
 }
 
@@ -347,7 +332,7 @@ mod tests {
         assert!(svg.contains("<svg"));
         assert!(svg.contains(">a</text>"), "table title");
         assert!(svg.contains(">b&lt;x&gt;</text>"), "escaped title");
-        assert!(svg.contains("<polyline"), "edge route");
+        assert!(svg.contains("C "), "cubic edge path");
         assert!(svg.contains("<circle"), "pk key icon marker");
     }
 
