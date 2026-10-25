@@ -222,10 +222,15 @@ fn in_table_body(blocks: &[Block]) -> bool {
     matches!(blocks.last(), Some(Block::Table))
 }
 
+/// Whether the text just before a definition name ends with one of `kws`
+/// (ASCII case-insensitive — `table users` must register a table body the
+/// same way `Table users` does).
 fn prev_was(src: &str, name_start: usize, kws: &[&str]) -> bool {
     let before = &src[..name_start];
     let trimmed = before.trim_end_matches([' ', '\t']);
-    kws.iter().any(|kw| trimmed.ends_with(kw))
+    kws.iter().any(|kw| {
+        trimmed.len() >= kw.len() && trimmed[trimmed.len() - kw.len()..].eq_ignore_ascii_case(kw)
+    })
 }
 
 /// If the name that just ended at `name_end` follows a `Table`/`Enum`
@@ -393,6 +398,35 @@ mod tests {
         assert!(ks.contains(&("'it''s ok'".into(), Kind::String)), "{ks:?}");
         assert!(ks.contains(&("'a'".into(), Kind::String)));
         assert!(ks.contains(&("Note".into(), Kind::Keyword)), "{ks:?}");
+    }
+
+    #[test]
+    fn types_highlight_in_any_case_block() {
+        // regression: prev_was was case-sensitive, so after renaming
+        // `Table` to `table` the block stopped registering as a table body
+        // and its types lost their color
+        let src = "table users {\n  id integer [pk]\n}\nTaBlE posts {\n  title varchar(200)\n}\nTABLE comments {\n  body text\n}\n";
+        let ks = kinds(src);
+        for (word, _) in [
+            ("integer", "integer"),
+            ("varchar", "varchar"),
+            ("text", "text"),
+        ] {
+            assert!(
+                ks.iter().any(|(s, k)| s == word && *k == Kind::Type),
+                "{word} not Type in {ks:?}"
+            );
+        }
+        // names/keywords still fine in the mixed-case blocks
+        for w in ["users", "posts", "comments"] {
+            assert!(ks.iter().any(|(s, k)| s == w && *k == Kind::Name), "{ks:?}");
+        }
+        for w in ["table", "TaBlE", "TABLE"] {
+            assert!(
+                ks.iter().any(|(s, k)| s == w && *k == Kind::Keyword),
+                "{ks:?}"
+            );
+        }
     }
 
     #[test]
