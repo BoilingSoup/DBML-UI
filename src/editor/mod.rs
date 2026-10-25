@@ -229,6 +229,16 @@ impl Editor {
         }
     }
 
+    /// Replace the yank register (used by Regular-mode copy/cut).
+    pub fn set_register(&mut self, lines: Vec<String>) {
+        self.register = lines;
+    }
+
+    /// Snapshot of the yank register (used by Regular-mode paste).
+    pub fn register_lines(&self) -> Vec<String> {
+        self.register.clone()
+    }
+
     /// Vim-style showcmd: the in-progress count and pending operator, e.g.
     /// "2d3".
     pub fn showcmd(&self) -> Option<String> {

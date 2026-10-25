@@ -37,8 +37,16 @@ pub enum Message {
     ToggleEditor,
     /// Start a new, unsaved diagram from the start screen.
     NewDiagram,
-    /// Open-file button on the start screen: prefill the cmdline with `:o `.
-    OpenFilePrompt,
+    /// Toggle vim / Regular editing (persisted).
+    ToggleVim,
+    /// A recent file was picked on the start screen.
+    OpenRecent(String),
+    /// Open the native file-picker dialog (async; the UI stays live).
+    OpenFilePicker,
+    /// The file dialog closed without a choice.
+    PickerDismissed,
+    /// No dialog tool exists; fall back to the cmdline.
+    PickerUnavailable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,6 +138,8 @@ pub struct App {
     pub editor_collapsed: bool,
     /// Space was pressed awaiting the leader key (Space+e).
     space_leader: bool,
+    /// Persisted preferences (vim/Regular) and the recent-files list.
+    pub config: crate::config::Config,
     /// Editor viewport scroll, in lines.
     pub editor_scroll: f32,
     /// Horizontal viewport scroll in pixels, kept just large enough that
@@ -197,6 +207,7 @@ impl App {
             doc_open: true,
             editor_collapsed: false,
             space_leader: false,
+            config: crate::config::Config::default(),
             scroll_anim: None,
             scroll_target: None,
             diagram: layout::layout(&model::build(&dbml::parser::parse("").doc)),
@@ -392,8 +403,73 @@ fn window_resize() -> iced::Subscription<Message> {
     })
 }
 
+/// Result of the native file-dialog subprocess.
+enum PickOutcome {
+    Chosen(String),
+    Cancelled,
+    /// no dialog tool on the system
+    NoDialog,
+}
+
+/// Blocking zenity/kdialog file picker. Must run off the UI thread.
+fn pick_file_blocking() -> PickOutcome {
+    let run = |cmd: &str, args: &[&str]| -> Option<std::process::Output> {
+        std::process::Command::new(cmd)
+            .args(args)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()
+    };
+    for (tool, args) in [
+        ("zenity", vec!["--file-selection", "--title=Open DBML file"]),
+        ("kdialog", vec!["--getopenfilename", ".", "*.dbml"]),
+    ] {
+        if let Some(out) = run(tool, &args) {
+            if out.status.success() {
+                let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !p.is_empty() {
+                    return PickOutcome::Chosen(p);
+                }
+            }
+            // the tool ran: an empty/cancelled dialog is a cancel
+            return PickOutcome::Cancelled;
+        }
+    }
+    PickOutcome::NoDialog
+}
+
 pub fn update(app: &mut App, message: Message) -> iced::Task<Message> {
-    handle_message(app, message);
+    match message {
+        // native file dialog (zenity/kdialog subprocess off the render
+        // loop; the GTK rfd crate broke iced's event loop entirely)
+        Message::OpenFilePicker => {
+            let (tx, rx) = smol::channel::bounded(1);
+            std::thread::spawn(move || {
+                let outcome = pick_file_blocking();
+                let _ = smol::block_on(tx.send(outcome));
+            });
+            return iced::Task::future(async move {
+                match rx.recv().await {
+                    Ok(PickOutcome::Chosen(p)) => Message::OpenRecent(p),
+                    Ok(PickOutcome::NoDialog) => Message::PickerUnavailable,
+                    _ => Message::PickerDismissed,
+                }
+            });
+        }
+        Message::PickerDismissed => {}
+        // Ctrl+O opens the picker from either editing mode
+        Message::KeyPressed(code, mods)
+            if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('o') =>
+        {
+            return update(app, Message::OpenFilePicker);
+        }
+        m => handle_message(app, m),
+    }
+    handle_message_finish(app)
+}
+
+fn handle_message_finish(app: &mut App) -> iced::Task<Message> {
     if app.should_quit {
         return iced::exit();
     }
@@ -433,15 +509,22 @@ fn handle_message(app: &mut App, message: Message) {
         Message::CompletionPicked(idx) => app.completion_accept(idx),
         Message::EditorHover(p) => app.editor_hover = p,
         Message::ToggleEditor => app.toggle_editor(),
-        Message::NewDiagram => app.new_diagram(),
-        Message::OpenFilePrompt => {
-            // prefill the cmdline so Enter runs `:o <typed path>`
+        Message::ToggleVim => app.toggle_vim(),
+        Message::OpenRecent(path) => {
+            if let Err(e) = app.open_file(&path) {
+                app.message = Some(format!("cannot open {path}: {e}"));
+            }
+        }
+        Message::OpenFilePicker | Message::PickerDismissed => {} // handled in update
+        Message::PickerUnavailable => {
+            // no zenity/kdialog: fall back to typing the path in the cmdline
             app.editor.cmdline = Some(editor::CmdLine {
                 kind: ':',
                 input: "o ".to_string(),
             });
             app.focus = Focus::Editor;
         }
+        Message::NewDiagram => app.new_diagram(),
         Message::Tick => {
             let Some(anim) = app.scroll_anim.clone() else {
                 return;
@@ -531,6 +614,175 @@ impl App {
         self.message = Some("new diagram".to_string());
     }
 
+    /// True when editing is notepad-style (no modal operators).
+    pub fn regular_mode(&self) -> bool {
+        !self.config.vim
+    }
+
+    /// Switch vim <-> Regular editing; persisted. Any vim state in flight
+    /// (visual mode, pending operators) resets so nothing leaks across.
+    pub fn toggle_vim(&mut self) {
+        self.config.vim = !self.config.vim;
+        self.config.save();
+        self.editor.mode = editor::Mode::Normal;
+        self.editor.visual_linewise = false;
+        self.editor.buf.cancel_selection();
+        self.completion = None;
+        self.space_leader = false;
+        self.message = Some(if self.config.vim {
+            "vim mode".to_string()
+        } else {
+            "regular mode".to_string()
+        });
+    }
+
+    /// Regular-mode editor keys: notepad behavior — typing inserts (a
+    /// selection is replaced), arrows move, Shift+arrows extend the
+    /// selection, no modal operators.
+    fn regular_key(&mut self, key: KeyEvent) {
+        let m = key.modifiers;
+        let sel = self.editor.buf.selection_anchor().is_some();
+        let replace_sel = |app: &mut Self| {
+            if app.editor.buf.selection_anchor().is_some() {
+                let _ = app.editor.buf.cut_selection();
+            }
+        };
+        let mv = |app: &mut Self, k: KeyCode, shift: bool, motion: editor::buffer::Move| {
+            let _ = k;
+            if shift {
+                if !sel {
+                    app.editor.buf.start_selection();
+                }
+                app.editor.buf.move_cursor(motion);
+            } else {
+                app.editor.buf.cancel_selection();
+                app.editor.buf.move_cursor(motion);
+            }
+        };
+        match key.code {
+            KeyCode::Char(c)
+                if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
+            {
+                replace_sel(self);
+                self.editor.buf.insert_char(c);
+                self.after_edit(editor::Action::Changed);
+            }
+            KeyCode::Space => {
+                replace_sel(self);
+                self.editor.buf.insert_char(' ');
+                self.after_edit(editor::Action::Changed);
+            }
+            KeyCode::Enter => {
+                replace_sel(self);
+                self.editor.buf.insert_newline();
+                self.after_edit(editor::Action::Changed);
+            }
+            KeyCode::Backspace => {
+                if sel {
+                    let _ = self.editor.buf.cut_selection();
+                } else {
+                    self.editor.buf.delete_char();
+                }
+                self.after_edit(editor::Action::Changed);
+            }
+            KeyCode::Delete => {
+                if sel {
+                    let _ = self.editor.buf.cut_selection();
+                } else {
+                    self.editor.buf.move_cursor(editor::buffer::Move::Forward);
+                    self.editor.buf.delete_char();
+                }
+                self.after_edit(editor::Action::Changed);
+            }
+            KeyCode::Left => mv(
+                self,
+                key.code,
+                m.contains(KeyModifiers::SHIFT),
+                editor::buffer::Move::Back,
+            ),
+            KeyCode::Right => mv(
+                self,
+                key.code,
+                m.contains(KeyModifiers::SHIFT),
+                editor::buffer::Move::Forward,
+            ),
+            KeyCode::Up => mv(
+                self,
+                key.code,
+                m.contains(KeyModifiers::SHIFT),
+                editor::buffer::Move::Up,
+            ),
+            KeyCode::Down => mv(
+                self,
+                key.code,
+                m.contains(KeyModifiers::SHIFT),
+                editor::buffer::Move::Down,
+            ),
+            KeyCode::Home => mv(
+                self,
+                key.code,
+                m.contains(KeyModifiers::SHIFT),
+                editor::buffer::Move::Head,
+            ),
+            KeyCode::End => mv(
+                self,
+                key.code,
+                m.contains(KeyModifiers::SHIFT),
+                editor::buffer::Move::End,
+            ),
+            KeyCode::PageUp => self.half_page(-1.0),
+            KeyCode::PageDown => self.half_page(1.0),
+            KeyCode::Esc => self.editor.buf.cancel_selection(),
+            KeyCode::Char('a') => {
+                // Ctrl+A: select all
+                self.editor.buf.cancel_selection();
+                self.editor
+                    .buf
+                    .move_cursor(editor::buffer::Move::Jump(0, 0));
+                self.editor.buf.start_selection();
+                let last = self.editor.buf.line_count().saturating_sub(1);
+                self.editor
+                    .buf
+                    .move_cursor(editor::buffer::Move::Jump(last, usize::MAX));
+                self.editor.buf.move_cursor(editor::buffer::Move::End);
+            }
+            KeyCode::Char('c') => {
+                // Ctrl+C: copy the selection into the register
+                if let Some(t) = self.editor.buf.copy_selection() {
+                    self.editor
+                        .set_register(t.split('\n').map(str::to_string).collect());
+                    self.message = Some(format!("copied {} chars", t.chars().count()));
+                }
+            }
+            KeyCode::Char('x') => {
+                if let Some(t) = self.editor.buf.cut_selection() {
+                    self.editor
+                        .set_register(t.split('\n').map(str::to_string).collect());
+                    self.after_edit(editor::Action::Changed);
+                }
+            }
+            KeyCode::Char('v') => {
+                // Ctrl+V: paste the register inline at the cursor
+                let reg = self.editor.register_lines();
+                if !reg.is_empty() {
+                    self.editor.buf.cancel_selection();
+                    for (i, line) in reg.iter().enumerate() {
+                        if i > 0 {
+                            self.editor.buf.insert_newline();
+                        }
+                        if !line.is_empty() {
+                            self.editor.buf.insert_str(line);
+                        }
+                    }
+                    self.after_edit(editor::Action::Changed);
+                }
+            }
+            _ => {}
+        }
+        self.follow_cursor_horizontal();
+        self.keep_cursor_visible();
+    }
+
     /// Collapse/expand the editor pane (Space+e or the toolbar button).
     /// No-op on the start screen, where the pane holds the Open/New buttons.
     pub fn toggle_editor(&mut self) {
@@ -557,6 +809,9 @@ impl App {
             content.lines().count(),
             content.len()
         ));
+        self.doc_open = true;
+        self.config.push_recent(path);
+        self.config.save();
         Ok(())
     }
 
@@ -662,7 +917,7 @@ impl App {
                     }
                     return;
                 }
-                KeyCode::Char('c') => {
+                KeyCode::Char('c') if self.config.vim => {
                     self.should_quit = true;
                     return;
                 }
@@ -700,6 +955,7 @@ impl App {
             }
             // any other key processes normally after the leader
         } else if key.code == KeyCode::Space
+            && self.config.vim
             && self.editor.mode != editor::Mode::Insert
             && self.editor.cmdline.is_none()
             && !self.show_help
@@ -714,7 +970,11 @@ impl App {
             return;
         }
         if self.focus == Focus::Editor {
-            self.editor_key(key);
+            if self.regular_mode() {
+                self.regular_key(key);
+            } else {
+                self.editor_key(key);
+            }
             return;
         }
         // canvas focus: hjkl/arrows pan, ':'/'/' open the cmdline
@@ -1501,6 +1761,135 @@ mod completion_tests {
         );
         assert!(app.completion.is_none());
         assert_eq!(app.editor.mode, crate::editor::Mode::Insert);
+    }
+
+    #[test]
+    fn regular_mode_types_and_selects() {
+        let _g = crate::config::CONFIG_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // keep test writes out of the real config
+        std::env::set_var(
+            "DBML_UI_CONFIG",
+            std::env::temp_dir().join("dbml-ui-cfg-regular-test"),
+        );
+        let mut app = App {
+            config: crate::config::Config {
+                vim: false,
+                ..Default::default()
+            },
+            ..App::default()
+        };
+        app.editor.set_text("");
+        app.set_source("");
+        let k = |c: char| Message::KeyPressed(KeyCode::Char(c), KeyModifiers::NONE);
+        for ch in "hello".chars() {
+            let _ = update(&mut app, k(ch));
+        }
+        assert!(app.source.contains("hello"), "{}", app.source);
+        // vim keys are inert: x types instead of deleting
+        let _ = update(&mut app, k('x'));
+        assert!(app.source.contains("x"));
+        // backspace deletes the typed x
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Backspace, KeyModifiers::NONE),
+        );
+        assert!(!app.source.contains('x') || app.source.contains("xx"));
+        assert!(app.source.ends_with("hello"));
+        // Shift+Left selects, then typing replaces the selection
+        for _ in 0..2 {
+            let _ = update(
+                &mut app,
+                Message::KeyPressed(KeyCode::Left, KeyModifiers::SHIFT),
+            );
+        }
+        assert!(app.editor.buf.selection_anchor().is_some(), "shift selects");
+        let _ = update(&mut app, k('!'));
+        assert!(app.source.ends_with("hel!"), "{}", app.source);
+        // Esc clears the selection; Ctrl+C copies without quitting
+        for _ in 0..2 {
+            let _ = update(
+                &mut app,
+                Message::KeyPressed(KeyCode::Left, KeyModifiers::SHIFT),
+            );
+        }
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        );
+        assert!(!app.should_quit, "regular Ctrl+C copies, not quit");
+        assert!(!app.editor.register_lines().is_empty());
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Esc, KeyModifiers::NONE),
+        );
+        assert!(app.editor.buf.selection_anchor().is_none());
+        std::env::remove_var("DBML_UI_CONFIG");
+    }
+
+    #[test]
+    fn toggle_vim_switches_and_persists() {
+        let _g = crate::config::CONFIG_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("dbml-ui-tgl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::env::set_var("DBML_UI_CONFIG", dir.join("config"));
+        let mut app = App::default();
+        assert!(!app.regular_mode(), "vim by default");
+        let _ = update(&mut app, Message::ToggleVim);
+        assert!(app.regular_mode());
+        assert_eq!(app.editor.mode, editor::Mode::Normal, "vim state reset");
+        // persisted
+        assert!(!crate::config::Config::load().vim);
+        // vim motions work again after toggling back
+        let _ = update(&mut app, Message::ToggleVim);
+        assert!(!app.regular_mode());
+        let before = app.editor.buf.pos();
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('l'), KeyModifiers::NONE),
+        );
+        assert_ne!(app.editor.buf.pos(), before, "vim l moves");
+        // vim Ctrl+C still quits
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        );
+        assert!(app.should_quit);
+        std::env::remove_var("DBML_UI_CONFIG");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn open_file_records_recent() {
+        let _g = crate::config::CONFIG_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("dbml-ui-recent-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("DBML_UI_CONFIG", dir.join("config"));
+        let path = dir.join("x.dbml");
+        std::fs::write(&path, "Table t { id integer }").unwrap();
+        let mut app = App::blank_start();
+        let _ = update(
+            &mut app,
+            Message::OpenRecent(path.to_string_lossy().into_owned()),
+        );
+        assert!(app.doc_open, "opened from the recent list");
+        assert_eq!(
+            app.config.recent.first().map(String::as_str),
+            Some(path.to_string_lossy().as_ref())
+        );
+        let _ = update(
+            &mut app,
+            Message::OpenRecent(path.to_string_lossy().into_owned()),
+        );
+        assert_eq!(app.config.recent.len(), 1, "no duplicate entries");
+        std::env::remove_var("DBML_UI_CONFIG");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

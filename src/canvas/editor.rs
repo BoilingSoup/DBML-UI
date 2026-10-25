@@ -249,9 +249,14 @@ impl canvas::Program<Message> for EditorView<'_> {
         let cursor = app.editor.buf.pos();
         let p = pos_to_px(cursor, scroll, hs);
         if p.y > -LINE_HEIGHT && p.y < bounds.height + LINE_HEIGHT {
-            let (color, filled) = match app.editor.mode {
-                crate::editor::Mode::Insert => (theme::TEXT, false),
-                _ => (theme::TEXT, true),
+            // Regular mode always shows the thin caret (no block cursor)
+            let (color, filled) = if app.regular_mode() {
+                (theme::TEXT, false)
+            } else {
+                match app.editor.mode {
+                    crate::editor::Mode::Insert => (theme::TEXT, false),
+                    _ => (theme::TEXT, true),
+                }
             };
             let rect = if filled {
                 // block cursor

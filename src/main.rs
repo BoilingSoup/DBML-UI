@@ -2,6 +2,7 @@
 
 mod app;
 mod canvas;
+mod config;
 mod editor;
 mod theme;
 mod view;
@@ -20,6 +21,8 @@ fn main() -> Result<(), iced::Error> {
         }
         None => app::App::blank_start(),
     };
+    // persisted preferences (vim/Regular) + recent files
+    app.config = config::Config::load();
     let _ = &mut app;
     iced::application("dbml-ui", app::update, view::root)
         .theme(|_| theme::app())

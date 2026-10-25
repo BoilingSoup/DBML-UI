@@ -47,7 +47,10 @@ pub fn root(app: &App) -> Element<'_, Message> {
 
     let panes = if !app.doc_open {
         // start screen: the side pane is not collapsible, no divider
-        row![start_pane(), diagram].spacing(4).height(Fill)
+        let start = container(start_pane(app))
+            .width(Length::FillPortion((app.split * 1000.0) as u16))
+            .height(Fill);
+        row![start, diagram].spacing(4).height(Fill)
     } else if app.editor_collapsed {
         row![diagram].spacing(4).height(Fill)
     } else {
@@ -68,9 +71,24 @@ pub fn root(app: &App) -> Element<'_, Message> {
         .padding([4, 8])
         .style(move |_t, _s| tool_button_style())
         .on_press(Message::ToggleEditor);
-        column![row![horizontal_space(), toggle].padding([0, 4]), panes]
-            .spacing(4)
-            .height(Fill)
+        let mode_btn = button(
+            text(if app.config.vim {
+                "Mode: Vim"
+            } else {
+                "Mode: Regular"
+            })
+            .size(12.0)
+            .color(theme::TEXT),
+        )
+        .padding([4, 8])
+        .style(move |_t, _s| tool_button_style())
+        .on_press(Message::ToggleVim);
+        column![
+            row![mode_btn, horizontal_space(), toggle].padding([0, 4]),
+            panes
+        ]
+        .spacing(4)
+        .height(Fill)
     } else {
         column![panes].spacing(4).height(Fill)
     };
@@ -86,33 +104,54 @@ pub fn root(app: &App) -> Element<'_, Message> {
 
 /// The no-document start screen: Open file / New diagram. Shown in place
 /// of the editor pane; this state is not collapsible.
-fn start_pane() -> Element<'static, Message> {
-    let open = button(text("Open file…").size(14.0).color(theme::TEXT))
+fn start_pane(app: &App) -> Element<'static, Message> {
+    let open = button(text("Open file…".to_string()).size(14.0).color(theme::TEXT))
         .padding([8, 16])
-        .width(180)
+        .width(200)
         .style(move |_t, _s| tool_button_style())
-        .on_press(Message::OpenFilePrompt);
-    let new = button(text("New diagram").size(14.0).color(theme::TEXT))
-        .padding([8, 16])
-        .width(180)
-        .style(move |_t, _s| tool_button_style())
-        .on_press(Message::NewDiagram);
-    container(
-        column![
-            text("dbml-ui").size(20.0).color(theme::TEXT),
-            text("DBML diagram editor").size(12.0).color(theme::DIM),
-            open,
-            new,
-        ]
-        .spacing(12)
-        .align_x(iced::alignment::Horizontal::Center),
+        .on_press(Message::OpenFilePicker);
+    let new = button(
+        text("New diagram".to_string())
+            .size(14.0)
+            .color(theme::TEXT),
     )
-    .align_x(iced::alignment::Horizontal::Center)
-    .width(Fill)
-    .height(Fill)
-    .padding(1.0)
-    .style(move |_t| panel_style(false))
-    .into()
+    .padding([8, 16])
+    .width(200)
+    .style(move |_t, _s| tool_button_style())
+    .on_press(Message::NewDiagram);
+    let mut list = column![
+        text("dbml-ui".to_string()).size(20.0).color(theme::TEXT),
+        text("DBML diagram editor".to_string())
+            .size(12.0)
+            .color(theme::DIM),
+        open,
+        new,
+    ]
+    .spacing(12)
+    .align_x(iced::alignment::Horizontal::Center);
+    if !app.config.recent.is_empty() {
+        list = list.push(text("Recent".to_string()).size(12.0).color(theme::DIM));
+        for path in app.config.recent.iter().take(5) {
+            let label = match path.rsplit('/').next() {
+                Some(base) if !base.is_empty() => base.to_string(),
+                _ => path.clone(),
+            };
+            list = list.push(
+                button(text(label).size(12.0).color(theme::TEXT))
+                    .padding([4, 10])
+                    .width(200)
+                    .style(move |_t, _s| tool_button_style())
+                    .on_press(Message::OpenRecent(path.clone())),
+            );
+        }
+    }
+    container(list)
+        .align_x(iced::alignment::Horizontal::Center)
+        .width(Fill)
+        .height(Fill)
+        .padding(1.0)
+        .style(move |_t| panel_style(false))
+        .into()
 }
 
 /// Quiet chrome button (toolbar, start screen).
@@ -305,7 +344,11 @@ fn status_bar(app: &App) -> Element<'_, Message> {
             iced::Color::BLACK,
         ));
     } else {
-        let (mode, color) = mode_chip(&app.editor.mode, app.editor.visual_linewise);
+        let (mode, color) = if app.regular_mode() {
+            (" REGULAR ", Color::from_rgb(0.55, 0.75, 0.95))
+        } else {
+            mode_chip(&app.editor.mode, app.editor.visual_linewise)
+        };
         items.push(
             container(seg(mode, Color::BLACK))
                 .style(move |_t| container::Style {
