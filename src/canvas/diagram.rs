@@ -1,13 +1,15 @@
-//! The diagram canvas: draws the laid-out schema as rounded table boxes,
-//! header bands, column rows, and relationship edges — mirroring the SVG
-//! exporter's geometry, but sized by `zoom` (pixels per diagram cell) so
-//! text stays crisp at every scale.
+//! The diagram canvas: draws the laid-out schema as dbdiagram.io-style
+//! table boxes — monochrome charcoal with soft drop shadows, near-black
+//! header bands, gray outline key/link markers after each column name —
+//! and gray orthogonal relationship lines with crow's-foot/tick end
+//! markers. Mirrors the SVG exporter's geometry, but sized by `zoom`
+//! (pixels per diagram cell) so text stays crisp at every scale.
 
 use crate::theme;
-use dbml_ui::layout::{EdgeRoute, Layout, TableBox};
-use dbml_ui::model::NodeKind;
+use dbml_ui::layout::{many_ends, EdgeRoute, Layout, TableBox};
 use iced::widget::canvas::{self, Path, Stroke, Text};
 use iced::{font, Color, Font, Point, Rectangle, Size, Vector};
+use unicode_width::UnicodeWidthStr;
 
 /// Diagram cells around the content (matches the SVG renderer's margin).
 pub const MARGIN_CELLS: f32 = 1.0;
@@ -53,8 +55,23 @@ pub fn hit_test(layout: &Layout, zoom: f32, pan: Vector, p: Point) -> Option<&Ta
     })
 }
 
-/// The pk/fk marker under a canvas point, if any: the icon band sits
-/// between the box edge and the column name, on a row that has a marker.
+/// Monospace character advance for row text at `zoom` (mono glyphs are
+/// ~0.6 em wide), used to find where a column name ends.
+fn char_px(zoom: f32) -> f32 {
+    0.6 * 0.55 * zoom
+}
+
+/// X range (frame px) of the pk/fk icon on a row: dbdiagram puts the
+/// marker right AFTER the column name.
+fn marker_band(b: &TableBox, row: usize, zoom: f32, pan: Vector) -> (f32, f32) {
+    let top_left = to_px(b.x, b.y, zoom, pan);
+    let s = cell_size(zoom);
+    let name_end = top_left.x + 1.0 * s.width + b.rows[row].name.width() as f32 * char_px(zoom);
+    (name_end + 0.45 * s.width, name_end + 2.35 * s.width)
+}
+
+/// The pk/fk marker under a canvas point, if any: the icon band sits just
+/// after the column name, on a row that has a marker.
 pub fn marker_hit(layout: &Layout, zoom: f32, pan: Vector, p: Point) -> Option<(&TableBox, usize)> {
     let b = hit_test(layout, zoom, pan, p)?;
     let top_left = to_px(b.x, b.y, zoom, pan);
@@ -63,10 +80,7 @@ pub fn marker_hit(layout: &Layout, zoom: f32, pan: Vector, p: Point) -> Option<(
     if row >= b.rows.len() {
         return None;
     }
-    // the glyph starts at 1.6*sw (advance ~1.1*sw wide); the band hugs it
-    // and stops before the column name at 3.2*sw
-    let x0 = top_left.x + 0.8 * s.width;
-    let x1 = top_left.x + 2.9 * s.width;
+    let (x0, x1) = marker_band(b, row, zoom, pan);
     (p.x >= x0 && p.x < x1 && (b.rows[row].pk || b.rows[row].fk)).then_some((b, row))
 }
 
@@ -112,10 +126,9 @@ fn header_color(b: &TableBox) -> Color {
         .as_deref()
         .and_then(dbml_ui::render::svg::parse_hex)
         .map(|(r, g, bl)| Color::from_rgb8(r, g, bl))
-        .unwrap_or(match b.kind {
-            NodeKind::Table => theme::TABLE_HEADER,
-            NodeKind::Enum => theme::ENUM_HEADER,
-        })
+        // dbdiagram's dark theme renders table and enum headers the same
+        // near-black band; a DBML headercolor override still wins
+        .unwrap_or(theme::HEADER_BG)
 }
 
 /// Everything the painter needs; rebuilt each frame in `view`.
@@ -192,7 +205,7 @@ impl canvas::Program<crate::app::Message> for Diagram<'_> {
         _cursor: iced::mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
         let mut frame = canvas::Frame::new(renderer, bounds.size());
-        frame.fill_rectangle(Point::ORIGIN, bounds.size(), theme::BG);
+        frame.fill_rectangle(Point::ORIGIN, bounds.size(), theme::CANVAS);
         // NOTE: canvas geometry is not clipped to the widget by default, but
         // the pane container uses .clip(true) (view.rs) so boxes dragged to
         // negative diagram coords never paint over the editor pane. Don't
@@ -213,15 +226,16 @@ impl canvas::Program<crate::app::Message> for Diagram<'_> {
                 // the tooltip rect is frame-local: clamp against the pane
                 // size, not the window-space widget bounds
                 let local = Rectangle::new(Point::ORIGIN, bounds.size());
+                let (band_x0, band_x1) = marker_band(b, row, self.zoom, self.pan);
                 let rect = marker_tooltip_rect(
-                    top_left.x + 1.6 * s.width,
+                    (band_x0 + band_x1) / 2.0,
                     top_left.y,
                     top_left.y + b.h as f32 * s.height,
                     label,
                     self.zoom,
                     local,
                 );
-                let accent = if rowd.pk { theme::PK } else { theme::FK };
+                // dbdiagram's tooltip: a light pill with dark text
                 let mut tframe = canvas::Frame::new(renderer, bounds.size());
                 tframe.fill(
                     &Path::rounded_rectangle(
@@ -229,24 +243,12 @@ impl canvas::Program<crate::app::Message> for Diagram<'_> {
                         rect.size(),
                         iced::border::Radius::from(4.0),
                     ),
-                    theme::TOOLTIP,
-                );
-                tframe.stroke(
-                    &Path::rounded_rectangle(
-                        rect.position(),
-                        rect.size(),
-                        iced::border::Radius::from(4.0),
-                    ),
-                    Stroke {
-                        style: accent.into(),
-                        width: 1.0,
-                        ..Default::default()
-                    },
+                    theme::TIP_BG,
                 );
                 tframe.fill_text(Text {
                     content: label.to_string(),
                     position: Point::new(rect.x + 8.0, rect.y + rect.height * 0.5),
-                    color: theme::TEXT,
+                    color: theme::TIP_TEXT,
                     size: (0.5 * self.zoom).into(),
                     font: Font::MONOSPACE,
                     horizontal_alignment: iced::alignment::Horizontal::Left,
@@ -294,22 +296,90 @@ fn paint(frame: &mut canvas::Frame, layout: &Layout, zoom: f32, pan: Vector, hov
 }
 
 fn paint_edge(frame: &mut canvas::Frame, edge: &EdgeRoute, zoom: f32, pan: Vector) {
+    let pts: Vec<Point> = edge
+        .pts
+        .iter()
+        .map(|&(x, y)| to_px(x, y, zoom, pan))
+        .collect();
     let path = Path::new(|builder| {
-        let mut it = edge.pts.iter();
-        if let Some(&(x, y)) = it.next() {
-            builder.move_to(to_px(x, y, zoom, pan));
+        if let Some(&p) = pts.first() {
+            builder.move_to(p);
         }
-        for &(x, y) in it {
-            builder.line_to(to_px(x, y, zoom, pan));
+        for &p in pts.iter().skip(1) {
+            builder.line_to(p);
         }
     });
+    let stroke = edge_stroke(zoom);
+    frame.stroke(&path, stroke);
+    if pts.len() < 2 {
+        return;
+    }
+    // cardinality end markers (dbdiagram): a crow's foot on the "many"
+    // end, a perpendicular tick on the "one" end
+    let (many_fk, many_ref) = many_ends(edge.card);
+    let n = pts.len();
+    if many_fk {
+        crow_foot(frame, pts[0], pts[1], zoom, stroke);
+    } else {
+        one_tick(frame, pts[0], pts[1], zoom, stroke);
+    }
+    if many_ref {
+        crow_foot(frame, pts[n - 1], pts[n - 2], zoom, stroke);
+    } else {
+        one_tick(frame, pts[n - 1], pts[n - 2], zoom, stroke);
+    }
+}
+
+fn edge_stroke(zoom: f32) -> Stroke<'static> {
+    Stroke {
+        style: theme::LINE.into(),
+        width: edge_stroke_width(zoom),
+        ..Default::default()
+    }
+}
+
+/// Unit direction from `a` to `b`, and its perpendicular.
+fn dir_and_normal(a: Point, b: Point) -> (Vector, Vector) {
+    let d = Vector::new(b.x - a.x, b.y - a.y);
+    let len = (d.x * d.x + d.y * d.y).sqrt();
+    if len < f32::EPSILON {
+        (Vector::new(1.0, 0.0), Vector::new(0.0, 1.0))
+    } else {
+        let d = Vector::new(d.x / len, d.y / len);
+        (d, Vector::new(-d.y, d.x))
+    }
+}
+
+/// The "one" end: a short dash across the line where it meets the table.
+fn one_tick(frame: &mut canvas::Frame, end: Point, inner: Point, zoom: f32, stroke: Stroke) {
+    let (_, n) = dir_and_normal(end, inner);
+    let half = 0.30 * zoom;
     frame.stroke(
-        &path,
-        Stroke {
-            style: theme::EDGE.into(),
-            width: edge_stroke_width(zoom),
-            ..Default::default()
-        },
+        &Path::new(|b| {
+            b.move_to(end - n * half);
+            b.line_to(end + n * half);
+        }),
+        stroke,
+    );
+}
+
+/// The "many" end: three prongs fanning from the table edge back along
+/// the line.
+fn crow_foot(frame: &mut canvas::Frame, end: Point, inner: Point, zoom: f32, stroke: Stroke) {
+    let (d, n) = dir_and_normal(end, inner);
+    let back = 0.55 * zoom;
+    let spread = 0.30 * zoom;
+    let heel = end + d * back;
+    frame.stroke(
+        &Path::new(|b| {
+            b.move_to(end);
+            b.line_to(heel);
+            b.move_to(end);
+            b.line_to(heel + n * spread);
+            b.move_to(end);
+            b.line_to(heel - n * spread);
+        }),
+        stroke,
     );
 }
 
@@ -323,7 +393,7 @@ fn edge_stroke_width(zoom: f32) -> f32 {
 
 /// Key icon (dbdiagram pk): circular bow, shaft, two teeth — stroked.
 fn draw_key_icon(frame: &mut canvas::Frame, center: Point, size: f32, color: Color) {
-    let w = (0.085 * size).max(1.0);
+    let w = (0.11 * size).max(1.2);
     let stroke = canvas::Stroke {
         style: color.into(),
         width: w,
@@ -353,7 +423,7 @@ fn draw_key_icon(frame: &mut canvas::Frame, center: Point, size: f32, color: Col
 
 /// Chain-link icon (dbdiagram fk): two interlocking rings — stroked.
 fn draw_link_icon(frame: &mut canvas::Frame, center: Point, size: f32, color: Color) {
-    let w = (0.085 * size).max(1.0);
+    let w = (0.11 * size).max(1.2);
     let stroke = canvas::Stroke {
         style: color.into(),
         width: w,
@@ -375,41 +445,93 @@ fn paint_table(frame: &mut canvas::Frame, b: &TableBox, zoom: f32, pan: Vector, 
     let s = cell_size(zoom);
     let top_left = to_px(b.x, b.y, zoom, pan);
     let size = Size::new(b.w as f32 * s.width, b.h as f32 * s.height);
-    let corner = (0.35 * s.height).min(size.width / 2.0);
-    let radius = iced::border::Radius::from(corner);
 
-    // body
-    frame.fill(
-        &Path::rounded_rectangle(top_left, size, radius),
-        theme::PANEL,
+    // soft drop shadow: the canvas has no blur, so two stacked offset
+    // fills fake the falloff (dbdiagram boxes float on the canvas)
+    let sh = 0.22 * s.height;
+    frame.fill_rectangle(
+        top_left + Vector::new(0.45 * sh, 0.8 * sh),
+        size,
+        Color::from_rgba(0.0, 0.0, 0.0, 0.30),
     );
+    frame.fill_rectangle(
+        top_left + Vector::new(0.9 * sh, 1.6 * sh),
+        size,
+        Color::from_rgba(0.0, 0.0, 0.0, 0.13),
+    );
+
+    // body: sharp corners, thin darker border (dbdiagram's boxes are square)
+    let body = Path::rectangle(top_left, size);
+    frame.fill(&body, theme::TABLE_BG);
+    let border_w = if hovered {
+        2.0
+    } else {
+        (zoom / 20.0).clamp(1.0, 2.5)
+    };
     frame.stroke(
-        &Path::rounded_rectangle(top_left, size, radius),
+        &body,
         Stroke {
-            style: if hovered { theme::TEXT } else { theme::BORDER }.into(),
-            width: if hovered { 2.0 } else { 1.0 },
+            style: if hovered {
+                theme::TABLE_HOVER
+            } else {
+                theme::TABLE_BORDER
+            }
+            .into(),
+            width: border_w,
             ..Default::default()
         },
     );
 
-    // header band, rounded on top only: a rounded band plus a square strip
-    // covering its bottom corners
+    // header band: solid near-black, full-width, with a hairline below it
     let band = Size::new(size.width, s.height);
-    frame.fill(
-        &Path::rounded_rectangle(top_left, band, radius),
-        header_color(b),
-    );
-    frame.fill_rectangle(
-        top_left + Vector::new(0.0, s.height - corner),
-        Size::new(size.width, corner),
-        header_color(b),
+    frame.fill_rectangle(top_left, band, header_color(b));
+    frame.stroke(
+        &Path::new(|bd| {
+            bd.move_to(Point::new(top_left.x, top_left.y + s.height));
+            bd.line_to(Point::new(top_left.x + size.width, top_left.y + s.height));
+        }),
+        Stroke {
+            style: theme::TABLE_BORDER.into(),
+            width: 1.0,
+            ..Default::default()
+        },
     );
 
-    // title, centered in the header band
+    // a tiny table glyph before the title, like dbdiagram's header icon
+    let glyph = 0.5 * s.height;
+    let gx = top_left.x + 0.9 * s.width;
+    let gy = top_left.y + (s.height - glyph) / 2.0;
+    let gstroke = Stroke {
+        style: Color::from_rgba(0.91, 0.92, 0.93, 0.9).into(),
+        width: 1.0,
+        ..Default::default()
+    };
+    frame.stroke(
+        &Path::new(|bd| {
+            let r = glyph * 0.2;
+            bd.move_to(Point::new(gx + r, gy));
+            bd.line_to(Point::new(gx + glyph - r, gy));
+            bd.line_to(Point::new(gx + glyph, gy + r));
+            bd.line_to(Point::new(gx + glyph, gy + glyph));
+            bd.line_to(Point::new(gx, gy + glyph));
+            bd.line_to(Point::new(gx, gy + r));
+            bd.close();
+            // header divider + one body line
+            let h1 = gy + glyph * 0.42;
+            bd.move_to(Point::new(gx, h1));
+            bd.line_to(Point::new(gx + glyph, h1));
+            let h2 = gy + glyph * 0.71;
+            bd.move_to(Point::new(gx, h2));
+            bd.line_to(Point::new(gx + glyph, h2));
+        }),
+        gstroke,
+    );
+
+    // title, bold white, after the glyph
     let title_size = 0.55 * s.height;
     frame.fill_text(Text {
         content: b.title.clone(),
-        position: Point::new(top_left.x + 2.0 * s.width, top_left.y + s.height * 0.5),
+        position: Point::new(gx + glyph + 0.5 * s.width, top_left.y + s.height * 0.5),
         color: Color::WHITE,
         size: title_size.into(),
         font: Font {
@@ -421,35 +543,34 @@ fn paint_table(frame: &mut canvas::Frame, b: &TableBox, zoom: f32, pan: Vector, 
         ..Default::default()
     });
 
-    // column rows
+    // column rows: name at the left, gray outline marker right AFTER the
+    // name (dbdiagram's placement), type right-aligned in muted gray
     let row_size = 0.55 * s.height;
     for (i, row) in b.rows.iter().enumerate() {
         let y = top_left.y + (i as f32 + 1.0) * s.height + s.height * 0.5;
         let baseline = |x: f32| Point::new(x, y);
-        // dbdiagram-style markers: a key icon for primary keys, a chain
-        // link for foreign keys (stroke-drawn so they stay crisp at any
-        // zoom; the old diamond glyphs were text and scaled poorly)
-        let center = baseline(top_left.x + 1.6 * s.width);
-        if row.pk {
-            draw_key_icon(frame, center, 0.62 * s.height, theme::PK);
-        } else if row.fk {
-            draw_link_icon(frame, center, 0.58 * s.height, theme::FK);
-        }
         frame.fill_text(Text {
             content: row.name.clone(),
-            position: baseline(top_left.x + 3.2 * s.width),
-            color: theme::TEXT,
+            position: baseline(top_left.x + 1.0 * s.width),
+            color: theme::ROW_TEXT,
             size: row_size.into(),
             font: Font::MONOSPACE,
             horizontal_alignment: iced::alignment::Horizontal::Left,
             vertical_alignment: iced::alignment::Vertical::Center,
             ..Default::default()
         });
+        let (band_x0, band_x1) = marker_band(b, i, zoom, pan);
+        let center = baseline((band_x0 + band_x1) / 2.0);
+        if row.pk {
+            draw_key_icon(frame, center, 0.78 * s.height, theme::MARKER);
+        } else if row.fk {
+            draw_link_icon(frame, center, 0.74 * s.height, theme::MARKER);
+        }
         if !row.ty.is_empty() {
             frame.fill_text(Text {
                 content: row.ty.clone(),
-                position: baseline(top_left.x + size.width - 0.8 * s.width),
-                color: theme::DIM,
+                position: baseline(top_left.x + size.width - 1.2 * s.width),
+                color: theme::TYPE_TEXT,
                 size: row_size.into(),
                 font: Font::MONOSPACE,
                 horizontal_alignment: iced::alignment::Horizontal::Right,
@@ -480,18 +601,26 @@ mod tests {
         let top_left = to_px(b.x, b.y, zoom, pan);
         let s = cell_size(zoom);
         let row_top = top_left.y + s.height;
-        // dead center of the marker band on that row (glyph at 1.6*sw)
-        let p = Point::new(top_left.x + 1.9 * s.width, row_top + s.height * 0.5);
+        // the band sits right after the name "id": marker_band tells us
+        // exactly where, and its middle must hit
+        let (x0, x1) = marker_band(b, 0, zoom, pan);
+        let p = Point::new((x0 + x1) / 2.0, row_top + s.height * 0.5);
         let hit = marker_hit(&l, zoom, pan, p).expect("pk marker hit");
         assert_eq!(hit.0.title, "a");
         assert!(hit.0.rows[hit.1].pk);
         assert_eq!(marker_label(true), "Primary Key");
-        // the name column is NOT the marker band
-        let name_p = Point::new(top_left.x + 3.5 * s.width, row_top + s.height * 0.5);
+        // the name text (left of the band) is NOT the marker band
+        let name_p = Point::new(top_left.x + 1.2 * s.width, row_top + s.height * 0.5);
         assert!(marker_hit(&l, zoom, pan, name_p).is_none());
-        // left of the band (before the glyph) misses too
+        // left of the box padding misses too
         let left_p = Point::new(top_left.x + 0.3 * s.width, row_top + s.height * 0.5);
         assert!(marker_hit(&l, zoom, pan, left_p).is_none());
+        // and the band tracks the name width: "id" spans 1.0..2.32 cells
+        // (2 chars at 0.66 cells advance), so the band starts past that
+        assert!(
+            x0 > top_left.x + 2.32 * s.width,
+            "band after the name: {x0}"
+        );
     }
 
     #[test]

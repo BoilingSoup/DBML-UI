@@ -19,7 +19,7 @@ pub struct Row {
 }
 
 impl Row {
-    /// "◆ name type" width in cells.
+    /// "name ⚿ type" width in cells (marker icon after the name).
     pub fn width(&self) -> i32 {
         2 + self.name.width() as i32 + 1 + self.ty.width() as i32
     }
@@ -61,6 +61,8 @@ pub struct EdgeRoute {
     /// Index into `Schema::edges`.
     pub edge: usize,
     pub pts: Vec<(i32, i32)>,
+    /// Cardinality, for the crow's-foot / tick end markers.
+    pub card: Cardinality,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -161,6 +163,14 @@ pub fn layout_with_overrides(
         })
         .collect();
 
+    // dbdiagram-style uniform width: every box as wide as the widest one
+    // (with a floor), so columns of tables read as tidy equal blocks.
+    let uniform_w = boxes.iter().map(|b| b.w).max().unwrap_or(6).max(16);
+    let mut boxes = boxes;
+    for b in &mut boxes {
+        b.w = uniform_w;
+    }
+
     // Column packing: one column of tables per layer, doc order within.
     // All boxes in a column are left-aligned; `cols` records each column's
     // extent so edge routing can use the gaps between columns.
@@ -238,6 +248,7 @@ pub fn layout_with_overrides(
         .map(|(ei, e)| EdgeRoute {
             edge: ei,
             pts: route(&placed, e, ei, &ctx),
+            card: e.card,
         })
         .collect();
 
@@ -261,6 +272,17 @@ fn fk_ref(e: &Edge) -> (usize, usize) {
     match e.card {
         Cardinality::OneToMany => (e.to, e.from),
         _ => (e.from, e.to),
+    }
+}
+
+/// Which route ends carry the "many" crow's foot, as (fk end, referenced
+/// end). For both directional cardinalities the FK side is the many side;
+/// `<>` is many on both, `-` on neither.
+pub fn many_ends(card: Cardinality) -> (bool, bool) {
+    match card {
+        Cardinality::OneToMany | Cardinality::ManyToOne => (true, false),
+        Cardinality::OneToOne => (false, false),
+        Cardinality::ManyToMany => (true, true),
     }
 }
 
@@ -438,5 +460,40 @@ Ref: b.b_ref > a.id
         assert_eq!(l.boxes.len(), 2);
         let st = l.boxes.iter().find(|b| b.title == "st").unwrap();
         assert_eq!(st.h, 4); // 2 values + header + bottom border
+    }
+
+    #[test]
+    fn boxes_share_a_uniform_width() {
+        // dbdiagram renders all tables at one equal width (the widest one)
+        let src = "
+Table short { id integer }
+Table much_longer_name { id integer [pk] very_long_column integer }
+";
+        let l = layout_of(src);
+        let ws: Vec<i32> = l.boxes.iter().map(|b| b.w).collect();
+        assert!(ws.windows(2).all(|w| w[0] == w[1]), "{ws:?}");
+        // the short box alone needs only 16 cells; uniform width must have
+        // been stretched past its own content by the wide sibling
+        let short_row = 2 + 2 + 1 + 7; // "id integer"
+        assert_eq!(short_row, 12);
+        assert!(ws[0] > short_row + 4, "stretched: {ws:?}");
+        assert!(ws[0] >= 16, "minimum width floor");
+    }
+
+    #[test]
+    fn edge_routes_carry_cardinality() {
+        let l = layout_of("Table a { id integer }\nTable b { a_id integer }\nRef: b.a_id > a.id\n");
+        assert_eq!(l.edges.len(), 1);
+        assert_eq!(l.edges[0].card, Cardinality::ManyToOne);
+    }
+
+    #[test]
+    fn many_ends_follow_cardinality() {
+        use Cardinality::*;
+        // fk end first in the route, so it carries the crow's foot
+        assert_eq!(many_ends(ManyToOne), (true, false));
+        assert_eq!(many_ends(OneToMany), (true, false));
+        assert_eq!(many_ends(OneToOne), (false, false));
+        assert_eq!(many_ends(ManyToMany), (true, true));
     }
 }

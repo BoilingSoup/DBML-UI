@@ -9,14 +9,26 @@ pub const BORDER: iced::Color = iced::Color::from_rgb(0.267, 0.298, 0.337); // #
 pub const TEXT: iced::Color = iced::Color::from_rgb(0.902, 0.929, 0.953); // #e6edf3
 pub const DIM: iced::Color = iced::Color::from_rgb(0.545, 0.580, 0.620); // #8b949e
 
-pub const TABLE_HEADER: iced::Color =
-    iced::Color::from_rgb(47.0 / 255.0, 122.0 / 255.0, 220.0 / 255.0); // matches svg.rs header default
-pub const ENUM_HEADER: iced::Color =
-    iced::Color::from_rgb(145.0 / 255.0, 104.0 / 255.0, 219.0 / 255.0);
+// Diagram palette, lifted from dbdiagram.io's dark theme: flat charcoal
+// canvas, monochrome table boxes with soft drop shadows and near-black
+// header bands, muted gray markers and relationship lines.
+pub const CANVAS: iced::Color = iced::Color::from_rgb(0.169, 0.180, 0.212); // #2b2e36
+pub const TABLE_BG: iced::Color = iced::Color::from_rgb(0.192, 0.208, 0.243); // #31353e
+pub const TABLE_BORDER: iced::Color = iced::Color::from_rgb(0.122, 0.133, 0.157); // #1f2228
+pub const TABLE_HOVER: iced::Color = iced::Color::from_rgb(0.290, 0.314, 0.376); // #4a5060
+pub const HEADER_BG: iced::Color = iced::Color::from_rgb(0.122, 0.129, 0.157); // #1f2128
+pub const ROW_TEXT: iced::Color = iced::Color::from_rgb(0.910, 0.918, 0.929); // #e8eaed
+pub const TYPE_TEXT: iced::Color = iced::Color::from_rgb(0.545, 0.565, 0.612); // #8b909c
+/// pk/fk marker glyphs — outline gray, matching dbdiagram's row icons.
+pub const MARKER: iced::Color = iced::Color::from_rgb(0.545, 0.565, 0.612); // #8b909c
+pub const LINE: iced::Color = iced::Color::from_rgb(0.498, 0.514, 0.553); // #7f838d
+
+/// dbdiagram's hover tooltip is a light pill with dark text.
+pub const TIP_BG: iced::Color = iced::Color::from_rgb(0.941, 0.945, 0.953); // #f0f1f3
+pub const TIP_TEXT: iced::Color = iced::Color::from_rgb(0.2, 0.212, 0.239); // #33363d
 
 pub const PK: iced::Color = iced::Color::from_rgb(0.824, 0.6, 0.133); // ◆ #d29922
 pub const FK: iced::Color = iced::Color::from_rgb(0.267, 0.576, 0.973); // ◇ #4493f8
-pub const EDGE: iced::Color = iced::Color::from_rgb(0.431, 0.463, 0.506); // #6e7681
 
 pub fn app() -> iced::Theme {
     iced::Theme::Dark

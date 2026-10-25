@@ -1,8 +1,7 @@
 //! Diagram -> SVG. One terminal cell maps to CELL_W x CELL_H SVG units; the
 //! rasterizer scales to the actual font metrics times zoom.
 
-use crate::layout::{EdgeRoute, Layout, TableBox};
-use crate::model::NodeKind;
+use crate::layout::{many_ends, EdgeRoute, Layout, TableBox};
 use unicode_width::UnicodeWidthStr;
 
 pub const CELL_W: f32 = 10.0;
@@ -13,8 +12,8 @@ pub const MARGIN_CELLS: f32 = 1.0;
 /// Canvas background color; the rasterizer pads viewports with the same
 /// value (alpha is dropped by the halfblocks encoder, so padding must not
 /// be transparent).
-pub const BG_COLOR: &str = "#101216";
-pub const BG_RGBA: (u8, u8, u8, u8) = (0x10, 0x12, 0x16, 0xff);
+pub const BG_COLOR: &str = "#2b2e36";
+pub const BG_RGBA: (u8, u8, u8, u8) = (0x2b, 0x2e, 0x36, 0xff);
 
 pub fn escape(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -41,10 +40,9 @@ fn header_rgb(b: &TableBox) -> (u8, u8, u8) {
     b.header_color
         .as_deref()
         .and_then(parse_hex)
-        .unwrap_or(match b.kind {
-            NodeKind::Table => (47, 122, 220),
-            NodeKind::Enum => (145, 104, 219),
-        })
+        // dbdiagram's dark theme uses one near-black header band for both
+        // tables and enums; a DBML headercolor override still wins
+        .unwrap_or((0x1f, 0x21, 0x28))
 }
 
 /// Total SVG size in units, derived from the layout extent.
@@ -81,22 +79,91 @@ pub fn build_svg_with(layout: &Layout, show_text: bool) -> String {
     s
 }
 
+/// Route point in SVG units.
+fn pt_px(x: i32, y: i32) -> (f32, f32) {
+    (
+        (x as f32 + MARGIN_CELLS + 0.5) * CELL_W,
+        (y as f32 + MARGIN_CELLS + 0.5) * CELL_H,
+    )
+}
+
+/// Unit direction `a -> b` and its perpendicular, in SVG units.
+fn dir_normal(a: (f32, f32), b: (f32, f32)) -> ((f32, f32), (f32, f32)) {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let len = (dx * dx + dy * dy).sqrt();
+    if len < f32::EPSILON {
+        ((1.0, 0.0), (0.0, 1.0))
+    } else {
+        let d = (dx / len, dy / len);
+        (d, (-d.1, d.0))
+    }
+}
+
+/// The "one" end: a perpendicular dash across the line at the table edge.
+fn one_tick_path(end: (f32, f32), inner: (f32, f32)) -> String {
+    let (_, n) = dir_normal(end, inner);
+    let half = 0.30 * CELL_H;
+    format!(
+        r##"<path d="M {:.1} {:.1} L {:.1} {:.1}" fill="none" stroke="#7f838d" stroke-width="1.5"/>"##,
+        end.0 - n.0 * half,
+        end.1 - n.1 * half,
+        end.0 + n.0 * half,
+        end.1 + n.1 * half
+    )
+}
+
+/// The "many" end: three prongs fanning from the table edge back along
+/// the line (dbdiagram's crow's foot).
+fn crow_foot_path(end: (f32, f32), inner: (f32, f32)) -> String {
+    let (d, n) = dir_normal(end, inner);
+    let back = 0.55 * CELL_H;
+    let spread = 0.30 * CELL_H;
+    let heel = (end.0 + d.0 * back, end.1 + d.1 * back);
+    format!(
+        r##"<path d="M {ex:.1} {ey:.1} L {hx:.1} {hy:.1} M {ex:.1} {ey:.1} L {ax:.1} {ay:.1} M {ex:.1} {ey:.1} L {bx:.1} {by:.1}" fill="none" stroke="#7f838d" stroke-width="1.5"/>"##,
+        ex = end.0,
+        ey = end.1,
+        hx = heel.0,
+        hy = heel.1,
+        ax = heel.0 + n.0 * spread,
+        ay = heel.1 + n.1 * spread,
+        bx = heel.0 - n.0 * spread,
+        by = heel.1 - n.1 * spread,
+    )
+}
+
 fn push_edge(s: &mut String, r: &EdgeRoute) {
     let pts: Vec<String> = r
         .pts
         .iter()
-        .map(|(x, y)| {
-            format!(
-                "{:.1},{:.1}",
-                (*x as f32 + MARGIN_CELLS + 0.5) * CELL_W,
-                (*y as f32 + MARGIN_CELLS + 0.5) * CELL_H
-            )
+        .map(|&(x, y)| {
+            let (px, py) = pt_px(x, y);
+            format!("{px:.1},{py:.1}")
         })
         .collect();
     s.push_str(&format!(
-        r##"<polyline points="{}" fill="none" stroke="#6e7681" stroke-width="1.5"/>"##,
+        r##"<polyline points="{}" fill="none" stroke="#7f838d" stroke-width="1.5"/>"##,
         pts.join(" ")
     ));
+    if r.pts.len() < 2 {
+        return;
+    }
+    let first = pt_px(r.pts[0].0, r.pts[0].1);
+    let second = pt_px(r.pts[1].0, r.pts[1].1);
+    let last = pt_px(r.pts[r.pts.len() - 1].0, r.pts[r.pts.len() - 1].1);
+    let penult = pt_px(r.pts[r.pts.len() - 2].0, r.pts[r.pts.len() - 2].1);
+    // fk end first, referenced end last (see layout::fk_ref)
+    let (many_fk, many_ref) = many_ends(r.card);
+    if many_fk {
+        s.push_str(&crow_foot_path(first, second));
+    } else {
+        s.push_str(&one_tick_path(first, second));
+    }
+    if many_ref {
+        s.push_str(&crow_foot_path(last, penult));
+    } else {
+        s.push_str(&one_tick_path(last, penult));
+    }
 }
 
 fn push_table(s: &mut String, b: &TableBox, show_text: bool) {
@@ -106,80 +173,105 @@ fn push_table(s: &mut String, b: &TableBox, show_text: bool) {
     let h = b.h as f32 * CELL_H;
     let (hr, hg, hb) = header_rgb(b);
 
-    // body with rounded corners
+    // soft drop shadow: two stacked offset fills (no blur needed)
+    let sh = 0.22 * CELL_H;
     s.push_str(&format!(
-        r##"<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="7" fill="#1c2128" stroke="#444c56"/>"##
+        r##"<rect x="{:.1}" y="{:.1}" width="{w}" height="{h}" fill="#000" fill-opacity="0.30"/>"##,
+        x + 0.45 * sh,
+        y + 0.8 * sh
     ));
-    // header band (rounded on top)
-    let r = 7.0f32.min(w / 2.0).min(CELL_H / 2.0);
     s.push_str(&format!(
-        r##"<path d="M {x} {yy} A {r} {r} 0 0 1 {xr} {y} L {xwr} {y} A {r} {r} 0 0 1 {xw} {yy} L {xw} {yh} L {x} {yh} Z" fill="rgb({hr},{hg},{hb})"/>"##,
-        x = x,
-        y = y,
-        xw = x + w,
-        xr = x + r,
-        xwr = x + w - r,
-        yy = y + r,
-        yh = y + CELL_H,
+        r##"<rect x="{:.1}" y="{:.1}" width="{w}" height="{h}" fill="#000" fill-opacity="0.13"/>"##,
+        x + 0.9 * sh,
+        y + 1.6 * sh
     ));
-    // title
+    // body: sharp corners, thin darker border (dbdiagram-style)
+    s.push_str(&format!(
+        r##"<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="#31353e" stroke="#1f2228"/>"##
+    ));
+    // header band: solid near-black with a hairline below
+    s.push_str(&format!(
+        r##"<rect x="{x}" y="{y}" width="{w}" height="{ch}" fill="rgb({hr},{hg},{hb})"/>"##,
+        ch = CELL_H
+    ));
+    s.push_str(&format!(
+        r##"<path d="M {x} {ybh} L {xwe} {ybh}" stroke="#1f2228" stroke-width="1"/>"##,
+        ybh = y + CELL_H,
+        xwe = x + w,
+    ));
+
+    let title_size = CELL_H * 0.55;
     if show_text {
-        let title_size = CELL_H * 0.55;
+        // a tiny table glyph before the title, then the bold white title
+        let g = CELL_H * 0.5;
+        let gx = x + 0.9 * CELL_W;
+        let gy = y + (CELL_H - g) / 2.0;
+        let r = g * 0.2;
         s.push_str(&format!(
-            r##"<text x="{}" y="{:.1}" font-family="monospace" font-size="{title_size}" font-weight="bold" fill="#ffffff">{}</text>"##,
-            x + 2.0 * CELL_W,
+            r##"<path d="M {gxr:.1} {gy:.1} L {gxe:.1} {gy:.1} L {gxw:.1} {gyr:.1} L {gxw:.1} {gyb:.1} L {gx:.1} {gyb:.1} L {gx:.1} {gyr:.1} Z M {gx:.1} {h1:.1} L {gxw:.1} {h1:.1} M {gx:.1} {h2:.1} L {gxw:.1} {h2:.1}" fill="none" stroke="#e8eaed" stroke-width="1"/>"##,
+            gxr = gx + r,
+            gxe = gx + g - r,
+            gxw = gx + g,
+            gyr = gy + r,
+            gyb = gy + g,
+            h1 = gy + g * 0.42,
+            h2 = gy + g * 0.71,
+        ));
+        s.push_str(&format!(
+            r##"<text x="{:.1}" y="{:.1}" font-family="monospace" font-size="{title_size}" font-weight="bold" fill="#ffffff">{}</text>"##,
+            gx + g + 0.5 * CELL_W,
             y + CELL_H * 0.70,
             escape(&b.title)
         ));
     }
-    // column rows
+    // column rows: name at the left, gray marker right after it, type
+    // right-aligned (matches the on-screen canvas)
     let row_size = CELL_H * 0.55;
+    let char_w = 0.6 * row_size;
     for (i, row) in b.rows.iter().enumerate() {
         if !show_text {
             continue;
         }
         let ry = y + (i as f32 + 1.0) * CELL_H + CELL_H * 0.70;
-        // dbdiagram-style markers: key icon (pk) / chain link (fk),
-        // matching the on-screen canvas
-        let cx = x + 1.6 * CELL_W + 2.0;
+        let name_x = x + 1.0 * CELL_W;
+        s.push_str(&format!(
+            r##"<text x="{name_x:.1}" y="{ry:.1}" font-family="monospace" font-size="{row_size}" fill="#e8eaed">{}</text>"##,
+            escape(&row.name)
+        ));
+        // marker icon: key (pk) / chain link (fk), gray outline
+        let cx = name_x + row.name.width() as f32 * char_w + 1.4 * CELL_W;
         let cy = ry - row_size * 0.35;
+        let (color, sw) = ("#8b909c", (0.11 * row_size).max(1.2));
         if row.pk {
-            let (color, w) = ("#d29922", (0.085 * row_size).max(1.0));
             let r = 0.30 * row_size;
             let bx = cx - 0.18 * row_size;
             let x0 = bx + r * 0.72;
             let x1 = cx + 0.45 * row_size;
             s.push_str(&format!(
-                r#"<circle cx="{bx:.1}" cy="{cy:.1}" r="{r:.1}" fill="none" stroke="{color}" stroke-width="{w:.1}"/>"#
+                r#"<circle cx="{bx:.1}" cy="{cy:.1}" r="{r:.1}" fill="none" stroke="{color}" stroke-width="{sw:.1}"/>"#
             ));
             s.push_str(&format!(
-                r#"<path d="M {x0:.1} {cy:.1} L {x1:.1} {cy:.1} M {t1:.1} {cy:.1} V {te:.1} M {t2:.1} {cy:.1} V {te:.1}" fill="none" stroke="{color}" stroke-width="{w:.1}"/>"#,
+                r#"<path d="M {x0:.1} {cy:.1} L {x1:.1} {cy:.1} M {t1:.1} {cy:.1} V {te:.1} M {t2:.1} {cy:.1} V {te:.1}" fill="none" stroke="{color}" stroke-width="{sw:.1}"/>"#,
                 t1 = x1 - 0.16 * row_size,
                 t2 = x1 - 0.02 * row_size,
                 te = cy + 0.26 * row_size,
             ));
         } else if row.fk {
-            let (color, w) = ("#4493f8", (0.085 * row_size).max(1.0));
             let r = 0.26 * row_size;
             let off = 0.30 * row_size;
             s.push_str(&format!(
-                r#"<circle cx="{:.1}" cy="{cy:.1}" r="{r:.1}" fill="none" stroke="{color}" stroke-width="{w:.1}"/>"#,
+                r#"<circle cx="{:.1}" cy="{cy:.1}" r="{r:.1}" fill="none" stroke="{color}" stroke-width="{sw:.1}"/>"#,
                 cx - off
             ));
             s.push_str(&format!(
-                r#"<circle cx="{:.1}" cy="{cy:.1}" r="{r:.1}" fill="none" stroke="{color}" stroke-width="{w:.1}"/>"#,
+                r#"<circle cx="{:.1}" cy="{cy:.1}" r="{r:.1}" fill="none" stroke="{color}" stroke-width="{sw:.1}"/>"#,
                 cx + off
             ));
         }
-        s.push_str(&format!(
-            r##"<text x="{}" y="{ry:.1}" font-family="monospace" font-size="{row_size}" fill="#e6edf3">{}</text>"##,
-            x + 3.2 * CELL_W,
-            escape(&row.name)
-        ));
         if !row.ty.is_empty() {
             s.push_str(&format!(
-                r##"<text x="{}" y="{ry:.1}" font-family="monospace" font-size="{row_size}" fill="#8b949e">{}</text>"##,
-                x + (3.2 + row.name.width() as f32 + 0.8) * CELL_W,
+                r##"<text x="{:.1}" y="{ry:.1}" font-family="monospace" font-size="{row_size}" fill="#8b909c" text-anchor="end">{}</text>"##,
+                x + w - 1.2 * CELL_W,
                 escape(&row.ty)
             ));
         }
@@ -232,6 +324,24 @@ mod tests {
     fn bg_constants_agree() {
         let (r, g, b) = parse_hex(BG_COLOR).expect("valid hex");
         assert_eq!((r, g, b, BG_RGBA.3), BG_RGBA);
+    }
+
+    #[test]
+    fn dbdiagram_chrome_is_present() {
+        let svg =
+            svg_of("Table a { id integer [pk] }\nTable b { a_id integer }\nRef: b.a_id > a.id\n");
+        // flat charcoal canvas + monochrome box + near-black header band
+        assert!(svg.contains(&format!("fill=\"{BG_COLOR}\"")));
+        assert!(svg.contains("fill=\"#31353e\""), "table body");
+        assert!(svg.contains("fill=\"rgb(31,33,40)\""), "header band");
+        // soft drop shadow layers
+        assert!(svg.contains("fill-opacity=\"0.30\""));
+        assert!(svg.contains("fill-opacity=\"0.13\""));
+        // gray markers after the name (not gold/blue before it)
+        assert!(svg.contains("stroke=\"#8b909c\""));
+        assert!(!svg.contains("#d29922") && !svg.contains("#4493f8"));
+        // line + both cardinality end markers share the line color
+        assert_eq!(svg.matches("stroke=\"#7f838d\"").count(), 3);
     }
 
     #[test]
