@@ -95,6 +95,9 @@ pub struct EdgeRoute {
     /// vertical centers, turns in column-gap lanes. Renderers round the
     /// corners (dbdiagram's look).
     pub pts: Vec<(f32, f32)>,
+    /// (node, column) of each end: fk end first, referenced end second
+    /// (see `fk_ref`). Column index == row index in the box.
+    pub ends: [(usize, usize); 2],
     /// Cardinality, for the crow's-foot / tick end markers.
     pub card: Cardinality,
 }
@@ -278,10 +281,14 @@ pub fn layout_with_overrides(
         .edges
         .iter()
         .enumerate()
-        .map(|(ei, e)| EdgeRoute {
-            edge: ei,
-            pts: route(&placed, e, &cols),
-            card: e.card,
+        .map(|(ei, e)| {
+            let (pts, ends) = route(&placed, e, &cols);
+            EdgeRoute {
+                edge: ei,
+                pts,
+                ends,
+                card: e.card,
+            }
         })
         .collect();
 
@@ -294,6 +301,17 @@ pub fn layout_with_overrides(
 }
 
 /// How many segments a bezier is sampled into for the canvas polyline.
+impl Layout {
+    /// Indices (into `edges`) of routes touching a (node, column) row.
+    pub fn edges_touching(&self, node: usize, col: usize) -> Vec<usize> {
+        self.edges
+            .iter()
+            .filter(|r| r.ends.contains(&(node, col)))
+            .map(|r| r.edge)
+            .collect()
+    }
+}
+
 /// Lane candidates for the vertical run: the middle of each column gap,
 /// plus bulges outside the outermost columns (cell coords).
 fn lane_candidates(cols: &[(i32, i32)]) -> Vec<f32> {
@@ -310,11 +328,14 @@ fn lane_candidates(cols: &[(i32, i32)]) -> Vec<f32> {
     v
 }
 
+/// Router output: waypoints plus the (node, column) pair at each end.
+pub type Route = (Vec<(f32, f32)>, [(usize, usize); 2]);
+
 /// dbdiagram-style routing: side anchors at the rows' vertical centers on
 /// the sides FACING the other table (nearest sides when boxes overlap),
 /// joined by an orthogonal Z whose vertical run rides a column-gap lane.
 /// Renderers round the corners.
-fn route(boxes: &[TableBox], e: &Edge, cols: &[(i32, i32)]) -> Vec<(f32, f32)> {
+fn route(boxes: &[TableBox], e: &Edge, cols: &[(i32, i32)]) -> Route {
     let (fk_idx, rf_idx) = fk_ref(e);
     let (fk_col_idx, rf_col_idx) = match e.card {
         Cardinality::OneToMany => (e.to_col, e.from_col),
@@ -340,9 +361,11 @@ fn route(boxes: &[TableBox], e: &Edge, cols: &[(i32, i32)]) -> Vec<(f32, f32)> {
         (fk.x as f32, rf.right() as f32)
     };
 
+    let ends = [(fk_idx, fk_col_idx), (rf_idx, rf_col_idx)];
+
     // straight across when the rows align
     if (sy - ey).abs() < 0.25 {
-        return vec![(sx, sy), (ex, ey)];
+        return (vec![(sx, sy), (ex, ey)], ends);
     }
 
     // self-loop (or fully degenerate Z): bulge out of one side
@@ -350,7 +373,7 @@ fn route(boxes: &[TableBox], e: &Edge, cols: &[(i32, i32)]) -> Vec<(f32, f32)> {
     if fk_idx == rf_idx || (sx - ex).abs() < 1.0 {
         let (x0, dir) = if sx >= ex { (sx, 1.0) } else { (sx, -1.0) };
         let mx = x0 + dir * loop_bulge;
-        return vec![(sx, sy), (mx, sy), (mx, ey), (ex, ey)];
+        return (vec![(sx, sy), (mx, sy), (mx, ey), (ex, ey)], ends);
     }
 
     // Z-route: the vertical run takes the gap lane nearest the midpoint,
@@ -377,7 +400,7 @@ fn route(boxes: &[TableBox], e: &Edge, cols: &[(i32, i32)]) -> Vec<(f32, f32)> {
     if (mx - ex).abs() < 0.4 {
         mx = if ex < sx { ex + 0.8 } else { ex - 0.8 };
     }
-    vec![(sx, sy), (mx, sy), (mx, ey), (ex, ey)]
+    (vec![(sx, sy), (mx, sy), (mx, ey), (ex, ey)], ends)
 }
 
 fn index_of(e: &Edge) -> usize {
@@ -637,6 +660,19 @@ Table much_longer_name { id integer [pk] very_long_column integer }
         let l = layout_of("Table a { id integer }\nTable b { a_id integer }\nRef: b.a_id > a.id\n");
         assert_eq!(l.edges.len(), 1);
         assert_eq!(l.edges[0].card, Cardinality::ManyToOne);
+    }
+
+    #[test]
+    fn edges_touching_maps_both_ends() {
+        let l = layout_of(
+            "Table a { id integer [pk] }\nTable b { a_id integer }\nRef: b.a_id > a.id\n",
+        );
+        // a.id (node 0, col 0) and b.a_id (node 1, col 0) both touch edge 0
+        assert_eq!(l.edges_touching(0, 0), vec![0]);
+        assert_eq!(l.edges_touching(1, 0), vec![0]);
+        // unrelated rows touch nothing
+        assert!(l.edges_touching(0, 0).len() == 1);
+        assert!(l.edges[0].ends[0] == (1, 0) && l.edges[0].ends[1] == (0, 0));
     }
 
     #[test]

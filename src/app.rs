@@ -148,6 +148,10 @@ pub struct App {
     space_leader: bool,
     /// Persisted preferences (vim/Regular) and the recent-files list.
     pub config: crate::config::Config,
+    /// Diagram edges to highlight (hovered row's connections / hovered line).
+    pub hover_edges: Vec<usize>,
+    /// Phase of the flowing-packets animation on highlighted edges.
+    pub flow_phase: f32,
     /// Editor viewport scroll, in lines.
     pub editor_scroll: f32,
     /// Horizontal viewport scroll in pixels, kept just large enough that
@@ -216,6 +220,8 @@ impl App {
             editor_collapsed: false,
             space_leader: false,
             config: crate::config::Config::default(),
+            hover_edges: Vec::new(),
+            flow_phase: 0.0,
             scroll_anim: None,
             scroll_target: None,
             diagram: layout::layout(&model::build(&dbml::parser::parse("").doc)),
@@ -270,6 +276,21 @@ impl App {
 
     fn canvas_moved(&mut self, p: Point) {
         self.canvas_cursor = Some(p);
+        // edge hover: lines under the pointer plus the hovered row's
+        // connections (dbdiagram highlights them with a flow animation)
+        use crate::canvas::diagram as dia;
+        let mut active: Vec<usize> = Vec::new();
+        if let Some(ei) = dia::edge_hit(&self.diagram, self.zoom, self.pan, p, 7.0) {
+            active.push(ei);
+        }
+        if let Some((b, row)) = dia::row_at(&self.diagram, self.zoom, self.pan, p) {
+            for ei in self.diagram.edges_touching(b.node, row) {
+                if !active.contains(&ei) {
+                    active.push(ei);
+                }
+            }
+        }
+        self.hover_edges = active;
         match self.drag.clone() {
             Drag::Pan { anchor } => {
                 self.pan = self.pan + Vector::new(p.x - anchor.x, p.y - anchor.y);
@@ -376,7 +397,7 @@ pub fn subscription(_app: &App) -> iced::Subscription<Message> {
         }
         _ => None,
     });
-    let tick = if _app.scroll_anim.is_some() {
+    let tick = if _app.scroll_anim.is_some() || !_app.hover_edges.is_empty() {
         iced::time::every(std::time::Duration::from_millis(16)).map(|_| Message::Tick)
     } else {
         iced::Subscription::none()
@@ -594,6 +615,9 @@ fn handle_message(app: &mut App, message: Message) {
         }
         Message::DividerPressed => app.drag = Drag::Divider,
         Message::MouseMovedWindow(x, _y) => {
+            if x < app.editor_pane_width() + 30.0 && app.drag == Drag::None {
+                app.hover_edges.clear();
+            }
             if app.drag == Drag::Divider {
                 const PAD: f32 = 16.0;
                 let usable = (app.window_size.0 - 2.0 * PAD).max(1.0);
@@ -629,6 +653,10 @@ fn handle_message(app: &mut App, message: Message) {
         }
         Message::NewDiagram => app.new_diagram(),
         Message::Tick => {
+            if !app.hover_edges.is_empty() {
+                // 16ms cadence
+                app.flow_phase += 0.016 * crate::canvas::diagram::FLOW_SPEED;
+            }
             let Some(anim) = app.scroll_anim.clone() else {
                 return;
             };

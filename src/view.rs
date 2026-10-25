@@ -41,6 +41,8 @@ pub fn root(app: &App) -> Element<'_, Message> {
                 None
             },
             dragging: app.drag != Drag::None,
+            active_edges: &app.hover_edges,
+            flow_phase: app.flow_phase,
         })
         .width(Fill)
         .height(Fill),

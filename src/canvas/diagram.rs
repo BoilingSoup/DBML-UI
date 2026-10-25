@@ -164,6 +164,10 @@ pub struct Diagram<'a> {
     pub hover: Option<Point>,
     /// A drag is in flight (table or pan) — show the grab cursor.
     pub dragging: bool,
+    /// Edge indices to highlight (hovered row's connections / hovered line).
+    pub active_edges: &'a [usize],
+    /// Phase of the flowing-packets animation (px along the path).
+    pub flow_phase: f32,
 }
 
 impl canvas::Program<crate::app::Message> for Diagram<'_> {
@@ -234,7 +238,15 @@ impl canvas::Program<crate::app::Message> for Diagram<'_> {
         // negative diagram coords never paint over the editor pane. Don't
         // use Frame::with_clip here — its draft/paste misplaces mesh
         // geometry on the wgpu backend in 0.13.
-        paint(&mut frame, self.layout, self.zoom, self.pan, self.hover);
+        paint(
+            &mut frame,
+            self.layout,
+            self.zoom,
+            self.pan,
+            self.hover,
+            self.active_edges,
+            self.flow_phase,
+        );
 
         // pk/fk marker tooltip (dbdiagram-style), as a SECOND geometry:
         // within one geometry, text renders after meshes, so a tooltip
@@ -351,9 +363,70 @@ impl canvas::Program<crate::app::Message> for Diagram<'_> {
     }
 }
 
-fn paint(frame: &mut canvas::Frame, layout: &Layout, zoom: f32, pan: Vector, hover: Option<Point>) {
+/// The (box, row) under a canvas point, if any row of that box.
+pub fn row_at(layout: &Layout, zoom: f32, pan: Vector, p: Point) -> Option<(&TableBox, usize)> {
+    let b = hit_test(layout, zoom, pan, p)?;
+    let top_left = to_px(b.x, b.y, zoom, pan);
+    let s = cell_size(zoom);
+    let y_cell = (p.y - top_left.y) / s.height;
+    if y_cell < 1.0 {
+        return None; // the header band is not a column row
+    }
+    let row = (y_cell as usize).saturating_sub(1);
+    (row < b.rows.len()).then_some((b, row))
+}
+
+/// The edge whose polyline passes within `threshold` px of the point
+/// (nearest wins), for line-hover highlighting.
+pub fn edge_hit(
+    layout: &Layout,
+    zoom: f32,
+    pan: Vector,
+    p: Point,
+    threshold: f32,
+) -> Option<usize> {
+    let s = cell_size(zoom);
+    let to_px = |(x, y): (f32, f32)| {
+        Point::new(
+            (x + MARGIN_CELLS) * s.width + pan.x,
+            (y + MARGIN_CELLS) * s.height + pan.y,
+        )
+    };
+    let mut best: Option<(f32, usize)> = None;
+    for r in &layout.edges {
+        let mut dmin = f32::INFINITY;
+        for w in r.pts.windows(2) {
+            let (a, b) = (to_px(w[0]), to_px(w[1]));
+            let (vx, vy) = (b.x - a.x, b.y - a.y);
+            let len2 = vx * vx + vy * vy;
+            let t = if len2 < f32::EPSILON {
+                0.0
+            } else {
+                (((p.x - a.x) * vx + (p.y - a.y) * vy) / len2).clamp(0.0, 1.0)
+            };
+            let dx = a.x + t * vx - p.x;
+            let dy = a.y + t * vy - p.y;
+            dmin = dmin.min((dx * dx + dy * dy).sqrt());
+        }
+        if dmin <= threshold && best.is_none_or(|(d, _)| dmin < d) {
+            best = Some((dmin, r.edge));
+        }
+    }
+    best.map(|(_, e)| e)
+}
+
+fn paint(
+    frame: &mut canvas::Frame,
+    layout: &Layout,
+    zoom: f32,
+    pan: Vector,
+    hover: Option<Point>,
+    active_edges: &[usize],
+    flow_phase: f32,
+) {
     for edge in &layout.edges {
-        paint_edge(frame, edge, zoom, pan);
+        let active = active_edges.contains(&edge.edge);
+        paint_edge(frame, edge, zoom, pan, active, flow_phase);
     }
     let hovered = hover.and_then(|p| hit_test(layout, zoom, pan, p));
     for b in &layout.boxes {
@@ -362,7 +435,14 @@ fn paint(frame: &mut canvas::Frame, layout: &Layout, zoom: f32, pan: Vector, hov
     }
 }
 
-fn paint_edge(frame: &mut canvas::Frame, edge: &EdgeRoute, zoom: f32, pan: Vector) {
+fn paint_edge(
+    frame: &mut canvas::Frame,
+    edge: &EdgeRoute,
+    zoom: f32,
+    pan: Vector,
+    active: bool,
+    flow_phase: f32,
+) {
     let s = cell_size(zoom);
     // waypoints are f32 cell coords; rows anchor at their vertical center
     let pts: Vec<Point> = edge
@@ -376,8 +456,15 @@ fn paint_edge(frame: &mut canvas::Frame, edge: &EdgeRoute, zoom: f32, pan: Vecto
         })
         .collect();
     let path = rounded_edge_path(&pts, (0.9 * s.height).min(14.0));
-    let stroke = edge_stroke(zoom);
+    let mut stroke = edge_stroke(zoom);
+    if active {
+        stroke.style = theme::SYN_NUMBER.into();
+        stroke.width += 0.8;
+    }
     frame.stroke(&path, stroke);
+    if active {
+        paint_flow(frame, &pts, zoom, flow_phase);
+    }
     if pts.len() < 2 {
         return;
     }
@@ -427,6 +514,53 @@ fn rounded_edge_path(pts: &[Point], r: f32) -> Path {
         }
     })
 }
+
+/// Bright packets flowing along the highlighted polyline (dbdiagram's
+/// "flowing energy"): short round-capped segments advancing with phase.
+fn paint_flow(frame: &mut canvas::Frame, pts: &[Point], zoom: f32, phase: f32) {
+    use iced::widget::canvas::LineCap;
+    let mut segs: Vec<(Point, Point, f32)> = Vec::new();
+    let mut total = 0.0f32;
+    for w in pts.windows(2) {
+        let len = ((w[1].x - w[0].x).powi(2) + (w[1].y - w[0].y).powi(2)).sqrt();
+        if len > f32::EPSILON {
+            segs.push((w[0], w[1], len));
+            total += len;
+        }
+    }
+    if total < f32::EPSILON {
+        return;
+    }
+    let point_at = |d: f32| -> Point {
+        let mut d = d.rem_euclid(total);
+        for (a, b, len) in &segs {
+            if d <= *len {
+                let t = d / len;
+                return Point::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
+            }
+            d -= len;
+        }
+        *pts.last().unwrap()
+    };
+    let packet = (0.9 * zoom).clamp(6.0, 22.0).min(total / 2.0);
+    let count = ((total / (4.5 * zoom)).ceil() as usize).clamp(1, 8);
+    let spacing = total / count as f32;
+    let stroke = Stroke {
+        style: theme::SYN_STRING.into(),
+        width: edge_stroke_width(zoom) + 1.4,
+        line_cap: LineCap::Round,
+        ..Default::default()
+    };
+    for i in 0..count {
+        let center = phase * FLOW_SPEED + i as f32 * spacing;
+        let a = point_at(center - packet / 2.0);
+        let b = point_at(center + packet / 2.0);
+        frame.stroke(&Path::line(a, b), stroke);
+    }
+}
+
+/// Flow animation speed in px/s.
+pub const FLOW_SPEED: f32 = 110.0;
 
 fn edge_stroke(zoom: f32) -> Stroke<'static> {
     Stroke {
@@ -867,6 +1001,57 @@ mod tests {
     }
 
     #[test]
+    fn edge_hit_finds_the_line_under_the_pointer() {
+        let l = dbml_ui::layout::layout(&dbml_ui::model::build(
+            &dbml_ui::dbml::parser::parse(
+                "Table a { id integer [pk] }\nTable b { a_id integer }\nRef: b.a_id > a.id\n",
+            )
+            .doc,
+        ));
+        assert!(!l.edges.is_empty());
+        let zoom = 20.0;
+        let pan = Vector::new(40.0, 40.0);
+        let r = &l.edges[0];
+        // midpoint of the first segment, converted to px
+        let (x, y) = r.pts[0];
+        let (x2, y2) = r.pts[1];
+        let mx = (x + x2) / 2.0;
+        let my = (y + y2) / 2.0;
+        let s = cell_size(zoom);
+        let p = Point::new(
+            (mx + MARGIN_CELLS) * s.width + pan.x,
+            (my + MARGIN_CELLS) * s.height + pan.y,
+        );
+        assert_eq!(edge_hit(&l, zoom, pan, p, 7.0), Some(0));
+        // far away: nothing
+        let far = Point::new(5000.0, 5000.0);
+        assert_eq!(edge_hit(&l, zoom, pan, far, 7.0), None);
+    }
+
+    #[test]
+    fn row_at_finds_rows_not_borders() {
+        let l = dbml_ui::layout::layout(&dbml_ui::model::build(
+            &dbml_ui::dbml::parser::parse(
+                "Table a { id integer [pk] }\nTable b { a_id integer }\nRef: b.a_id > a.id\n",
+            )
+            .doc,
+        ));
+        let zoom = 20.0;
+        let pan = Vector::new(40.0, 40.0);
+        let b = &l.boxes[0];
+        let top_left = to_px(b.x, b.y, zoom, pan);
+        let s = cell_size(zoom);
+        // middle of row 0 (id)
+        let p = Point::new(top_left.x + 3.0 * s.width, top_left.y + s.height * 1.5);
+        let (hit, row) = row_at(&l, zoom, pan, p).unwrap();
+        assert_eq!(hit.title, "a");
+        assert_eq!(row, 0);
+        // header band is not a row
+        let header = Point::new(top_left.x + 3.0 * s.width, top_left.y + s.height * 0.5);
+        assert!(row_at(&l, zoom, pan, header).is_none());
+    }
+
+    #[test]
     fn transform_roundtrips() {
         let zoom = 24.0;
         let pan = Vector::new(13.0, -7.0);
@@ -908,6 +1093,8 @@ mod interaction_tests {
             pan: Vector::default(),
             hover: None,
             dragging: false,
+            active_edges: &[],
+            flow_phase: 0.0,
         }
     }
 
