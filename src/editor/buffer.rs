@@ -654,6 +654,19 @@ impl Buffer {
         }
     }
 
+    /// Replace the whole text as ONE undo step (used by the formatter).
+    pub fn replace_all(&mut self, text: &str) {
+        self.push_history();
+        // from_text builds a fresh buffer; keep this buffer's history and
+        // cursor bookkeeping so the replace is one undo step
+        let mut next = Self::from_text(text);
+        std::mem::swap(&mut next.undo, &mut self.undo);
+        std::mem::swap(&mut next.redo, &mut self.redo);
+        let search = self.search.clone();
+        *self = next;
+        self.search = search;
+    }
+
     // ---- cursor movement ----
 
     /// Port of tui-textarea's `next_cursor` (no viewport moves): computes

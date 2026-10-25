@@ -47,6 +47,14 @@ pub enum Message {
     PickerDismissed,
     /// No dialog tool exists; fall back to the cmdline.
     PickerUnavailable,
+    /// Toolbar/button save-as request.
+    SaveAsPrompt,
+    /// The native save dialog produced a target path.
+    SaveAs(String),
+    /// Run the canonical formatter over the whole buffer.
+    FormatNow,
+    /// Flip the persisted format-on-save preference.
+    ToggleFmtOnSave,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -411,6 +419,42 @@ enum PickOutcome {
     NoDialog,
 }
 
+/// Blocking zenity/kdialog save dialog. Must run off the UI thread.
+fn pick_save_path_blocking() -> PickOutcome {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let start = format!("{home}/diagram.dbml");
+    for (tool, args) in [
+        (
+            "zenity",
+            vec![
+                "--save",
+                "--confirm-overwrite",
+                "--filename",
+                &start,
+                "--title=Save DBML file",
+            ],
+        ),
+        ("kdialog", vec!["--getsavefilename", &start, "*.dbml"]),
+    ] {
+        let Ok(out) = std::process::Command::new(tool)
+            .args(&args)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output()
+        else {
+            continue;
+        };
+        if out.status.success() {
+            let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !p.is_empty() {
+                return PickOutcome::Chosen(p);
+            }
+        }
+        return PickOutcome::Cancelled;
+    }
+    PickOutcome::NoDialog
+}
+
 /// Blocking zenity/kdialog file picker. Must run off the UI thread.
 fn pick_file_blocking() -> PickOutcome {
     let run = |cmd: &str, args: &[&str]| -> Option<std::process::Output> {
@@ -464,6 +508,42 @@ pub fn update(app: &mut App, message: Message) -> iced::Task<Message> {
         {
             return update(app, Message::OpenFilePicker);
         }
+        // Ctrl+N (and the toolbar button) opens the save dialog
+        Message::KeyPressed(code, mods)
+            if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('n') =>
+        {
+            return update(app, Message::SaveAsPrompt);
+        }
+        Message::SaveAsPrompt => {
+            let (tx, rx) = smol::channel::bounded(1);
+            std::thread::spawn(move || {
+                let outcome = pick_save_path_blocking();
+                let _ = smol::block_on(tx.send(outcome));
+            });
+            return iced::Task::future(async move {
+                match rx.recv().await {
+                    Ok(PickOutcome::Chosen(p)) => Message::SaveAs(p),
+                    Ok(PickOutcome::NoDialog) => Message::PickerUnavailable,
+                    _ => Message::PickerDismissed,
+                }
+            });
+        }
+        Message::SaveAs(path) => {
+            app.file = Some(std::path::PathBuf::from(&path));
+            if let Err(e) = app.save_file(None) {
+                app.message = Some(format!("save failed: {e}"));
+            }
+        }
+        Message::FormatNow => app.format_now(),
+        Message::ToggleFmtOnSave => {
+            app.config.fmt_on_save = !app.config.fmt_on_save;
+            app.config.save();
+            app.message = Some(if app.config.fmt_on_save {
+                "format on save: on".to_string()
+            } else {
+                "format on save: off".to_string()
+            });
+        }
         m => handle_message(app, m),
     }
     handle_message_finish(app)
@@ -516,6 +596,9 @@ fn handle_message(app: &mut App, message: Message) {
             }
         }
         Message::OpenFilePicker | Message::PickerDismissed => {} // handled in update
+        Message::SaveAsPrompt | Message::SaveAs(_) => {}         // handled in update
+        Message::FormatNow => {}                                 // handled in update
+        Message::ToggleFmtOnSave => {}                           // handled in update
         Message::PickerUnavailable => {
             // no zenity/kdialog: fall back to typing the path in the cmdline
             app.editor.cmdline = Some(editor::CmdLine {
@@ -815,6 +898,31 @@ impl App {
         Ok(())
     }
 
+    /// Format the whole buffer canonically. Skips sources with comments
+    /// (the AST does not carry them) or parse errors; reports why.
+    pub fn format_now(&mut self) {
+        if self.source.contains("//") || self.source.contains("/*") {
+            self.message = Some("format skipped: source has comments".to_string());
+            return;
+        }
+        match dbml::fmt::format_source(&self.source) {
+            Some(f) if f != self.source => {
+                let f = if self.source.ends_with('\n') && !f.ends_with('\n') {
+                    f + "\n"
+                } else {
+                    f
+                };
+                self.editor.buf.replace_all(&f);
+                self.set_source(&f);
+                self.editor_scroll = 0.0;
+                self.editor_hscroll = 0.0;
+                self.message = Some("formatted".to_string());
+            }
+            Some(_) => self.message = Some("already formatted".to_string()),
+            None => self.message = Some("format skipped: parse errors".to_string()),
+        }
+    }
+
     pub fn save_file(&mut self, path: Option<&str>) -> std::io::Result<()> {
         let target = match path {
             Some(p) => {
@@ -831,9 +939,20 @@ impl App {
                 }
             },
         };
+        // format-on-save (default on): skip sources with comments or parse
+        // errors — reformatting those would lose data
+        if self.config.fmt_on_save
+            && !self.source.contains("//")
+            && !self.source.contains("/*")
+            && dbml::fmt::format_source(&self.editor.text()).is_some()
+        {
+            self.format_now();
+        }
         let text = self.editor.text();
         std::fs::write(&target, &text)?;
         self.saved_text = text;
+        self.config.push_recent(&target.to_string_lossy());
+        self.config.save();
         self.message = Some(format!(
             "\"{}\" written, {}B",
             target.display(),
@@ -1888,6 +2007,103 @@ mod completion_tests {
             Message::OpenRecent(path.to_string_lossy().into_owned()),
         );
         assert_eq!(app.config.recent.len(), 1, "no duplicate entries");
+        std::env::remove_var("DBML_UI_CONFIG");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn format_now_cleans_the_buffer() {
+        let _g = crate::config::CONFIG_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("dbml-ui-fmt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::env::set_var("DBML_UI_CONFIG", dir.join("config"));
+        let mut app = App::default();
+        let messy = "Table   users {\nid integer [pk,increment]\n}\n";
+        app.editor.set_text(messy);
+        app.set_source(messy);
+        let _ = update(&mut app, Message::FormatNow);
+        eprintln!("AFTER FORMAT: {:?}", app.source);
+        assert!(
+            app.source
+                .contains("Table users {\n  id integer [pk, increment]\n}"),
+            "{}",
+            app.source
+        );
+        // one undo step restores the original
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('u'), KeyModifiers::NONE),
+        );
+        assert_eq!(app.source, messy, "single undo unit");
+        // second format is a no-op ("already formatted")
+        let _ = update(&mut app, Message::FormatNow);
+        std::env::remove_var("DBML_UI_CONFIG");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn format_skips_comments_and_parse_errors() {
+        let mut app = App::default();
+        let noted = "// hello\nTable users { id integer }\n";
+        app.editor.set_text(noted);
+        app.set_source(noted);
+        let _ = update(&mut app, Message::FormatNow);
+        assert_eq!(app.source, noted, "commented source untouched");
+        let broken = "Table users { id integer";
+        app.editor.set_text(broken);
+        app.set_source(broken);
+        let _ = update(&mut app, Message::FormatNow);
+        assert_eq!(app.source, broken, "broken source untouched");
+    }
+
+    #[test]
+    fn fmt_on_save_is_default_and_toggles() {
+        let _g = crate::config::CONFIG_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("dbml-ui-fos-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::env::set_var("DBML_UI_CONFIG", dir.join("config"));
+        let mut app = App::default();
+        assert!(app.config.fmt_on_save, "on by default");
+        let _ = update(&mut app, Message::ToggleFmtOnSave);
+        assert!(!app.config.fmt_on_save);
+        assert!(!crate::config::Config::load().fmt_on_save, "persisted");
+        let _ = update(&mut app, Message::ToggleFmtOnSave);
+        assert!(app.config.fmt_on_save);
+        std::env::remove_var("DBML_UI_CONFIG");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn saving_formats_the_file() {
+        let _g = crate::config::CONFIG_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("dbml-ui-fsv-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("DBML_UI_CONFIG", dir.join("config"));
+        let mut app = App::default();
+        let messy = "Table   users {\nid integer [pk,increment]\n}\n";
+        app.editor.set_text(messy);
+        app.set_source(messy);
+        let path = dir.join("out.dbml");
+        app.save_file(Some(path.to_str().unwrap())).unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            written.contains("Table users {\n  id integer [pk, increment]\n}"),
+            "{written}"
+        );
+        // off-switch: disable, save, raw bytes land
+        let _ = update(&mut app, Message::ToggleFmtOnSave);
+        let messy2 = "Table   users {\nemail varchar(80) [unique,not null]\n}\n";
+        app.editor.set_text(messy2);
+        app.set_source(messy2);
+        app.save_file(Some(path.to_str().unwrap())).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), messy2);
         std::env::remove_var("DBML_UI_CONFIG");
         let _ = std::fs::remove_dir_all(&dir);
     }

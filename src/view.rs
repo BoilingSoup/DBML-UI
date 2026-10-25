@@ -4,6 +4,7 @@
 use crate::app::{App, Drag, Focus, Message};
 use crate::canvas::diagram::Diagram;
 use crate::canvas::editor::EditorView;
+use crate::editor::{KeyCode, KeyModifiers};
 use crate::theme;
 use iced::widget::{button, canvas, column, container, horizontal_space, row, stack, text};
 use iced::{Color, Element, Fill, Length};
@@ -12,7 +13,18 @@ use iced::{Color, Element, Fill, Length};
 pub const BASE_ZOOM: f32 = 20.0;
 
 pub fn root(app: &App) -> Element<'_, Message> {
-    let editor_pane = container(canvas(EditorView { app }).width(Fill).height(Fill))
+    let editor_body: Element<'_, Message> = if app.doc_open {
+        column![
+            editor_toolbar(app),
+            canvas(EditorView { app }).width(Fill).height(Fill)
+        ]
+        .spacing(4)
+        .height(Fill)
+        .into()
+    } else {
+        canvas(EditorView { app }).width(Fill).height(Fill).into()
+    };
+    let editor_pane = container(editor_body)
         .padding(1.0)
         .width(Fill)
         .height(Fill)
@@ -100,6 +112,59 @@ pub fn root(app: &App) -> Element<'_, Message> {
     } else {
         base.into()
     }
+}
+
+/// Small toolbar above the editor: Save, Save As, Format, fmt-on-save
+/// switch.
+fn editor_toolbar(app: &App) -> Element<'static, Message> {
+    use iced::widget::button;
+    let btn = |label: &'static str, msg: Message, accent: bool| {
+        let mut b = button(text(label).size(11.0).color(theme::TEXT))
+            .padding([3, 8])
+            .style(move |_t, _s| tool_button_style());
+        if accent {
+            b = b.style(move |_t, _s| {
+                let mut st = tool_button_style();
+                st.border = st.border.color(theme::FK);
+                st
+            });
+        }
+        b.on_press_maybe(Some(msg))
+    };
+    let fmt_switch = button(
+        text(if app.config.fmt_on_save {
+            "Fmt-on-Save ✓"
+        } else {
+            "Fmt-on-Save ✗"
+        })
+        .size(11.0)
+        .color(if app.config.fmt_on_save {
+            theme::PK
+        } else {
+            theme::DIM
+        }),
+    )
+    .padding([3, 8])
+    .style(move |_t, _s| tool_button_style())
+    .on_press(Message::ToggleFmtOnSave);
+    row![
+        btn(
+            "Save",
+            Message::KeyPressed(KeyCode::Char('s'), KeyModifiers::CONTROL),
+            true
+        ),
+        btn(
+            "Save As",
+            Message::KeyPressed(KeyCode::Char('n'), KeyModifiers::CONTROL),
+            false
+        ),
+        btn("Format", Message::FormatNow, false),
+        fmt_switch,
+        horizontal_space(),
+    ]
+    .padding([0, 2])
+    .spacing(4)
+    .into()
 }
 
 /// The no-document start screen: Open file / New diagram. Shown in place

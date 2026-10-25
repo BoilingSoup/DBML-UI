@@ -9,6 +9,8 @@
 pub struct Config {
     /// Vim modal editing; false = Regular notepad-style editing.
     pub vim: bool,
+    /// Format the source canonically before saving.
+    pub fmt_on_save: bool,
     /// Most-recent-first opened files (capped).
     pub recent: Vec<String>,
 }
@@ -17,6 +19,7 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             vim: true,
+            fmt_on_save: true,
             recent: Vec::new(),
         }
     }
@@ -47,6 +50,8 @@ impl Config {
         for line in text.lines() {
             if let Some(v) = line.strip_prefix("vim=") {
                 c.vim = v.trim() != "0";
+            } else if let Some(v) = line.strip_prefix("fmt_on_save=") {
+                c.fmt_on_save = v.trim() != "0";
             } else if let Some(p) = line.strip_prefix("recent=") {
                 let p = p.trim();
                 if !p.is_empty() && !c.recent.iter().any(|r| r == p) {
@@ -62,7 +67,11 @@ impl Config {
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let mut out = format!("vim={}\n", if self.vim { 1 } else { 0 });
+        let mut out = format!(
+            "vim={}\nfmt_on_save={}\n",
+            if self.vim { 1 } else { 0 },
+            if self.fmt_on_save { 1 } else { 0 }
+        );
         for r in &self.recent {
             out.push_str("recent=");
             out.push_str(r);
@@ -99,6 +108,7 @@ mod tests {
 
         let mut c = Config {
             vim: false,
+            fmt_on_save: false,
             recent: vec!["a".into(), "b".into()],
         };
         c.push_recent("c");
