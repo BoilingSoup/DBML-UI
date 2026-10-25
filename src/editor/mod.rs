@@ -418,7 +418,13 @@ impl Editor {
         match key.code {
             KeyCode::Esc => {
                 self.mode = Mode::Normal;
-                self.buf.move_cursor(CursorMove::Back);
+                // vim: leaving insert backs up one column, but never off
+                // the line — at column 0 (e.g. the empty line cc leaves)
+                // the cursor stays put; Move::Back would wrap to the END
+                // of the line above
+                if self.buf.pos().col > 0 {
+                    self.buf.move_cursor(CursorMove::Back);
+                }
                 Action::None
             }
             KeyCode::Char(c) => {
@@ -727,9 +733,7 @@ impl Editor {
                 if let Some((from, n)) = lines {
                     self.buf.move_cursor(CursorMove::Jump(from, 0));
                     self.yank_lines(n);
-                    self.delete_lines(n);
-                    self.buf.insert_newline();
-                    self.buf.move_cursor(CursorMove::Up);
+                    self.buf.change_lines(n);
                 }
                 self.mode = Mode::Insert;
                 self.visual_linewise = false;
@@ -987,10 +991,9 @@ impl Editor {
             }
             (C, KeyCode::Char('c')) => {
                 // [count]cc deletes the lines and edits one empty line
+                // (one undo unit: change_lines snapshots before both steps)
                 self.yank_lines(rep);
-                self.delete_lines(rep);
-                self.buf.insert_newline();
-                self.buf.move_cursor(CursorMove::Up);
+                self.buf.change_lines(rep);
                 self.mode = Mode::Insert;
                 Action::Changed
             }
@@ -1467,11 +1470,12 @@ impl Editor {
         let n = row.abs_diff(target) + 1;
         self.buf.move_cursor(CursorMove::Jump(from, 0));
         self.yank_lines(n);
-        self.delete_lines(n);
         if insert {
-            self.buf.insert_newline();
-            self.buf.move_cursor(CursorMove::Up);
+            // cG/cgg: one empty editable line, one undo unit
+            self.buf.change_lines(n);
             self.mode = Mode::Insert;
+        } else {
+            self.delete_lines(n);
         }
         Action::Changed
     }
@@ -1948,6 +1952,101 @@ mod tests {
         // dw on the last word must not eat the newline (cursor on 'b')
         let (_, t) = typed("a b\nc", "lldw");
         assert_eq!(t, "a \nc");
+    }
+
+    #[test]
+    fn cc_escape_stays_on_the_cleared_line() {
+        // vim: Esc from insert at column 0 stays put; it must not wrap to
+        // the end of the line above (the cleared line is empty, col 0)
+        let mut e = editor("one\ntwo\nthree");
+        for c in "jcc".chars() {
+            e.handle_key(key(c));
+        }
+        e.handle_key(esc());
+        assert_eq!(e.cursor(), (1, 0), "cursor stays on the cleared line");
+        assert_eq!(e.text(), "one\n\nthree");
+
+        // first line
+        let mut e = editor("one\ntwo\nthree");
+        for c in "cc".chars() {
+            e.handle_key(key(c));
+        }
+        e.handle_key(esc());
+        assert_eq!(e.cursor(), (0, 0));
+        assert_eq!(e.text(), "\ntwo\nthree");
+
+        // last line
+        let mut e = editor("one\ntwo");
+        for c in "jcc".chars() {
+            e.handle_key(key(c));
+        }
+        e.handle_key(esc());
+        assert_eq!(e.cursor(), (1, 0));
+
+        // the only line of the document
+        let mut e = editor("only");
+        for c in "cc".chars() {
+            e.handle_key(key(c));
+        }
+        e.handle_key(esc());
+        assert_eq!(e.cursor(), (0, 0));
+
+        // typed text keeps the cursor on that line after Esc
+        let mut e = editor("one\ntwo\nthree");
+        for c in "jccX".chars() {
+            e.handle_key(key(c));
+        }
+        e.handle_key(esc());
+        assert_eq!(e.cursor(), (1, 0));
+        assert_eq!(e.text(), "one\nX\nthree");
+    }
+
+    #[test]
+    fn cc_undo_restores_the_line_in_one_step() {
+        // one u restores the original line in place (was: the first u
+        // deleted the cleared line, a second was needed for the text)
+        let mut e = editor("one\ntwo\nthree");
+        for c in "jcc".chars() {
+            e.handle_key(key(c));
+        }
+        e.handle_key(esc());
+        e.handle_key(key('u'));
+        assert_eq!(e.text(), "one\ntwo\nthree");
+        assert_eq!(e.cursor().0, 1, "undo returns to the changed line");
+        // redo brings the cleared line back
+        e.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        assert_eq!(e.text(), "one\n\nthree");
+
+        // [count]cc is one undo unit too
+        let mut e = editor("a\nb\nc\nd");
+        for c in "j3cc".chars() {
+            e.handle_key(key(c));
+        }
+        e.handle_key(esc());
+        e.handle_key(key('u'));
+        assert_eq!(e.text(), "a\nb\nc\nd");
+
+        // so is the cG form
+        let mut e = editor("one\ntwo\nthree");
+        for c in "jcG".chars() {
+            e.handle_key(key(c));
+        }
+        e.handle_key(esc());
+        e.handle_key(key('u'));
+        assert_eq!(e.text(), "one\ntwo\nthree");
+    }
+
+    #[test]
+    fn visual_linewise_c_undo_restores_rows() {
+        let mut e = editor("a\nb\nc\n");
+        for c in "Vjc".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "\nc\n");
+        assert_eq!(e.mode, Mode::Insert);
+        e.handle_key(esc());
+        e.handle_key(key('u'));
+        assert_eq!(e.text(), "a\nb\nc\n");
     }
 
     #[test]

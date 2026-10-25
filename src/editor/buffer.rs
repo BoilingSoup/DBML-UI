@@ -877,6 +877,12 @@ impl Buffer {
             return;
         }
         self.push_history();
+        self.delete_str_raw(chars);
+    }
+
+    /// `delete_str` without the undo snapshot: compose with `push_history`
+    /// and other raw ops to make a multi-step edit ONE undo unit.
+    fn delete_str_raw(&mut self, chars: usize) {
         let start = self.cursor;
         // walk forward `chars` chars across lines
         let mut remaining = chars;
@@ -919,6 +925,28 @@ impl Buffer {
                 col: self.line_len(self.lines.len() - 1),
             },
         );
+    }
+
+    /// vim [count]cc / linewise c: replace the `n` lines at the cursor with
+    /// one empty editable line as a SINGLE undo unit (the delete-line step
+    /// and the re-inserted line break share one snapshot, so one `u`
+    /// restores the original lines). The cursor lands on the empty line,
+    /// column 0.
+    pub fn change_lines(&mut self, n: usize) {
+        let row = self.cursor.row.min(self.lines.len().saturating_sub(1));
+        self.selection = None;
+        self.cursor = Pos { row, col: 0 };
+        let end = (row + n.max(1)).min(self.lines.len());
+        let total: usize = self.lines[row..end]
+            .iter()
+            .map(|l| l.chars().count() + 1)
+            .sum();
+        self.push_history();
+        if total > 0 {
+            self.delete_str_raw(total);
+        }
+        self.insert_newline_raw();
+        self.move_cursor(Move::Up);
     }
 
     /// vim `r`: replace `n` chars starting at the cursor with `c` as a
