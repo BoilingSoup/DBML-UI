@@ -183,15 +183,25 @@ struct ICol {
     default: Option<String>,
     note: Option<String>,
     /// Inline `REFERENCES t (c)` — merged like standalone FKs.
-    fk: Option<(String, Vec<String>)>,
+    /// Inline REFERENCES: (schema, table, cols — cols may be empty until
+    /// finish() resolves the target's pk).
+    fk: Option<(Option<String>, String, Vec<String>)>,
     check: Option<String>,
 }
 
 /// One index entry: (columns, name, unique, index_type, pk).
 type IndexDef = (Vec<String>, Option<String>, bool, Option<String>, bool);
 
-/// One table-level foreign key: (name, fk_table, fk_cols, ref_table, ref_cols).
-type FkDef = (Option<String>, String, Vec<String>, String, Vec<String>);
+/// One table-level foreign key: (name, fk_table, fk_cols, ref_schema,
+/// ref_table, ref_cols).
+type FkDef = (
+    Option<String>,
+    String,
+    Vec<String>,
+    Option<String>,
+    String,
+    Vec<String>,
+);
 
 #[derive(Debug, Default, Clone)]
 struct ITable {
@@ -488,6 +498,7 @@ impl Importer {
         }
         let Some(t) = s.get(i) else { return 0 };
         let mut cols = Vec::new();
+        let mut ref_schema: Option<String> = None;
         let mut ref_table = String::new();
         let mut ref_cols = Vec::new();
         let mut consumed = 0;
@@ -546,9 +557,12 @@ impl Importer {
             }
             if s.get(i).is_some_and(|t| t.is_w("REFERENCES")) {
                 i += 1;
-                if let Some(Tok::W(r, _)) = s.get(i) {
-                    ref_table = r.clone();
-                    i += 1;
+                // [schema.]table — qualified references carry the schema
+                let (rs, rt, used) = self.qual_name(&s[i..]);
+                if !rt.is_empty() {
+                    ref_schema = rs;
+                    ref_table = rt;
+                    i += used;
                 }
                 if let Some(Tok::P('(')) = s.get(i) {
                     i += 1;
@@ -564,8 +578,20 @@ impl Importer {
                 }
             }
             if !cols.is_empty() && !ref_table.is_empty() {
-                self.fks
-                    .push((name.clone(), table.to_string(), cols, ref_table, ref_cols));
+                // REFERENCES t without a column list: the target's pk
+                let ref_cols = if ref_cols.is_empty() {
+                    self.pk_of(&ref_schema, &ref_table)
+                } else {
+                    ref_cols
+                };
+                self.fks.push((
+                    name.clone(),
+                    table.to_string(),
+                    cols,
+                    ref_schema,
+                    ref_table,
+                    ref_cols,
+                ));
             }
             consumed = i;
         }
@@ -631,6 +657,7 @@ impl Importer {
                 Tok::P(',') if type_depth > 0 => ty.push(",".into()),
                 Tok::P('[') => ty.push("[".into()),
                 Tok::P(']') => ty.push("]".into()),
+                Tok::P('.') => ty.push(".".into()),
                 _ => {}
             }
             i += 1;
@@ -660,7 +687,9 @@ impl Importer {
             table.cols.push(col);
             return;
         }
-        let ty_quoted = matches!(s.get(1), Some(Tok::W(_, true)));
+        let normalized_preview = normalize_type(&joined, self.dialect);
+        let ty_quoted =
+            matches!(s.get(1), Some(Tok::W(_, true))) || normalized_preview.contains(' ');
         col.ty_quoted = ty_quoted || joined.contains('[');
         if joined.contains('[') {
             // array types (TEXT[], timetz(2)[]) are quoted in DBML —
@@ -753,15 +782,15 @@ impl Importer {
                 i = next;
             } else if t.is_w("REFERENCES") {
                 i += 1;
-                if let Some(Tok::W(rt, _)) = s.get(i) {
-                    let rt = rt.clone();
-                    i += 1;
+                let (rs, rt, used) = self.qual_name(&s[i..]);
+                if !rt.is_empty() {
+                    i += used;
                     let mut rc = Vec::new();
                     if matches!(s.get(i), Some(Tok::P('('))) {
                         i += 1;
                         (rc, i) = ident_list(s, i);
                     }
-                    col.fk = Some((rt, rc));
+                    col.fk = Some((rs, rt, rc));
                 }
             } else if t.is_w("COMMENT") {
                 i += 1;
@@ -946,13 +975,41 @@ impl Importer {
     fn comment(&mut self, s: &[Tok]) {
         // COMMENT ON TABLE t IS '...' | COMMENT ON COLUMN t.c IS '...'
         let on_table = s.get(2).is_some_and(|t| t.is_w("TABLE"));
-        let (schema, name, mut i) = self.qual_name(&s[3..]);
-        i += 3;
+        // COLUMN path: [schema.]table.column (2 or 3 idents) — read them
+        // explicitly; qual_name would eat table.column as schema.table
+        let mut schema = None;
+        let name;
         let mut col: Option<String> = None;
-        if !on_table {
-            if let Some(Tok::W(c, _)) = s.get(i) {
-                col = Some(c.clone());
-                i += 1;
+        let mut i = 3;
+        if on_table {
+            let (sc, nm, used) = self.qual_name(&s[3..]);
+            schema = sc;
+            name = nm;
+            i += used;
+        } else {
+            let mut parts = Vec::new();
+            while i < s.len() {
+                if let Some(Tok::W(w, _)) = s.get(i) {
+                    parts.push(w.clone());
+                    i += 1;
+                    if matches!(s.get(i), Some(Tok::P('.'))) {
+                        i += 1;
+                        continue;
+                    }
+                }
+                break;
+            }
+            match parts.len() {
+                2 => {
+                    name = parts[0].clone();
+                    col = Some(parts[1].clone());
+                }
+                3 => {
+                    schema = Some(parts[0].clone());
+                    name = parts[1].clone();
+                    col = Some(parts[2].clone());
+                }
+                _ => return,
             }
         }
         // IS '...'
@@ -975,6 +1032,30 @@ impl Importer {
         }
     }
 
+    /// The pk column(s) of a table (for REFERENCES t without a list).
+    fn pk_of(&self, schema: &Option<String>, table: &str) -> Vec<String> {
+        self.tables
+            .iter()
+            .find(|t| t.name == table && t.schema == *schema)
+            .map(|t| {
+                let pks: Vec<&String> = t
+                    .indexes
+                    .iter()
+                    .filter(|(_, _, _, _, pk)| *pk)
+                    .flat_map(|(c, _, _, _, _)| c.iter())
+                    .collect();
+                if !pks.is_empty() {
+                    return pks.into_iter().cloned().collect();
+                }
+                t.cols
+                    .iter()
+                    .filter(|c| c.pk)
+                    .map(|c| c.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     fn table_index(&mut self, schema: &Option<String>, name: &str) -> Option<usize> {
         self.tables
             .iter()
@@ -995,6 +1076,49 @@ impl Importer {
 
     /// Merge pending uniques/PKs and inline FKs into the tables.
     fn finish(&mut self) {
+        // forward REFERENCES t (no column list): resolve the target's pk
+        // now that all tables exist
+        // collect resolutions first, apply after (pk_of borrows self)
+        let mut fixes: Vec<(usize, usize, Option<Vec<String>>)> = Vec::new();
+        for (ti, t) in self.tables.iter().enumerate() {
+            for (ci, c) in t.cols.iter().enumerate() {
+                if let Some((rs, rt, rc)) = &c.fk {
+                    if rc.is_empty() {
+                        let resolved = self.pk_of(rs, rt);
+                        fixes.push((
+                            ti,
+                            ci,
+                            if resolved.is_empty() {
+                                None // dangling: drop like the golden
+                            } else {
+                                Some(resolved)
+                            },
+                        ));
+                    }
+                }
+            }
+        }
+        for (ti, ci, resolved) in fixes {
+            if let Some(c) = self.tables.get_mut(ti).and_then(|t| t.cols.get_mut(ci)) {
+                match (resolved, &c.fk) {
+                    (Some(cols), Some((rs, rt, _))) => {
+                        c.fk = Some((rs.clone(), rt.clone(), cols));
+                    }
+                    (None, _) => c.fk = None,
+                    _ => {}
+                }
+            }
+        }
+        let mut fks = std::mem::take(&mut self.fks);
+        for fk in &mut fks {
+            if fk.5.is_empty() {
+                fk.5 = self.pk_of(&fk.3, &fk.4);
+            }
+        }
+        // drop unresolvable FKs (no target table / no pk) — emitting a
+        // dangling reference would break the output
+        fks.retain(|fk| !fk.5.is_empty());
+        self.fks = fks;
         for (table, cols, is_pk, name) in std::mem::take(&mut self.pending_uniques) {
             let Some(ti) = self.tables.iter().position(|t| t.name == table) else {
                 continue;
@@ -1019,9 +1143,6 @@ impl Importer {
                     .push((cols, name, !is_pk, None, false));
             }
         }
-        // table-level FKs (ALTER TABLE or CONSTRAINT) all render as
-        // top-level Refs in emit; only inline column REFERENCES set
-        // col.fk during parsing, so nothing to fold here
     }
 
     /// Emit DBML (always quoted identifiers; semantic comparison makes the
@@ -1030,7 +1151,7 @@ impl Importer {
         let mut out = String::new();
         let q = |n: &str| format!("\"{n}\"");
         // named FK constraints -> top-level Ref statements (golden style)
-        for (name, fk_table, fk_cols, ref_table, ref_cols) in &self.fks {
+        for (name, fk_table, fk_cols, ref_schema, ref_table, ref_cols) in &self.fks {
             let fks = fk_cols.iter().map(|c| q(c)).collect::<Vec<_>>().join(", ");
             let rcs = ref_cols.iter().map(|c| q(c)).collect::<Vec<_>>().join(", ");
             let (f, r) = if fk_cols.len() == 1 {
@@ -1038,18 +1159,22 @@ impl Importer {
             } else {
                 (format!("({fks})"), format!("({rcs})"))
             };
+            let ref_head = match ref_schema {
+                Some(sc) => format!("{}.{}", q(sc), q(ref_table)),
+                None => q(ref_table),
+            };
             match name {
                 Some(n) => out.push_str(&format!(
                     "Ref {}: {}.{} < {}.{}\n\n",
                     q(n),
-                    q(ref_table),
+                    ref_head,
                     r,
                     q(fk_table),
                     f
                 )),
                 None => out.push_str(&format!(
                     "Ref: {}.{} < {}.{}\n\n",
-                    q(ref_table),
+                    ref_head,
                     r,
                     q(fk_table),
                     f
@@ -1088,7 +1213,10 @@ impl Importer {
                     settings.push("not null".into());
                 }
                 if let Some(d) = &c.default {
-                    if d.eq_ignore_ascii_case("null") {
+                    if d.starts_with("`nextval(") {
+                        // sequence-driven serials: the golden drops the
+                        // default entirely
+                    } else if d.eq_ignore_ascii_case("null") {
                         // DEFAULT NULL is the default: omitted
                     } else if d.eq_ignore_ascii_case("current_timestamp") {
                         settings.push("default: `CURRENT_TIMESTAMP`".into());
@@ -1096,12 +1224,16 @@ impl Importer {
                         settings.push(format!("default: {d}"));
                     }
                 }
-                if let Some((rt, rc)) = &c.fk {
+                if let Some((rs, rt, rc)) = &c.fk {
                     let rcs = rc.iter().map(|x| q(x)).collect::<Vec<_>>().join(", ");
+                    let head = match rs {
+                        Some(sc) => format!("{}.{}", q(sc), q(rt)),
+                        None => q(rt),
+                    };
                     if rc.len() == 1 {
-                        settings.push(format!("ref: > {}.{}", q(rt), rcs));
+                        settings.push(format!("ref: > {}.{}", head, rcs));
                     } else {
-                        settings.push(format!("ref: > {}.({})", q(rt), rcs));
+                        settings.push(format!("ref: > {}.({})", head, rcs));
                     }
                 }
                 if let Some(n) = &c.note {
@@ -1372,22 +1504,34 @@ fn normalize_type(ty: &str, d: Dialect) -> String {
     ] {
         t = t.replace(drop, "");
     }
-    let low = t.to_ascii_lowercase();
     if matches!(d, Dialect::Postgres) {
-        let mapped = match low.as_str() {
-            "int4" => "int",
-            "int8" => "bigint",
-            "int2" => "smallint",
-            "float4" => "real",
-            "float8" => "double precision",
-            "bool" => "boolean",
-            "character varying" => "varchar",
-            "time without time zone" => "time",
-            _ => "",
-        };
-        if !mapped.is_empty() {
-            return mapped.to_string();
+        // phrase replacements that keep any (n,m) suffix
+        for (from, to) in [
+            ("character varying", "varchar"),
+            ("int4", "int"),
+            ("int8", "bigint"),
+            ("int2", "smallint"),
+            ("float4", "real"),
+            ("float8", "double precision"),
+            ("bool", "boolean"),
+        ] {
+            let lower = t.to_ascii_lowercase();
+            if let Some(pos) = lower.find(from) {
+                let after = pos + from.len();
+                // word-boundary: 'bool' must not match inside 'boolean'
+                let boundary = lower[..after]
+                    .chars()
+                    .next_back()
+                    .map_or(true, |c| !c.is_alphanumeric())
+                    || lower[after..]
+                        .chars()
+                        .next()
+                        .map_or(true, |c| !c.is_alphanumeric());
+                if boundary {
+                    t = format!("{}{}{}", &t[..pos], to, &t[after..]);
+                }
+            }
         }
     }
-    t
+    t.trim().to_string()
 }
