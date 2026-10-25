@@ -43,22 +43,21 @@ pub enum Focus {
 
 /// Open completion popup: candidate items, the selected index, where the
 /// completed word starts in the buffer, and the typed prefix.
-/// An in-flight animated scroll, neoscroll.nvim-style: the viewport
-/// advances in WHOLE-LINE steps (text never renders at a fractional
-/// offset), with the delay between steps shaped by an ease-out curve.
-/// `applied` tracks how many steps are already on screen so each tick
-/// only draws the difference.
+/// An in-flight animated scroll, neoscroll.nvim-style: each tick applies
+/// the absolute whole-line positions for the current eased fraction —
+/// cursor and window travel one eased timeline, each clamped at its own
+/// limit (the window freezes at stop_eof while the cursor glides on).
 #[derive(Debug, Clone)]
 pub struct ScrollAnim {
-    pub from: f32,
-    pub to: f32,
+    pub scroll_from: f32,
+    pub scroll_to: f32,
     pub started: std::time::Instant,
     /// Seconds; see `scroll_duration_override`.
     pub duration: f32,
-    /// Whole-line steps already applied.
-    pub applied: f32,
     /// Cursor rows coupled to the scroll (neoscroll scrolls the cursor one
-    /// line per step alongside the window, gj/gk with ctrl-e/y). None for
+    /// line per tick alongside the window, gj/gk with ctrl-e/y). Each side
+    /// clamps independently: the window freezes at its limit (stop_eof)
+    /// while the cursor continues alone (cursor_scrolls_alone). None for
     /// view-only animations (G/gg/jump-to-definition).
     pub cursor: Option<(usize, usize)>,
 }
@@ -418,37 +417,28 @@ fn handle_message(app: &mut App, message: Message) {
                 return;
             };
             let y = (anim.started.elapsed().as_secs_f32() / anim.duration).min(1.0);
-            let range = (anim.to - anim.from).abs();
-            let dir = (anim.to - anim.from).signum();
-            // whole-line steps due by now (ease-out in space)
-            let due = (scroll_progress(y) * range).round();
-            if due != anim.applied {
-                let scroll = anim.from + due * dir;
-                if let Some((from_row, to_row)) = anim.cursor {
-                    let frac = if range > 0.0 { due / range } else { 1.0 };
-                    let row = ((from_row as f32 + (to_row as f32 - from_row as f32) * frac).round()
-                        as i32)
-                        .clamp(0, app.editor.buf.line_count() as i32 - 1)
-                        as usize;
-                    let col = app.editor.buf.pos().col;
-                    app.editor
-                        .buf
-                        .move_cursor(crate::editor::buffer::Move::Jump(row, col));
-                }
-                app.editor_scroll = scroll;
-                if let Some(a) = app.scroll_anim.as_mut() {
-                    a.applied = due;
-                }
-                if std::env::var("DBML_UI_DEBUG").is_ok() {
-                    eprintln!(
-                        "DBG tick y={y:.3} scroll={scroll:.0}/{:.0} cursor coupled={}",
-                        anim.to,
-                        anim.cursor.is_some()
-                    );
-                }
+            let frac = scroll_progress(y);
+            let rows = app.editor.buf.line_count() as i32;
+            if let Some((from_row, to_row)) = anim.cursor {
+                let row = ((from_row as f32 + (to_row as f32 - from_row as f32) * frac).round()
+                    as i32)
+                    .clamp(0, rows - 1) as usize;
+                let col = app.editor.buf.pos().col;
+                app.editor
+                    .buf
+                    .move_cursor(crate::editor::buffer::Move::Jump(row, col));
+            }
+            let scroll = (anim.scroll_from + (anim.scroll_to - anim.scroll_from) * frac).round();
+            app.editor_scroll = scroll;
+            if std::env::var("DBML_UI_DEBUG").is_ok() {
+                eprintln!(
+                    "DBG tick y={y:.3} scroll={scroll:.0}/{:.0} cursor={}",
+                    anim.scroll_to,
+                    app.editor.buf.pos().row
+                );
             }
             if y >= 1.0 {
-                app.editor_scroll = anim.to;
+                app.editor_scroll = anim.scroll_to;
                 if let Some((_, to_row)) = anim.cursor {
                     let col = app.editor.buf.pos().col;
                     app.editor
@@ -945,25 +935,32 @@ impl App {
     fn animate_scroll(&mut self, to: f32, duration_ms: f32, cursor: Option<(usize, usize)>) {
         let to = to.clamp(0.0, self.max_scroll()).round();
         let from = self.editor_scroll.round();
-        if (to - from).abs() < 0.5 {
+        let cursor_moves = cursor.is_some_and(|(a, b)| a != b);
+        if (to - from).abs() < 0.5 && !cursor_moves {
+            // neither the window nor the cursor can move
             self.editor_scroll = to;
             self.scroll_anim = None;
             self.scroll_target = None;
             return;
         }
-        self.scroll_target = Some(to);
+        if (to - from).abs() >= 0.5 {
+            self.scroll_target = Some(to);
+        }
         self.scroll_anim = Some(ScrollAnim {
-            from,
-            to,
+            scroll_from: from,
+            scroll_to: to,
             started: std::time::Instant::now(),
             duration: scroll_duration_override().unwrap_or(duration_ms / 1000.0),
-            applied: 0.0,
             cursor,
         });
     }
 
     /// neoscroll's distance-proportional duration (z-command formula):
     /// a half page takes HALF_PAGE_MS, scaling linearly with distance.
+    /// neoscroll semantics: the cursor always animates (line by line) even
+    /// when the window cannot scroll (fitting document, or at an edge);
+    /// the window follows in lockstep until ITS clamp — stop_eof — freezes
+    /// it, after which the cursor continues alone.
     fn scroll_by_lines(&mut self, lines: f32, duration_ms: f32) {
         self.completion = None;
         let pos = self.editor.buf.pos();
@@ -972,19 +969,6 @@ impl App {
         let base = self.scroll_target.unwrap_or(self.editor_scroll.round());
         let to = (base + lines).clamp(0.0, self.max_scroll()).round();
         self.focus = Focus::Editor;
-        if (to - self.editor_scroll.round()).abs() < 0.5 {
-            // the view has nowhere to go (document fits / at an edge), but
-            // the cursor still moves — vim moves the cursor half a page
-            // even when the window cannot scroll
-            self.editor_scroll = to;
-            self.scroll_anim = None;
-            self.scroll_target = None;
-            self.editor
-                .buf
-                .move_cursor(crate::editor::buffer::Move::Jump(cursor_to, pos.col));
-            return;
-        }
-        // cursor travels WITH the view, from its ACTUAL current row
         self.animate_scroll(to, duration_ms, Some((pos.row, cursor_to)));
     }
 
@@ -1452,7 +1436,10 @@ mod scroll_tests {
         );
         let anim = app.scroll_anim.as_ref().expect("animation running");
         assert!((anim.duration - 0.25).abs() < 1e-3, "250ms: {anim:?}");
-        assert!((anim.to - page / 2.0).abs() < 1.0, "half page: {anim:?}");
+        assert!(
+            (anim.scroll_to - page / 2.0).abs() < 1.0,
+            "half page: {anim:?}"
+        );
         // neoscroll moves the cursor WITH the view, not ahead of it
         assert_eq!(app.editor.buf.pos().row, 0, "cursor not jumped");
         force_finish(&mut app);
@@ -1474,7 +1461,7 @@ mod scroll_tests {
         );
         let anim = app.scroll_anim.as_ref().expect("anim");
         assert!((anim.duration - 0.45).abs() < 1e-3, "450ms: {anim:?}");
-        assert!((anim.to - app.page_lines()).abs() < 1.0);
+        assert!((anim.scroll_to - app.page_lines()).abs() < 1.0);
     }
 
     #[test]
@@ -1489,7 +1476,7 @@ mod scroll_tests {
         let anim = app.scroll_anim.as_mut().unwrap();
         let half = Duration::from_secs_f32(anim.duration / 2.0);
         anim.started -= half;
-        let range = (anim.to - anim.from).abs();
+        let range = (anim.scroll_to - anim.scroll_from).abs();
         let _ = update(&mut app, Message::Tick);
         let expected = (scroll_progress(0.5) * range).round();
         assert!(
@@ -1517,7 +1504,7 @@ mod scroll_tests {
         );
         let anim = app.scroll_anim.as_ref().unwrap();
         assert!(
-            (anim.to - after_one - app.page_lines() / 2.0).abs() < 1.0,
+            (anim.scroll_to - after_one - app.page_lines() / 2.0).abs() < 1.0,
             "second ctrl-d extends by another half page: {anim:?}"
         );
     }
@@ -1530,7 +1517,7 @@ mod scroll_tests {
             &mut app,
             Message::KeyPressed(KeyCode::Char('d'), KeyModifiers::CONTROL),
         );
-        let to = app.scroll_anim.as_ref().unwrap().to;
+        let to = app.scroll_anim.as_ref().unwrap().scroll_to;
         force_finish(&mut app);
         assert!(app.scroll_anim.is_none());
         assert!((app.editor_scroll - to).abs() < 0.001, "lands exactly");
@@ -1586,44 +1573,6 @@ mod scroll_tests {
     }
 
     #[test]
-    fn page_keys_move_cursor_even_when_document_fits() {
-        // regression: after the neoscroll rework the cursor only moved via
-        // animation ticks, and with a document that fits the page the
-        // animation no-oped — Ctrl-d/u/PgUp/PgDn did literally nothing
-        let mut app = App {
-            window_size: (1400.0, 900.0),
-            ..App::default() // sample: ~40 lines, fits the page
-        };
-        let page = app.page_lines();
-        let _ = update(
-            &mut app,
-            Message::KeyPressed(KeyCode::Char('d'), KeyModifiers::CONTROL),
-        );
-        assert!(app.scroll_anim.is_none(), "nothing to scroll");
-        assert_eq!(
-            app.editor.buf.pos().row,
-            (page / 2.0).round() as usize,
-            "cursor still moves half a page"
-        );
-        // and Ctrl-u walks it back up
-        let _ = update(
-            &mut app,
-            Message::KeyPressed(KeyCode::Char('u'), KeyModifiers::CONTROL),
-        );
-        assert_eq!(app.editor.buf.pos().row, 0);
-        // PgDn moves a full page, clamped to the buffer end
-        let _ = update(
-            &mut app,
-            Message::KeyPressed(KeyCode::PageDown, KeyModifiers::NONE),
-        );
-        assert_eq!(
-            app.editor.buf.pos().row,
-            app.editor.buf.line_count() - 1,
-            "clamped to last line"
-        );
-    }
-
-    #[test]
     fn cursor_at_buffer_bottom_does_not_yank_backward() {
         // regression: cursor_from was reconstructed from the scroll delta,
         // so a clamped cursor jumped UP before animating back down
@@ -1649,6 +1598,82 @@ mod scroll_tests {
         let _ = update(&mut app, Message::Tick);
         assert_eq!(app.editor.buf.pos().row, last);
         assert!(app.editor_scroll >= 0.0);
+    }
+
+    #[test]
+    fn fitting_document_cursor_glides_without_scrolling() {
+        // neoscroll: with a document that fits the page the window never
+        // scrolls but the cursor still glides line by line — never an
+        // instant jump (regression: this case jumped instantly)
+        let mut app = App {
+            window_size: (1400.0, 900.0),
+            ..App::default() // sample: ~40 lines, fits the page
+        };
+        let page = app.page_lines();
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        );
+        let anim = app.scroll_anim.as_ref().expect("cursor animation runs");
+        assert_eq!(app.editor_scroll, 0.0, "window has nothing to scroll");
+        assert_eq!(
+            anim.cursor,
+            Some((0, (page / 2.0).round() as usize)),
+            "cursor glides from row 0"
+        );
+        // mid-animation: cursor advanced, window static
+        if let Some(a) = app.scroll_anim.as_mut() {
+            a.started -= std::time::Duration::from_secs_f32(a.duration / 2.0);
+        }
+        let _ = update(&mut app, Message::Tick);
+        assert_eq!(app.editor_scroll, 0.0, "window still static");
+        assert!(
+            app.editor.buf.pos().row > 0,
+            "cursor mid-glide at {}",
+            app.editor.buf.pos().row
+        );
+        force_finish(&mut app);
+        assert_eq!(app.editor.buf.pos().row, (page / 2.0).round() as usize);
+        // Ctrl-u walks it back up the same way
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        );
+        force_finish(&mut app);
+        assert_eq!(app.editor.buf.pos().row, 0);
+    }
+
+    #[test]
+    fn near_eof_window_freezes_and_cursor_continues_alone() {
+        // the user-observed behavior: with less than half a screen left,
+        // neoscroll's stop_eof freezes the window at its clamp while the
+        // cursor continues alone to its target
+        let mut app = tall_app(120);
+        app.window_size = (1400.0, 900.0);
+        let last = app.editor.buf.line_count() - 1;
+        let max = app.max_scroll();
+        app.editor_scroll = max - 5.0;
+        let cursor_at = last - 10;
+        app.editor
+            .buf
+            .move_cursor(crate::editor::buffer::Move::Jump(cursor_at, 0));
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        );
+        let anim = app.scroll_anim.as_ref().expect("animates");
+        assert!(
+            (anim.scroll_to - max).abs() < 0.5,
+            "window stops at its clamp (stop_eof): {anim:?}"
+        );
+        assert_eq!(
+            anim.cursor,
+            Some((cursor_at, last)),
+            "cursor continues to the last line"
+        );
+        force_finish(&mut app);
+        assert_eq!(app.editor.buf.pos().row, last);
+        assert!((app.editor_scroll - max).abs() < 0.5);
     }
 
     #[test]
