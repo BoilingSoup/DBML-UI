@@ -1,0 +1,155 @@
+Enum "orders_status" {
+  "created"
+  "running"
+  "done"
+  "failure"
+}
+
+Enum "product status" {
+  "Out of Stock"
+  "In Stock"
+}
+
+Table "orders" {
+  "id" SERIAL [pk, increment]
+  "user_id" int [unique, not null]
+  "status" orders_status
+  "created_at" varchar
+  "modified_at" timestamp(2)
+}
+
+Table "order_items" {
+  "order_id" int
+  "product_id" int
+  "quantity" int [default: 1]
+  "created_at" timestamp
+  "modified_at" time
+}
+
+Table "products" {
+  "id" int
+  "name" varchar
+  "merchant_id" int [not null]
+  "price" int
+  "status" "product status"
+  "created_at" datetime [default: `now()`]
+  "modified_at" timestamp
+
+  Indexes {
+    (id, name) [pk]
+    (merchant_id, status) [name: "product_status"]
+    id [type: hash, unique]
+  }
+  Note: 'Products table comment'
+}
+
+Table "users" {
+  "id" int [pk]
+  "full_name" varchar
+  "email" varchar [unique]
+  "gender" varchar
+  "date_of_birth" varchar
+  "created_at" varchar
+  "modified_at" time(2)
+  "country_code" int
+  Note: 'Store user data'
+}
+
+Table "merchants" {
+  "id" int [pk]
+  "merchant_name" varchar
+  "country_code" int
+  "created_at" varchar
+  "modified_at" time
+  "admin_id" int
+}
+
+Table "countries" {
+  "code" int [pk]
+  "name" varchar
+  "continent_name" varchar
+}
+
+Table "foo" {
+  "bar" "text[]"
+  "bar2" "int[1]"
+  "bar3" "int[2][3]"
+  "bar4" "int[]"
+  "bar5" "int[2]"
+  "bar6" "text[8]"
+  "bar7" "text[100]"
+  "bar8" "time(2)[]"
+  "bar9" "time(1)[1]"
+  "bar10" "time(1)[]"
+  "bar11" "time[5]"
+  "bar12" "timestamp(2)[10][2][5]"
+  "bar13" "character varying[]"
+  "bar14" "character varying(25)[][2][]"
+  "bar15" "character varying[76]"
+}
+
+Table "accounts" {
+  "id" integer [not null, increment]
+  "domain" "character varying(100)"
+  "name" "character varying(100)"
+  "slug" "character varying(10)"
+
+  Indexes {
+    id [pk, name: "accounts_pkey"]
+  }
+}
+
+Table "tests" {
+  "id" bigint [not null]
+  "type" "character varying" [default: `'testing'::charactervarying`]
+}
+
+Table "users2" {
+  "username" "character varying" [not null]
+  "hashed_password" "character varying" [not null]
+  "full_name" "character varying" [not null]
+  "email" "character varying" [not null]
+  "password_changed_at" timestamp [not null, default: `'0001-01-01 00:00:00+00'::timestampwithtimezone`]
+  "created_at" timestamp [not null, default: `now()`]
+}
+
+Table "table1" {
+  "field" text [not null]
+  "field2" text [not null]
+
+  Indexes {
+    (field, field2) [pk]
+  }
+}
+
+Table "table2" {
+  "id" int [pk, increment]
+  "field" text
+  "field2" text
+}
+
+Table "test_table" {
+  "name" varchar [not null]
+  "id" varchar
+  "linked_name" varchar [not null]
+
+  Indexes {
+    (name, id) [pk, name: "test_table_pk"]
+  }
+}
+
+Ref:"orders"."id" ?<? "order_items"."order_id"
+
+Ref:"products"."id" ?<? "order_items"."product_id"
+
+Ref:"countries"."code" ?<? "users"."country_code"
+
+Ref:"countries"."code" ?<? "merchants"."country_code"
+
+Ref:"merchants"."id" <? "products"."merchant_id"
+
+Ref:"users"."id" ?<? "merchants"."admin_id"
+
+Ref:"table1".("field", "field2") ?<? "table2".("field", "field2")
+
+Ref "test_table_fk":"test_table".("name", "id") ?<? "test_table".("linked_name", "id")

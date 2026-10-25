@@ -189,6 +189,9 @@ fn sq_string(input: &mut &str, base: usize) -> R<String> {
 
 /// Note value: `'''triple quoted'''` or a normal single-quoted string.
 fn note_value(input: &mut &str, base: usize) -> R<String> {
+    if input.starts_with('"') {
+        return ident(input, base);
+    }
     if eat(input, "'''") {
         let end = input.find("'''").ok_or(Fail {
             offset: offset(input, base),
@@ -206,18 +209,36 @@ fn is_type_char(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '_' | '(' | ')' | ',' | '.' | ' ' | '\t')
 }
 
-/// Column type, e.g. `varchar(255)` or `decimal(10,2)`.
+/// Column type, e.g. `varchar(255)`, `decimal(10,2)`, or a qualified /
+/// quoted name (`"Var Char"`, `user.e`, `"user"."e"`).
 fn type_str(input: &mut &str, base: usize) -> R<String> {
-    let end = input
-        .find(|c: char| !is_type_char(c))
-        .unwrap_or(input.len());
-    let ty = input[..end].trim_end();
-    if ty.is_empty() {
-        return fail(offset(input, base), "expected column type");
+    let mut out = String::new();
+    loop {
+        if let Some(rest) = input.strip_prefix('"') {
+            let end = rest.find('"').ok_or(Fail {
+                offset: offset(input, base),
+                message: "unterminated quoted type",
+            })?;
+            out.push('"');
+            out.push_str(&rest[..end + 1]); // verbatim, both quotes
+            *input = &rest[end + 1..];
+        } else {
+            let end = input
+                .find(|c: char| !(is_type_char(c) && c != '"' && c != '.'))
+                .unwrap_or(input.len());
+            out.push_str(input[..end].trim_end());
+            *input = &input[end..];
+        }
+        if out.is_empty() {
+            return fail(offset(input, base), "expected column type");
+        }
+        if eat(input, ".") {
+            out.push('.');
+        } else {
+            break;
+        }
     }
-    let ty = ty.to_string();
-    *input = &input[end..];
-    Ok(ty)
+    Ok(out)
 }
 
 /// A setting value: string, backtick expression, or bare token (number,
@@ -225,6 +246,9 @@ fn type_str(input: &mut &str, base: usize) -> R<String> {
 fn value(input: &mut &str, base: usize) -> R<String> {
     if input.starts_with('\'') {
         return note_value(input, base);
+    }
+    if input.starts_with('"') {
+        return ident(input, base);
     }
     if input.starts_with('`') {
         let rest = &input[1..];
@@ -260,24 +284,53 @@ fn cardinality(input: &mut &str, base: usize) -> R<Cardinality> {
     }
 }
 
-/// `table.column` path.
-fn path(input: &mut &str, base: usize) -> R<(String, String)> {
-    let table = ident(input, base)?;
-    if !eat(input, ".") {
-        return fail(offset(input, base), "expected '.' in reference");
+/// `[schema.]name` — either part may be quoted (`"Schema Name".users`).
+fn qualified_name(input: &mut &str, base: usize) -> R<(Option<String>, String)> {
+    let first = ident(input, base)?;
+    if eat(input, ".") {
+        let second = ident(input, base)?;
+        Ok((Some(first), second))
+    } else {
+        Ok((None, first))
     }
-    let column = ident(input, base)?;
-    Ok((table, column))
 }
 
-/// Reference endpoint: `table.col` or composite `(table.a, table.b)`.
+/// Reference path: `[schema.]table.column` (each part may be quoted).
+fn path(input: &mut &str, base: usize) -> R<(Option<String>, String, String)> {
+    let mut parts = vec![ident(input, base)?];
+    while eat(input, ".") {
+        parts.push(ident(input, base)?);
+        if parts.len() == 3 {
+            break;
+        }
+    }
+    match parts.as_slice() {
+        [t, c] => Ok((None, t.clone(), c.clone())),
+        [sc, t, c] => Ok((Some(sc.clone()), t.clone(), c.clone())),
+        _ => fail(offset(input, base), "expected [schema.]table.column"),
+    }
+}
+
+/// Reference endpoint: `[schema.]table.(col, ...)` (new composite form),
+/// `([schema.]table.col, ...)` (legacy form), or `[schema.]table.col`.
 fn endpoint(input: &mut &str, base: usize) -> R<Endpoint> {
     let start = offset(input, base);
-    let mut paths = Vec::new();
+    let mut columns: Vec<String> = Vec::new();
+    let (schema, table);
     if eat(input, "(") {
+        // legacy composite: (table.a, table.b)
+        let mut first: Option<(Option<String>, String)> = None;
         loop {
             ws(input);
-            paths.push(path(input, base)?);
+            let (sc, t, c) = path(input, base)?;
+            if let Some((s0, t0)) = &first {
+                if (s0.clone(), t0.clone()) != (sc, t) {
+                    return fail(offset(input, base), "composite endpoints share one table");
+                }
+            } else {
+                first = Some((sc, t));
+            }
+            columns.push(c);
             ws(input);
             if !eat(input, ",") {
                 break;
@@ -289,14 +342,56 @@ fn endpoint(input: &mut &str, base: usize) -> R<Endpoint> {
                 "expected ')' after composite reference",
             );
         }
+        let (s0, t0) = first.unwrap();
+        schema = s0;
+        table = t0;
     } else {
-        paths.push(path(input, base)?);
+        let p1 = ident(input, base)?;
+        if !eat(input, ".") {
+            return fail(offset(input, base), "expected '.' in reference");
+        }
+        if peek_is(input, "(") {
+            // table.(a, b)
+            table = p1;
+            schema = None;
+        } else {
+            let p2 = ident(input, base)?;
+            if eat(input, ".") {
+                // schema.table.(a, b) or schema.table.col
+                schema = Some(p1);
+                table = p2;
+            } else {
+                columns.push(p2);
+                schema = None;
+                table = p1;
+            }
+        }
+        if columns.is_empty() {
+            if peek_is(input, "(") {
+                let _ = eat(input, "(");
+                loop {
+                    ws(input);
+                    columns.push(ident(input, base)?);
+                    ws(input);
+                    if !eat(input, ",") {
+                        break;
+                    }
+                }
+                if !eat(input, ")") {
+                    return fail(
+                        offset(input, base),
+                        "expected ')' after composite reference",
+                    );
+                }
+            } else {
+                columns.push(ident(input, base)?);
+            }
+        }
     }
     let end = offset(input, base);
-    let table = paths[0].0.clone();
-    let columns = paths.into_iter().map(|(_, c)| c).collect();
     Ok(Endpoint {
         table,
+        schema,
         columns,
         span: start..end,
     })
@@ -338,6 +433,39 @@ fn settings_list(input: &mut &str, base: usize) -> R<Vec<(String, Option<Setting
                 ws(input);
                 let to = endpoint(input, base)?;
                 out.push((key, Some(SettingVal::Ref(card, to))));
+            } else if key == "default" {
+                // verbatim: quoted strings keep their quotes so exporters
+                // can distinguish literals from bare tokens
+                let raw = if input.starts_with('\'') {
+                    let mut end = 1;
+                    let b = input.as_bytes();
+                    while end < b.len() {
+                        if b[end] == b'\'' {
+                            if end + 1 < b.len() && b[end + 1] == b'\'' {
+                                end += 2;
+                                continue;
+                            }
+                            end += 1;
+                            break;
+                        }
+                        end += 1;
+                    }
+                    let v = input[..end.min(input.len())].to_string();
+                    *input = &input[end.min(input.len())..];
+                    v
+                } else if input.starts_with('`') {
+                    // keep the backticks: marks an expression for exporters
+                    let end = input[1..].find('`').map(|i| i + 1).unwrap_or(input.len());
+                    let v = input[..end + 1].to_string();
+                    *input = &input[end + 1..];
+                    v
+                } else {
+                    let end = input.find([',', ']', '\n', '\r']).unwrap_or(input.len());
+                    let v = input[..end].trim().to_string();
+                    *input = &input[end..];
+                    v
+                };
+                out.push((key, Some(SettingVal::Str(raw))));
             } else {
                 let v = value(input, base)?;
                 out.push((key, Some(SettingVal::Str(v))));
@@ -490,11 +618,12 @@ fn table(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Table> 
     }
     ws(input);
     let name_off = offset(input, base);
-    let name = ident(input, base)?;
+    let (schema, name) = qualified_name(input, base)?;
     let name_end = offset(input, base);
     ws(input);
     let mut t = Table {
         name,
+        schema,
         alias: None,
         span: start..0,
         name_span: name_off..name_end,
@@ -594,6 +723,30 @@ fn ref_stmt(input: &mut &str, base: usize) -> R<Ref> {
         name = Some(ident(input, base)?);
         ws(input);
     }
+    if peek_is(input, "{") {
+        // `Ref name { a.b > c.d }` block form
+        let _ = eat(input, "{");
+        ws(input);
+        let from = endpoint(input, base)?;
+        ws(input);
+        let card = cardinality(input, base)?;
+        ws(input);
+        let to = endpoint(input, base)?;
+        ws(input);
+        if !eat(input, "}") {
+            return fail(offset(input, base), "expected '}' after ref body");
+        }
+        let (on_delete, on_update) = ref_settings(input, base);
+        return Ok(Ref {
+            name,
+            span: start..offset(input, base),
+            from,
+            to,
+            card,
+            on_delete,
+            on_update,
+        });
+    }
     if !eat(input, ":") {
         return fail(offset(input, base), "expected ':' after Ref");
     }
@@ -603,13 +756,37 @@ fn ref_stmt(input: &mut &str, base: usize) -> R<Ref> {
     let card = cardinality(input, base)?;
     ws(input);
     let to = endpoint(input, base)?;
+    let (on_delete, on_update) = ref_settings(input, base);
     Ok(Ref {
         name,
         span: start..offset(input, base),
         from,
         to,
         card,
+        on_delete,
+        on_update,
     })
+}
+
+/// Optional `[delete: cascade, update: no action]` referential actions.
+fn ref_settings(input: &mut &str, base: usize) -> (Option<String>, Option<String>) {
+    let mut out = (None, None);
+    ws(input);
+    if !peek_is(input, "[") {
+        return out;
+    }
+    if let Ok(kvs) = settings_list(input, base) {
+        for (k, v) in kvs {
+            if let Some(SettingVal::Str(v)) = v {
+                match k.as_str() {
+                    "delete" | "on_delete" => out.0 = Some(v.to_ascii_uppercase()),
+                    "update" | "on_update" => out.1 = Some(v.to_ascii_uppercase()),
+                    _ => {}
+                }
+            }
+        }
+    }
+    out
 }
 
 fn enum_def(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Enum> {
@@ -619,7 +796,7 @@ fn enum_def(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Enum
     }
     ws(input);
     let name_off = offset(input, base);
-    let name = ident(input, base)?;
+    let (schema, name) = qualified_name(input, base)?;
     let name_end = offset(input, base);
     ws(input);
     if !eat(input, "{") {
@@ -627,6 +804,7 @@ fn enum_def(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Enum
     }
     let mut e = Enum {
         name,
+        schema,
         span: start..0,
         name_span: name_off..name_end,
         values: Vec::new(),
@@ -702,8 +880,8 @@ fn table_group(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<T
         if eat(input, "}") {
             break;
         }
-        match ident(input, base) {
-            Ok(t) => g.tables.push(t),
+        match qualified_name(input, base) {
+            Ok((sc, n)) => g.tables.push(sc.map_or(n.clone(), |s| format!("{s}.{n}"))),
             Err(e) => {
                 errs.push(err_at(e.offset, e.message));
                 skip_line(input);
@@ -882,8 +1060,9 @@ Table users as U [note: 'Accounts', headercolor: #3498DB] {
         assert_eq!(username.settings.not_null, Some(true));
         assert!(username.settings.unique);
 
-        assert_eq!(t.columns[3].settings.default.as_deref(), Some("member"));
-        assert_eq!(t.columns[4].settings.default.as_deref(), Some("now()"));
+        assert_eq!(t.columns[3].settings.default.as_deref(), Some("'member'"));
+        // backtick expressions keep their markers
+        assert_eq!(t.columns[4].settings.default.as_deref(), Some("`now()`"));
 
         assert_eq!(t.indexes.len(), 1);
         let ix = &t.indexes[0];
@@ -977,7 +1156,12 @@ Table "user accounts" {
         let t = &tables(&out)[0];
         assert_eq!(t.name, "user accounts");
         assert_eq!(t.columns[0].name, "full name");
-        assert_eq!(t.columns[1].settings.default.as_deref(), Some("it's fine"));
+        // defaults are stored verbatim (quotes + '' escapes intact) so the
+        // SQL exporter can distinguish literals from bare tokens
+        assert_eq!(
+            t.columns[1].settings.default.as_deref(),
+            Some("'it''s fine'")
+        );
     }
 
     #[test]

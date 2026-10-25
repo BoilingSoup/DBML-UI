@@ -72,7 +72,8 @@ pub fn build(doc: &Document) -> Schema {
                 .iter()
                 .map(|c| ColumnInfo {
                     name: c.name.clone(),
-                    ty: c.ty.clone(),
+                    // display form: unquoted (the AST keeps verbatim quotes)
+                    ty: c.ty.replace('"', ""),
                     pk: c.settings.pk,
                     fk: false,
                     not_null: c.settings.not_null,

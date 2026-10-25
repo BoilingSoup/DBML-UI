@@ -26,6 +26,8 @@ pub struct Project {
 #[derive(Debug, Clone)]
 pub struct Table {
     pub name: String,
+    /// Optional `schema.name` qualifier (`Table public.users`).
+    pub schema: Option<String>,
     pub alias: Option<String>,
     /// Whole `Table ... { ... }` block.
     pub span: Span,
@@ -107,11 +109,16 @@ pub struct Ref {
     pub from: Endpoint,
     pub to: Endpoint,
     pub card: Cardinality,
+    /// `[delete: cascade]` and friends (uppercased by the parser).
+    pub on_delete: Option<String>,
+    pub on_update: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Endpoint {
     pub table: String,
+    /// Optional `schema.table` qualifier in the reference path.
+    pub schema: Option<String>,
     pub columns: Vec<String>,
     pub span: Span,
 }
@@ -119,6 +126,8 @@ pub struct Endpoint {
 #[derive(Debug, Clone)]
 pub struct Enum {
     pub name: String,
+    /// Optional `schema.name` qualifier (`Enum schemaB.gender`).
+    pub schema: Option<String>,
     pub span: Span,
     pub name_span: Span,
     pub values: Vec<EnumValue>,
