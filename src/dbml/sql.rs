@@ -1190,26 +1190,23 @@ mod fixtures {
         );
     }
 
-    // WIP: the importer core (tokenizer, DDL parsers, constraint merger)
-    // is complete for pg/mysql; the 26 remaining golden cases need
-    // per-case iteration (type normalization, dump quirks).
-    #[ignore = "importer WIP: golden iteration in progress"]
     #[test]
     fn importer_fixtures() {
         let mut failures = Vec::new();
-        // mssql/oracle importers land after pg/mysql
-        const TODO_DIALECTS: &[Dialect] = &[Dialect::MSSQL, Dialect::Oracle];
-        if !TODO_DIALECTS.contains(&Dialect::Postgres) {
-            run_dir(
-                "importer",
-                Dialect::Postgres,
-                "postgres_importer",
-                &mut failures,
-            );
-        }
-        if !TODO_DIALECTS.contains(&Dialect::MySQL) {
-            run_dir("importer", Dialect::MySQL, "mysql_importer", &mut failures);
-        }
+        run_dir(
+            "importer",
+            Dialect::Postgres,
+            "postgres_importer",
+            &mut failures,
+        );
+        run_dir("importer", Dialect::MySQL, "mysql_importer", &mut failures);
+        run_dir("importer", Dialect::MSSQL, "mssql_importer", &mut failures);
+        run_dir(
+            "importer",
+            Dialect::Oracle,
+            "oracle_importer",
+            &mut failures,
+        );
         assert!(
             failures.is_empty(),
             "{} case(s) mismatched:\n{}\n",

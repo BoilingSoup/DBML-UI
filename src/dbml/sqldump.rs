@@ -150,16 +150,37 @@ fn read_string(b: &[char], mut i: usize) -> Result<(String, usize), String> {
     Err("unterminated string literal".into())
 }
 
-/// Split the token stream into `;`-terminated statements.
-fn statements(toks: &[Tok]) -> Vec<&[Tok]> {
+/// Split the token stream into `;`-terminated statements. MSSQL dumps
+/// also batch DDL with `GO` separators and bare newlines between
+/// statements, so a top-level `GO` or an `ALTER TABLE` keyword pair
+/// starts a new statement there too.
+fn statements(toks: &[Tok], d: Dialect) -> Vec<&[Tok]> {
+    let mssql = matches!(d, Dialect::MSSQL);
     let mut out = Vec::new();
     let mut start = 0;
+    let mut depth = 0i32;
     for (i, t) in toks.iter().enumerate() {
-        if *t == Tok::P(';') {
-            if i > start {
-                out.push(&toks[start..i]);
+        match t {
+            Tok::P('(') => depth += 1,
+            Tok::P(')') => depth = (depth - 1).max(0),
+            Tok::P(';') => {
+                if i > start {
+                    out.push(&toks[start..i]);
+                }
+                start = i + 1;
             }
-            start = i + 1;
+            Tok::W(w, false) if mssql && depth <= 0 => {
+                let go = w.eq_ignore_ascii_case("GO");
+                let alter = w.eq_ignore_ascii_case("ALTER")
+                    && toks.get(i + 1).is_some_and(|x| x.is_w("TABLE"));
+                if go || alter {
+                    if i > start {
+                        out.push(&toks[start..i]);
+                    }
+                    start = if go { i + 1 } else { i };
+                }
+            }
+            _ => {}
         }
     }
     if start < toks.len() {
@@ -246,7 +267,7 @@ pub fn import(source: &str, dialect: Dialect) -> Result<String, String> {
         fks: Vec::new(),
         pending_uniques: Vec::new(),
     };
-    for stmt in statements(&toks) {
+    for stmt in statements(&toks, dialect) {
         imp.statement(stmt);
     }
     imp.finish();
@@ -264,6 +285,8 @@ impl Importer {
             self.alter(s);
         } else if s[0].is_w("COMMENT") {
             self.comment(s);
+        } else if s[0].is_w("EXEC") || s[0].is_w("EXECUTE") {
+            self.exec_extended_property(s);
         }
         // INSERT / SET / BEGIN / COMMIT / DROP / ANALYZE …: ignored
     }
@@ -435,6 +458,39 @@ impl Importer {
                         }
                     }
                 }
+                if self.dialect == Dialect::MSSQL && s[i].is_w("INDEX") {
+                    // mssql inline `INDEX name [UNIQUE] [CLUSTERED] (cols)`
+                    let mut j = i + 1;
+                    let mut iname = None;
+                    if let Some(Tok::W(n, _)) = s.get(j) {
+                        iname = Some(n.clone());
+                        j += 1;
+                    }
+                    let mut unique = false;
+                    let mut ity = None;
+                    while j < s.len() && !matches!(s[j], Tok::P('(')) {
+                        if s[j].is_w("UNIQUE") {
+                            unique = true;
+                        } else if s[j].is_w("USING") {
+                            if let Some(Tok::W(t, _)) = s.get(j + 1) {
+                                ity = Some(t.to_ascii_lowercase());
+                            }
+                            j += 1;
+                        }
+                        j += 1;
+                    }
+                    if matches!(s.get(j), Some(Tok::P('('))) {
+                        let (icols, jj) = ident_list(s, j + 1);
+                        if !icols.is_empty() {
+                            table.indexes.push((icols, iname, unique, ity, false));
+                            i = jj;
+                            if i < s.len() && s[i] == Tok::P(',') {
+                                i += 1;
+                            }
+                            continue;
+                        }
+                    }
+                }
                 if s[i].is_w("CHECK") || s[i].is_w("CONSTRAINT") {
                     // [CONSTRAINT name] CHECK (expr) — belongs to the table
                     // being built (not yet in self.tables)
@@ -451,7 +507,10 @@ impl Importer {
                         j += 1;
                         if matches!(s.get(j), Some(Tok::P('('))) {
                             let end = skip_group(s, j);
-                            table.checks.push((cname, tokens_text(&s[j + 1..end - 1])));
+                            table.checks.push((
+                                cname,
+                                tokens_text(&s[j + 1..end - 1], self.dialect == Dialect::MSSQL),
+                            ));
                             i = end;
                             if i < s.len() && s[i] == Tok::P(',') {
                                 i += 1;
@@ -463,7 +522,7 @@ impl Importer {
                 let consumed = if key_is_column {
                     0 // a column named `key` — parse it as a column below
                 } else {
-                    self.table_constraint(&s[i..], &table.name, true)
+                    self.table_constraint(&s[i..], &table.name, &table.schema, true)
                 };
                 if consumed > 0 {
                     i += consumed;
@@ -591,7 +650,14 @@ impl Importer {
     }
 
     /// Parse a table-level constraint; returns consumed token count.
-    fn table_constraint(&mut self, s: &[Tok], table: &str, from_create: bool) -> usize {
+    /// `schema` disambiguates same-named tables in different schemas.
+    fn table_constraint(
+        &mut self,
+        s: &[Tok],
+        table: &str,
+        schema: &Option<String>,
+        from_create: bool,
+    ) -> usize {
         let mut i = 0;
         let mut name: Option<String> = None;
         if s.first().is_some_and(|t| t.is_w("CONSTRAINT")) {
@@ -708,10 +774,16 @@ impl Importer {
             i += 1;
             if matches!(s.get(i), Some(Tok::P('('))) {
                 let end = skip_group(s, i);
-                if let Some(ti) = self.tables.iter().position(|t| t.name == table) {
-                    self.tables[ti]
-                        .checks
-                        .push((name.clone(), tokens_text(&s[i + 1..end - 1])));
+                if let Some(ti) = self
+                    .tables
+                    .iter()
+                    .position(|t| t.name == table && t.schema == *schema)
+                    .or_else(|| self.tables.iter().position(|t| t.name == table))
+                {
+                    self.tables[ti].checks.push((
+                        name.clone(),
+                        tokens_text(&s[i + 1..end - 1], self.dialect == Dialect::MSSQL),
+                    ));
                 }
             }
             consumed = i;
@@ -801,6 +873,7 @@ impl Importer {
                     || w.eq_ignore_ascii_case("DEFAULT")
                     || w.eq_ignore_ascii_case("PRIMARY")
                     || w.eq_ignore_ascii_case("UNIQUE")
+                    || w.eq_ignore_ascii_case("FOREIGN")
                     || w.eq_ignore_ascii_case("REFERENCES")
                     || w.eq_ignore_ascii_case("CHECK")
                     || w.eq_ignore_ascii_case("CONSTRAINT")
@@ -977,7 +1050,11 @@ impl Importer {
                 i += 1;
             } else if t.is_w("DEFAULT") {
                 i += 1;
-                let (v, next) = default_value(s, i);
+                let (v, next) = if matches!(self.dialect, Dialect::MSSQL) {
+                    mssql_default(s, i)
+                } else {
+                    default_value(s, i)
+                };
                 col.default = Some(v);
                 i = next;
             } else if t.is_w("REFERENCES") {
@@ -1002,7 +1079,10 @@ impl Importer {
                 i += 1;
                 if matches!(s.get(i), Some(Tok::P('('))) {
                     let end = skip_group(s, i);
-                    col.check = Some(format!("`{}`", tokens_text(&s[i + 1..end - 1])));
+                    col.check = Some(format!(
+                        "`{}`",
+                        tokens_text(&s[i + 1..end - 1], self.dialect == Dialect::MSSQL)
+                    ));
                     i = end;
                 }
             } else if t.is_w("CONSTRAINT") {
@@ -1133,8 +1213,19 @@ impl Importer {
                     i = end;
                     continue;
                 }
+                // MSSQL `ADD DEFAULT <v> FOR <col> [WITH VALUES]`: replaces
+                // the column's default (paren-wrapped literals unwrap)
+                if matches!(self.dialect, Dialect::MSSQL)
+                    && s.get(i).is_some_and(|t| t.is_w("DEFAULT"))
+                {
+                    if let Some((v, col)) = add_default_for(&s[i + 1..]) {
+                        self.set_default(ti, &col, Some(v));
+                    }
+                    break;
+                }
                 let table_name = self.tables[ti].name.clone();
-                let consumed = self.table_constraint(&s[i..], &table_name, false);
+                let table_schema = self.tables[ti].schema.clone();
+                let consumed = self.table_constraint(&s[i..], &table_name, &table_schema, false);
                 i += consumed.max(1);
             } else if s[i].is_w("ALTER") {
                 // ALTER [COLUMN] x SET NOT NULL | SET DEFAULT v | DROP NOT NULL
@@ -1234,6 +1325,87 @@ impl Importer {
                 }
             }
             None => self.tables[ti].note = Some(note),
+        }
+    }
+
+    /// MSSQL `EXEC sp_addextendedproperty @name = N'MS_Description',
+    /// @value = '…', @level1type = N'Table', @level1name = 't'
+    /// [, @level2type = N'Column', @level2name = 'c']` — attaches the
+    /// note to the table or column (goldens: general_schema,
+    /// multiple_schema).
+    fn exec_extended_property(&mut self, s: &[Tok]) {
+        let mut name = None;
+        let mut value = None;
+        let mut l0name = None;
+        let mut l1type = None;
+        let mut l1name = None;
+        let mut l2type = None;
+        let mut l2name = None;
+        let mut i = 0;
+        while i < s.len() {
+            if s[i] == Tok::P('@') {
+                if let Some(Tok::W(arg, _)) = s.get(i + 1) {
+                    let mut j = i + 2;
+                    if s.get(j) == Some(&Tok::P('=')) {
+                        j += 1;
+                    }
+                    // optional unicode prefix: N'…'
+                    if let Some(Tok::W(np, false)) = s.get(j) {
+                        if np.eq_ignore_ascii_case("N") {
+                            j += 1;
+                        }
+                    }
+                    let v = match s.get(j) {
+                        Some(Tok::S(v)) => Some(v.clone()),
+                        Some(Tok::W(v, _)) => Some(v.clone()),
+                        _ => None,
+                    };
+                    match arg.to_ascii_lowercase().as_str() {
+                        "name" => name = v,
+                        "value" => value = v,
+                        "level0name" => l0name = v,
+                        "level1type" => l1type = v,
+                        "level1name" => l1name = v,
+                        "level2type" => l2type = v,
+                        "level2name" => l2name = v,
+                        _ => {}
+                    }
+                    i = j + 1;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+        let kind = name.as_deref().map(|n| n.to_ascii_lowercase());
+        if !matches!(
+            kind.as_deref(),
+            Some("ms_description") | Some("table_description") | Some("column_description")
+        ) {
+            return;
+        }
+        let (Some(value), Some(tname)) = (value, l1name) else {
+            return;
+        };
+        if !l1type
+            .as_deref()
+            .map_or(true, |t| t.eq_ignore_ascii_case("table"))
+        {
+            return;
+        }
+        let mut ti = self.table_index(&l0name, &tname);
+        if ti.is_none() && l0name.is_some() {
+            // @level0name names the dump's default schema (e.g. dbo),
+            // which bare table names belong to
+            ti = self.table_index(&None, &tname);
+        }
+        let Some(ti) = ti else { return };
+        match (l2type, l2name) {
+            (Some(c), Some(cn)) if c.eq_ignore_ascii_case("column") => {
+                if let Some(col) = self.tables[ti].cols.iter_mut().find(|x| x.name == cn) {
+                    col.note = Some(value);
+                }
+            }
+            _ => self.tables[ti].note = Some(value),
         }
     }
 
@@ -1380,8 +1552,11 @@ impl Importer {
                 (format!("({fks})"), format!("({rcs})"))
             };
             let ref_head = match ref_schema {
-                Some(sc) => format!("{}.{}", q(sc), q(ref_table)),
-                None => q(ref_table),
+                // mssql goldens drop schema qualifiers entirely
+                Some(sc) if !matches!(self.dialect, Dialect::MSSQL) => {
+                    format!("{}.{}", q(sc), q(ref_table))
+                }
+                _ => q(ref_table),
             };
             match name {
                 Some(n) => out.push_str(&format!(
@@ -1418,8 +1593,11 @@ impl Importer {
         ordered.sort_by_key(|t| t.schema.is_some());
         for t in ordered {
             let head = match &t.schema {
-                Some(s) => format!("Table {}.{} {{\n", q(s), q(&t.name)),
-                None => format!("Table {} {{\n", q(&t.name)),
+                // mssql goldens drop schema qualifiers entirely
+                Some(s) if !matches!(self.dialect, Dialect::MSSQL) => {
+                    format!("Table {}.{} {{\n", q(s), q(&t.name))
+                }
+                _ => format!("Table {} {{\n", q(&t.name)),
             };
             out.push_str(&head);
             for c in &t.cols {
@@ -1591,7 +1769,7 @@ fn default_value(s: &[Tok], mut i: usize) -> (String, usize) {
     if matches!(s.get(i), Some(Tok::P('('))) {
         // parenthesized expression: backtick the group's content
         let end = skip_group(s, i);
-        let expr = tokens_text(&s[i + 1..end - 1]).replace(' ', "");
+        let expr = tokens_text(&s[i + 1..end - 1], false).replace(' ', "");
         return (format!("`{expr}`"), end);
     }
     match s.get(i) {
@@ -1613,7 +1791,7 @@ fn default_value(s: &[Tok], mut i: usize) -> (String, usize) {
             // function call: name(...)
             if matches!(s.get(i), Some(Tok::P('('))) {
                 let end = skip_group(s, i);
-                let args = tokens_text(&s[i + 1..end - 1]).replace(' ', "");
+                let args = tokens_text(&s[i + 1..end - 1], false).replace(' ', "");
                 v = format!("`{v}({args})`");
                 i = end;
             }
@@ -1621,6 +1799,53 @@ fn default_value(s: &[Tok], mut i: usize) -> (String, usize) {
         }
         _ => (String::new(), i),
     }
+}
+
+/// MSSQL DEFAULT: redundant wrapping parens are peeled; a bare
+/// string/number literal stays a plain default, anything else renders
+/// as a backticked expression (golden rule from default_parameters).
+fn mssql_default(s: &[Tok], i: usize) -> (String, usize) {
+    if matches!(s.get(i), Some(Tok::P('('))) {
+        let end = skip_group(s, i);
+        let mut inner = &s[i + 1..end - 1];
+        while inner.len() >= 2 && inner[0] == Tok::P('(') && skip_group(inner, 0) == inner.len() {
+            inner = &inner[1..inner.len() - 1];
+        }
+        match inner {
+            [Tok::S(v)] => return (format!("'{}'", v.replace('\'', "''")), end),
+            [Tok::N(n)] => return (parse_int_literal(n), end),
+            _ => {}
+        }
+        return (
+            format!("`{}`", tokens_text(inner, false).replace(' ', "")),
+            end,
+        );
+    }
+    default_value(s, i)
+}
+
+/// MSSQL `ADD DEFAULT <v> FOR <col> [WITH VALUES]`: the value's wrapping
+/// parens are peeled (see mssql_default); returns (value, column).
+fn add_default_for(s: &[Tok]) -> Option<(String, String)> {
+    let mut depth = 0i32;
+    let mut j = 0;
+    while j < s.len() {
+        match &s[j] {
+            Tok::P('(') => depth += 1,
+            Tok::P(')') => depth -= 1,
+            t if depth == 0 && t.is_w("FOR") => break,
+            _ => {}
+        }
+        j += 1;
+    }
+    if j == 0 || !s.get(j).is_some_and(|t| t.is_w("FOR")) {
+        return None;
+    }
+    let (v, _) = mssql_default(s, 0);
+    let Some(Tok::W(col, _)) = s.get(j + 1) else {
+        return None;
+    };
+    Some((v, col.clone()))
 }
 
 /// Render a numeric literal: 0b/0o/0x and leading-zero forms convert to
@@ -1649,7 +1874,7 @@ fn parse_int_literal(n: &str) -> String {
     n.to_string()
 }
 
-fn tokens_text(s: &[Tok]) -> String {
+fn tokens_text(s: &[Tok], bracket_idents: bool) -> String {
     let mut out = String::new();
     for (i, t) in s.iter().enumerate() {
         let _ = i;
@@ -1671,7 +1896,10 @@ fn tokens_text(s: &[Tok]) -> String {
         }
         match t {
             Tok::W(w, quoted) => {
-                if *quoted {
+                if *quoted && bracket_idents {
+                    // mssql goldens keep bracket-quoted idents verbatim
+                    out.push_str(&format!("[{w}]"));
+                } else if *quoted {
                     out.push_str(&format!("\"{w}\""));
                 } else {
                     out.push_str(w);
