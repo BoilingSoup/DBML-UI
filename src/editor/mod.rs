@@ -1361,11 +1361,12 @@ impl Editor {
                 }
             }
             'w' | 'e' => {
-                if at(col).is_none_or(char::is_whitespace) {
+                let is_word = |c: char| buffer::CharKind::new(c) == buffer::CharKind::Other;
+                if !at(col).is_some_and(is_word) {
                     return None;
                 }
                 let mut e = col;
-                while e + 1 < line.len() && !line[e + 1].is_whitespace() {
+                while e + 1 < line.len() && is_word(line[e + 1]) {
                     e += 1;
                 }
                 Some(TextObj {
@@ -1375,11 +1376,12 @@ impl Editor {
                 })
             }
             'b' => {
-                if col == 0 || at(col).map_or(true, char::is_whitespace) {
+                let is_word = |c: char| buffer::CharKind::new(c) == buffer::CharKind::Other;
+                if col == 0 || !at(col).is_some_and(is_word) {
                     return None;
                 }
                 let mut st = col;
-                while st > 0 && !line[st - 1].is_whitespace() {
+                while st > 0 && is_word(line[st - 1]) {
                     st -= 1;
                 }
                 if st == col {
@@ -1591,32 +1593,34 @@ impl Editor {
     /// the same whitespace-ness. `a_word` extends over adjacent whitespace
     /// (trailing, else leading).
     fn word_span(&self, a_word: bool) -> Option<(usize, usize)> {
+        use buffer::CharKind;
         let (row, col) = self.buf.cursor();
         let chars: Vec<char> = self.buf.lines().get(row)?.chars().collect();
         if chars.is_empty() {
             return None;
         }
         let probe = col.min(chars.len() - 1);
-        let ws = chars[probe].is_whitespace();
+        let kind = CharKind::new(chars[probe]);
+        let same = |c: char| CharKind::new(c) == kind;
         let mut s = probe;
-        while s > 0 && chars[s - 1].is_whitespace() == ws {
+        while s > 0 && same(chars[s - 1]) {
             s -= 1;
         }
         let mut e = probe;
-        while e + 1 < chars.len() && chars[e + 1].is_whitespace() == ws {
+        while e + 1 < chars.len() && same(chars[e + 1]) {
             e += 1;
         }
         let e = e + 1; // exclusive
-        if a_word && !ws {
+        if a_word && kind != CharKind::Space {
             let mut ne = e;
-            while ne < chars.len() && chars[ne].is_whitespace() {
+            while ne < chars.len() && CharKind::new(chars[ne]) == CharKind::Space {
                 ne += 1;
             }
             if ne > e {
                 return Some((s, ne));
             }
             let mut ns = s;
-            while ns > 0 && chars[ns - 1].is_whitespace() {
+            while ns > 0 && CharKind::new(chars[ns - 1]) == CharKind::Space {
                 ns -= 1;
             }
             if ns < s {

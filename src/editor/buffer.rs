@@ -233,24 +233,27 @@ impl Buffer {
     /// is the only separator, matching the w/e/b motions); `a` extends over
     /// trailing whitespace, else leading.
     pub fn word_object(&self, around: bool) -> Option<TextObj> {
+        use CharKind::*;
         let (row, col) = (self.cursor.row, self.cursor.col);
         let chars: Vec<char> = self.line(row).chars().collect();
         if chars.is_empty() {
             return None;
         }
         let probe = col.min(chars.len() - 1);
-        let ws = chars[probe].is_whitespace();
+        let kind = CharKind::new(chars[probe]);
+        let same = |c: char| CharKind::new(c) == kind;
         let mut s = probe;
-        while s > 0 && chars[s - 1].is_whitespace() == ws {
+        while s > 0 && same(chars[s - 1]) {
             s -= 1;
         }
         let mut e = probe;
-        while e + 1 < chars.len() && chars[e + 1].is_whitespace() == ws {
+        while e + 1 < chars.len() && same(chars[e + 1]) {
             e += 1;
         }
-        if around && !ws {
+        if around && kind != Space {
+            // trailing whitespace run, else leading (vim aw)
             let mut ne = e + 1;
-            while ne < chars.len() && chars[ne].is_whitespace() {
+            while ne < chars.len() && CharKind::new(chars[ne]) == Space {
                 ne += 1;
             }
             if ne > e + 1 {
@@ -261,7 +264,7 @@ impl Buffer {
                 });
             }
             let mut ns = s;
-            while ns > 0 && chars[ns - 1].is_whitespace() {
+            while ns > 0 && CharKind::new(chars[ns - 1]) == Space {
                 ns -= 1;
             }
             if ns < s {
@@ -1240,16 +1243,21 @@ fn char_off(s: &str, col: usize) -> usize {
 /// non-whitespace form one word, so `snake_case` and `[pk]` each move as a
 /// single `w`/`e`/`b` unit (vim's `iskeyword` with `_`, tuned for DBML
 /// identifiers).
-#[derive(PartialEq, Eq, Clone, Copy)]
-enum CharKind {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CharKind {
     Space,
+    Punct,
     Other,
 }
 
 impl CharKind {
-    fn new(c: char) -> Self {
+    pub fn new(c: char) -> Self {
         if c.is_whitespace() {
             Self::Space
+        } else if c.is_ascii_punctuation() && c != '_' {
+            // symbols (, ; : brackets …) separate words; `_` does not —
+            // snake_case identifiers move as one unit (vim iskeyword)
+            Self::Punct
         } else {
             Self::Other
         }
@@ -1359,9 +1367,9 @@ mod tests {
         b.move_cursor(Move::WordBack);
         assert_eq!(b.cursor().1, 4);
 
-        // whitespace is the only separator: `[[[ccc]]]` is one word
+        // symbols separate words; `_` does not (snake_case is one word)
         let mut b = buf("aaa bbb [[[ccc]]]\n\n ddd");
-        for expect in [2, 6, 16] {
+        for expect in [2, 6, 10, 13, 16] {
             b.move_cursor(Move::WordEnd);
             assert_eq!(
                 b.pos(),
@@ -1373,6 +1381,30 @@ mod tests {
         }
         b.move_cursor(Move::WordEnd);
         assert_eq!(b.pos(), Pos { row: 2, col: 3 }, "crosses lines");
+    }
+
+    #[test]
+    fn symbols_separate_but_underscores_do_not() {
+        // symbol runs separate words (a run of consecutive symbols is one
+        // stop, like vim); user_id stays a single word
+        let mut b = buf("user_id,[x]:;y z");
+        for expect in [7, 9, 10, 13, 15] {
+            b.move_cursor(Move::WordForward);
+            assert_eq!(b.cursor().1, expect, "w stop {expect}");
+        }
+        // e crosses user_id in one press, stopping before the comma
+        let mut b = buf("user_id, tail");
+        b.move_cursor(Move::WordEnd);
+        assert_eq!(b.cursor().1, 6);
+        // and objects agree: iw on user_id spans just the identifier
+        let mut b2 = buf("a user_id, b");
+        b2.move_cursor(Move::WordForward); // onto 'u' of user_id
+        let obj = b2.word_object(false).unwrap();
+        assert_eq!(
+            (obj.start.row, obj.start.col, obj.end.row, obj.end.col),
+            (0, 2, 0, 8),
+            "user_id without the comma"
+        );
     }
 
     #[test]
