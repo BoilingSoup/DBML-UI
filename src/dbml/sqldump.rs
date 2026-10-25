@@ -12,8 +12,9 @@ use super::sql::Dialect;
 
 #[derive(Debug, Clone, PartialEq)]
 enum Tok {
-    /// Identifier or keyword (bare or quoted — quoting is dropped).
-    W(String),
+    /// Identifier or keyword; the flag marks quoted idents ("x", `x`, [x])
+    /// which must stay quoted when re-emitted inside expressions.
+    W(String, bool),
     /// Single-quoted string literal (unescaped).
     S(String),
     /// Number literal.
@@ -24,12 +25,12 @@ enum Tok {
 
 impl Tok {
     fn is_w(&self, kw: &str) -> bool {
-        matches!(self, Tok::W(w) if w.eq_ignore_ascii_case(kw))
+        matches!(self, Tok::W(w, _) if w.eq_ignore_ascii_case(kw))
     }
 
     fn text(&self) -> String {
         match self {
-            Tok::W(w) => w.clone(),
+            Tok::W(w, _) => w.clone(),
             Tok::N(n) => n.clone(),
             Tok::S(v) => v.clone(),
             Tok::P(c) => c.to_string(),
@@ -80,7 +81,13 @@ fn tokenize(src: &str) -> Result<Vec<Tok>, String> {
                     s.push(b[i]);
                     i += 1;
                 }
-                out.push(Tok::W(s));
+                out.push(Tok::W(s, true));
+            }
+            '[' if i + 1 < b.len() && b[i + 1] == ']' => {
+                // empty brackets: postgres array-type postfix (TEXT[])
+                out.push(Tok::P('['));
+                out.push(Tok::P(']'));
+                i += 2;
             }
             '[' => {
                 // mssql bracketed identifier
@@ -91,7 +98,7 @@ fn tokenize(src: &str) -> Result<Vec<Tok>, String> {
                     i += 1;
                 }
                 i += 1;
-                out.push(Tok::W(s));
+                out.push(Tok::W(s, true));
             }
             '0'..='9' => {
                 let start = i;
@@ -111,7 +118,7 @@ fn tokenize(src: &str) -> Result<Vec<Tok>, String> {
                 {
                     i += 1;
                 }
-                out.push(Tok::W(b[start..i].iter().collect()));
+                out.push(Tok::W(b[start..i].iter().collect(), false));
             }
             other => {
                 out.push(Tok::P(other));
@@ -187,7 +194,8 @@ struct ITable {
     note: Option<String>,
     /// (columns, name, unique, index_type)
     indexes: Vec<IndexDef>,
-    checks: Vec<String>,
+    /// (constraint name, expression)
+    checks: Vec<(Option<String>, String)>,
 }
 
 #[derive(Debug)]
@@ -269,13 +277,13 @@ impl Importer {
         if i < s.len() && s[i].is_w("IF") {
             i += 3; // IF NOT EXISTS
         }
-        let Some(Tok::W(first)) = s.get(i) else {
+        let Some(Tok::W(first, _)) = s.get(i) else {
             return (None, String::new(), i);
         };
         let first = first.clone();
         i += 1;
         if i + 1 < s.len() && s[i] == Tok::P('.') {
-            if let Tok::W(second) = &s[i + 1] {
+            if let Tok::W(second, _) = &s[i + 1] {
                 return (Some(first), second.clone(), i + 2);
             }
         }
@@ -305,6 +313,33 @@ impl Importer {
             }
             // table-level constraint?
             if self.constraint_kw(s, i).is_some() {
+                // bare CHECK constraints belong to the table being built
+                // (not yet in self.tables) — route them locally
+                if s[i].is_w("CHECK") || s[i].is_w("CONSTRAINT") {
+                    // [CONSTRAINT name] CHECK (expr) — belongs to the table
+                    // being built (not yet in self.tables)
+                    let mut j = i;
+                    let mut cname = None;
+                    if s[j].is_w("CONSTRAINT") {
+                        j += 1;
+                        if let Some(Tok::W(n, _)) = s.get(j) {
+                            cname = Some(n.clone());
+                            j += 1;
+                        }
+                    }
+                    if s.get(j).is_some_and(|t| t.is_w("CHECK")) {
+                        j += 1;
+                        if matches!(s.get(j), Some(Tok::P('('))) {
+                            let end = skip_group(s, j);
+                            table.checks.push((cname, tokens_text(&s[j + 1..end - 1])));
+                            i = end;
+                            if i < s.len() && s[i] == Tok::P(',') {
+                                i += 1;
+                            }
+                            continue;
+                        }
+                    }
+                }
                 let consumed = self.table_constraint(&s[i..], &table.name);
                 if consumed > 0 {
                     i += consumed;
@@ -348,7 +383,7 @@ impl Importer {
         let mut name: Option<String> = None;
         if s.first().is_some_and(|t| t.is_w("CONSTRAINT")) {
             i = 1;
-            if let Some(Tok::W(n)) = s.get(i) {
+            if let Some(Tok::W(n, _)) = s.get(i) {
                 name = Some(n.clone());
                 i += 1;
             }
@@ -392,7 +427,9 @@ impl Importer {
             if matches!(s.get(i), Some(Tok::P('('))) {
                 let end = skip_group(s, i);
                 if let Some(ti) = self.tables.iter().position(|t| t.name == table) {
-                    self.tables[ti].checks.push(tokens_text(&s[i + 1..end - 1]));
+                    self.tables[ti]
+                        .checks
+                        .push((name.clone(), tokens_text(&s[i + 1..end - 1])));
                 }
             }
             consumed = i;
@@ -407,7 +444,7 @@ impl Importer {
                 i += 1;
                 (ref_cols, i) = ident_list(s, i);
             }
-            if let Some(Tok::W(r)) = s.get(i) {
+            if let Some(Tok::W(r, _)) = s.get(i) {
                 ref_table = r.clone();
             }
             if !cols.is_empty() && !ref_table.is_empty() {
@@ -421,7 +458,7 @@ impl Importer {
     }
 
     fn column_def(&mut self, table: &mut ITable, s: &[Tok]) {
-        let Some(Tok::W(name)) = s.first() else {
+        let Some(Tok::W(name, _)) = s.first() else {
             return;
         };
         let mut col = ICol {
@@ -447,7 +484,7 @@ impl Importer {
             }
             let stop = type_depth == 0
                 && !close
-                && matches!(t, Tok::W(w)
+                && matches!(t, Tok::W(w, _)
                 if w.eq_ignore_ascii_case("NOT")
                     || w.eq_ignore_ascii_case("NULL")
                     || w.eq_ignore_ascii_case("DEFAULT")
@@ -472,16 +509,24 @@ impl Importer {
                 break;
             }
             match t {
-                Tok::W(w) => ty.push(w.clone()),
+                Tok::W(w, _) => ty.push(w.clone()),
                 Tok::N(n) => ty.push(n.clone()),
                 Tok::P('(') if !close => ty.push("(".into()),
                 Tok::P(')') => ty.push(")".into()),
                 Tok::P(',') if type_depth > 0 => ty.push(",".into()),
+                Tok::P('[') => ty.push("[".into()),
+                Tok::P(']') => ty.push("]".into()),
                 _ => {}
             }
             i += 1;
         }
-        col.ty = normalize_type(&join_type(&ty), self.dialect);
+        let joined = join_type(&ty);
+        if joined.contains('[') {
+            // array types (TEXT[], timetz(2)[]) are quoted in DBML
+            col.ty = format!("\"{joined}\"");
+        } else {
+            col.ty = normalize_type(&joined, self.dialect);
+        }
         // options
         while i < s.len() {
             let t = &s[i];
@@ -533,7 +578,7 @@ impl Importer {
                 i = next;
             } else if t.is_w("REFERENCES") {
                 i += 1;
-                if let Some(Tok::W(rt)) = s.get(i) {
+                if let Some(Tok::W(rt, _)) = s.get(i) {
                     let rt = rt.clone();
                     i += 1;
                     let mut rc = Vec::new();
@@ -651,7 +696,9 @@ impl Importer {
             } else if s[i].is_w("ALTER") {
                 // ALTER [COLUMN] x SET NOT NULL | SET DEFAULT v | DROP NOT NULL
                 i += 2;
-                let Some(Tok::W(col)) = s.get(i) else { break };
+                let Some(Tok::W(col, _)) = s.get(i) else {
+                    break;
+                };
                 let col = col.clone();
                 i += 1;
                 while i < s.len() {
@@ -694,7 +741,7 @@ impl Importer {
         i += 3;
         let mut col: Option<String> = None;
         if !on_table {
-            if let Some(Tok::W(c)) = s.get(i) {
+            if let Some(Tok::W(c, _)) = s.get(i) {
                 col = Some(c.clone());
                 i += 1;
             }
@@ -859,8 +906,12 @@ impl Importer {
             }
             if !t.checks.is_empty() {
                 out.push_str("\n  Checks {\n");
-                for c in &t.checks {
-                    out.push_str(&format!("    `{}`\n", c));
+                for (name, expr) in &t.checks {
+                    let suffix = name
+                        .as_ref()
+                        .map(|n| format!(" [name: '{}']", n.replace('\'', "''")))
+                        .unwrap_or_default();
+                    out.push_str(&format!("    `{expr}`{suffix}\n"));
                 }
                 out.push_str("  }\n");
             }
@@ -919,7 +970,7 @@ fn ident_list(s: &[Tok], mut i: usize) -> (Vec<String>, usize) {
     let mut out = Vec::new();
     while i < s.len() {
         match &s[i] {
-            Tok::W(w) => out.push(w.clone()),
+            Tok::W(w, _) => out.push(w.clone()),
             Tok::P(')') => {
                 i += 1;
                 break;
@@ -937,7 +988,7 @@ fn default_value(s: &[Tok], mut i: usize) -> (String, usize) {
     match s.get(i) {
         Some(Tok::S(v)) => (format!("'{}'", v.replace('\'', "''")), i + 1),
         Some(Tok::N(n)) => (n.clone(), i + 1),
-        Some(Tok::W(w)) => {
+        Some(Tok::W(w, _)) => {
             let mut v = w.clone();
             i += 1;
             // function call: name ( ... )
@@ -960,10 +1011,12 @@ fn tokens_text(s: &[Tok]) -> String {
             // space before word/number tokens, and before opening parens
             // when they follow a word (LOWER(x)); never inside call groups
             let needs_space = match t {
-                Tok::W(_) | Tok::N(_) => true,
+                Tok::W(_, _) | Tok::N(_) | Tok::S(_) => !out.ends_with(',') && !out.ends_with('('),
                 Tok::P('(') => out.ends_with(|c: char| c.is_alphanumeric() || c == '_'),
-                Tok::P('>' | '<' | '=') => out
-                    .ends_with(|c: char| c.is_alphanumeric() || c == '_' || c == '\'' || c == ')'),
+                Tok::P('>' | '<' | '=' | '~') => {
+                    !out.ends_with(' ') && !out.ends_with(['>', '<', '=', '~'])
+                }
+                Tok::P(',') => false,
                 _ => false,
             };
             if needs_space && !out.ends_with(' ') {
@@ -971,14 +1024,25 @@ fn tokens_text(s: &[Tok]) -> String {
             }
         }
         match t {
-            Tok::W(w) => out.push_str(w),
+            Tok::W(w, quoted) => {
+                if *quoted {
+                    out.push_str(&format!("\"{w}\""));
+                } else {
+                    out.push_str(w);
+                }
+            }
             Tok::N(n) => out.push_str(n),
             Tok::S(v) => {
                 out.push('\'');
                 out.push_str(&v.replace('\'', "''"));
                 out.push('\'');
             }
-            Tok::P(c) => out.push(*c),
+            Tok::P(c) => {
+                out.push(*c);
+                if *c == ',' {
+                    out.push(' '); // golden style: space after commas
+                }
+            }
         }
     }
     out

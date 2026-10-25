@@ -214,6 +214,24 @@ fn note_value(input: &mut &str, base: usize) -> R<String> {
     }
 }
 
+/// Skip a balanced (...) group: returns the BYTE length of the content
+/// between the parens (the caller has already consumed '(').
+fn skip_parens_len(input: &str) -> usize {
+    let bytes = input.as_bytes();
+    let mut depth = 1i32;
+    for (k, &bch) in bytes.iter().enumerate() {
+        if bch == b'(' {
+            depth += 1;
+        } else if bch == b')' {
+            depth -= 1;
+            if depth == 0 {
+                return k;
+            }
+        }
+    }
+    bytes.len()
+}
+
 /// Skip a balanced {...} group: returns the BYTE length of the content
 /// between the braces (the caller has already consumed '{').
 fn skip_group_len(input: &str) -> usize {
@@ -653,26 +671,6 @@ fn top_item(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Item
         ref_stmt(input, base).map(Item::Ref)
     } else if peek_kw(input, "Enum") {
         enum_def(input, base, errs).map(Item::Enm)
-    } else if peek_kw(input, "Records") {
-        // Records name(cols) { rows } — data samples; skipped (no model
-        // equivalent yet)
-        let _ = eat(input, "Records");
-        ws(input);
-        let _ = ident(input, base);
-        ws(input);
-        if peek_is(input, "(") {
-            let end = skip_group_len(input);
-            *input = &input[end - 1..];
-            let _ = eat(input, ")");
-        }
-        ws(input);
-        if peek_is(input, "{") {
-            let _ = eat(input, "{");
-            let end = skip_group_len(input);
-            *input = &input[end..];
-            let _ = eat(input, "}");
-        }
-        top_item(input, base, errs)
     } else {
         fail(
             offset(input, base),
@@ -1069,7 +1067,7 @@ fn project(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Proje
 /// at the next line that starts a top-level keyword. Braces are deliberately
 /// ignored: by the time we get here the construct header itself failed, so
 /// any `{` on these lines belongs to the broken header.
-const TOP_KWS: [&str; 5] = ["Project", "Table", "Ref", "Enum", "TableGroup"];
+const TOP_KWS: [&str; 6] = ["Project", "Table", "Ref", "Enum", "TableGroup", "Records"];
 
 fn recover(mut input: &str) -> &str {
     while !input.is_empty() {
@@ -1095,6 +1093,29 @@ pub fn parse(src: &str) -> ParseOutput {
         ws(&mut rest);
         if rest.is_empty() {
             break;
+        }
+        // Records name(cols) { rows } — data samples; skipped (no model
+        // equivalent yet)
+        if peek_kw(rest, "Records") {
+            let mut r = rest;
+            let _ = eat(&mut r, "Records");
+            ws(&mut r);
+            let _ = ident(&mut r, base);
+            ws(&mut r);
+            if peek_is(&r[..1.min(r.len())], "(") {
+                let _ = eat(&mut r, "(");
+                let end = skip_parens_len(r);
+                r = &r[end + 1..];
+            }
+            ws(&mut r);
+            if r.starts_with('{') {
+                r = &r[1..];
+                let end = skip_group_len(r);
+                r = &r[end..];
+                let _ = eat(&mut r, "}");
+            }
+            rest = r;
+            continue;
         }
         let mut attempt = rest;
         match top_item(&mut attempt, base, &mut out.errors) {
