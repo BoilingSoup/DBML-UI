@@ -119,6 +119,9 @@ pub struct App {
     pub focus: Focus,
     /// Editor viewport scroll, in lines.
     pub editor_scroll: f32,
+    /// Horizontal viewport scroll in pixels, kept just large enough that
+    /// the cursor stays inside the pane when lines are wider than it.
+    pub editor_hscroll: f32,
     /// Active animated scroll (neoscroll-style): interpolate editor_scroll
     /// from `from` to `to` over SCROLL_DURATION.
     pub scroll_anim: Option<ScrollAnim>,
@@ -177,6 +180,7 @@ impl App {
             editor: Editor::default(),
             focus: Focus::Editor,
             editor_scroll: 0.0,
+            editor_hscroll: 0.0,
             scroll_anim: None,
             scroll_target: None,
             diagram: layout::layout(&model::build(&dbml::parser::parse("").doc)),
@@ -460,6 +464,7 @@ fn handle_message(app: &mut App, message: Message) {
                 app.editor.buf.start_selection();
             }
             app.focus = Focus::Editor;
+            app.follow_cursor_horizontal();
         }
     }
 }
@@ -477,6 +482,7 @@ impl App {
         self.editor.set_text(&content);
         self.set_source(&content);
         self.editor_scroll = 0.0;
+        self.editor_hscroll = 0.0;
         self.message = Some(format!(
             "\"{path}\" {}L, {}B",
             content.lines().count(),
@@ -695,12 +701,14 @@ impl App {
                     let action = self.editor.handle_key(key);
                     self.after_edit(action);
                     self.refilter_completion();
+                    self.follow_cursor_horizontal();
                     return;
                 }
                 KeyCode::Backspace => {
                     let action = self.editor.handle_key(key);
                     self.after_edit(action);
                     self.refilter_completion();
+                    self.follow_cursor_horizontal();
                     return;
                 }
                 _ => self.completion = None, // any other key dismisses, then proceeds
@@ -722,6 +730,10 @@ impl App {
             }
         }
         self.after_edit(action);
+        // keep the cursor on screen after every key, motions included
+        // (Action::None never reached the follow inside after_edit)
+        self.follow_cursor_horizontal();
+        self.keep_cursor_visible();
     }
 
     /// The word being typed before the cursor: its start position and text.
@@ -909,6 +921,7 @@ impl App {
             self.editor.buf.insert_str(" ");
         }
         self.after_edit(Action::Changed);
+        self.follow_cursor_horizontal();
     }
 
     fn after_edit(&mut self, action: Action) {
@@ -986,6 +999,40 @@ impl App {
         self.scroll_by_lines(self.page_lines() * dir, FULL_PAGE_MS);
     }
 
+    /// Editor pane width in px from the window size and split share: the
+    /// row is `window - 16 column padding - 6 divider - 8 spacing`.
+    fn editor_pane_width(&self) -> f32 {
+        ((self.window_size.0 - 30.0).max(60.0) * self.split).max(60.0)
+    }
+
+    /// Keep the cursor inside the pane horizontally when the line is
+    /// wider than the text area: scroll right just far enough to bring a
+    /// cursor that passed the right edge back inside (with a few chars of
+    /// lookahead, never past the line's end), scroll back left when the
+    /// cursor moves before the view, and relax to 0 once the line fits.
+    fn follow_cursor_horizontal(&mut self) {
+        let char_w = crate::canvas::editor::char_width();
+        let text_w = self.editor_pane_width() - crate::canvas::editor::GUTTER;
+        if text_w <= 4.0 * char_w {
+            return;
+        }
+        let pos = self.editor.buf.pos();
+        let line_len = self.editor.buf.line(pos.row).chars().count();
+        let col = pos.col;
+        let cx = col as f32 * char_w;
+        let line_end = line_len as f32 * char_w;
+        let mut hs = self.editor_hscroll;
+        if cx + char_w > hs + text_w {
+            // cursor's cell would cross the right edge
+            hs = cx + char_w - text_w + 4.0 * char_w;
+        } else if cx < hs {
+            hs = (cx - 4.0 * char_w).max(0.0);
+        }
+        // never scroll past what the current line needs (plus one char)
+        let max = (line_end + char_w - text_w).max(0.0);
+        self.editor_hscroll = hs.clamp(0.0, max).round();
+    }
+
     /// Scroll the editor viewport so the cursor stays on screen. Small
     /// corrections snap; big jumps (G, click-to-jump) animate.
     fn keep_cursor_visible(&mut self) {
@@ -1027,6 +1074,7 @@ impl App {
                     self.editor.jump(row, col);
                     self.focus = Focus::Editor;
                     self.keep_cursor_visible();
+                    self.follow_cursor_horizontal();
                 }
             }
         }
@@ -1346,6 +1394,99 @@ mod completion_tests {
         );
         assert!(app.completion.is_none());
         assert_eq!(app.editor.mode, crate::editor::Mode::Insert);
+    }
+
+    #[test]
+    fn horizontal_follow_when_pane_too_narrow() {
+        let mut app = App {
+            window_size: (500.0, 900.0), // pane ~188px: ~15 chars of text
+            ..App::default()
+        };
+        let cw = crate::canvas::editor::char_width();
+        // cursor at the end of the longest SAMPLE_DBML line
+        let (row, len) = app
+            .editor
+            .buf
+            .lines()
+            .iter()
+            .enumerate()
+            .map(|(i, l)| (i, l.chars().count()))
+            .max_by_key(|&(_, l)| l)
+            .unwrap();
+        assert!(
+            len as f32 * cw > app.editor_pane_width() - crate::canvas::editor::GUTTER,
+            "fixture needs a line wider than the pane"
+        );
+        app.editor.jump(row, len);
+        app.follow_cursor_horizontal();
+        assert!(app.editor_hscroll > 0.0, "scrolled right");
+        // the cursor cell is back inside the pane
+        let cursor_right = crate::canvas::editor::GUTTER + len as f32 * cw - app.editor_hscroll;
+        assert!(
+            cursor_right <= app.editor_pane_width() + 1.0,
+            "{cursor_right} vs pane {}",
+            app.editor_pane_width()
+        );
+
+        // moving to col 0 scrolls back to the line start
+        app.editor.jump(row, 0);
+        app.follow_cursor_horizontal();
+        assert_eq!(app.editor_hscroll, 0.0);
+
+        // through real keys: $ then 0
+        app.editor.jump(row, 0);
+        app.editor_hscroll = 0.0;
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('$'), KeyModifiers::NONE),
+        );
+        assert!(app.editor_hscroll > 0.0, "$ scrolls to line end");
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('0'), KeyModifiers::NONE),
+        );
+        assert_eq!(app.editor_hscroll, 0.0, "0 scrolls back");
+    }
+
+    #[test]
+    fn horizontal_follow_never_scrolls_past_line_end() {
+        let mut app = App {
+            window_size: (500.0, 900.0),
+            ..App::default()
+        };
+        let cw = crate::canvas::editor::char_width();
+        let text_w = app.editor_pane_width() - crate::canvas::editor::GUTTER;
+        let (row, len) = app
+            .editor
+            .buf
+            .lines()
+            .iter()
+            .enumerate()
+            .map(|(i, l)| (i, l.chars().count()))
+            .max_by_key(|&(_, l)| l)
+            .unwrap();
+        app.editor.jump(row, len);
+        app.follow_cursor_horizontal();
+        let max = (len as f32 * cw + cw - text_w).max(0.0);
+        assert!(
+            app.editor_hscroll <= max + 0.5,
+            "{} vs {max}",
+            app.editor_hscroll
+        );
+        // a short line relaxes the scroll entirely
+        let short = app
+            .editor
+            .buf
+            .lines()
+            .iter()
+            .enumerate()
+            .find(|(_, l)| (l.chars().count() as f32) * cw < text_w)
+            .map(|(i, _)| i)
+            .unwrap();
+        app.editor.jump(short, 0);
+        app.editor_hscroll = 500.0; // stale scroll from a wider line
+        app.follow_cursor_horizontal();
+        assert_eq!(app.editor_hscroll, 0.0, "clamped for a fitting line");
     }
 
     #[test]

@@ -20,9 +20,9 @@ pub fn char_width() -> f32 {
 }
 
 /// Screen-space origin of a buffer position (local to the editor pane).
-pub fn pos_to_px(p: Pos, scroll: f32) -> Point {
+pub fn pos_to_px(p: Pos, scroll: f32, hscroll: f32) -> Point {
     Point::new(
-        GUTTER + p.col as f32 * char_width(),
+        GUTTER + p.col as f32 * char_width() - hscroll,
         // pixel-snapped so glyphs, cursor and marks always share one grid
         ((p.row as f32 - scroll) * LINE_HEIGHT).round(),
     )
@@ -39,7 +39,8 @@ pub fn px_to_pos(app: &App, p: Point) -> Pos {
         0
     } else {
         // floor: the char under the pointer, also used for hit-testing
-        (((p.x - GUTTER) / char_width()).floor() as usize).min(max_col)
+        // (+ hscroll: the view may be scrolled sideways)
+        (((p.x - GUTTER + app.editor_hscroll) / char_width()).floor() as usize).min(max_col)
     };
     Pos { row, col }
 }
@@ -123,6 +124,7 @@ impl canvas::Program<Message> for EditorView<'_> {
         let app = self.app;
         let lines = app.editor.buf.lines();
         let scroll = app.editor_scroll;
+        let hs = app.editor_hscroll;
         let visible = (bounds.height / LINE_HEIGHT).ceil() as usize + 1;
         let first = scroll.floor() as usize;
         let sub = scroll - first as f32;
@@ -146,8 +148,8 @@ impl canvas::Program<Message> for EditorView<'_> {
                 }
             }
         } else if let Some((start, end)) = app.editor.buf.selection_range() {
-            let top = pos_to_px(start, scroll);
-            let bottom = pos_to_px(end, scroll);
+            let top = pos_to_px(start, scroll, hs);
+            let bottom = pos_to_px(end, scroll, hs);
             let full_rows = end.row.saturating_sub(start.row + 1);
             let w = char_width();
             if top.y == bottom.y {
@@ -225,7 +227,7 @@ impl canvas::Program<Message> for EditorView<'_> {
                         let col = src[ls..s].chars().count();
                         frame.fill_text(Text {
                             content: content.to_string(),
-                            position: Point::new(GUTTER + col as f32 * char_width(), text_y),
+                            position: Point::new(GUTTER + col as f32 * char_width() - hs, text_y),
                             color: token_color(t.kind),
                             size: FONT_SIZE.into(),
                             font: Font::MONOSPACE,
@@ -245,7 +247,7 @@ impl canvas::Program<Message> for EditorView<'_> {
         // gliding block IS the animation — hiding it made fitting-document
         // scrolls look like an instant jump.
         let cursor = app.editor.buf.pos();
-        let p = pos_to_px(cursor, scroll);
+        let p = pos_to_px(cursor, scroll, hs);
         if p.y > -LINE_HEIGHT && p.y < bounds.height + LINE_HEIGHT {
             let (color, filled) = match app.editor.mode {
                 crate::editor::Mode::Insert => (theme::TEXT, false),
@@ -272,8 +274,8 @@ impl canvas::Program<Message> for EditorView<'_> {
                 continue;
             }
             let y = top_y + LINE_HEIGHT * 0.85;
-            let x0 = GUTTER + m.start as f32 * char_width();
-            let x1 = (GUTTER + m.end as f32 * char_width()).max(x0 + 3.0);
+            let x0 = GUTTER + m.start as f32 * char_width() - hs;
+            let x1 = (GUTTER + m.end as f32 * char_width() - hs).max(x0 + 3.0);
             let path = canvas::Path::new(|b| {
                 b.move_to(Point::new(x0, y + 1.5));
                 let mut x = x0 + 2.5;
@@ -684,7 +686,7 @@ fn popup_layout(app: &App, bounds: Rectangle) -> Option<(Rectangle, usize, usize
         * char_width()
         + 20.0;
     let height = visible as f32 * ROW_H + 6.0;
-    let caret = pos_to_px(app.editor.buf.pos(), app.editor_scroll);
+    let caret = pos_to_px(app.editor.buf.pos(), app.editor_scroll, app.editor_hscroll);
     let mut x = caret.x + char_width() + 2.0;
     let mut y = caret.y + LINE_HEIGHT + 2.0;
     if y + height > bounds.y + bounds.height - 2.0 {
@@ -733,7 +735,11 @@ mod doc_tests {
         let row = app.editor.buf.line_count() - 1;
         let line = app.editor.buf.line(row);
         let col = line.find("users").unwrap();
-        let p = pos_to_px(crate::editor::buffer::Pos { row, col }, app.editor_scroll);
+        let p = pos_to_px(
+            crate::editor::buffer::Pos { row, col },
+            app.editor_scroll,
+            app.editor_hscroll,
+        );
         let doc = doc_hover_at(&app, p + Vector::new(3.0, 10.0)).expect("doc");
         assert_eq!(doc.title, "Table users");
         assert!(doc.rows.iter().any(|(_, t)| t.contains("username")));
@@ -749,6 +755,7 @@ mod doc_tests {
         let p = pos_to_px(
             crate::editor::buffer::Pos { row: 19, col },
             app.editor_scroll,
+            app.editor_hscroll,
         );
         let doc = doc_hover_at(&app, p + Vector::new(3.0, 10.0)).expect("alias doc");
         assert_eq!(doc.title, "Table users");
@@ -763,6 +770,7 @@ mod doc_tests {
         let p = pos_to_px(
             crate::editor::buffer::Pos { row: 33, col },
             app.editor_scroll,
+            app.editor_hscroll,
         );
         let doc = doc_hover_at(&app, p + Vector::new(3.0, 10.0)).expect("enum doc");
         assert_eq!(doc.title, "Enum post_status");
@@ -779,12 +787,14 @@ mod doc_tests {
         let p = pos_to_px(
             crate::editor::buffer::Pos { row: 6, col },
             app.editor_scroll,
+            app.editor_hscroll,
         );
         assert!(doc_hover_at(&app, p + Vector::new(3.0, 10.0)).is_none());
         // hovering whitespace: no word at all
         let p = pos_to_px(
             crate::editor::buffer::Pos { row: 6, col: 0 },
             app.editor_scroll,
+            app.editor_hscroll,
         );
         assert!(word_at(&app, p + Vector::new(1.0, 10.0)).is_none());
     }
@@ -849,6 +859,7 @@ mod error_tests {
                 col: m.start,
             },
             app.editor_scroll,
+            app.editor_hscroll,
         );
         let pos = px_to_pos(&app, p);
         let hit = marks
@@ -872,6 +883,7 @@ mod error_tests {
         let p = pos_to_px(
             crate::editor::buffer::Pos { row: other, col: 0 },
             app.editor_scroll,
+            app.editor_hscroll,
         );
         let pos = px_to_pos(&app, p);
         assert!(!marks
@@ -953,7 +965,7 @@ mod popup_tests {
         );
         assert!(app.completion.is_some(), "popup open");
         let (rect, _, _) = popup_layout(&app, PANE).unwrap();
-        let caret = pos_to_px(app.editor.buf.pos(), app.editor_scroll);
+        let caret = pos_to_px(app.editor.buf.pos(), app.editor_scroll, app.editor_hscroll);
         assert!(
             rect.y + rect.height <= caret.y,
             "popup should sit above the caret: rect={rect:?} caret_y={}",
