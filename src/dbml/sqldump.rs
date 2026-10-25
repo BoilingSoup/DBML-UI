@@ -610,6 +610,7 @@ impl Importer {
         let mut ty: Vec<String> = Vec::new();
         let mut i = 1;
         let mut type_depth = 0i32;
+        let mut array_pending = false;
         while i < s.len() {
             let t = &s[i];
             if *t == Tok::P('(') {
@@ -623,8 +624,10 @@ impl Importer {
                 type_depth -= 1;
                 close = true;
             }
+            let is_array_kw = matches!(t, Tok::W(w, _) if w.eq_ignore_ascii_case("array"));
             let stop = type_depth == 0
                 && !close
+                && !is_array_kw
                 && matches!(t, Tok::W(w, _)
                 if w.eq_ignore_ascii_case("NOT")
                     || w.eq_ignore_ascii_case("NULL")
@@ -650,6 +653,21 @@ impl Importer {
                 break;
             }
             match t {
+                // ARRAY keyword renders as []; a numeric subscript right
+                // after it replaces the bare [] with [N]
+                Tok::W(w, _) if w.eq_ignore_ascii_case("array") => {
+                    array_pending = true;
+                    ty.push("[]".into());
+                }
+                // quoted [N] from the tokenizer (bracket-ident) after a
+                // base type is an array subscript
+                Tok::W(w, true) if !ty.is_empty() && w.chars().all(|c| c.is_ascii_digit()) => {
+                    if array_pending {
+                        array_pending = false;
+                        ty.pop(); // drop the bare []
+                    }
+                    ty.push(format!("[{w}]"));
+                }
                 Tok::W(w, _) => ty.push(w.clone()),
                 Tok::N(n) => ty.push(n.clone()),
                 Tok::P('(') if !close => ty.push("(".into()),
@@ -1476,12 +1494,14 @@ fn join_type(toks: &[String]) -> String {
     let mut out = String::new();
     for t in toks {
         match t.as_str() {
-            "(" | ")" | "," => out.push_str(t),
+            "(" | ")" | "," | "." | "[" | "]" => out.push_str(t),
             _ => {
                 if !out.is_empty()
                     && !out.ends_with('(')
                     && !out.ends_with(',')
                     && !out.ends_with('.')
+                    && !out.ends_with('[')
+                    && !t.starts_with('[')
                 {
                     out.push(' ');
                 }
@@ -1507,7 +1527,6 @@ fn normalize_type(ty: &str, d: Dialect) -> String {
     if matches!(d, Dialect::Postgres) {
         // phrase replacements that keep any (n,m) suffix
         for (from, to) in [
-            ("character varying", "varchar"),
             ("int4", "int"),
             ("int8", "bigint"),
             ("int2", "smallint"),
