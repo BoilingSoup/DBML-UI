@@ -69,6 +69,9 @@ fn render(doc: &Document) -> String {
             }
             s.push_str("  }\n");
         }
+        if let Some(c) = &t.checks {
+            s.push_str(&format!("  Checks {{\n{c}\n  }}\n"));
+        }
         if let Some(n) = &t.note {
             s.push_str(&format!("  note: '{n}'\n"));
         }
@@ -151,6 +154,9 @@ fn column_settings(st: &super::ast::ColumnSettings) -> Vec<String> {
     }
     if let Some(r) = &st.inline_ref {
         out.push(format!("ref: {} {}", card_str(r.card), endpoint(&r.to)));
+    }
+    if let Some(c) = &st.check {
+        out.push(format!("check: {c}"));
     }
     if let Some(n) = &st.note {
         out.push(format!("note: '{n}'"));

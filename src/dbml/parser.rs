@@ -508,6 +508,9 @@ fn column_settings_from(kvs: Vec<(String, Option<SettingVal>)>) -> ColumnSetting
             Some(SettingVal::Str(v)) => match key.as_str() {
                 "note" => s.note = Some(v),
                 "default" => s.default = Some(v),
+                // `check: \`expr\`` — value() strips the backticks; keep
+                // them so the formatter can re-emit verbatim
+                "check" => s.check = Some(format!("`{v}`")),
                 _ => {}
             },
             Some(SettingVal::Ref(card, to)) => {
@@ -640,6 +643,7 @@ fn table(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Table> 
         note: None,
         columns: Vec::new(),
         indexes: Vec::new(),
+        checks: None,
     };
     if peek_kw(input, "as") {
         let _ = eat(input, "as");
@@ -684,6 +688,31 @@ fn table(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Table> 
                     skip_line(input);
                 }
             }
+            continue;
+        }
+        if peek_kw_then(input, "Checks", '{') {
+            let _ = eat(input, "Checks");
+            ws(input);
+            let _ = eat(input, "{");
+            let start_off = offset(input, base);
+            let mut depth = 1i32;
+            let bytes = input.as_bytes();
+            let mut end = bytes.len();
+            for (k, &bch) in bytes.iter().enumerate() {
+                if bch == b'{' {
+                    depth += 1;
+                } else if bch == b'}' {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = k;
+                        break;
+                    }
+                }
+            }
+            let raw = input[..end].trim().to_string();
+            *input = &input[end..];
+            let _ = eat(input, "}");
+            t.checks = Some(raw);
             continue;
         }
         if peek_kw_then(input, "indexes", '{') {

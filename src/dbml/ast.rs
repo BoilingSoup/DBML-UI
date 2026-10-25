@@ -37,6 +37,8 @@ pub struct Table {
     pub note: Option<String>,
     pub columns: Vec<Column>,
     pub indexes: Vec<Index>,
+    /// `Checks { ... }` block content, verbatim (their importer emits it).
+    pub checks: Option<String>,
 }
 
 impl Table {
@@ -64,6 +66,8 @@ pub struct ColumnSettings {
     pub not_null: Option<bool>,
     pub default: Option<String>,
     pub note: Option<String>,
+    /// `[check: \`expr\`]` — kept verbatim (backticks included).
+    pub check: Option<String>,
     pub inline_ref: Option<InlineRef>,
 }
 
