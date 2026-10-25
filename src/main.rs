@@ -1,5 +1,6 @@
 //! dbml-ui — desktop DBML diagram editor built on iced.
 
+#![forbid(unsafe_code)] // the whole editor is written in safe Rust
 mod app;
 mod canvas;
 mod config;

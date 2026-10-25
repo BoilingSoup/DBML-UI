@@ -4,6 +4,7 @@
 //! the DBML parser, the schema model, the auto-layout engine, ex-command
 //! parsing, and the SVG/PNG exporters.
 
+#![forbid(unsafe_code)] // the whole editor is written in safe Rust
 pub mod commands;
 pub mod dbml;
 pub mod layout;
