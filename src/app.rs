@@ -938,6 +938,8 @@ impl App {
                 dbml::sql::Dialect::MSSQL
             } else if lower.contains("oracle") {
                 dbml::sql::Dialect::Oracle
+            } else if lower.contains("sqlite") || lower.contains("sqlite3") {
+                dbml::sql::Dialect::SQLite
             } else {
                 dbml::sql::Dialect::Postgres
             };
@@ -1099,6 +1101,7 @@ impl App {
                                     dbml::sql::Dialect::MySQL => "mysql",
                                     dbml::sql::Dialect::MSSQL => "mssql",
                                     dbml::sql::Dialect::Oracle => "oracle",
+                                    dbml::sql::Dialect::SQLite => "sqlite",
                                 }
                             );
                             match std::fs::write(&path, sql) {

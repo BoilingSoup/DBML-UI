@@ -1,0 +1,6 @@
+Table order items {
+  id INTEGER [pk]
+  select TEXT
+  group TEXT [default: 'none']
+}
+

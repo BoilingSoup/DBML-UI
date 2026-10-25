@@ -1,0 +1,16 @@
+Enum plan_tier {
+  free
+  pro
+  enterprise
+}
+
+Enum user_state {
+  active
+  suspended [note: 'temporarily banned']
+}
+
+Table accounts {
+  id integer [pk, increment]
+  tier plan_tier [not null, default: 'free']
+  state user_state
+}

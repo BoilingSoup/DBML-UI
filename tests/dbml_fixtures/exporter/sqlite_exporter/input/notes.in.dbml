@@ -1,0 +1,7 @@
+Table audit_log {
+  id integer [pk, increment]
+  actor varchar(120) [note: 'who performed the action']
+  payload json
+
+  note: 'append-only audit trail'
+}

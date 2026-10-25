@@ -1,0 +1,9 @@
+Table students {
+  id integer [pk, increment]
+}
+
+Table courses {
+  id integer [pk, increment]
+}
+
+Ref: students.id <> courses.id

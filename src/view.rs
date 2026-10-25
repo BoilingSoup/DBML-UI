@@ -323,7 +323,7 @@ fn help_overlay() -> Element<'static, Message> {
         ),
         line("x dd dw cw cc d$ c0 yy p P diw ciw", "operators"),
         line(
-            ":export sql [postgres|mysql|mssql|oracle]",
+            ":export sql [postgres|mysql|mssql|oracle|sqlite]",
             "write DDL for a dialect"
         ),
         line("open file.sql", "import a SQL dump as DBML"),

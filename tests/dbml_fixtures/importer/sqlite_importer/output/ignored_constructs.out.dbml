@@ -1,0 +1,5 @@
+Table keeps {
+  id INTEGER [pk]
+  flag int [default: `abs(-1)`]
+}
+

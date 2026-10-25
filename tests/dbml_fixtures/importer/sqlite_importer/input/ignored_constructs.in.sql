@@ -1,0 +1,10 @@
+PRAGMA foreign_keys = ON;
+BEGIN TRANSACTION;
+CREATE TABLE keeps (
+  id INTEGER PRIMARY KEY,
+  flag int DEFAULT (abs(-1))
+);
+CREATE VIEW adults AS SELECT * FROM keeps WHERE id > 17;
+CREATE TRIGGER t AFTER INSERT ON keeps BEGIN UPDATE keeps SET flag = 1; END;
+INSERT INTO keeps VALUES (1, 0);
+COMMIT;

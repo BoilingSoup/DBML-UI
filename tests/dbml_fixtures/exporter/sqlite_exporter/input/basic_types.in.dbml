@@ -1,0 +1,10 @@
+Table users {
+  id integer [pk, increment]
+  email varchar(255) [not null, unique]
+  display_name varchar(120)
+  age int [default: 18]
+  rating double [default: 0.0]
+  settings json [default: '{}']
+  created_at timestamp [not null, default: `now()`]
+  active boolean [not null, default: true]
+}

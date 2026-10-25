@@ -1,0 +1,19 @@
+Table users {
+  id INTEGER [pk, increment]
+}
+
+Table countries {
+  id integer [pk]
+}
+
+Table posts {
+  id INTEGER [pk]
+  author_id INTEGER [not null]
+  country_id int
+  editor_id int
+}
+
+Ref: users.id < posts.author_id
+Ref: countries.id < posts.country_id
+Ref: countries.(id, editor_id) < posts.(country_id, editor_id)
+

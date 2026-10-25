@@ -1,0 +1,6 @@
+Table logs {
+  id INTEGER [pk, increment]
+  message TEXT [not null, default: '']
+  level int
+}
+

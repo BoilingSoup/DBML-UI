@@ -1,0 +1,11 @@
+Table events {
+  id INTEGER [pk]
+  user_id int
+  kind varchar(40)
+  indexes {
+    (kind), unique, name: 'events_kind_unique'
+    (user_id, kind), name: 'idx_multi'
+    (user_id), name: 'idx_partial'
+  }
+}
+

@@ -1,0 +1,11 @@
+Table events {
+  id integer [pk, increment]
+  user_id int
+  occurred_at timestamp
+  kind varchar(40)
+
+  indexes {
+    (user_id, occurred_at) [name: 'events_user_time']
+    (kind) [unique, name: 'events_kind_unique']
+  }
+}

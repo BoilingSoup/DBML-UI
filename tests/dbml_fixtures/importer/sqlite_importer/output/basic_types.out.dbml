@@ -1,0 +1,9 @@
+Table users {
+  id INTEGER [pk, increment]
+  email TEXT [not null, unique]
+  display_name TEXT
+  age INTEGER [default: 18]
+  rating REAL [default: 0.0]
+  created_at TEXT [not null, default: `datetime('now')`]
+}
+

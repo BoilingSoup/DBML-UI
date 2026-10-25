@@ -94,9 +94,10 @@ fn tokenize(src: &str, d: Dialect) -> Result<Vec<Tok>, String> {
                 i += 2;
             }
             '[' => {
-                // mssql bracketed identifier — dialect-gated so pg ARRAY
-                // literals (`ARRAY['a'::text, 'b'::text]`) tokenize right
-                if !matches!(d, Dialect::MSSQL) {
+                // mssql/sqlite bracketed identifier — dialect-gated so pg
+                // ARRAY literals (`ARRAY['a'::text, 'b'::text]`) tokenize
+                // right
+                if !matches!(d, Dialect::MSSQL | Dialect::SQLite) {
                     out.push(Tok::P('['));
                     i += 1;
                     continue;
@@ -1190,7 +1191,7 @@ impl Importer {
             } else if t.is_w("SERIAL") {
                 // trailing SERIAL after a type: dropped (serval golden)
                 i += 1;
-            } else if t.is_w("AUTO_INCREMENT") {
+            } else if t.is_w("AUTO_INCREMENT") || t.is_w("AUTOINCREMENT") {
                 col.increment = true;
                 i += 1;
             } else if t.is_w("IDENTITY") {

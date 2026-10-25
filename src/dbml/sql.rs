@@ -15,6 +15,7 @@ pub enum Dialect {
     MySQL,
     MSSQL,
     Oracle,
+    SQLite,
 }
 
 impl Dialect {
@@ -24,6 +25,7 @@ impl Dialect {
             "mysql" => Some(Dialect::MySQL),
             "mssql" | "sqlserver" => Some(Dialect::MSSQL),
             "oracle" => Some(Dialect::Oracle),
+            "sqlite" | "sqlite3" => Some(Dialect::SQLite),
             _ => None,
         }
     }
@@ -31,7 +33,7 @@ impl Dialect {
     /// Quoting style for identifiers: (left, right).
     fn quote(&self) -> (&'static str, &'static str) {
         match self {
-            Dialect::Postgres | Dialect::Oracle => ("\"", "\""),
+            Dialect::Postgres | Dialect::Oracle | Dialect::SQLite => ("\"", "\""),
             Dialect::MySQL => ("`", "`"),
             Dialect::MSSQL => ("[", "]"),
         }
@@ -188,6 +190,9 @@ struct Exporter<'a> {
     unnamed_index: usize,
     /// Junction/table names seen, for m2m junction (n) suffixing.
     junction_names: Vec<String>,
+    /// SQLite: FK definitions queued by table name — sqlite cannot
+    /// ALTER-add constraints, so they render inside the CREATE TABLE.
+    pending_fks: Vec<(String, String)>,
 }
 
 impl<'a> Exporter<'a> {
@@ -198,6 +203,7 @@ impl<'a> Exporter<'a> {
             out: String::new(),
             unnamed_index: 0,
             junction_names: Vec::new(),
+            pending_fks: Vec::new(),
         }
     }
 
@@ -208,7 +214,7 @@ impl<'a> Exporter<'a> {
 
     fn qualified_table(&self, t: &Table) -> String {
         match &t.schema {
-            Some(s) if !is_default_schema(&Some(s.clone())) => {
+            Some(s) if !is_default_schema(&Some(s.clone())) && self.d != Dialect::SQLite => {
                 format!("{}.{}", self.d.q(s), self.d.q(&t.name))
             }
             _ => self.d.q(&t.name),
@@ -247,9 +253,8 @@ impl<'a> Exporter<'a> {
             Dialect::Oracle => {
                 self.emit_users_oracle();
             }
-        }
-        for t in &self.doc.tables {
-            self.emit_table(t);
+            // sqlite: no schemas, no CREATE TYPE — enums inline as checks
+            Dialect::SQLite => {}
         }
         // junction names seeded from tables: a generated junction whose
         // base name hits a table gets (n) suffixes from 1
@@ -259,6 +264,53 @@ impl<'a> Exporter<'a> {
             .iter()
             .map(|t| t.name.clone())
             .collect::<Vec<_>>();
+        if self.d == Dialect::SQLite {
+            // sqlite cannot ALTER-add constraints: the FK definitions
+            // must be queued before the tables render (junctions emit in
+            // the normal pass, their FKs inline in their own body)
+            for t in &self.doc.tables {
+                for c in &t.columns {
+                    if let Some(r) = &c.settings.inline_ref {
+                        if r.card != Cardinality::ManyToMany {
+                            self.emit_fk_multi(
+                                None,
+                                &t.schema,
+                                &t.name,
+                                std::slice::from_ref(&c.name),
+                                &r.to.schema,
+                                &r.to.table,
+                                &r.to.columns,
+                                &None,
+                                &None,
+                            );
+                        }
+                    }
+                }
+            }
+            for r in &self.doc.refs {
+                if r.card == Cardinality::ManyToMany {
+                    continue;
+                }
+                let (fk_ep, ref_ep) = match r.card {
+                    Cardinality::OneToMany => (&r.to, &r.from),
+                    _ => (&r.from, &r.to),
+                };
+                self.emit_fk_multi(
+                    r.name.as_deref(),
+                    &fk_ep.schema,
+                    &fk_ep.table,
+                    &fk_ep.columns,
+                    &ref_ep.schema,
+                    &ref_ep.table,
+                    &ref_ep.columns,
+                    &r.on_delete,
+                    &r.on_update,
+                );
+            }
+        }
+        for t in &self.doc.tables {
+            self.emit_table(t);
+        }
         // index statements (after all tables), in table order; [pk]
         // indexes became PRIMARY KEY constraints instead
         for t in &self.doc.tables {
@@ -272,7 +324,9 @@ impl<'a> Exporter<'a> {
         for t in &self.doc.tables {
             self.emit_comment(t);
         }
-        // foreign keys: inline refs (table order) then standalone refs
+        // foreign keys: inline refs (table order) then standalone refs;
+        // sqlite has already queued the non-m2m ones (its junctions still
+        // flow through here, with their FKs inline)
         for t in &self.doc.tables {
             for c in &t.columns {
                 if let Some(r) = &c.settings.inline_ref {
@@ -287,7 +341,7 @@ impl<'a> Exporter<'a> {
                                 span: 0..0,
                             },
                         );
-                    } else {
+                    } else if self.d != Dialect::SQLite {
                         self.emit_fk_multi(
                             None,
                             &t.schema,
@@ -308,6 +362,9 @@ impl<'a> Exporter<'a> {
                 self.emit_junction(&r.from, &r.to);
                 continue;
             }
+            if self.d == Dialect::SQLite {
+                continue;
+            }
             // the FK lives on the many side: `<` puts it on the RIGHT
             // endpoint, `>` and `-` on the LEFT one
             let (fk_ep, ref_ep) = match r.card {
@@ -326,7 +383,11 @@ impl<'a> Exporter<'a> {
                 &r.on_update,
             );
         }
-        // trim the trailing blank separator; junction files keep one
+        self.finish()
+    }
+
+    /// Trim the trailing blank separator; junction files keep one.
+    fn finish(mut self) -> String {
         while self.out.ends_with("\n\n\n") {
             self.out.pop();
         }
@@ -455,6 +516,12 @@ impl<'a> Exporter<'a> {
                     _ => base.to_string(),
                 }
             }
+            Dialect::SQLite => match lower.as_str() {
+                // sqlite has no sequences: autoincrement covers them
+                "serial" | "smallserial" | "bigserial" => "INTEGER".into(),
+                // sqlite accepts any type name (type affinity) — verbatim
+                _ => base.to_string(),
+            },
         };
         if let Some(p) = params {
             mapped.push_str(p);
@@ -477,6 +544,12 @@ impl<'a> Exporter<'a> {
                 ),
                 Dialect::Oracle => format!(
                     "nvarchar2(255) CHECK ({} IN ({}))",
+                    self.d.q(col),
+                    self.enum_values(e)
+                ),
+                // sqlite has no enums: TEXT affinity + an IN check
+                Dialect::SQLite => format!(
+                    "TEXT CHECK ({} IN ({}))",
                     self.d.q(col),
                     self.enum_values(e)
                 ),
@@ -595,10 +668,28 @@ impl<'a> Exporter<'a> {
                         suffixes.push("NOT NULL".into());
                     }
                 }
+                Dialect::SQLite => {
+                    // AUTOINCREMENT is only valid on INTEGER PRIMARY KEY
+                    if c.settings.pk && pk_count <= 1 {
+                        suffixes.push("PRIMARY KEY".into());
+                    }
+                    if identity && c.settings.pk {
+                        suffixes.push("AUTOINCREMENT".into());
+                    }
+                    if c.settings.unique {
+                        suffixes.push("UNIQUE".into());
+                    }
+                    if c.settings.not_null == Some(true) {
+                        suffixes.push("NOT NULL".into());
+                    }
+                }
             }
+            // sqlite autoincrement requires the literal type INTEGER;
             // postgres serial-family with increment keeps the serial type
             // (no IDENTITY); the type itself may need rewriting
-            let ty = if self.d == Dialect::Postgres {
+            let ty = if self.d == Dialect::SQLite && identity && c.settings.pk {
+                "INTEGER".to_string()
+            } else if self.d == Dialect::Postgres {
                 if c.settings.increment {
                     // increment canonicalizes the int/serial families; an
                     // unknown type falls back to SERIAL (golden rule)
@@ -635,8 +726,12 @@ impl<'a> Exporter<'a> {
                     suffixes.push(format!("COMMENT '{}'", escape_sq(n)));
                 }
             }
+            let note_prefix = match (&c.settings.note, self.d == Dialect::SQLite) {
+                (Some(n), true) => format!("  -- note: {}\n", escape_sq(n)),
+                _ => String::new(),
+            };
             lines.push(format!(
-                "  {} {}{}",
+                "{note_prefix}  {} {}{}",
                 self.d.q(&c.name),
                 ty,
                 if suffixes.is_empty() {
@@ -670,18 +765,28 @@ impl<'a> Exporter<'a> {
                 .join(", ");
             lines.push(format!("  PRIMARY KEY ({})", cols));
         }
+        if self.d == Dialect::SQLite {
+            // queued FK definitions render inside the CREATE TABLE
+            for line in self.pending_fks.iter().filter(|(tn, _)| tn == &t.name) {
+                lines.push(format!("  {}", line.1));
+            }
+        }
         let table_head = match &t.schema {
-            Some(s) if !is_default_schema(&Some(s.clone())) => {
+            Some(s) if !is_default_schema(&Some(s.clone())) && self.d != Dialect::SQLite => {
                 format!("{}.{}", self.d.q(s), self.d.q(&t.name))
             }
             _ => self.d.q(&t.name),
+        };
+        let note_line = match (&t.note, self.d == Dialect::SQLite) {
+            (Some(n), true) => format!("-- note: {}\n", escape_sq(n)),
+            _ => String::new(),
         };
         let (tail, post) = match self.d {
             Dialect::MSSQL => (")\nGO", String::new()),
             _ => (");", String::new()),
         };
         self.push(format!(
-            "CREATE TABLE {} (\n{}\n{}",
+            "{note_line}CREATE TABLE {} (\n{}\n{}",
             table_head,
             lines.join(",\n"),
             tail
@@ -693,7 +798,7 @@ impl<'a> Exporter<'a> {
         // `expr` backticks mark expressions: parenthesized per dialect
         if let Some(expr) = dv.strip_prefix('`').and_then(|s| s.strip_suffix('`')) {
             return match self.d {
-                Dialect::Postgres | Dialect::MySQL | Dialect::MSSQL => {
+                Dialect::Postgres | Dialect::MySQL | Dialect::MSSQL | Dialect::SQLite => {
                     format!("({})", expr)
                 }
                 Dialect::Oracle => expr.to_string(),
@@ -740,10 +845,13 @@ impl<'a> Exporter<'a> {
                 }
             }
         };
-        let using = ix
-            .index_type
-            .as_deref()
-            .map(|t| format!("USING {}", t.to_ascii_uppercase()));
+        let using = if self.d == Dialect::SQLite {
+            None // sqlite has no index access-method clause
+        } else {
+            ix.index_type
+                .as_deref()
+                .map(|t| format!("USING {}", t.to_ascii_uppercase()))
+        };
         let table_head = self.qualified_table(t);
         // assemble from non-empty parts joined by single spaces; mysql
         // puts USING at the end, pg right after the table
@@ -808,6 +916,20 @@ impl<'a> Exporter<'a> {
                 parts.push(format!("({cols})"));
                 format!("{};", parts.join(" "))
             }
+            // sqlite indexes are always named and have no USING
+            Dialect::SQLite => {
+                let mut parts = vec!["CREATE".to_string()];
+                if ix.unique {
+                    parts.push("UNIQUE".into());
+                }
+                parts.push("INDEX".into());
+                if let Some(n) = &name {
+                    parts.push(n.clone());
+                }
+                parts.push(format!("ON {table_head}"));
+                parts.push(format!("({cols})"));
+                format!("{};", parts.join(" "))
+            }
         };
         self.push(stmt);
     }
@@ -815,6 +937,8 @@ impl<'a> Exporter<'a> {
     fn emit_comment(&mut self, t: &Table) {
         let table_head = self.qualified_table(t);
         match self.d {
+            // sqlite notes render as comments inside emit_table
+            Dialect::SQLite => {}
             Dialect::Postgres | Dialect::Oracle => {
                 if let Some(n) = &t.note {
                     self.push(format!(
@@ -913,7 +1037,7 @@ impl<'a> Exporter<'a> {
         self.junction_names.push(name.clone());
         let schema = a.schema.clone();
         let head = match &schema {
-            Some(sc) if !is_default_schema(&Some(sc.clone())) => {
+            Some(sc) if !is_default_schema(&Some(sc.clone())) && self.d != Dialect::SQLite => {
                 format!("{}.{}", self.d.q(sc), self.d.q(&name))
             }
             _ => self.d.q(&name),
@@ -933,12 +1057,36 @@ impl<'a> Exporter<'a> {
         } else {
             ");"
         };
+        if self.d == Dialect::SQLite {
+            // sqlite cannot ALTER-add constraints: the junction's FKs
+            // render inside its own CREATE TABLE
+            for (ep, t, cols) in [(a, ta, &a_cols), (b, tb, &b_cols)] {
+                let junction_cols = cols
+                    .iter()
+                    .map(|(c, _)| self.d.q(c))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let ep_cols = ep
+                    .columns
+                    .iter()
+                    .map(|c| self.d.q(c))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let ref_head = self.qualified_table(t);
+                lines.push(format!(
+                    "  FOREIGN KEY ({junction_cols}) REFERENCES {ref_head} ({ep_cols})"
+                ));
+            }
+        }
         self.push(format!(
             "CREATE TABLE {} (\n{}\n{}",
             head,
             lines.join(",\n"),
             tail
         ));
+        if self.d == Dialect::SQLite {
+            return;
+        }
         // one FK per side
         for (ep, t, cols) in [(a, ta, &a_cols), (b, tb, &b_cols)] {
             let junction_cols = cols
@@ -1012,6 +1160,19 @@ impl<'a> Exporter<'a> {
             if self.d != Dialect::Oracle {
                 actions.push_str(&format!(" ON UPDATE {}", a));
             }
+        }
+        if self.d == Dialect::SQLite {
+            // queue: the definition renders inside the fk table's
+            // CREATE TABLE (sqlite cannot ALTER-add constraints)
+            let Some(fkt) = resolve(self.doc.tables.as_slice(), fk_schema, fk_table) else {
+                return;
+            };
+            let ref_head = self.qualified_table(rf);
+            self.pending_fks.push((
+                fkt.name.clone(),
+                format!("FOREIGN KEY ({fk_list}) REFERENCES {ref_head} ({ref_list}){actions}"),
+            ));
+            return;
         }
         let deferrable = match self.d {
             Dialect::Postgres | Dialect::Oracle => " DEFERRABLE INITIALLY IMMEDIATE",
@@ -1169,6 +1330,12 @@ mod fixtures {
             "exporter",
             Dialect::Oracle,
             "oracle_exporter",
+            &mut failures,
+        );
+        run_dir(
+            "exporter",
+            Dialect::SQLite,
+            "sqlite_exporter",
             &mut failures,
         );
         assert!(

@@ -1,0 +1,8 @@
+Table products {
+  price REAL [check: `price > 0`]
+  stock INTEGER [not null, default: 0, check: `stock >= 0`]
+  Checks {
+`price < 1000000` [name: 'price_band']
+  }
+}
+

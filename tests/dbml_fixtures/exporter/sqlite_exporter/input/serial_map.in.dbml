@@ -1,0 +1,12 @@
+Table counters {
+  id serial [pk, increment]
+  plain bigint
+}
+
+Table big_counters {
+  big_id bigserial [pk, increment]
+}
+
+Table tiny_counters {
+  small_id smallserial [pk, increment]
+}

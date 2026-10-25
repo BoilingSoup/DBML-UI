@@ -1,0 +1,10 @@
+Table subscriptions {
+  user_id INTEGER [not null]
+  plan TEXT [not null]
+  started_at TEXT
+  indexes {
+    (user_id, plan), pk
+    (started_at, user_id), unique
+  }
+}
+

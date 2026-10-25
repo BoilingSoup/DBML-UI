@@ -1,0 +1,9 @@
+Table subscriptions {
+  user_id int [not null]
+  plan varchar(40) [not null]
+  started_at timestamp [default: `now()`]
+
+  indexes {
+    (user_id, plan) [pk]
+  }
+}
