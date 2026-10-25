@@ -103,6 +103,8 @@ enum Pending {
     /// `d g…` / `c g…` awaiting `g`
     Dg,
     Cg,
+    /// `r` awaiting the replacement character
+    R,
 }
 
 pub struct Editor {
@@ -197,6 +199,7 @@ impl Editor {
             Some(Pending::Ca) => "ca",
             Some(Pending::Dg) => "dg",
             Some(Pending::Cg) => "cg",
+            Some(Pending::R) => "r",
             None => "",
         };
         s.push_str(p);
@@ -270,6 +273,36 @@ impl Editor {
                 self.buf.delete_char();
                 Action::Changed
             }
+            KeyCode::Delete => {
+                self.buf.delete_next_char();
+                Action::Changed
+            }
+            KeyCode::Left => {
+                self.buf.move_cursor(CursorMove::Back);
+                Action::None
+            }
+            KeyCode::Right => {
+                self.buf.move_cursor(CursorMove::Forward);
+                Action::None
+            }
+            KeyCode::Up => {
+                self.buf.move_cursor(CursorMove::Up);
+                Action::None
+            }
+            KeyCode::Down => {
+                self.buf.move_cursor(CursorMove::Down);
+                Action::None
+            }
+            KeyCode::Home => {
+                self.buf.move_cursor(CursorMove::Head);
+                Action::None
+            }
+            KeyCode::End => {
+                self.buf.move_cursor(CursorMove::End);
+                Action::None
+            }
+            // PageUp/PageDown are handled by the app (animated, page-size
+            // aware) before keys reach here
             KeyCode::Tab => Action::None, // focus switching handled by app
             _ => Action::None,
         }
@@ -323,6 +356,7 @@ impl Editor {
 
     fn dispatch_normal(&mut self, key: KeyEvent, m: KeyModifiers) -> Action {
         match key.code {
+            KeyCode::Delete => self.x_delete(),
             KeyCode::Char('r') if m.contains(KeyModifiers::CONTROL) => {
                 let n = self.count.take().unwrap_or(1).max(1);
                 for _ in 0..n {
@@ -372,24 +406,7 @@ impl Editor {
                 self.mode = Mode::Insert;
                 Action::Changed
             }
-            KeyCode::Char('x') => {
-                let n = self.count.take().unwrap_or(1).max(1) as usize;
-                // x never crosses the line end
-                let (row, col) = self.buf.cursor();
-                let remain = self
-                    .buf
-                    .lines()
-                    .get(row)
-                    .map(|l| l.chars().count().saturating_sub(col))
-                    .unwrap_or(0);
-                let n = n.min(remain);
-                if n > 0 {
-                    self.buf.delete_str(n);
-                    Action::Changed
-                } else {
-                    Action::None
-                }
-            }
+            KeyCode::Char('x') => self.x_delete(),
             KeyCode::Char('D') => {
                 self.buf.delete_line_by_end();
                 Action::Changed
@@ -412,6 +429,11 @@ impl Editor {
             KeyCode::Char('y') => {
                 self.op_count = self.count.take();
                 self.pending = Some(Pending::Y);
+                Action::None
+            }
+            KeyCode::Char('r') => {
+                self.op_count = self.count.take();
+                self.pending = Some(Pending::R);
                 Action::None
             }
             KeyCode::Char('p') => {
@@ -498,6 +520,20 @@ impl Editor {
                 self.buf.start_selection();
                 Action::None
             }
+            KeyCode::Char('u') => {
+                if self.buf.apply_selection_case(false) {
+                    Action::Changed
+                } else {
+                    Action::None
+                }
+            }
+            KeyCode::Char('U') => {
+                if self.buf.apply_selection_case(true) {
+                    Action::Changed
+                } else {
+                    Action::None
+                }
+            }
             _ => {
                 if let Some(action) = self.apply_motion(key.code) {
                     return action;
@@ -562,6 +598,22 @@ impl Editor {
         let rep = (self.op_count.unwrap_or(1).max(1) as usize)
             .saturating_mul(self.count.unwrap_or(1).max(1) as usize);
         match (leader, code) {
+            (R, KeyCode::Esc) => Action::None,
+            (R, KeyCode::Enter) => {
+                if self.buf.replace_with_newline() {
+                    Action::Changed
+                } else {
+                    Action::None
+                }
+            }
+            (R, KeyCode::Char(c)) => {
+                if self.buf.replace_next(rep.max(1), c) {
+                    Action::Changed
+                } else {
+                    Action::None
+                }
+            }
+            (R, _) => Action::None,
             (G, KeyCode::Char('g')) => {
                 // [count]gg jumps to line N
                 if let Some(line) = self.count.or(self.op_count) {
@@ -721,6 +773,25 @@ impl Editor {
             self.mode = Mode::Insert;
         }
         Action::Changed
+    }
+
+    /// `x`: delete up to [count] chars, never crossing the line end.
+    fn x_delete(&mut self) -> Action {
+        let n = self.count.take().unwrap_or(1).max(1) as usize;
+        let (row, col) = self.buf.cursor();
+        let remain = self
+            .buf
+            .lines()
+            .get(row)
+            .map(|l| l.chars().count().saturating_sub(col))
+            .unwrap_or(0);
+        let n = n.min(remain);
+        if n > 0 {
+            self.buf.delete_str(n);
+            Action::Changed
+        } else {
+            Action::None
+        }
     }
 
     /// Yank `n` lines from the cursor row into the register.
@@ -906,11 +977,11 @@ impl Editor {
 mod tests {
     use super::*;
 
-    fn key(c: char) -> KeyEvent {
+    pub(super) fn key(c: char) -> KeyEvent {
         KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
     }
 
-    fn esc() -> KeyEvent {
+    pub(super) fn esc() -> KeyEvent {
         KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)
     }
 
@@ -918,7 +989,7 @@ mod tests {
         KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
     }
 
-    fn editor(text: &str) -> Editor {
+    pub(super) fn editor(text: &str) -> Editor {
         Editor::new(text)
     }
 
@@ -1059,18 +1130,16 @@ mod tests {
         e.handle_key(key('y'));
         e.handle_key(key('p'));
         let pasted = e.text().lines().nth(1).unwrap_or("").to_string();
-        assert!(
-            pasted.len() >= 3 && "three".contains(&pasted),
-            "pasted {pasted:?} from {}",
-            e.text()
-        );
+        // $ lands ON the last char, so $vb yanks "three" inclusive
+        assert_eq!(pasted, "three", "from {}", e.text());
 
         // visual d deletes the selection (cursor sits on the pasted line)
         e.handle_key(key('0'));
         e.handle_key(key('v'));
         e.handle_key(key('l'));
         e.handle_key(key('d'));
-        assert_eq!(e.text().lines().nth(1), Some("hree"), "{}", e.text());
+        // vim v+l selects TWO chars (inclusive of the cursor cell): "th"
+        assert_eq!(e.text().lines().nth(1), Some("ree"), "{}", e.text());
         assert!(e.text().starts_with("one two"));
     }
 
@@ -1290,5 +1359,91 @@ mod tests {
         assert_eq!(e.cursor(), (1, 3));
         e.jump(0, 0);
         assert_eq!(e.cursor(), (0, 0));
+    }
+}
+
+#[cfg(test)]
+mod polish_tests {
+    use super::tests::editor;
+    use super::*;
+
+    #[test]
+    fn r_replaces_char_under_cursor() {
+        let mut e = editor("hello\n");
+        e.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        e.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert_eq!(e.text(), "xello\n");
+        // single undo unit
+        e.buf.undo();
+        assert_eq!(e.text(), "hello\n");
+    }
+
+    #[test]
+    fn r_with_count_replaces_run_and_aborts_past_eol() {
+        let mut e = editor("hello\n");
+        e.handle_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
+        e.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        e.handle_key(KeyEvent::new(KeyCode::Char('!'), KeyModifiers::NONE));
+        assert_eq!(e.text(), "!!!lo\n");
+        // 10r? past end of line: vim aborts with no change
+        e.handle_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
+        e.handle_key(KeyEvent::new(KeyCode::Char('0'), KeyModifiers::NONE));
+        e.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        e.handle_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+        assert_eq!(e.text(), "!!!lo\n");
+    }
+
+    #[test]
+    fn esc_cancels_pending_r() {
+        let mut e = editor("abc\n");
+        e.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        assert_eq!(e.showcmd().as_deref(), Some("r"));
+        e.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(e.showcmd(), None);
+        e.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert_eq!(e.text(), "bc\n");
+    }
+
+    #[test]
+    fn visual_u_lowercases_and_keeps_selection() {
+        let mut e = editor("Hello World\n");
+        e.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+        e.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+        e.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
+        assert_eq!(e.text(), "hello World\n");
+        assert_eq!(e.mode, Mode::Visual, "stays in visual");
+        let (start, end) = e.buf.selection_range().unwrap();
+        assert_eq!((start.row, start.col), (0, 0));
+        assert_eq!((end.row, end.col), (0, 5));
+        // one undo unit restores both cases
+        e.buf.undo();
+        assert_eq!(e.text(), "Hello World\n");
+    }
+
+    #[test]
+    fn visual_u_uppercase_multiline() {
+        let mut e = editor("abc\ndef\n");
+        e.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+        // extend to end of second line
+        e.handle_key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT));
+        e.handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+        e.handle_key(KeyEvent::new(KeyCode::Char('U'), KeyModifiers::NONE));
+        assert_eq!(e.text(), "ABC\nDEF\n");
+    }
+
+    #[test]
+    fn insert_mode_arrow_and_delete_keys() {
+        let mut e = editor("ab\ncd\n");
+        e.handle_key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        e.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        e.handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+        e.handle_key(KeyEvent::new(KeyCode::Char('!'), KeyModifiers::NONE));
+        e.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        e.handle_key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
+        e.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        e.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        e.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        e.handle_key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
+        assert_eq!(e.text(), "abcd\n", "Delete at EOL joins (GUI behavior)");
     }
 }

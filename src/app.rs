@@ -257,32 +257,60 @@ pub fn subscription(_app: &App) -> iced::Subscription<Message> {
         }
         _ => None,
     });
-    let keys = iced::keyboard::on_key_press(|key, mods| {
-        let code = match key {
-            iced::keyboard::Key::Character(c) => c.chars().next().map(KeyCode::Char),
-            iced::keyboard::Key::Named(n) => Some(match n {
-                iced::keyboard::key::Named::Escape => KeyCode::Esc,
-                iced::keyboard::key::Named::Enter => KeyCode::Enter,
-                iced::keyboard::key::Named::Space => KeyCode::Space,
-                iced::keyboard::key::Named::Backspace => KeyCode::Backspace,
-                iced::keyboard::key::Named::Tab => KeyCode::Tab,
-                iced::keyboard::key::Named::ArrowLeft => KeyCode::Left,
-                iced::keyboard::key::Named::ArrowRight => KeyCode::Right,
-                iced::keyboard::key::Named::ArrowUp => KeyCode::Up,
-                iced::keyboard::key::Named::ArrowDown => KeyCode::Down,
-                iced::keyboard::key::Named::Home => KeyCode::Home,
-                iced::keyboard::key::Named::End => KeyCode::End,
-                iced::keyboard::key::Named::PageUp => KeyCode::PageUp,
-                iced::keyboard::key::Named::PageDown => KeyCode::PageDown,
-                iced::keyboard::key::Named::Delete => KeyCode::Delete,
-                _ => return None,
-            }),
-            _ => None,
-        }?;
-        let m = KeyModifiers::new(mods.control(), mods.shift(), mods.alt());
-        Some(Message::KeyPressed(code, m))
+    // Full keyboard events, not on_key_press: the logical key it hands out
+    // is unmodified (Shift+a arrives as 'a'), which made capitals and
+    // shifted symbols impossible. KeyPressed.modified_key has shift and
+    // CapsLock applied (everything but Ctrl), and `text` is what typing
+    // actually produced.
+    let keys = iced::event::listen_with(|event, _status, _id| match event {
+        iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+            key,
+            modified_key,
+            modifiers,
+            ..
+        }) => {
+            let code = match &modified_key {
+                iced::keyboard::Key::Character(c) => c.chars().next().map(KeyCode::Char),
+                iced::keyboard::Key::Named(n) => named_code(n),
+                _ => None,
+            }?;
+            // a Ctrl chord must keep the UNMODIFIED character (Ctrl+r, not Ctrl+R)
+            let code = if modifiers.control() {
+                match &key {
+                    iced::keyboard::Key::Character(c) => {
+                        c.chars().next().map(KeyCode::Char).unwrap_or(code)
+                    }
+                    _ => code,
+                }
+            } else {
+                code
+            };
+            let m = KeyModifiers::new(modifiers.control(), modifiers.shift(), modifiers.alt());
+            Some(Message::KeyPressed(code, m))
+        }
+        _ => None,
     });
     iced::Subscription::batch([mouse, keys, window_resize()])
+}
+
+fn named_code(n: &iced::keyboard::key::Named) -> Option<KeyCode> {
+    Some(match n {
+        iced::keyboard::key::Named::Escape => KeyCode::Esc,
+        iced::keyboard::key::Named::Enter => KeyCode::Enter,
+        iced::keyboard::key::Named::Space => KeyCode::Space,
+        iced::keyboard::key::Named::Backspace => KeyCode::Backspace,
+        iced::keyboard::key::Named::Tab => KeyCode::Tab,
+        iced::keyboard::key::Named::ArrowLeft => KeyCode::Left,
+        iced::keyboard::key::Named::ArrowRight => KeyCode::Right,
+        iced::keyboard::key::Named::ArrowUp => KeyCode::Up,
+        iced::keyboard::key::Named::ArrowDown => KeyCode::Down,
+        iced::keyboard::key::Named::Home => KeyCode::Home,
+        iced::keyboard::key::Named::End => KeyCode::End,
+        iced::keyboard::key::Named::PageUp => KeyCode::PageUp,
+        iced::keyboard::key::Named::PageDown => KeyCode::PageDown,
+        iced::keyboard::key::Named::Delete => KeyCode::Delete,
+        _ => return None,
+    })
 }
 
 fn window_resize() -> iced::Subscription<Message> {

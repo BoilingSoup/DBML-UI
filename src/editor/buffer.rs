@@ -101,15 +101,37 @@ impl Buffer {
         self.lines.len()
     }
 
-    /// Normalized selection range (start <= end), if a selection is active.
+    /// Normalized selection range (start inclusive, end exclusive), if a
+    /// selection is active.
+    ///
+    /// Vim selects the cells between anchor and cursor inclusive on both
+    /// ends (an `e` or `$` landing on a char includes it; at EOL the
+    /// newline). Normalized here by advancing the cursor-side end by one.
     pub fn selection_range(&self) -> Option<(Pos, Pos)> {
         let a = self.selection?;
         let (start, end) = if self.before(self.cursor, a) {
-            (self.cursor, a)
+            (self.cursor, self.advance(a))
         } else {
-            (a, self.cursor)
+            (a, self.advance(self.cursor))
         };
         Some((start, end))
+    }
+
+    /// One cell past `p`, wrapping to the next line start after EOL.
+    fn advance(&self, p: Pos) -> Pos {
+        if p.col < self.line_len(p.row) {
+            Pos {
+                row: p.row,
+                col: p.col + 1,
+            }
+        } else if p.row + 1 < self.lines.len() {
+            Pos {
+                row: p.row + 1,
+                col: 0,
+            }
+        } else {
+            p
+        }
     }
 
     pub fn selection_text(&self) -> Option<String> {
@@ -414,6 +436,72 @@ impl Buffer {
         );
     }
 
+    /// vim `r`: replace `n` chars starting at the cursor with `c` as a
+    /// single undo unit. Returns false (unchanged) if fewer than `n` chars
+    /// remain on the line.
+    pub fn replace_next(&mut self, n: usize, c: char) -> bool {
+        if n == 0 {
+            return false;
+        }
+        let (r, col) = (self.cursor.row, self.cursor.col);
+        let len = self.line(r).chars().count();
+        if col + n > len {
+            return false;
+        }
+        self.push_history();
+        let line = &mut self.lines[r];
+        let start = char_off(line, col);
+        let end = char_off(line, col + n);
+        let replacement: String = std::iter::repeat(c).take(n).collect();
+        line.replace_range(start..end, &replacement);
+        true
+    }
+
+    /// vim `r<CR>`: replace the char under the cursor with a newline
+    /// (single undo unit).
+    pub fn replace_with_newline(&mut self) -> bool {
+        let len = self.line_len(self.cursor.row);
+        if self.cursor.col >= len {
+            return false;
+        }
+        self.selection = None;
+        self.push_history();
+        self.delete_next_char_raw();
+        self.insert_newline_raw();
+        true
+    }
+
+    /// vim visual `u`/`U`: re-case the selection in place as one undo
+    /// unit; keeps visual mode by re-selecting the transformed range.
+    /// Returns false when nothing is selected.
+    pub fn apply_selection_case(&mut self, upper: bool) -> bool {
+        let Some((start, end)) = self.selection_range() else {
+            return false;
+        };
+        let Some(text) = self.selection_text() else {
+            return false;
+        };
+        // clear before the raw ops: delete/insert re-check the (stale)
+        // selection internally
+        self.selection = None;
+        self.push_history();
+        let transformed: String = if upper {
+            text.chars().flat_map(|c| c.to_uppercase()).collect()
+        } else {
+            text.chars().flat_map(|c| c.to_lowercase()).collect()
+        };
+        self.delete_range(start, end);
+        self.cursor = start;
+        self.insert_str_raw(&transformed);
+        // keep the selection over the (possibly re-sized) result: the
+        // cursor sits ON the last transformed char (selections are
+        // inclusive of the cursor cell)
+        self.selection = Some(start);
+        let new_len = transformed.chars().count();
+        self.cursor.col = start.col + new_len.saturating_sub(1);
+        true
+    }
+
     /// Delete from the cursor to the end of the line (newline stays).
     pub fn delete_line_by_end(&mut self) {
         if self.delete_selection() {
@@ -423,6 +511,44 @@ impl Buffer {
         let r = self.cursor.row;
         let off = char_off(&self.lines[r], self.cursor.col);
         self.lines[r].truncate(off);
+    }
+
+    fn delete_next_char_raw(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
+        let (r, cpos) = (self.cursor.row, self.cursor.col);
+        let len = self.line_len(r);
+        if cpos < len {
+            let line = &mut self.lines[r];
+            let start = char_off(line, cpos);
+            let end = char_off(line, cpos + 1);
+            line.replace_range(start..end, "");
+        } else if r + 1 < self.lines.len() {
+            let next = self.lines.remove(r + 1);
+            self.lines[r].push_str(&next);
+        }
+    }
+
+    fn insert_newline_raw(&mut self) {
+        self.delete_selection();
+        let (r, cpos) = (self.cursor.row, self.cursor.col);
+        let mut line = self.lines[r].clone();
+        let off = char_off(&line, cpos);
+        let rest = line.split_off(off);
+        self.lines[r] = line;
+        self.lines.insert(r + 1, rest);
+        self.cursor.row += 1;
+        self.cursor.col = 0;
+    }
+
+    fn insert_str_raw(&mut self, s: &str) {
+        self.delete_selection();
+        let (r, cpos) = (self.cursor.row, self.cursor.col);
+        let line = &mut self.lines[r];
+        let off = char_off(line, cpos);
+        line.insert_str(off, s);
+        self.cursor.col = cpos + s.chars().count();
     }
 
     fn delete_selection(&mut self) -> bool {
