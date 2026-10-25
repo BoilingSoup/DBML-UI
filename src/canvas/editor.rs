@@ -549,7 +549,7 @@ fn word_at(app: &App, p: Point) -> Option<String> {
 }
 
 /// Definition doc for the hovered word: a table/enum by name or alias.
-fn doc_hover_at(app: &App, p: Point) -> Option<DocHover> {
+pub fn doc_hover_at(app: &App, p: Point) -> Option<DocHover> {
     use dbml_ui::model::NodeKind;
     let word = word_at(app, p)?;
     let b = app

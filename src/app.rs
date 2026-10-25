@@ -649,6 +649,27 @@ impl App {
     /// Keys routed to the editor pane, with the completion popup
     /// intercepting navigation/filter/accept keys first.
     fn editor_key(&mut self, key: KeyEvent) {
+        // K: hover at the caret (vim keywordprg muscle memory) — shows the
+        // error message when on a squiggle, else the definition docs for
+        // the word under the cursor. Not in insert mode, where K types.
+        if key.code == KeyCode::Char('K')
+            && !key.modifiers.contains(KeyModifiers::CONTROL)
+            && !key.modifiers.contains(KeyModifiers::ALT)
+            && self.editor.mode != editor::Mode::Insert
+        {
+            let caret = crate::canvas::editor::pos_to_px(
+                self.editor.buf.pos(),
+                self.editor_scroll,
+                self.editor_hscroll,
+            );
+            self.editor_hover = Some(iced::Point::new(
+                caret.x + crate::canvas::editor::char_width() * 0.5,
+                caret.y + crate::canvas::editor::LINE_HEIGHT * 0.5,
+            ));
+            return;
+        }
+        // any other editor key dismisses the hover tooltip
+        self.editor_hover = None;
         // page scrolling works in every mode, before anything else
         match key.code {
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -1394,6 +1415,45 @@ mod completion_tests {
         );
         assert!(app.completion.is_none());
         assert_eq!(app.editor.mode, crate::editor::Mode::Insert);
+    }
+
+    #[test]
+    fn k_hovers_the_word_at_the_caret() {
+        let mut app = App::default();
+        // caret on "users" in its "Table users {" row, col 6
+        let row = app
+            .editor
+            .buf
+            .lines()
+            .iter()
+            .position(|l| l.contains("Table users"))
+            .expect("sample has the users table");
+        app.editor.jump(row, 6);
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('K'), KeyModifiers::NONE),
+        );
+        let hover = app.editor_hover.expect("K sets the hover point");
+        // the point sits in the caret cell and resolves to the same word
+        let pos = crate::canvas::editor::px_to_pos(&app, hover);
+        assert_eq!((pos.row, pos.col), (row, 6), "on \"users\"");
+        let doc = crate::canvas::editor::doc_hover_at(&app, hover)
+            .expect("doc tooltip for the table name");
+        assert_eq!(doc.title, "Table users");
+        // any other editor key dismisses it
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('l'), KeyModifiers::NONE),
+        );
+        assert!(app.editor_hover.is_none());
+        // K in insert mode just types (no hover)
+        let mut app = insert_app();
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('K'), KeyModifiers::NONE),
+        );
+        assert!(app.editor_hover.is_none(), "insert K types");
+        assert!(app.source.contains('K'), "the K landed in the buffer");
     }
 
     #[test]
