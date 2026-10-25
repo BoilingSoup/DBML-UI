@@ -319,6 +319,74 @@ impl Importer {
             if self.constraint_kw(s, i).is_some() {
                 // bare CHECK constraints belong to the table being built
                 // (not yet in self.tables) — route them locally
+                // mysql inline KEY/UNIQUE KEY entries belong to the table
+                // being built (not yet in self.tables)
+                if self.dialect == Dialect::MySQL && s[i].is_w("KEY") {
+                    // KEY name [USING t1] (cols) [USING t2] — the LAST
+                    // USING wins (golden rule)
+                    let mut j = i + 1; // past KEY
+                    let mut iname = None;
+                    if let Some(Tok::W(n, _)) = s.get(j) {
+                        iname = Some(n.clone());
+                        j += 1;
+                    }
+                    let mut ity = None;
+                    let take_using = |j: &mut usize, ity: &mut Option<String>| {
+                        if s.get(*j).is_some_and(|t| t.is_w("USING")) {
+                            if let Some(Tok::W(t, _)) = s.get(*j + 1) {
+                                *ity = Some(t.to_ascii_lowercase());
+                            }
+                            *j += 2;
+                        }
+                    };
+                    take_using(&mut j, &mut ity);
+                    if matches!(s.get(j), Some(Tok::P('('))) {
+                        let (icols, jj) = ident_list(s, j + 1);
+                        j = jj;
+                        take_using(&mut j, &mut ity);
+                        while j < s.len() && !matches!(s[j], Tok::P(',')) {
+                            j += 1;
+                        }
+                        if !icols.is_empty() {
+                            table.indexes.push((icols, iname, false, ity, false));
+                            i = j;
+                            if i < s.len() && s[i] == Tok::P(',') {
+                                i += 1;
+                            }
+                            continue;
+                        }
+                    }
+                }
+                if s[i].is_w("UNIQUE") && self.dialect == Dialect::MySQL {
+                    // UNIQUE KEY name (cols) USING ...
+                    let mut j = i + 2; // past UNIQUE KEY
+                    let mut iname = None;
+                    if let Some(Tok::W(n, _)) = s.get(j) {
+                        iname = Some(n.clone());
+                        j += 1;
+                    }
+                    if matches!(s.get(j), Some(Tok::P('('))) {
+                        let (icols, jj) = ident_list(s, j + 1);
+                        j = jj;
+                        let mut ity = None;
+                        while j < s.len() && !matches!(s[j], Tok::P(',')) {
+                            if s[j].is_w("USING") {
+                                if let Some(Tok::W(t, _)) = s.get(j + 1) {
+                                    ity = Some(t.to_ascii_lowercase());
+                                }
+                            }
+                            j += 1;
+                        }
+                        if !icols.is_empty() {
+                            table.indexes.push((icols, iname, true, ity, false));
+                            i = j;
+                            if i < s.len() && s[i] == Tok::P(',') {
+                                i += 1;
+                            }
+                            continue;
+                        }
+                    }
+                }
                 if s[i].is_w("CHECK") || s[i].is_w("CONSTRAINT") {
                     // [CONSTRAINT name] CHECK (expr) — belongs to the table
                     // being built (not yet in self.tables)
@@ -400,6 +468,10 @@ impl Importer {
         if t.is_w("PRIMARY") || t.is_w("KEY") || t.is_w("UNIQUE") {
             let is_pk = t.is_w("PRIMARY") || t.is_w("KEY");
             i += if t.is_w("PRIMARY") { 2 } else { 1 };
+            // pg: UNIQUE NULLS [NOT] DISTINCT precedes the column list
+            if s.get(i).is_some_and(|t| t.is_w("NULLS")) {
+                i += 3; // NULLS [NOT] DISTINCT
+            }
             if let Some(Tok::P('(')) = s.get(i) {
                 i += 1;
                 (cols, i) = ident_list(s, i);
@@ -635,7 +707,10 @@ impl Importer {
                 // ON UPDATE/CURRENT/DELETE actions after REFERENCES
                 i += 2;
                 if i < s.len() && s[i].is_w("CURRENT_TIMESTAMP") {
-                    col.default = Some("current_timestamp".into());
+                    // with AUTO_INCREMENT the golden drops the default
+                    if !col.increment {
+                        col.default = Some("`CURRENT_TIMESTAMP`".into());
+                    }
                     i += 1;
                 }
             } else {
@@ -653,22 +728,63 @@ impl Importer {
     }
 
     fn create_index(&mut self, s: &[Tok]) {
-        // CREATE [UNIQUE] INDEX [IF NOT EXISTS] name ON table (cols) ...
-        let mut i = 0;
+        // CREATE [UNIQUE] INDEX [IF NOT EXISTS] name ON table (cols)
+        // [USING btree|hash]
+        let mut i = 1;
+        if s.first().is_some_and(|t| t.is_w("UNIQUE")) {
+            i = 2;
+        }
+        // optional IF NOT EXISTS, then the index name before ON
+        let mut name = None;
         while i < s.len() && !s[i].is_w("ON") {
+            if let Tok::W(w, _) = &s[i] {
+                if !w.eq_ignore_ascii_case("not") && !w.eq_ignore_ascii_case("exists") {
+                    name = Some(w.clone());
+                }
+            }
             i += 1;
         }
         i += 1;
+        if i >= s.len() {
+            return;
+        }
         let (_schema, table, j) = self.qual_name(&s[i..]);
         i += j;
         let mut cols = Vec::new();
         if matches!(s.get(i), Some(Tok::P('('))) {
             (cols, _) = ident_list(s, i + 1);
         }
-        if !cols.is_empty() {
-            self.pending_uniques.push((table, cols, false, None));
+        // USING <type> after the column list
+        let mut index_type = None;
+        let mut k = i;
+        while k < s.len() {
+            if s[k].is_w("USING") {
+                if let Some(Tok::W(t, _)) = s.get(k + 1) {
+                    index_type = Some(t.to_ascii_lowercase());
+                }
+            }
+            k += 1;
         }
-        let _ = i;
+        if cols.is_empty() {
+            return;
+        }
+        let Some(ti) = self.tables.iter().position(|t| t.name == table) else {
+            return;
+        };
+        // single-column unnamed unique folds onto the column
+        if cols.len() == 1 && name.is_none() && s.first().is_some_and(|t| t.is_w("UNIQUE")) {
+            if let Some(col) = self.tables[ti].cols.iter_mut().find(|x| x.name == cols[0]) {
+                col.unique = true;
+            }
+            return;
+        }
+        self.tables[ti].indexes.push((
+            cols,
+            name,
+            s.first().is_some_and(|t| t.is_w("UNIQUE")),
+            index_type,
+            false,
+        ));
     }
 
     fn create_type(&mut self, s: &[Tok]) {
@@ -891,7 +1007,13 @@ impl Importer {
                     settings.push("not null".into());
                 }
                 if let Some(d) = &c.default {
-                    settings.push(format!("default: {d}"));
+                    if d.eq_ignore_ascii_case("null") {
+                        // DEFAULT NULL is the default: omitted
+                    } else if d.eq_ignore_ascii_case("current_timestamp") {
+                        settings.push("default: `CURRENT_TIMESTAMP`".into());
+                    } else {
+                        settings.push(format!("default: {d}"));
+                    }
                 }
                 if let Some((rt, rc)) = &c.fk {
                     let rcs = rc.iter().map(|x| q(x)).collect::<Vec<_>>().join(", ");
