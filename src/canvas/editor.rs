@@ -295,6 +295,12 @@ impl canvas::Program<Message> for EditorView<'_> {
             );
         }
 
+        // overlays (error tooltip, hover docs, completion popup) render in
+        // a SECOND geometry: within one geometry iced draws all meshes
+        // before all text, so a popup in the main geometry left the code
+        // text beneath it showing through its background — it read as a
+        // transparent popup
+        let mut overlay = canvas::Frame::new(renderer, bounds.size());
         // tooltips on hover: errors win, then definition docs; suppressed
         // while the completion popup is open
         if let Some(hover) = app.editor_hover {
@@ -305,13 +311,13 @@ impl canvas::Program<Message> for EditorView<'_> {
                     .find(|m| m.row == pos.row && pos.col >= m.start && pos.col <= m.end)
                 {
                     let (rect, lines) = tooltip_layout(hover, &m.message, bounds);
-                    frame.fill(
+                    overlay.fill(
                         &canvas::Path::rounded_rectangle(
                             rect.position(),
                             rect.size(),
                             iced::border::Radius::from(6.0),
                         ),
-                        theme::PANEL,
+                        theme::TOOLTIP,
                     );
                     frame.stroke(
                         &canvas::Path::rounded_rectangle(
@@ -326,7 +332,7 @@ impl canvas::Program<Message> for EditorView<'_> {
                         },
                     );
                     for (i, line) in lines.iter().enumerate() {
-                        frame.fill_text(Text {
+                        overlay.fill_text(Text {
                             content: line.clone(),
                             position: Point::new(rect.x + 12.0, rect.y + 12.0 + i as f32 * 18.0),
                             color: theme::TEXT,
@@ -339,13 +345,13 @@ impl canvas::Program<Message> for EditorView<'_> {
                     }
                 } else if let Some(doc) = doc_hover_at(app, hover) {
                     let rect = doc_rect(hover, &doc, bounds);
-                    frame.fill(
+                    overlay.fill(
                         &canvas::Path::rounded_rectangle(
                             rect.position(),
                             rect.size(),
                             iced::border::Radius::from(6.0),
                         ),
-                        theme::PANEL,
+                        theme::TOOLTIP,
                     );
                     frame.stroke(
                         &canvas::Path::rounded_rectangle(
@@ -359,7 +365,7 @@ impl canvas::Program<Message> for EditorView<'_> {
                             ..Default::default()
                         },
                     );
-                    frame.fill_text(Text {
+                    overlay.fill_text(Text {
                         content: doc.title.clone(),
                         position: Point::new(rect.x + 12.0, rect.y + 10.0),
                         color: theme::SYN_NAME,
@@ -374,7 +380,7 @@ impl canvas::Program<Message> for EditorView<'_> {
                     });
                     for (i, (marker, text)) in doc.rows.iter().enumerate() {
                         let ry = rect.y + 28.0 + i as f32 * 16.0;
-                        frame.fill_text(Text {
+                        overlay.fill_text(Text {
                             content: marker.clone(),
                             position: Point::new(rect.x + 12.0, ry),
                             color: if marker == "\u{25c6}" {
@@ -390,7 +396,7 @@ impl canvas::Program<Message> for EditorView<'_> {
                             vertical_alignment: iced::alignment::Vertical::Top,
                             ..Default::default()
                         });
-                        frame.fill_text(Text {
+                        overlay.fill_text(Text {
                             content: text.clone(),
                             position: Point::new(rect.x + 12.0 + 2.0 * char_width(), ry),
                             color: theme::TEXT,
@@ -407,13 +413,13 @@ impl canvas::Program<Message> for EditorView<'_> {
 
         if let Some((prect, first_row, visible)) = popup_layout(app, bounds) {
             let c = app.completion.as_ref().unwrap();
-            frame.fill(
+            overlay.fill(
                 &canvas::Path::rounded_rectangle(
                     prect.position(),
                     prect.size(),
                     iced::border::Radius::from(6.0),
                 ),
-                theme::PANEL,
+                theme::TOOLTIP,
             );
             frame.stroke(
                 &canvas::Path::rounded_rectangle(
@@ -437,7 +443,7 @@ impl canvas::Program<Message> for EditorView<'_> {
                         Color::from_rgba(0.267, 0.576, 0.973, 0.25),
                     );
                 }
-                frame.fill_text(Text {
+                overlay.fill_text(Text {
                     content: item.label.clone(),
                     position: Point::new(prect.x + 10.0, ry + ROW_H * 0.5),
                     color: item_kind_color(item.kind),
@@ -449,7 +455,7 @@ impl canvas::Program<Message> for EditorView<'_> {
                 });
             }
         }
-        vec![frame.into_geometry()]
+        vec![frame.into_geometry(), overlay.into_geometry()]
     }
 
     fn mouse_interaction(
