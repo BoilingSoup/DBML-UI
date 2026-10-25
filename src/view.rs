@@ -114,10 +114,16 @@ impl canvas::Program<Message> for DividerHandle {
     fn mouse_interaction(
         &self,
         _state: &Self::State,
-        _bounds: iced::Rectangle,
-        _cursor: iced::mouse::Cursor,
+        bounds: iced::Rectangle,
+        cursor: iced::mouse::Cursor,
     ) -> iced::mouse::Interaction {
-        iced::mouse::Interaction::ResizingHorizontally
+        // canvas mouse_interaction is not bounds-gated by iced — without
+        // this check the resize cursor leaked over the whole window
+        if cursor.position_over(bounds).is_some() {
+            iced::mouse::Interaction::ResizingHorizontally
+        } else {
+            iced::mouse::Interaction::default()
+        }
     }
 }
 
@@ -332,5 +338,23 @@ mod divider_tests {
         );
         assert!(message.is_none());
         assert_eq!(status, canvas::event::Status::Ignored);
+    }
+
+    #[test]
+    fn cursor_shape_only_on_the_handle() {
+        // regression: iced does not bounds-gate canvas mouse_interaction,
+        // so an unconditional ResizingHorizontally put resize arrows over
+        // the whole window
+        let h = DividerHandle;
+        let inside = Cursor::Available(Point::new(203.0, 100.0));
+        assert_eq!(
+            h.mouse_interaction(&(), HANDLE, inside),
+            iced::mouse::Interaction::ResizingHorizontally
+        );
+        let outside = Cursor::Available(Point::new(100.0, 100.0));
+        assert_eq!(
+            h.mouse_interaction(&(), HANDLE, outside),
+            iced::mouse::Interaction::default()
+        );
     }
 }

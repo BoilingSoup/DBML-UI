@@ -279,6 +279,8 @@ impl canvas::Program<crate::app::Message> for Diagram<'_> {
             if hit_test(self.layout, self.zoom, self.pan, local).is_some() {
                 return Interaction::Pointer;
             }
+            // empty canvas: the open hand, signalling pan
+            return Interaction::Grab;
         }
         Interaction::default()
     }
@@ -736,5 +738,42 @@ mod interaction_tests {
             Cursor::Available(outside),
         );
         assert!(released.is_some(), "release outside ends the drag");
+    }
+
+    #[test]
+    fn cursor_shape_matches_context() {
+        use iced::mouse::Interaction;
+        let mut d = diagram();
+        // over a table box: the pointer (click-to-jump)
+        let (bx, by) = first_box_point();
+        let over_box = Cursor::Available(Point::new(BOUNDS.x + bx, BOUNDS.y + by));
+        assert_eq!(
+            d.mouse_interaction(&(), BOUNDS, over_box),
+            Interaction::Pointer
+        );
+        // empty canvas (past all content): the open grab hand
+        let empty = Cursor::Available(Point::new(BOUNDS.x + 550.0, BOUNDS.y + 380.0));
+        assert_eq!(d.mouse_interaction(&(), BOUNDS, empty), Interaction::Grab);
+        // mid-drag: grabbing
+        d.dragging = true;
+        assert_eq!(
+            d.mouse_interaction(&(), BOUNDS, empty),
+            Interaction::Grabbing
+        );
+        // outside the canvas: no opinion (arrow). Grabbing DOES persist
+        // outside mid-drag (pan continues past the edge), so un-drag first.
+        d.dragging = false;
+        assert_eq!(
+            d.mouse_interaction(&(), BOUNDS, Cursor::Available(Point::new(10.0, 10.0))),
+            Interaction::default()
+        );
+    }
+
+    /// A bounds-relative point inside the first table box of SAMPLE_DBML.
+    fn first_box_point() -> (f32, f32) {
+        let layout = diagram().layout;
+        let b = &layout.boxes[0];
+        let tl = to_px(b.x, b.y, 20.0, Vector::default());
+        (tl.x + 5.0, tl.y + 5.0)
     }
 }

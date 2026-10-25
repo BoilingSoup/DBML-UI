@@ -4,6 +4,7 @@
 
 use crate::app::{App, Message};
 use crate::editor::buffer::Pos;
+use crate::editor::Mode;
 use crate::theme;
 use iced::widget::canvas::{self, Text};
 use iced::{Color, Font, Point, Rectangle, Size};
@@ -449,6 +450,21 @@ impl canvas::Program<Message> for EditorView<'_> {
             }
         }
         vec![frame.into_geometry()]
+    }
+
+    fn mouse_interaction(
+        &self,
+        _state: &Self::State,
+        bounds: Rectangle,
+        cursor: iced::mouse::Cursor,
+    ) -> iced::mouse::Interaction {
+        // canvas mouse_interaction is not bounds-gated by iced, so check
+        // hover here: I-beam only while typing, plain arrow otherwise
+        // (normal/visual motions are keyboard-driven)
+        if cursor.position_over(bounds).is_some() && self.app.editor.mode == Mode::Insert {
+            return iced::mouse::Interaction::Text;
+        }
+        iced::mouse::Interaction::default()
     }
 }
 
@@ -1052,5 +1068,32 @@ mod tests {
             Cursor::Available(Point::new(900.0, 100.0)),
         );
         assert!(message.is_none(), "{message:?}");
+    }
+    #[test]
+    fn cursor_shape_follows_mode() {
+        use iced::mouse::Interaction;
+        let inside = Cursor::Available(Point::new(150.0, 100.0));
+        let mut app = App::default();
+        // insert mode: the I-beam; normal/visual: plain arrow
+        for (mode, expected) in [
+            (Mode::Insert, Interaction::Text),
+            (Mode::Normal, Interaction::default()),
+            (Mode::Visual, Interaction::default()),
+        ] {
+            app.editor.mode = mode;
+            let view = EditorView { app: &app };
+            assert_eq!(
+                view.mouse_interaction(&(), BOUNDS, inside),
+                expected,
+                "{mode:?}"
+            );
+        }
+        // outside the pane: no opinion even in insert mode
+        app.editor.mode = Mode::Insert;
+        let view = EditorView { app: &app };
+        assert_eq!(
+            view.mouse_interaction(&(), BOUNDS, Cursor::Available(Point::new(900.0, 100.0))),
+            Interaction::default()
+        );
     }
 }

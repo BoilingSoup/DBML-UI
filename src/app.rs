@@ -706,9 +706,13 @@ impl App {
                 _ => self.completion = None, // any other key dismisses, then proceeds
             }
         }
+        let was_insert = self.editor.mode == editor::Mode::Insert;
         let action = self.editor.handle_key(key);
-        // auto-triggers, insert mode only
-        if self.editor.mode == editor::Mode::Insert {
+        // auto-triggers fire only for keys typed while ALREADY in insert:
+        // the i/a/o/s keys that enter insert mode must not pop completions
+        // (the popup then swallowed the first Esc, stranding the session in
+        // insert mode after a single Esc)
+        if self.editor.mode == editor::Mode::Insert && was_insert {
             match key.code {
                 KeyCode::Char(c) if c.is_alphanumeric() || c == '_' => {
                     self.maybe_autocomplete(false);
@@ -1342,6 +1346,28 @@ mod completion_tests {
         );
         assert!(app.completion.is_none());
         assert_eq!(app.editor.mode, crate::editor::Mode::Insert);
+    }
+
+    #[test]
+    fn entering_insert_does_not_open_completions() {
+        // regression: the i/a/o keys that enter insert are alphanumeric, so
+        // the auto-trigger fired for the entering keypress itself — the
+        // popup then ate the first Esc, needing two Escapes to leave insert
+        for enter in ['i', 'a', 'o'] {
+            let mut app = App::default();
+            let _ = update(
+                &mut app,
+                Message::KeyPressed(KeyCode::Char(enter), KeyModifiers::NONE),
+            );
+            assert_eq!(app.editor.mode, crate::editor::Mode::Insert, "{enter}");
+            assert!(app.completion.is_none(), "{enter} opened a popup");
+            // and a single Esc leaves insert mode
+            let _ = update(
+                &mut app,
+                Message::KeyPressed(KeyCode::Esc, KeyModifiers::NONE),
+            );
+            assert_eq!(app.editor.mode, crate::editor::Mode::Normal, "{enter}");
+        }
     }
 
     #[test]
