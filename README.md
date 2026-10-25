@@ -15,7 +15,8 @@ crisp text at any scale — no terminal graphics protocols involved.
   `d`/`c` operators composed with counts, motions, and text objects
   (`d3w 2dd 2d2w d$ c0 dG cG dgg ggdG diw ciw daw caw cc dd C D yy p P x`),
   `r` replace, visual `u`/`U` re-casing, undo/redo, `/` search with `n`/`N`,
-  and ex commands (`:w :q :wq :q! :e! :o <file> :export <f.svg|f.png>`).
+  and ex commands (`:w :q :wq :q! :e! :o <file> :export <f.svg|f.png>`
+  `:export sql [pg|mysql|mssql|oracle]`).
   Keywords are case-insensitive (`table`, `TABLE`, `TaBlE` all parse).
 - **Smooth scrolling**: `Ctrl-d`/`Ctrl-u` and PgUp/PgDn animate over 250ms
   (neoscroll-style easing, re-targetable mid-flight); arrows, Home, End,
@@ -28,8 +29,14 @@ crisp text at any scale — no terminal graphics protocols involved.
   highlights tables, drag a table to reposition it **live** (positions
   survive edits for the session). Click a table to jump the editor to
   its definition.
-- **Files**: open via `dbml-ui <file>` or `:o`; saves round-trip
-  byte-identical; `:export` writes the dark-themed SVG or a 2x PNG.
+- **Files**: open via `dbml-ui <file>`, `:o`, or Ctrl+O (system file
+  picker); saves round-trip byte-identical; `:export` writes the
+  dark-themed SVG or a 2x PNG.
+- **SQL round-trip**: `:export sql [dialect]` writes Postgres / MySQL /
+  MSSQL / Oracle DDL from the diagram; opening a `.sql` dump (or
+  `dbml-ui dump.sql`) imports it back into DBML. Both directions are
+  pinned by 90+ golden fixtures vendored from the upstream dbml
+  project's own test suite.
 - **Status bar**: mode chip, cmdline + showcmd, filename with `[+]`
   modified flag, Ln/Col, table count, zoom, parse errors.
 - Draggable divider between the panes; `?` opens the key reference.
@@ -65,7 +72,8 @@ src/
     buffer.rs    text buffer (motions/edits/undo/search, tui-textarea semantics)
     mod.rs        vim engine (modes, operators, counts, registers, cmdline)
 lib (dbml-ui):
-  dbml/          parser (spans, error recovery) + AST
+  dbml/          parser (spans, error recovery) + AST + canonical fmt;
+                 SQL exporter and SQL dump importer (pg mysql mssql oracle)
   model.rs       AST -> schema (refs, fk marking, dangling count)
   layout.rs      layered auto-layout + user position overrides
   commands.rs    ex-command parsing
@@ -73,7 +81,7 @@ lib (dbml-ui):
 ```
 
 The parser, model, layout, vim engine, and exporters are pure library
-code with thorough unit tests (62+); the GUI layer is thin on top.
+code with thorough unit tests (180+); the GUI layer is thin on top.
 
 ## MSRV / dependencies
 
