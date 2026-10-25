@@ -129,25 +129,58 @@ fn crow_foot_path(end: (f32, f32), inner: (f32, f32)) -> String {
     )
 }
 
+/// Orthogonal waypoint path with filleted corners (dbdiagram's look):
+/// straight segments joined by quadratic bends of radius `r` units.
+fn rounded_edge_path(pts: &[(f32, f32)], r: f32) -> String {
+    if pts.len() < 2 {
+        return String::new();
+    }
+    let mut d = format!("M {:.1} {:.1} ", pts[0].0, pts[0].1);
+    for w in pts.windows(3) {
+        let (px, py) = (w[0].0, w[0].1);
+        let (vx, vy) = (w[1].0, w[1].1);
+        let (nx, ny) = (w[2].0, w[2].1);
+        let seg_in = ((vx - px).powi(2) + (vy - py).powi(2)).sqrt();
+        let seg_out = ((nx - vx).powi(2) + (ny - vy).powi(2)).sqrt();
+        let cut = r.min(seg_in / 2.0).min(seg_out / 2.0);
+        let din = ((vx - px) / seg_in, (vy - py) / seg_in);
+        let dout = ((nx - vx) / seg_out, (ny - vy) / seg_out);
+        d.push_str(&format!(
+            "L {:.1} {:.1} Q {:.1} {:.1} {:.1} {:.1} ",
+            vx - din.0 * cut,
+            vy - din.1 * cut,
+            vx,
+            vy,
+            vx + dout.0 * cut,
+            vy + dout.1 * cut
+        ));
+    }
+    let last = pts[pts.len() - 1];
+    d.push_str(&format!("L {:.1} {:.1}", last.0, last.1));
+    d
+}
+
 fn push_edge(s: &mut String, r: &EdgeRoute) {
-    let (x0, y0) = pt_px(r.curve[0].0, r.curve[0].1);
-    let (x1, y1) = pt_px(r.curve[1].0, r.curve[1].1);
-    let (x2, y2) = pt_px(r.curve[2].0, r.curve[2].1);
-    let (x3, y3) = pt_px(r.curve[3].0, r.curve[3].1);
+    let units: Vec<(f32, f32)> = r.pts.iter().map(|&(x, y)| pt_px(x, y)).collect();
+    let d = rounded_edge_path(&units, 8.0);
     s.push_str(&format!(
-        r##"<path d="M {x0:.1} {y0:.1} C {x1:.1} {y1:.1} {x2:.1} {y2:.1} {x3:.1} {y3:.1}" fill="none" stroke="#7f838d" stroke-width="1.5"/>"##
+        r##"<path d="{d}" fill="none" stroke="#7f838d" stroke-width="1.5"/>"##
     ));
-    // cardinality end markers, oriented along the (horizontal) end tangents
+    // cardinality end markers along the (horizontal) end segments
+    let first = units[0];
+    let second = units[1];
+    let last = units[units.len() - 1];
+    let penult = units[units.len() - 2];
     let (many_fk, many_ref) = many_ends(r.card);
     if many_fk {
-        s.push_str(&crow_foot_path((x0, y0), (x1, y1)));
+        s.push_str(&crow_foot_path(first, second));
     } else {
-        s.push_str(&one_tick_path((x0, y0), (x1, y1)));
+        s.push_str(&one_tick_path(first, second));
     }
     if many_ref {
-        s.push_str(&crow_foot_path((x3, y3), (x2, y2)));
+        s.push_str(&crow_foot_path(last, penult));
     } else {
-        s.push_str(&one_tick_path((x3, y3), (x2, y2)));
+        s.push_str(&one_tick_path(last, penult));
     }
 }
 
@@ -332,7 +365,7 @@ mod tests {
         assert!(svg.contains("<svg"));
         assert!(svg.contains(">a</text>"), "table title");
         assert!(svg.contains(">b&lt;x&gt;</text>"), "escaped title");
-        assert!(svg.contains("C "), "cubic edge path");
+        assert!(svg.contains("Q ") || svg.contains("L "), "edge path");
         assert!(svg.contains("<circle"), "pk key icon marker");
     }
 

@@ -364,8 +364,7 @@ fn paint(frame: &mut canvas::Frame, layout: &Layout, zoom: f32, pan: Vector, hov
 
 fn paint_edge(frame: &mut canvas::Frame, edge: &EdgeRoute, zoom: f32, pan: Vector) {
     let s = cell_size(zoom);
-    // pts are f32 cell coords (sampled bezier); rows anchor at their
-    // vertical center, which the router bakes in
+    // waypoints are f32 cell coords; rows anchor at their vertical center
     let pts: Vec<Point> = edge
         .pts
         .iter()
@@ -376,14 +375,7 @@ fn paint_edge(frame: &mut canvas::Frame, edge: &EdgeRoute, zoom: f32, pan: Vecto
             )
         })
         .collect();
-    let path = Path::new(|builder| {
-        if let Some(&p) = pts.first() {
-            builder.move_to(p);
-        }
-        for &p in pts.iter().skip(1) {
-            builder.line_to(p);
-        }
-    });
+    let path = rounded_edge_path(&pts, (0.9 * s.height).min(14.0));
     let stroke = edge_stroke(zoom);
     frame.stroke(&path, stroke);
     if pts.len() < 2 {
@@ -403,6 +395,37 @@ fn paint_edge(frame: &mut canvas::Frame, edge: &EdgeRoute, zoom: f32, pan: Vecto
     } else {
         one_tick(frame, pts[n - 1], pts[n - 2], zoom, stroke);
     }
+}
+
+/// Orthogonal waypoint path with filleted corners: straight runs joined
+/// by quadratic bends (a quadratic B(c;t) equals a cubic with both
+/// controls at c, which iced's builder has).
+fn rounded_edge_path(pts: &[Point], r: f32) -> Path {
+    Path::new(|builder| {
+        let Some(first) = pts.first() else {
+            return;
+        };
+        builder.move_to(*first);
+        for i in 1..pts.len().saturating_sub(1) {
+            let (p, v, n) = (pts[i - 1], pts[i], pts[i + 1]);
+            let seg_in = ((v.x - p.x).powi(2) + (v.y - p.y).powi(2)).sqrt();
+            let seg_out = ((n.x - v.x).powi(2) + (n.y - v.y).powi(2)).sqrt();
+            if seg_in < f32::EPSILON || seg_out < f32::EPSILON {
+                continue;
+            }
+            let cut = r.min(seg_in / 2.0).min(seg_out / 2.0);
+            let din = ((v.x - p.x) / seg_in, (v.y - p.y) / seg_in);
+            let dout = ((n.x - v.x) / seg_out, (n.y - v.y) / seg_out);
+            builder.line_to(Point::new(v.x - din.0 * cut, v.y - din.1 * cut));
+            builder.quadratic_curve_to(
+                Point::new(v.x, v.y),
+                Point::new(v.x + dout.0 * cut, v.y + dout.1 * cut),
+            );
+        }
+        if let Some(last) = pts.last() {
+            builder.line_to(*last);
+        }
+    })
 }
 
 fn edge_stroke(zoom: f32) -> Stroke<'static> {

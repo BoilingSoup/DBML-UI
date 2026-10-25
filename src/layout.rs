@@ -91,12 +91,10 @@ impl TableBox {
 pub struct EdgeRoute {
     /// Index into `Schema::edges`.
     pub edge: usize,
-    /// Sampled bezier in cell coords (row-anchored, side-exit points).
+    /// Orthogonal waypoints in cell coords: side anchors at the rows'
+    /// vertical centers, turns in column-gap lanes. Renderers round the
+    /// corners (dbdiagram's look).
     pub pts: Vec<(f32, f32)>,
-    /// The true curve: [start, cp1, cp2, end] in cell coords. Both control
-    /// points share the y of their endpoint, so the curve leaves and enters
-    /// tables horizontally (dbdiagram's sankey-style look).
-    pub curve: [(f32, f32); 4],
     /// Cardinality, for the crow's-foot / tick end markers.
     pub card: Cardinality,
 }
@@ -280,14 +278,10 @@ pub fn layout_with_overrides(
         .edges
         .iter()
         .enumerate()
-        .map(|(ei, e)| {
-            let (pts, curve) = route(&placed, e);
-            EdgeRoute {
-                edge: ei,
-                pts,
-                curve,
-                card: e.card,
-            }
+        .map(|(ei, e)| EdgeRoute {
+            edge: ei,
+            pts: route(&placed, e, &cols),
+            card: e.card,
         })
         .collect();
 
@@ -300,12 +294,27 @@ pub fn layout_with_overrides(
 }
 
 /// How many segments a bezier is sampled into for the canvas polyline.
-const CURVE_SAMPLES: usize = 24;
+/// Lane candidates for the vertical run: the middle of each column gap,
+/// plus bulges outside the outermost columns (cell coords).
+fn lane_candidates(cols: &[(i32, i32)]) -> Vec<f32> {
+    let mut v = Vec::new();
+    if let Some((_, first_end)) = cols.first() {
+        v.push(*first_end as f32 - 2.0);
+    }
+    for w in cols.windows(2) {
+        v.push((w[0].1 + w[1].0) as f32 / 2.0);
+    }
+    if let Some((last_start, _)) = cols.last() {
+        v.push(*last_start as f32 + 2.0);
+    }
+    v
+}
 
-/// dbdiagram-style routing: each end anchors at the row's vertical center
-/// on the box side FACING the other table (nearest sides when the boxes
-/// overlap horizontally), joined by a horizontal-tangent cubic bezier.
-fn route(boxes: &[TableBox], e: &Edge) -> (Vec<(f32, f32)>, Curve) {
+/// dbdiagram-style routing: side anchors at the rows' vertical centers on
+/// the sides FACING the other table (nearest sides when boxes overlap),
+/// joined by an orthogonal Z whose vertical run rides a column-gap lane.
+/// Renderers round the corners.
+fn route(boxes: &[TableBox], e: &Edge, cols: &[(i32, i32)]) -> Vec<(f32, f32)> {
     let (fk_idx, rf_idx) = fk_ref(e);
     let (fk_col_idx, rf_col_idx) = match e.card {
         Cardinality::OneToMany => (e.to_col, e.from_col),
@@ -313,12 +322,12 @@ fn route(boxes: &[TableBox], e: &Edge) -> (Vec<(f32, f32)>, Curve) {
     };
     let fk = find_box(boxes, fk_idx);
     let rf = find_box(boxes, rf_idx);
-    let fy = fk.col_row_center(fk_col_idx);
-    let ry = rf.col_row_center(rf_col_idx);
+    let sy = fk.col_row_center(fk_col_idx);
+    let ey = rf.col_row_center(rf_col_idx);
 
-    // side choice: right side of the leftmost box, left side of the
+    // side choice: right edge of the leftmost box, left edge of the
     // rightmost; on horizontal overlap the nearer sides by center
-    let (start_x, end_x) = if fk_idx == rf_idx {
+    let (sx, ex) = if fk_idx == rf_idx {
         // self-reference: a loop out of and back into the right side
         (fk.right() as f32, fk.right() as f32)
     } else if (fk.right() as f32) <= rf.x as f32 {
@@ -331,28 +340,44 @@ fn route(boxes: &[TableBox], e: &Edge) -> (Vec<(f32, f32)>, Curve) {
         (fk.x as f32, rf.right() as f32)
     };
 
-    let mut curve = [(0.0f32, 0.0f32); 4];
-    curve[0] = (start_x, fy);
-    curve[3] = (end_x, ry);
-    if fk_idx == rf_idx {
-        // loop: both control points bulge out the same side
-        let bulge = 3.0 + (index_of(e) as f32 % 3.0);
-        curve[1] = (start_x + bulge, fy);
-        curve[2] = (end_x + bulge, ry);
-    } else {
-        // tangent length scales with distance (clamped) for a natural arc
-        let dx = ((end_x - start_x).abs() * 0.5).clamp(1.5, 6.0);
-        let dir = if end_x >= start_x { 1.0 } else { -1.0 };
-        curve[1] = (start_x + dir * dx, fy);
-        curve[2] = (end_x - dir * dx, ry);
+    // straight across when the rows align
+    if (sy - ey).abs() < 0.25 {
+        return vec![(sx, sy), (ex, ey)];
     }
-    let pts: Vec<(f32, f32)> = (0..=CURVE_SAMPLES)
-        .map(|i| {
-            let t = i as f32 / CURVE_SAMPLES as f32;
-            bezier_at(&curve, t)
-        })
-        .collect();
-    (pts, curve)
+
+    // self-loop (or fully degenerate Z): bulge out of one side
+    let loop_bulge = 2.5 + (index_of(e) % 2) as f32;
+    if fk_idx == rf_idx || (sx - ex).abs() < 1.0 {
+        let (x0, dir) = if sx >= ex { (sx, 1.0) } else { (sx, -1.0) };
+        let mx = x0 + dir * loop_bulge;
+        return vec![(sx, sy), (mx, sy), (mx, ey), (ex, ey)];
+    }
+
+    // Z-route: the vertical run takes the gap lane nearest the midpoint,
+    // kept between the two anchors so the horizontals stay short
+    let lo = sx.min(ex);
+    let hi = sx.max(ex);
+    let mid = (sx + ex) / 2.0;
+    let mut mx = mid;
+    let mut best = f32::INFINITY;
+    for cand in lane_candidates(cols) {
+        if cand <= lo + 0.4 || cand >= hi - 0.4 {
+            continue; // must sit between the anchors
+        }
+        let d = (cand - mid).abs();
+        if d < best {
+            best = d;
+            mx = cand;
+        }
+    }
+    // keep clear of the anchors themselves
+    if (mx - sx).abs() < 0.4 {
+        mx = if sx < ex { sx + 0.8 } else { sx - 0.8 };
+    }
+    if (mx - ex).abs() < 0.4 {
+        mx = if ex < sx { ex + 0.8 } else { ex - 0.8 };
+    }
+    vec![(sx, sy), (mx, sy), (mx, ey), (ex, ey)]
 }
 
 fn index_of(e: &Edge) -> usize {
@@ -361,22 +386,6 @@ fn index_of(e: &Edge) -> usize {
     let mut h = e.from;
     h = h.wrapping_mul(31).wrapping_add(e.to);
     h.wrapping_mul(31).wrapping_add(e.from_col)
-}
-
-/// A cubic bezier in cell coords: [start, cp1, cp2, end].
-pub type Curve = [(f32, f32); 4];
-
-/// Point on a cubic bezier at parameter t.
-fn bezier_at(c: &Curve, t: f32) -> (f32, f32) {
-    let u = 1.0 - t;
-    let a = u * u * u;
-    let b = 3.0 * u * u * t;
-    let d = 3.0 * u * t * t;
-    let e = t * t * t;
-    (
-        a * c[0].0 + b * c[1].0 + d * c[2].0 + e * c[3].0,
-        a * c[0].1 + b * c[1].1 + d * c[2].1 + e * c[3].1,
-    )
 }
 
 /// FK/referenced node pair for an edge, normalizing `<` refs so the FK side
@@ -437,18 +446,19 @@ Ref: c.id > b.id
         // all three in distinct layers -> left-to-right ordering
         let xs: Vec<i32> = l.boxes.iter().map(|b| b.x).collect();
         assert!(xs.windows(2).all(|w| w[0] < w[1]), "{xs:?}");
-        // every curve is anchored on the two box edges facing each other,
-        // with horizontal tangents, and stays inside the extent
+        // every route is anchored on the two box edges facing each other,
+        // with horizontal first/last segments, inside the extent
         for r in &l.edges {
-            assert_eq!(r.pts.len(), 25, "sampled bezier");
+            assert!(r.pts.len() == 2 || r.pts.len() == 4, "straight or Z");
             for (x, y) in &r.pts {
                 assert!(
                     *x >= 0.0 && *y >= 0.0 && *x <= l.extent.0 as f32 && *y <= l.extent.1 as f32
                 );
             }
-            // tangents horizontal at both ends
-            assert_eq!(r.curve[0].1, r.curve[1].1);
-            assert_eq!(r.curve[2].1, r.curve[3].1);
+            // horizontal first/last segments (row-centered anchors)
+            assert_eq!(r.pts[0].1, r.pts[1].1);
+            let n = r.pts.len();
+            assert_eq!(r.pts[n - 2].1, r.pts[n - 1].1);
         }
     }
 
@@ -466,7 +476,7 @@ Ref: b.b_ref > a.id
     }
 
     #[test]
-    fn same_column_refs_curve_between_nearest_sides() {
+    fn same_column_refs_route_between_nearest_sides() {
         // cycle: neither table can be layered before the other
         let src = "
 Table a { id integer [pk] rb integer }
@@ -480,8 +490,8 @@ Ref: b.ra > a.id
         // same-x boxes: centers tie, so both ends use the nearer sides by
         // center comparison — one exits right into the other's left
         for r in &l.edges {
-            let (sx, sy) = r.curve[0];
-            let (ex, ey) = r.curve[3];
+            let (sx, sy) = r.pts[0];
+            let (ex, ey) = r.pts[r.pts.len() - 1];
             assert!(
                 (sx - ex).abs() > 0.5 || (sy - ey).abs() > 0.5,
                 "endpoints distinct: {r:?}"
@@ -499,9 +509,9 @@ Ref: b.ra > a.id
         let (a, b) = (&l.boxes[0], &l.boxes[1]);
         assert!(a.right() <= b.x, "a left of b");
         let r = &l.edges[0];
-        assert_eq!(r.curve[0].0, b.x as f32, "fk exits its left edge");
+        assert_eq!(r.pts[0].0, b.x as f32, "fk exits its left edge");
         assert_eq!(
-            r.curve[3].0,
+            r.pts[r.pts.len() - 1].0,
             a.right() as f32,
             "referenced enters its right edge"
         );
@@ -516,12 +526,12 @@ Ref: b.ra > a.id
         let l2 = layout_with_overrides(&schema, &ov);
         let r2 = &l2.edges[0];
         assert_eq!(
-            r2.curve[0].0,
+            r2.pts[0].0,
             l2.boxes.iter().find(|x| x.title == "b").unwrap().right() as f32,
             "fk exits its right edge"
         );
         assert_eq!(
-            r2.curve[3].0,
+            r2.pts[r2.pts.len() - 1].0,
             l2.boxes.iter().find(|x| x.title == "a").unwrap().x as f32,
             "referenced enters its left edge"
         );
@@ -534,14 +544,21 @@ Ref: b.ra > a.id
         let bk = l3.boxes.iter().find(|x| x.title == "b").unwrap();
         let ak = l3.boxes.iter().find(|x| x.title == "a").unwrap();
         assert!(
-            r3.curve[0].0 == bk.right() as f32 || r3.curve[0].0 == bk.x as f32,
+            r3.pts[0].0 == bk.right() as f32 || r3.pts[0].0 == bk.x as f32,
             "anchored on a box edge"
         );
-        assert!(r3.curve[3].0 == ak.x as f32 || r3.curve[3].0 == ak.right() as f32);
+        assert!(
+            r3.pts[r3.pts.len() - 1].0 == ak.x as f32
+                || r3.pts[r3.pts.len() - 1].0 == ak.right() as f32
+        );
         // and the anchors face each other (start >= end when b is right...)
         // centers: a at x=0..w, b at x=2..w+2 -> b center greater -> b exits left
-        assert_eq!(r3.curve[0].0, bk.x as f32, "b exits its left edge");
-        assert_eq!(r3.curve[3].0, ak.right() as f32, "a enters its right edge");
+        assert_eq!(r3.pts[0].0, bk.x as f32, "b exits its left edge");
+        assert_eq!(
+            r3.pts[r3.pts.len() - 1].0,
+            ak.right() as f32,
+            "a enters its right edge"
+        );
     }
 
     #[test]
@@ -552,9 +569,11 @@ Ref: b.ra > a.id
         let r = &l.edges[0];
         let b = &l.boxes[0];
         // both ends on the right edge, control points bulge right
-        assert_eq!(r.curve[0].0, b.right() as f32);
-        assert_eq!(r.curve[3].0, b.right() as f32);
-        assert!(r.curve[1].0 > b.right() as f32 && r.curve[2].0 > b.right() as f32);
+        assert_eq!(r.pts[0].0, b.right() as f32);
+        assert_eq!(r.pts[r.pts.len() - 1].0, b.right() as f32);
+        let bulge = r.pts[1].0;
+        assert!(bulge > b.right() as f32, "loop bulges right");
+        assert_eq!(r.pts[2].0, bulge, "the vertical run shares the lane");
     }
 
     #[test]
