@@ -190,6 +190,9 @@ struct ICol {
 /// One index entry: (columns, name, unique, index_type, pk).
 type IndexDef = (Vec<String>, Option<String>, bool, Option<String>, bool);
 
+/// One table-level foreign key: (name, fk_table, fk_cols, ref_table, ref_cols).
+type FkDef = (Option<String>, String, Vec<String>, String, Vec<String>);
+
 #[derive(Debug, Default, Clone)]
 struct ITable {
     schema: Option<String>,
@@ -207,8 +210,8 @@ struct Importer {
     dialect: Dialect,
     tables: Vec<ITable>,
     enums: Vec<(Option<String>, String, Vec<String>)>,
-    /// (fk_table, fk_cols, ref_table, ref_cols)
-    fks: Vec<(String, Vec<String>, String, Vec<String>)>,
+    /// (name, fk_table, fk_cols, ref_table, ref_cols)
+    fks: Vec<FkDef>,
     /// Uniques/PKs to merge: (table, cols, is_pk, constraint name)
     pending_uniques: Vec<(String, Vec<String>, bool, Option<String>)>,
 }
@@ -268,7 +271,9 @@ impl Importer {
         if kw.is_w("TABLE") {
             self.create_table(rest);
         } else if kw.is_w("INDEX") {
-            self.create_index(rest);
+            // UNIQUE sits before INDEX: detect from the full statement
+            let unique = s[..kind].iter().any(|t| t.is_w("UNIQUE"));
+            self.create_index(rest, unique);
         } else if kw.is_w("TYPE") {
             self.create_type(rest);
         }
@@ -321,14 +326,25 @@ impl Importer {
                 // (not yet in self.tables) — route them locally
                 // mysql inline KEY/UNIQUE KEY entries belong to the table
                 // being built (not yet in self.tables)
-                if self.dialect == Dialect::MySQL && s[i].is_w("KEY") {
-                    // KEY name [USING t1] (cols) [USING t2] — the LAST
-                    // USING wins (golden rule)
+                let is_index_kw = s[i].is_w("KEY")
+                    || (s[i].is_w("INDEX")
+                        && s.get(i + 2).is_some_and(|t| matches!(t, Tok::P('(')))
+                        && s.get(i + 3).is_some_and(|t| !matches!(t, Tok::P(')'))));
+                if self.dialect == Dialect::MySQL && is_index_kw {
+                    // [KEY|INDEX] name [USING t1] (cols) [USING t2] — the
+                    // LAST USING wins (golden rule). A `key` followed by a
+                    // TYPE is a column named key, not an index.
+                    let kw_is_index = s[i].is_w("INDEX");
+                    let _ = kw_is_index;
                     let mut j = i + 1; // past KEY
                     let mut iname = None;
                     if let Some(Tok::W(n, _)) = s.get(j) {
-                        iname = Some(n.clone());
-                        j += 1;
+                        // only an index when '(' or USING follows the name
+                        let nxt = s.get(j + 1);
+                        if nxt.is_some_and(|t| matches!(t, Tok::P('(')) || t.is_w("USING")) {
+                            iname = Some(n.clone());
+                            j += 1;
+                        }
                     }
                     let mut ity = None;
                     let take_using = |j: &mut usize, ity: &mut Option<String>| {
@@ -340,7 +356,7 @@ impl Importer {
                         }
                     };
                     take_using(&mut j, &mut ity);
-                    if matches!(s.get(j), Some(Tok::P('('))) {
+                    if iname.is_some() && matches!(s.get(j), Some(Tok::P('('))) {
                         let (icols, jj) = ident_list(s, j + 1);
                         j = jj;
                         take_using(&mut j, &mut ity);
@@ -432,6 +448,16 @@ impl Importer {
                 i += 1;
             }
         }
+        // mysql table trailer: ) ... COMMENT = '...' — scan the whole
+        // statement (constraint consumed-counts can overshoot the paren)
+        for j in 0..s.len() {
+            if s[j].is_w("COMMENT") && s.get(j + 1) == Some(&Tok::P('=')) {
+                if let Some(Tok::S(c)) = s.get(j + 2) {
+                    table.note = Some(c.clone());
+                    break;
+                }
+            }
+        }
         self.tables.push(table);
     }
 
@@ -512,25 +538,36 @@ impl Importer {
             }
             consumed = i;
         } else if t.is_w("FOREIGN") {
-            // FOREIGN KEY (cols) REFERENCES t (cols)
+            // FOREIGN KEY (cols) REFERENCES t (cols) [ON DELETE/UPDATE ...]
             i += 2;
             if let Some(Tok::P('(')) = s.get(i) {
                 i += 1;
                 (cols, i) = ident_list(s, i);
             }
-            if let Some(Tok::P('(')) = s.get(i) {
+            if s.get(i).is_some_and(|t| t.is_w("REFERENCES")) {
                 i += 1;
-                (ref_cols, i) = ident_list(s, i);
+                if let Some(Tok::W(r, _)) = s.get(i) {
+                    ref_table = r.clone();
+                    i += 1;
+                }
+                if let Some(Tok::P('(')) = s.get(i) {
+                    i += 1;
+                    (ref_cols, i) = ident_list(s, i);
+                }
             }
-            if let Some(Tok::W(r, _)) = s.get(i) {
-                ref_table = r.clone();
+            // skip ON DELETE/UPDATE <action> trailers
+            while i < s.len() {
+                if s[i].is_w("ON") {
+                    i += 3; // ON <ACTION> <action-word>
+                } else {
+                    break;
+                }
             }
             if !cols.is_empty() && !ref_table.is_empty() {
                 self.fks
-                    .push((table.to_string(), cols, ref_table, ref_cols));
+                    .push((name.clone(), table.to_string(), cols, ref_table, ref_cols));
             }
-            consumed = i + 1; // past the table name token
-            let _ = name;
+            consumed = i;
         }
         consumed
     }
@@ -599,6 +636,30 @@ impl Importer {
             i += 1;
         }
         let joined = join_type(&ty);
+        // mysql inline ENUM('a','b') -> a named enum type
+        if self.dialect == Dialect::MySQL
+            && s.get(1).is_some_and(|t| t.is_w("ENUM"))
+            && matches!(s.get(2), Some(Tok::P('(')))
+        {
+            let end = skip_group(s, 2);
+            let mut values = Vec::new();
+            for t in &s[3..end - 1] {
+                if let Tok::S(v) = t {
+                    values.push(v.clone());
+                }
+            }
+            let enum_name = format!("{}_{}_enum", table.name, name);
+            if !values.is_empty() && !self.enums.iter().any(|(_, n, _)| *n == enum_name) {
+                self.enums.push((None, enum_name.clone(), values));
+            }
+            col.ty = enum_name;
+            col.ty_quoted = false;
+            // skip the type tokens entirely; options start after the group
+            let rest_opts = &s[end..];
+            self.column_options(&mut col, rest_opts);
+            table.cols.push(col);
+            return;
+        }
         let ty_quoted = matches!(s.get(1), Some(Tok::W(_, true)));
         col.ty_quoted = ty_quoted || joined.contains('[');
         if joined.contains('[') {
@@ -609,7 +670,21 @@ impl Importer {
         } else {
             col.ty = normalize_type(&joined, self.dialect);
         }
-        // options
+        self.column_options(&mut col, &s[i..]);
+
+        if col.pk && matches!(self.dialect, Dialect::Postgres) {
+            // serial-family types imply generation
+            let low = col.ty.to_ascii_lowercase();
+            if low.contains("serial") {
+                col.increment = true;
+            }
+        }
+        table.cols.push(col);
+    }
+
+    /// Column constraint options after the type (NOT NULL, DEFAULT, ...).
+    fn column_options(&mut self, col: &mut ICol, s: &[Tok]) {
+        let mut i = 0;
         while i < s.len() {
             let t = &s[i];
             if *t == Tok::P(',') {
@@ -717,23 +792,13 @@ impl Importer {
                 i += 1;
             }
         }
-        if col.pk && matches!(self.dialect, Dialect::Postgres) {
-            // serial-family types imply generation
-            let low = col.ty.to_ascii_lowercase();
-            if low.contains("serial") {
-                col.increment = true;
-            }
-        }
-        table.cols.push(col);
     }
 
-    fn create_index(&mut self, s: &[Tok]) {
+    fn create_index(&mut self, s: &[Tok], unique: bool) {
         // CREATE [UNIQUE] INDEX [IF NOT EXISTS] name ON table (cols)
-        // [USING btree|hash]
-        let mut i = 1;
-        if s.first().is_some_and(|t| t.is_w("UNIQUE")) {
-            i = 2;
-        }
+        // [USING btree|hash]; `unique` arrives separately (the UNIQUE
+        // token precedes INDEX and is stripped from `s`)
+        let mut i = 0;
         // optional IF NOT EXISTS, then the index name before ON
         let mut name = None;
         while i < s.len() && !s[i].is_w("ON") {
@@ -772,19 +837,15 @@ impl Importer {
             return;
         };
         // single-column unnamed unique folds onto the column
-        if cols.len() == 1 && name.is_none() && s.first().is_some_and(|t| t.is_w("UNIQUE")) {
+        if cols.len() == 1 && name.is_none() && unique {
             if let Some(col) = self.tables[ti].cols.iter_mut().find(|x| x.name == cols[0]) {
                 col.unique = true;
             }
             return;
         }
-        self.tables[ti].indexes.push((
-            cols,
-            name,
-            s.first().is_some_and(|t| t.is_w("UNIQUE")),
-            index_type,
-            false,
-        ));
+        self.tables[ti]
+            .indexes
+            .push((cols, name, unique, index_type, false));
     }
 
     fn create_type(&mut self, s: &[Tok]) {
@@ -958,16 +1019,9 @@ impl Importer {
                     .push((cols, name, !is_pk, None, false));
             }
         }
-        for (fk_table, fk_cols, ref_table, ref_cols) in std::mem::take(&mut self.fks) {
-            let Some(ti) = self.tables.iter().position(|t| t.name == fk_table) else {
-                continue;
-            };
-            for (fc, rc) in fk_cols.iter().zip(ref_cols.iter()) {
-                if let Some(col) = self.tables[ti].cols.iter_mut().find(|x| x.name == *fc) {
-                    col.fk = Some((ref_table.clone(), vec![rc.clone()]));
-                }
-            }
-        }
+        // table-level FKs (ALTER TABLE or CONSTRAINT) all render as
+        // top-level Refs in emit; only inline column REFERENCES set
+        // col.fk during parsing, so nothing to fold here
     }
 
     /// Emit DBML (always quoted identifiers; semantic comparison makes the
@@ -975,6 +1029,33 @@ impl Importer {
     fn emit(&self) -> String {
         let mut out = String::new();
         let q = |n: &str| format!("\"{n}\"");
+        // named FK constraints -> top-level Ref statements (golden style)
+        for (name, fk_table, fk_cols, ref_table, ref_cols) in &self.fks {
+            let fks = fk_cols.iter().map(|c| q(c)).collect::<Vec<_>>().join(", ");
+            let rcs = ref_cols.iter().map(|c| q(c)).collect::<Vec<_>>().join(", ");
+            let (f, r) = if fk_cols.len() == 1 {
+                (fks.clone(), rcs.clone())
+            } else {
+                (format!("({fks})"), format!("({rcs})"))
+            };
+            match name {
+                Some(n) => out.push_str(&format!(
+                    "Ref {}: {}.{} < {}.{}\n\n",
+                    q(n),
+                    q(ref_table),
+                    r,
+                    q(fk_table),
+                    f
+                )),
+                None => out.push_str(&format!(
+                    "Ref: {}.{} < {}.{}\n\n",
+                    q(ref_table),
+                    r,
+                    q(fk_table),
+                    f
+                )),
+            }
+        }
         for (schema, name, values) in &self.enums {
             if let Some(s) = schema {
                 out.push_str(&format!("Enum {}.{} {{\n", q(s), q(name)));
@@ -1082,7 +1163,7 @@ impl Importer {
                 out.push_str("  }\n");
             }
             if let Some(n) = &t.note {
-                out.push_str(&format!("\n  Note: '{}'\n", n.replace('\'', "''")));
+                out.push_str(&format!("  note: '{}'\n", n.replace('\'', "''")));
             }
             out.push_str("}\n\n");
         }
