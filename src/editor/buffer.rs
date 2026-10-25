@@ -519,6 +519,48 @@ impl Buffer {
         }
     }
 
+    /// Column of the `count`-th `ch` on the cursor's line for the f/F/t/T
+    /// motions (till stops one short of the match, always making progress).
+    pub fn find_char_col(
+        &self,
+        forward: bool,
+        till: bool,
+        ch: char,
+        count: usize,
+    ) -> Option<usize> {
+        let (row, col) = (self.cursor.row, self.cursor.col);
+        let chars: Vec<char> = self.line(row).chars().collect();
+        let mut hits = 0usize;
+        if forward {
+            for (c, x) in chars.iter().enumerate().skip(col + 1) {
+                if *x == ch {
+                    hits += 1;
+                    if hits == count {
+                        return if till {
+                            (c > col + 1).then_some(c - 1)
+                        } else {
+                            Some(c)
+                        };
+                    }
+                }
+            }
+        } else {
+            for (c, x) in chars.iter().enumerate().take(col).rev() {
+                if *x == ch {
+                    hits += 1;
+                    if hits == count {
+                        return if till {
+                            (c + 1 < col).then_some(c + 1)
+                        } else {
+                            Some(c)
+                        };
+                    }
+                }
+            }
+        }
+        None
+    }
+
     // ---- vim-surround ----
 
     /// The (open, close) glyphs a surround target char stands for; quotes

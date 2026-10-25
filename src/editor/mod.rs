@@ -120,6 +120,17 @@ enum Pending {
     },
     /// visual-mode `S…` awaiting the pair to wrap the selection in
     SurroundVisual,
+    /// f/F/t/T awaiting the target char
+    Find {
+        forward: bool,
+        till: bool,
+    },
+    /// [cdy]f/F/t/T awaiting the target char
+    FindOp {
+        op: ObjOp,
+        forward: bool,
+        till: bool,
+    },
 }
 
 /// Which operator preceded a text object.
@@ -152,6 +163,8 @@ pub struct Editor {
     op_count: Option<u32>,
     pub cmdline: Option<CmdLine>,
     register: Vec<String>,
+    /// Last f/F/t/T (forward, till, char) for `;` and `,`
+    last_find: Option<(bool, bool, char)>,
     /// Source ended with a newline; preserved by `text()` for byte-identical
     /// file round-trips.
     trailing_newline: bool,
@@ -186,6 +199,7 @@ impl Editor {
             op_count: None,
             cmdline: None,
             register: Vec::new(),
+            last_find: None,
             trailing_newline: source.ends_with('\n'),
         }
     }
@@ -260,6 +274,82 @@ impl Editor {
             Some(Pending::SurroundChange { .. }) => "cs",
             Some(Pending::SurroundAdd { .. }) => "ys",
             Some(Pending::SurroundVisual) => "S",
+            Some(Pending::Find {
+                forward: true,
+                till: false,
+            }) => "f",
+            Some(Pending::Find {
+                forward: false,
+                till: false,
+            }) => "F",
+            Some(Pending::Find {
+                forward: true,
+                till: true,
+            }) => "t",
+            Some(Pending::Find {
+                forward: false,
+                till: true,
+            }) => "T",
+            Some(Pending::FindOp {
+                op: ObjOp::Delete,
+                forward: true,
+                till: false,
+            }) => "df",
+            Some(Pending::FindOp {
+                op: ObjOp::Delete,
+                forward: false,
+                till: false,
+            }) => "dF",
+            Some(Pending::FindOp {
+                op: ObjOp::Delete,
+                forward: true,
+                till: true,
+            }) => "dt",
+            Some(Pending::FindOp {
+                op: ObjOp::Delete,
+                forward: false,
+                till: true,
+            }) => "dT",
+            Some(Pending::FindOp {
+                op: ObjOp::Change,
+                forward: true,
+                till: false,
+            }) => "cf",
+            Some(Pending::FindOp {
+                op: ObjOp::Change,
+                forward: false,
+                till: false,
+            }) => "cF",
+            Some(Pending::FindOp {
+                op: ObjOp::Change,
+                forward: true,
+                till: true,
+            }) => "ct",
+            Some(Pending::FindOp {
+                op: ObjOp::Change,
+                forward: false,
+                till: true,
+            }) => "cT",
+            Some(Pending::FindOp {
+                op: ObjOp::Yank,
+                forward: true,
+                till: false,
+            }) => "yf",
+            Some(Pending::FindOp {
+                op: ObjOp::Yank,
+                forward: false,
+                till: false,
+            }) => "yF",
+            Some(Pending::FindOp {
+                op: ObjOp::Yank,
+                forward: true,
+                till: true,
+            }) => "yt",
+            Some(Pending::FindOp {
+                op: ObjOp::Yank,
+                forward: false,
+                till: true,
+            }) => "yT",
             None => "",
         };
         s.push_str(p);
@@ -428,6 +518,14 @@ impl Editor {
             KeyCode::Char('g') => {
                 self.op_count = self.count.take();
                 self.pending = Some(Pending::G);
+                Action::None
+            }
+            // f/F/t/T line motions await a target char
+            KeyCode::Char(c) if matches!(c, 'f' | 'F' | 't' | 'T') => {
+                self.pending = Some(Pending::Find {
+                    forward: c == 'f' || c == 't',
+                    till: c == 't' || c == 'T',
+                });
                 Action::None
             }
             KeyCode::Char('v') => {
@@ -651,6 +749,14 @@ impl Editor {
                 self.buf.start_selection();
                 Action::None
             }
+            // f/F/t/T extend the selection to a line char
+            KeyCode::Char(c) if matches!(c, 'f' | 'F' | 't' | 'T') => {
+                self.pending = Some(Pending::Find {
+                    forward: c == 'f' || c == 't',
+                    till: c == 't' || c == 'T',
+                });
+                Action::None
+            }
             // text objects and vim-surround start sequences in visual too
             KeyCode::Char('i') => {
                 self.pending = Some(Pending::VisualObj { around: false });
@@ -721,6 +827,16 @@ impl Editor {
         let count = self.count.take();
         let n = count.unwrap_or(1).max(1) as usize;
         match code {
+            // ; repeats the last f/F/t/T; , reverses its direction
+            KeyCode::Char(';') | KeyCode::Char(',') => {
+                if let Some((forward, till, ch)) = self.last_find {
+                    let flip = code == KeyCode::Char(',');
+                    if let Some(col) = self.buf.find_char_col(forward != flip, till, ch, n) {
+                        let row = self.buf.pos().row;
+                        self.buf.move_cursor(CursorMove::Jump(row, col));
+                    }
+                }
+            }
             // count is an absolute line number for G
             KeyCode::Char('G') => match count {
                 Some(line) => {
@@ -756,6 +872,52 @@ impl Editor {
             }
         }
         Some(Action::None)
+    }
+
+    /// [cdy]f/F/t/T (or d;…) operator over a find target.
+    fn apply_find_op(
+        &mut self,
+        op: ObjOp,
+        forward: bool,
+        till: bool,
+        ch: char,
+        count: usize,
+    ) -> Action {
+        let row = self.buf.pos().row;
+        let Some(col) = self.buf.find_char_col(forward, till, ch, count.max(1)) else {
+            return Action::None;
+        };
+        match op {
+            ObjOp::Yank => {
+                let anchor = self.buf.pos();
+                self.buf.start_selection();
+                self.buf.move_cursor(CursorMove::Jump(row, col));
+                if let Some(t) = self.buf.copy_selection() {
+                    self.register = t.split('\n').map(str::to_string).collect();
+                }
+                self.buf.cancel_selection();
+                self.buf
+                    .move_cursor(CursorMove::Jump(anchor.row, anchor.col));
+                Action::None
+            }
+            ObjOp::Delete | ObjOp::Change => {
+                // f deletes THROUGH its match; t lands one short of the
+                // match, so inclusive-through-cursor equals vim's
+                // exclusive-of-match. Backward motions stay exclusive.
+                let inclusive = forward;
+                let insert = matches!(op, ObjOp::Change);
+                self.operate(&[CursorMove::Jump(row, col)], inclusive, false, insert);
+                Action::Changed
+            }
+        }
+    }
+
+    /// Run an f/F/t/T motion to its target (plain or via ;/,).
+    fn do_find(&mut self, forward: bool, till: bool, ch: char, count: usize) {
+        if let Some(col) = self.buf.find_char_col(forward, till, ch, count.max(1)) {
+            let row = self.buf.pos().row;
+            self.buf.move_cursor(CursorMove::Jump(row, col));
+        }
     }
 
     fn repeat(&mut self, m: CursorMove, n: usize) {
@@ -898,6 +1060,57 @@ impl Editor {
             (Cg, KeyCode::Char('g')) => {
                 let target = self.line_target_row(true);
                 self.operate_lines(target, true)
+            }
+            // f/F/t/T motions and their operator forms
+            (Pending::Find { .. }, KeyCode::Esc) => Action::None,
+            (Pending::Find { forward, till }, KeyCode::Char(c)) => {
+                self.last_find = Some((forward, till, c));
+                self.do_find(forward, till, c, rep);
+                Action::None
+            }
+            (Pending::FindOp { .. }, KeyCode::Esc) => Action::None,
+            (Pending::FindOp { op, forward, till }, KeyCode::Char(c)) => {
+                self.last_find = Some((forward, till, c));
+                self.apply_find_op(op, forward, till, c, rep)
+            }
+            // d;/c;/y; (and ,) repeat the last find as an operator motion
+            (D, KeyCode::Char(';') | KeyCode::Char(','))
+            | (C, KeyCode::Char(';') | KeyCode::Char(','))
+            | (Y, KeyCode::Char(';') | KeyCode::Char(',')) => {
+                let Some((forward, till, ch)) = self.last_find else {
+                    return Action::None;
+                };
+                let flip = code == KeyCode::Char(',');
+                let op = match leader {
+                    D => ObjOp::Delete,
+                    C => ObjOp::Change,
+                    _ => ObjOp::Yank,
+                };
+                self.apply_find_op(op, forward != flip, till, ch, rep)
+            }
+            (D, KeyCode::Char(c)) if matches!(c, 'f' | 'F' | 't' | 'T') => {
+                self.pending = Some(Pending::FindOp {
+                    op: ObjOp::Delete,
+                    forward: c == 'f' || c == 't',
+                    till: c == 't' || c == 'T',
+                });
+                Action::None
+            }
+            (C, KeyCode::Char(c)) if matches!(c, 'f' | 'F' | 't' | 'T') => {
+                self.pending = Some(Pending::FindOp {
+                    op: ObjOp::Change,
+                    forward: c == 'f' || c == 't',
+                    till: c == 't' || c == 'T',
+                });
+                Action::None
+            }
+            (Y, KeyCode::Char(c)) if matches!(c, 'f' | 'F' | 't' | 'T') => {
+                self.pending = Some(Pending::FindOp {
+                    op: ObjOp::Yank,
+                    forward: c == 'f' || c == 't',
+                    till: c == 't' || c == 'T',
+                });
+                Action::None
             }
             // text objects: [cdy]i/a + w p quotes brackets
             (D, KeyCode::Char('i')) => {
@@ -1959,6 +2172,97 @@ mod polish_tests {
         assert_eq!(e.mode, Mode::Insert);
         e.handle_key(key('Z'));
         assert_eq!(e.text(), "Z\nc\n");
+    }
+
+    #[test]
+    fn find_motions_and_repeats() {
+        // f, jumps to the next comma; ; advances; , goes back
+        let mut e = editor("a,b,c,d\n");
+        for c in "f,".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.cursor(), (0, 1));
+        e.handle_key(key(';'));
+        assert_eq!(e.cursor(), (0, 3));
+        e.handle_key(key(';'));
+        assert_eq!(e.cursor(), (0, 5));
+        e.handle_key(key(','));
+        assert_eq!(e.cursor(), (0, 3));
+        // F scans backward
+        let mut e = editor("a,b,c,d\n");
+        for c in "$F,".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.cursor(), (0, 5));
+        // counts: 2f,
+        let mut e = editor("a,b,c,d\n");
+        for c in "2f,".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.cursor(), (0, 3));
+        // t stops one short of the target
+        let mut e = editor("(foo)\n");
+        for c in "t)".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.cursor(), (0, 3), "t) lands before the paren");
+        // T stops one after the previous match
+        let mut e = editor("(x)y\n");
+        for c in "$T)".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.cursor(), (0, 3), "after the ), before the y");
+        // visual f extends the selection
+        let mut e = editor("a,b,c\n");
+        for c in "vf,d".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "b,c\n");
+        // no match on the line: cursor stays
+        let mut e = editor("abc\n");
+        for c in "fz".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.cursor(), (0, 0));
+    }
+
+    #[test]
+    fn find_operators_df_cf_yf() {
+        // df( deletes through the paren (inclusive)
+        let mut e = editor("foo(bar)\n");
+        for c in "df(".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "bar)\n");
+        // dt) deletes up to but excluding the paren
+        let mut e = editor("(foo)\n");
+        for c in "ldt)".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "()\n");
+        // cf( changes through the paren
+        let mut e = editor("foo(bar)\n");
+        for c in "cf(".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "bar)\n");
+        assert_eq!(e.mode, Mode::Insert);
+        // yf, yanks through the comma, cursor stays put
+        let mut e = editor("a,b,c\n");
+        for c in "yf,".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.register, vec!["a,".to_string()]);
+        assert_eq!(e.cursor(), (0, 0), "yank leaves the cursor");
+        // d; repeats the find under the operator
+        let mut e = editor("a,b,c,d\n");
+        for c in "f,".chars() {
+            e.handle_key(key(c));
+        }
+        for c in "d;".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "ac,d\n", "d; deletes through the next comma");
     }
 
     #[test]
