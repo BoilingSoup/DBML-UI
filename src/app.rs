@@ -6,10 +6,6 @@ use dbml_ui::layout::{self, Layout};
 use dbml_ui::{dbml, model};
 use iced::{Point, Vector};
 
-/// Editor pane height in lines; updated by the view each frame when the
-/// pane is laid out (used to clamp scrolling).
-pub const EDITOR_VISIBLE_LINES: f32 = 40.0;
-
 #[derive(Debug, Clone)]
 pub enum Message {
     CanvasPressed(Point),
@@ -35,6 +31,8 @@ pub enum Message {
     CompletionPicked(usize),
     /// Mouse hover over the editor pane (local px, None when it left).
     EditorHover(Option<Point>),
+    /// Animation frame for the editor scroll.
+    Tick,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +43,26 @@ pub enum Focus {
 
 /// Open completion popup: candidate items, the selected index, where the
 /// completed word starts in the buffer, and the typed prefix.
+/// An in-flight animated scroll.
+#[derive(Debug, Clone)]
+pub struct ScrollAnim {
+    pub from: f32,
+    pub to: f32,
+    pub started: std::time::Instant,
+}
+
+/// neoscroll.nvim default speed.
+pub const SCROLL_DURATION: f32 = 0.25;
+
+/// Ease-in-out cubic (neoscroll's smooth feel).
+fn ease_in_out_cubic(t: f32) -> f32 {
+    if t < 0.5 {
+        4.0 * t * t * t
+    } else {
+        1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Completion {
     pub items: Vec<crate::editor::completion::Item>,
@@ -80,6 +98,12 @@ pub struct App {
     pub focus: Focus,
     /// Editor viewport scroll, in lines.
     pub editor_scroll: f32,
+    /// Active animated scroll (neoscroll-style): interpolate editor_scroll
+    /// from `from` to `to` over SCROLL_DURATION.
+    pub scroll_anim: Option<ScrollAnim>,
+    /// Accumulated target of the active animated scroll (repeated Ctrl-d
+    /// extends it instead of restarting).
+    scroll_target: Option<f32>,
     /// Parsed + laid out diagram for the current source.
     pub diagram: Layout,
     pub parse_errors: Vec<dbml::parser::ParseError>,
@@ -132,6 +156,8 @@ impl App {
             editor: Editor::default(),
             focus: Focus::Editor,
             editor_scroll: 0.0,
+            scroll_anim: None,
+            scroll_target: None,
             diagram: layout::layout(&model::build(&dbml::parser::parse("").doc)),
             parse_errors: Vec::new(),
             table_pos: Default::default(),
@@ -290,7 +316,12 @@ pub fn subscription(_app: &App) -> iced::Subscription<Message> {
         }
         _ => None,
     });
-    iced::Subscription::batch([mouse, keys, window_resize()])
+    let tick = if _app.scroll_anim.is_some() {
+        iced::time::every(std::time::Duration::from_millis(16)).map(|_| Message::Tick)
+    } else {
+        iced::Subscription::none()
+    };
+    iced::Subscription::batch([mouse, keys, tick, window_resize()])
 }
 
 fn named_code(n: &iced::keyboard::key::Named) -> Option<KeyCode> {
@@ -339,8 +370,10 @@ fn handle_message(app: &mut App, message: Message) {
         Message::Wheel(n) => app.wheel(n),
         Message::KeyPressed(code, mods) => app.key_pressed(code, mods),
         Message::EditorScrolled(n) => {
-            app.editor_scroll =
-                (app.editor_scroll + n).clamp(0.0, app.editor.buf.line_count() as f32 - 4.0);
+            // instant (neoscroll default) and takes over any animation
+            app.scroll_anim = None;
+            app.scroll_target = None;
+            app.editor_scroll = (app.editor_scroll + n).clamp(0.0, app.max_scroll());
         }
         Message::DividerPressed => app.drag = Drag::Divider,
         Message::MouseMovedWindow(x, _y) => {
@@ -358,6 +391,17 @@ fn handle_message(app: &mut App, message: Message) {
         Message::WindowResized(w, h) => app.window_size = (w, h),
         Message::CompletionPicked(idx) => app.completion_accept(idx),
         Message::EditorHover(p) => app.editor_hover = p,
+        Message::Tick => {
+            if let Some(anim) = &app.scroll_anim {
+                let t = (anim.started.elapsed().as_secs_f32() / SCROLL_DURATION).min(1.0);
+                let eased = ease_in_out_cubic(t);
+                app.editor_scroll = anim.from + (anim.to - anim.from) * eased;
+                if t >= 1.0 {
+                    app.scroll_anim = None;
+                    app.scroll_target = None;
+                }
+            }
+        }
         Message::EditorPressed(p) => {
             let pos = crate::canvas::editor::px_to_pos(app, p);
             app.editor
@@ -552,6 +596,26 @@ impl App {
     /// Keys routed to the editor pane, with the completion popup
     /// intercepting navigation/filter/accept keys first.
     fn editor_key(&mut self, key: KeyEvent) {
+        // page scrolling works in every mode, before anything else
+        match key.code {
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.half_page(1.0);
+                return;
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.half_page(-1.0);
+                return;
+            }
+            KeyCode::PageDown => {
+                self.page_scroll(1.0);
+                return;
+            }
+            KeyCode::PageUp => {
+                self.page_scroll(-1.0);
+                return;
+            }
+            _ => {}
+        }
         // Ctrl+Space toggles the popup (VSCode muscle memory)
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Space {
             if self.editor.mode == editor::Mode::Insert {
@@ -808,14 +872,92 @@ impl App {
         }
     }
 
-    /// Scroll the editor viewport so the cursor stays on screen.
+    /// Visible editor lines from the window size (panes + status bar).
+    fn page_lines(&self) -> f32 {
+        ((self.window_size.1 - 62.0) / crate::canvas::editor::LINE_HEIGHT).max(5.0)
+    }
+
+    fn max_scroll(&self) -> f32 {
+        (self.editor.buf.line_count() as f32 - self.page_lines()).max(0.0)
+    }
+
+    /// Start/re-target an animated scroll. Repeated requests extend the
+    /// target from the accumulated one (neoscroll behavior).
+    fn animate_scroll_by(&mut self, delta: f32) {
+        let base = self.scroll_target.unwrap_or(self.editor_scroll);
+        let to = (base + delta).clamp(0.0, self.max_scroll());
+        self.scroll_target = Some(to);
+        self.scroll_anim = Some(ScrollAnim {
+            from: self.editor_scroll,
+            to,
+            started: std::time::Instant::now(),
+        });
+    }
+
+    fn animate_scroll_to(&mut self, target: f32) {
+        let to = target.clamp(0.0, self.max_scroll());
+        if (to - self.editor_scroll).abs() < 0.5 {
+            self.editor_scroll = to;
+            self.scroll_anim = None;
+            return;
+        }
+        self.scroll_target = Some(to);
+        self.scroll_anim = Some(ScrollAnim {
+            from: self.editor_scroll,
+            to,
+            started: std::time::Instant::now(),
+        });
+    }
+
+    /// Half-page scroll with the cursor (vim Ctrl-d / Ctrl-u).
+    fn half_page(&mut self, dir: f32) {
+        self.completion = None;
+        let lines = (self.page_lines() / 2.0) * dir;
+        let pos = self.editor.buf.pos();
+        let rows = self.editor.buf.line_count();
+        let new_row = ((pos.row as f32 + lines).round() as i32).clamp(0, rows as i32 - 1) as usize;
+        let col = pos.col;
+        self.editor
+            .buf
+            .move_cursor(crate::editor::buffer::Move::Jump(new_row, col));
+        self.animate_scroll_by(lines);
+        self.focus = Focus::Editor;
+    }
+
+    /// Full-page scroll with the cursor (PageDown / PageUp).
+    fn page_scroll(&mut self, dir: f32) {
+        self.completion = None;
+        let lines = self.page_lines() * dir;
+        let pos = self.editor.buf.pos();
+        let rows = self.editor.buf.line_count();
+        let new_row = ((pos.row as f32 + lines).round() as i32).clamp(0, rows as i32 - 1) as usize;
+        let col = pos.col;
+        self.editor
+            .buf
+            .move_cursor(crate::editor::buffer::Move::Jump(new_row, col));
+        self.animate_scroll_by(lines);
+        self.focus = Focus::Editor;
+    }
+
+    /// Scroll the editor viewport so the cursor stays on screen. Small
+    /// corrections snap; big jumps (G, click-to-jump) animate.
     fn keep_cursor_visible(&mut self) {
         let row = self.editor.buf.pos().row as f32;
-        let visible = EDITOR_VISIBLE_LINES - 3.0;
-        if row < self.editor_scroll + 1.0 {
-            self.editor_scroll = (row - 1.0).max(0.0);
+        let page = self.page_lines();
+        let visible = page - 2.0;
+        let target = if row < self.editor_scroll + 1.0 {
+            (row - 1.0).max(0.0)
         } else if row > self.editor_scroll + visible {
-            self.editor_scroll = row - visible;
+            row - visible
+        } else {
+            return;
+        };
+        if (target - self.editor_scroll).abs() > page * 0.75 {
+            self.animate_scroll_to(target);
+        } else {
+            self.scroll_anim = None;
+            self.scroll_target = None;
+            self.editor_scroll = target.max(0.0);
         }
     }
 
@@ -827,7 +969,6 @@ impl App {
                     let (row, col) = dbml::parser::line_col_at(&self.source, span.start);
                     self.editor.jump(row, col);
                     self.focus = Focus::Editor;
-                    self.editor_scroll = (row as f32 - 2.0).max(0.0);
                     self.keep_cursor_visible();
                 }
             }
@@ -1208,5 +1349,127 @@ mod completion_tests {
             Message::KeyPressed(KeyCode::Backspace, KeyModifiers::NONE),
         );
         assert!(app.completion.is_none(), "empty prefix closes");
+    }
+}
+
+#[cfg(test)]
+mod scroll_tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn tall_app(lines: usize) -> App {
+        let mut src = String::new();
+        for i in 0..lines {
+            src.push_str(&format!("Table t{i} {{\n  id integer [pk]\n}}\n"));
+        }
+        App::with_source(src)
+    }
+
+    #[test]
+    fn ctrl_d_moves_cursor_half_page_and_animates() {
+        let mut app = tall_app(120);
+        app.window_size = (1400.0, 900.0);
+        let page = app.page_lines();
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        );
+        let pos = app.editor.buf.pos();
+        assert_eq!(pos.row, (page / 2.0).round() as usize, "cursor half page");
+        let anim = app.scroll_anim.as_ref().expect("animation running");
+        assert!(
+            (anim.to - page / 2.0).abs() < 0.01,
+            "target half page: {anim:?}"
+        );
+    }
+
+    #[test]
+    fn repeated_ctrl_d_stacks_to_a_full_page() {
+        let mut app = tall_app(120);
+        app.window_size = (1400.0, 900.0);
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        );
+        // let the first animation finish
+        app.scroll_anim.as_mut().unwrap().started -= Duration::from_secs(1);
+        let _ = update(&mut app, Message::Tick);
+        assert!(app.scroll_anim.is_none(), "finished");
+        let after_one = app.editor_scroll;
+
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        );
+        let anim = app.scroll_anim.as_ref().unwrap();
+        assert!(
+            (anim.to - after_one - app.page_lines() / 2.0).abs() < 0.01,
+            "second ctrl-d extends by another half page: {anim:?}"
+        );
+    }
+
+    #[test]
+    fn tick_completes_the_animation_at_the_target() {
+        let mut app = tall_app(120);
+        app.window_size = (1400.0, 900.0);
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        );
+        let to = app.scroll_anim.as_ref().unwrap().to;
+        app.scroll_anim.as_mut().unwrap().started -= Duration::from_secs(1);
+        let _ = update(&mut app, Message::Tick);
+        assert!(app.scroll_anim.is_none());
+        assert!((app.editor_scroll - to).abs() < 0.001, "lands exactly");
+    }
+
+    #[test]
+    fn scroll_clamps_at_buffer_bottom() {
+        let mut app = tall_app(40); // fewer lines than a page? make page small
+        app.window_size = (1400.0, 900.0);
+        // jump the cursor to the last line, then Ctrl-d repeatedly
+        for _ in 0..12 {
+            let _ = update(
+                &mut app,
+                Message::KeyPressed(KeyCode::Char('d'), KeyModifiers::CONTROL),
+            );
+            if let Some(a) = app.scroll_anim.as_mut() {
+                a.started -= Duration::from_secs(1);
+            }
+            let _ = update(&mut app, Message::Tick);
+        }
+        assert!(
+            app.editor_scroll <= app.max_scroll() + 0.001,
+            "clamped: {} vs {}",
+            app.editor_scroll,
+            app.max_scroll()
+        );
+        assert!(app.editor_scroll >= 0.0);
+    }
+
+    #[test]
+    fn easing_is_monotonic_and_hits_endpoints() {
+        assert_eq!(ease_in_out_cubic(0.0), 0.0);
+        assert_eq!(ease_in_out_cubic(1.0), 1.0);
+        let mut prev = -0.001;
+        for i in 0..=100 {
+            let v = ease_in_out_cubic(i as f32 / 100.0);
+            assert!(v > prev, "monotonic at {i}");
+            assert!((0.0..=1.0).contains(&v));
+            prev = v;
+        }
+    }
+
+    #[test]
+    fn wheel_cancels_the_animation() {
+        let mut app = tall_app(120);
+        app.window_size = (1400.0, 900.0);
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        );
+        assert!(app.scroll_anim.is_some());
+        let _ = update(&mut app, Message::EditorScrolled(-2.0));
+        assert!(app.scroll_anim.is_none(), "wheel takes over");
     }
 }
