@@ -29,14 +29,27 @@ impl Tok {
     }
 }
 
-fn tokenize(src: &str) -> Result<Vec<Tok>, String> {
+fn tokenize(src: &str, d: Dialect) -> Result<Vec<Tok>, String> {
+    let oracle = matches!(d, Dialect::Oracle);
     let mut out = Vec::new();
     let b: Vec<char> = src.chars().collect();
     let mut i = 0;
+    let mut depth = 0i32;
     while i < b.len() {
         let c = b[i];
         match c {
-            ' ' | '\t' | '\n' | '\r' => i += 1,
+            ' ' | '\t' | '\n' | '\r' => {
+                // consume the whole run; oracle emits ONE space marker
+                // after a ',' nested >= 2 groups deep so `NUMBER(10, 2)`
+                // keeps its in-type space (drives the golden's
+                // quoted-type rule: data_types, insert_*)
+                while i < b.len() && matches!(b[i], ' ' | '\t' | '\n' | '\r') {
+                    i += 1;
+                }
+                if oracle && depth >= 2 && matches!(out.last(), Some(Tok::P(','))) {
+                    out.push(Tok::P(' '));
+                }
+            }
             '-' if i + 1 < b.len() && b[i + 1] == '-' => {
                 while i < b.len() && b[i] != '\n' {
                     i += 1;
@@ -123,6 +136,11 @@ fn tokenize(src: &str) -> Result<Vec<Tok>, String> {
                 out.push(Tok::W(b[start..i].iter().collect(), false));
             }
             other => {
+                if other == '(' {
+                    depth += 1;
+                } else if other == ')' {
+                    depth = (depth - 1).max(0);
+                }
                 out.push(Tok::P(other));
                 i += 1;
             }
@@ -207,6 +225,8 @@ struct ICol {
     /// Inline REFERENCES: (schema, table, cols — cols may be empty until
     /// finish() resolves the target's pk).
     fk: Option<(Option<String>, String, Vec<String>)>,
+    /// Inline `CONSTRAINT name REFERENCES ...` — emitted as a named Ref.
+    fk_name: Option<String>,
     check: Option<String>,
 }
 
@@ -259,7 +279,7 @@ struct Importer {
 }
 
 pub fn import(source: &str, dialect: Dialect) -> Result<String, String> {
-    let toks = tokenize(source)?;
+    let toks = tokenize(source, dialect)?;
     let mut imp = Importer {
         dialect,
         tables: Vec::new(),
@@ -315,9 +335,13 @@ impl Importer {
         if kw.is_w("TABLE") {
             self.create_table(rest);
         } else if kw.is_w("INDEX") {
-            // UNIQUE sits before INDEX: detect from the full statement
+            // UNIQUE / BITMAP sit before INDEX: detect from the full
+            // statement (oracle bitmap indexes render `type: bitmap`)
             let unique = s[..kind].iter().any(|t| t.is_w("UNIQUE"));
-            self.create_index(rest, unique);
+            let ity = s[..kind]
+                .iter()
+                .find_map(|t| t.is_w("BITMAP").then(|| "bitmap".to_string()));
+            self.create_index(rest, unique, ity);
         } else if kw.is_w("TYPE") {
             self.create_type(rest);
         }
@@ -552,9 +576,10 @@ impl Importer {
                 // unnamed Ref (golden rule), in statement order
                 if let Some(col) = table.cols.last_mut() {
                     if col.fk.as_ref().is_some_and(|(_, _, rc)| !rc.is_empty()) {
+                        let fk_name = col.fk_name.take();
                         if let Some((rs, rt, rc)) = col.fk.take() {
                             self.fks.push((
-                                None,
+                                fk_name,
                                 table.name.clone(),
                                 vec![col.name.clone()],
                                 rs,
@@ -574,19 +599,26 @@ impl Importer {
         // index order matches the source item order (finish() handles
         // only ALTER-time pendings)
         let pend: Vec<_> = std::mem::take(&mut self.pending_uniques);
+        let oracle = self.dialect == Dialect::Oracle;
         for (tname, cols, is_pk, name, ity, _from_create) in pend {
             if tname != table.name {
                 self.pending_uniques
                     .push((tname, cols, is_pk, name, ity, true));
                 continue;
             }
-            if is_pk && cols.len() == 1 {
+            if is_pk && cols.len() == 1 && !oracle {
                 if let Some(col) = table.cols.iter_mut().find(|x| x.name == cols[0]) {
                     col.pk = true;
                 }
             } else if is_pk {
-                table.indexes.insert(0, (cols, name, false, ity, true));
-            } else if cols.len() == 1 && name.is_none() {
+                // oracle: table-level PKs always render as indexes-block
+                // entries, in constraint order (golden rule)
+                if oracle {
+                    table.indexes.push((cols, name, false, ity, true));
+                } else {
+                    table.indexes.insert(0, (cols, name, false, ity, true));
+                }
+            } else if cols.len() == 1 && name.is_none() && !oracle {
                 if let Some(col) = table.cols.iter_mut().find(|x| x.name == cols[0]) {
                     col.unique = true;
                 }
@@ -808,12 +840,40 @@ impl Importer {
                     (ref_cols, i) = ident_list(s, i);
                 }
             }
-            // skip ON DELETE/UPDATE <action> trailers
+            // skip constraint-option trailers: ON DELETE/UPDATE <action>
+            // (multi-word: SET NULL / NO ACTION / SET DEFAULT), DEFERRABLE
+            // / NOT DEFERRABLE [INITIALLY DEFERRED|IMMEDIATE], ENABLE /
+            // DISABLE [VALIDATE] [NOVALIDATE], RELY / NORELY — goldens
+            // drop them all
             while i < s.len() {
-                if s[i].is_w("ON") {
-                    i += 3; // ON <ACTION> <action-word>
-                } else {
-                    break;
+                match &s[i] {
+                    Tok::P(',') | Tok::P(')') => break,
+                    Tok::W(w, _) if w.eq_ignore_ascii_case("ON") => {
+                        // ON DELETE|UPDATE <action>; SET NULL / NO ACTION
+                        // / SET DEFAULT are two words
+                        i += 2;
+                        if s.get(i).is_some_and(|t| t.is_w("SET") || t.is_w("NO")) {
+                            i += 2;
+                        } else {
+                            i += 1;
+                        }
+                    }
+                    Tok::W(w, _)
+                        if w.eq_ignore_ascii_case("NOT")
+                            || w.eq_ignore_ascii_case("DEFERRABLE")
+                            || w.eq_ignore_ascii_case("INITIALLY")
+                            || w.eq_ignore_ascii_case("DEFERRED")
+                            || w.eq_ignore_ascii_case("IMMEDIATE")
+                            || w.eq_ignore_ascii_case("ENABLE")
+                            || w.eq_ignore_ascii_case("DISABLE")
+                            || w.eq_ignore_ascii_case("VALIDATE")
+                            || w.eq_ignore_ascii_case("NOVALIDATE")
+                            || w.eq_ignore_ascii_case("RELY")
+                            || w.eq_ignore_ascii_case("NORELY") =>
+                    {
+                        i += 1;
+                    }
+                    _ => break,
                 }
             }
             if !cols.is_empty() && !ref_table.is_empty() {
@@ -926,6 +986,9 @@ impl Importer {
                 Tok::P('[') => ty.push("[".into()),
                 Tok::P(']') => ty.push("]".into()),
                 Tok::P('.') => ty.push(".".into()),
+                // tokenizer space marker inside type parens (`NUMBER(10,
+                // 2)`) — join_type renders it, driving the quoted-type rule
+                Tok::P(' ') => ty.push(String::new()),
                 _ => {}
             }
             i += 1;
@@ -987,6 +1050,9 @@ impl Importer {
     /// Column constraint options after the type (NOT NULL, DEFAULT, ...).
     fn column_options(&mut self, col: &mut ICol, s: &[Tok]) {
         let mut i = 0;
+        // pending inline `CONSTRAINT name` — applies to the next
+        // REFERENCES (named inline FKs render as named Refs)
+        let mut constraint_name: Option<String> = None;
         while i < s.len() {
             let t = &s[i];
             if *t == Tok::P(',') {
@@ -1052,6 +1118,8 @@ impl Importer {
                 i += 1;
                 let (v, next) = if matches!(self.dialect, Dialect::MSSQL) {
                     mssql_default(s, i)
+                } else if matches!(self.dialect, Dialect::Oracle) {
+                    oracle_default(s, i)
                 } else {
                     default_value(s, i)
                 };
@@ -1068,6 +1136,7 @@ impl Importer {
                         (rc, i) = ident_list(s, i);
                     }
                     col.fk = Some((rs, rt, rc));
+                    col.fk_name = constraint_name.take();
                 }
             } else if t.is_w("COMMENT") {
                 i += 1;
@@ -1086,7 +1155,23 @@ impl Importer {
                     i = end;
                 }
             } else if t.is_w("CONSTRAINT") {
-                i += 2;
+                // inline constraint name — applies to the following
+                // REFERENCES (named inline FKs render as named Refs)
+                i += 1;
+                if let Some(Tok::W(n, _)) = s.get(i) {
+                    let kind = n.eq_ignore_ascii_case("PRIMARY")
+                        || n.eq_ignore_ascii_case("FOREIGN")
+                        || n.eq_ignore_ascii_case("UNIQUE")
+                        || n.eq_ignore_ascii_case("CHECK")
+                        || n.eq_ignore_ascii_case("KEY")
+                        || n.eq_ignore_ascii_case("NOT")
+                        || n.eq_ignore_ascii_case("NULL")
+                        || n.eq_ignore_ascii_case("DEFAULT");
+                    if !kind {
+                        constraint_name = Some(n.clone());
+                        i += 1;
+                    }
+                }
             } else if t.is_w("ON") {
                 // ON UPDATE/CURRENT/DELETE actions after REFERENCES
                 i += 2;
@@ -1103,7 +1188,7 @@ impl Importer {
         }
     }
 
-    fn create_index(&mut self, s: &[Tok], unique: bool) {
+    fn create_index(&mut self, s: &[Tok], unique: bool, seed_type: Option<String>) {
         // CREATE [UNIQUE] INDEX [IF NOT EXISTS] name ON table (cols)
         // [USING btree|hash]; `unique` arrives separately (the UNIQUE
         // token precedes INDEX and is stripped from `s`)
@@ -1126,11 +1211,18 @@ impl Importer {
         i += j;
         let mut cols = Vec::new();
         if matches!(s.get(i), Some(Tok::P('('))) {
-            (cols, _) = ident_list(s, i + 1);
+            if matches!(self.dialect, Dialect::Oracle) {
+                // function-based indexes keep their expressions verbatim
+                // (`UPPER(x)`, `price * 1.1`, `TO_CHAR(...)` — goldens)
+                cols = oracle_index_exprs(s, i + 1);
+            } else {
+                (cols, _) = ident_list(s, i + 1);
+            }
         }
         // USING <type> — appears after cols (mysql) or between table and
-        // cols (postgres: CREATE INDEX ... ON t USING HASH (cols))
-        let mut index_type = None;
+        // cols (postgres: CREATE INDEX ... ON t USING HASH (cols)); a
+        // CREATE BITMAP INDEX seeds the type for oracle
+        let mut index_type = seed_type;
         let mut k = 0;
         while k < s.len() {
             if s[k].is_w("USING") {
@@ -1261,11 +1353,106 @@ impl Importer {
                         break;
                     }
                 }
+            } else if s[i].is_w("MODIFY") && matches!(self.dialect, Dialect::Oracle) {
+                // oracle: MODIFY col [type] [DEFAULT expr [ON NULL]]
+                // [NOT NULL | NULL] [CONSTRAINT n NOT NULL] — or the
+                // multi-column MODIFY (col ..., col ...) form
+                i += 1;
+                if matches!(s.get(i), Some(Tok::P('('))) {
+                    let end = skip_group(s, i);
+                    let mut j = i + 1;
+                    while j + 1 < end {
+                        while j + 1 < end && s[j] == Tok::P(' ') {
+                            j += 1;
+                        }
+                        let elem_start = j;
+                        let mut depth = 0i32;
+                        while j + 1 < end {
+                            match &s[j] {
+                                Tok::P('(') => depth += 1,
+                                Tok::P(')') => depth = (depth - 1).max(0),
+                                Tok::P(',') if depth == 0 => break,
+                                _ => {}
+                            }
+                            j += 1;
+                        }
+                        self.oracle_modify_elem(ti, &s[elem_start..j]);
+                        j += 1; // past ','
+                    }
+                    i = end;
+                } else {
+                    let end = item_end(s, i);
+                    self.oracle_modify_elem(ti, &s[i..end]);
+                    i = end;
+                }
             } else {
                 i += 1;
             }
         }
         let _ = schema;
+    }
+
+    /// One Oracle `ALTER TABLE t MODIFY` element: `col [type] [DEFAULT
+    /// expr [ON NULL]] [NOT NULL | NULL] [CONSTRAINT name NOT NULL]`.
+    /// Type changes are ignored (goldens keep the declared type); within
+    /// one element a DEFAULT wins over NOT NULL/NULL (golden rule from
+    /// alter_table_set_default's `MODIFY (price DEFAULT 0.99 NOT NULL, …)`,
+    /// while `MODIFY (a NOT NULL, b NOT NULL)` applies the nullability).
+    fn oracle_modify_elem(&mut self, ti: usize, s: &[Tok]) {
+        let Some(Tok::W(col, _)) = s.first() else {
+            return;
+        };
+        let col = col.clone();
+        let mut i = 1;
+        let mut default_toks: Option<&[Tok]> = None;
+        let mut not_null = false;
+        let mut nullable = false;
+        while i < s.len() {
+            let t = &s[i];
+            if t.is_w("DEFAULT") {
+                i += 1;
+                // optional ON NULL between DEFAULT and the value
+                if s.get(i).is_some_and(|x| x.is_w("ON"))
+                    && s.get(i + 1).is_some_and(|x| x.is_w("NULL"))
+                {
+                    i += 2;
+                }
+                let start = i;
+                let mut depth = 0i32;
+                while i < s.len() {
+                    match &s[i] {
+                        Tok::P('(') => depth += 1,
+                        Tok::P(')') => depth = (depth - 1).max(0),
+                        Tok::W(_, false) if depth == 0 && oracle_expr_stops(s, i) => break,
+                        _ => {}
+                    }
+                    i += 1;
+                }
+                default_toks = Some(&s[start..i]);
+            } else if t.is_w("NOT") && s.get(i + 1).is_some_and(|x| x.is_w("NULL")) {
+                not_null = true;
+                i += 2;
+            } else if t.is_w("NULL") {
+                nullable = true;
+                i += 1;
+            } else if t.is_w("CONSTRAINT") {
+                // named NOT NULL: `MODIFY dept_name CONSTRAINT nn NOT NULL`
+                i += if s.get(i + 1).is_some_and(|x| matches!(x, Tok::W(_, _))) {
+                    2
+                } else {
+                    1
+                };
+            } else {
+                i += 1; // type tokens and anything else: ignored
+            }
+        }
+        if let Some(dt) = default_toks {
+            self.set_default(ti, &col, Some(oracle_default_value(dt)));
+        } else if not_null {
+            self.set_not_null(ti, &col, true);
+        } else if nullable {
+            self.set_not_null(ti, &col, false);
+        }
     }
 
     fn comment(&mut self, s: &[Tok]) {
@@ -1503,6 +1690,9 @@ impl Importer {
                 && match (self.dialect, from_create) {
                     (Dialect::Postgres, true) => false,
                     (Dialect::Postgres, false) => true,
+                    // oracle: ALTER-added table-level PK/UNIQUE always
+                    // render as indexes-block entries (golden rule)
+                    (Dialect::Oracle, _) => false,
                     _ => is_pk || name.is_none(),
                 };
             if fold && is_pk && cols.len() == 1 {
@@ -1588,9 +1778,28 @@ impl Importer {
             out.push_str("}\n\n");
         }
         // golden rule: default-schema tables first (creation order), then
-        // other schemas' tables in creation order
+        // other schemas' tables — oracle groups the schema-qualified ones
+        // by schema, in each schema's first-appearance order (create_table
+        // golden); other dialects keep plain creation order
         let mut ordered: Vec<&ITable> = self.tables.iter().collect();
-        ordered.sort_by_key(|t| t.schema.is_some());
+        if matches!(self.dialect, Dialect::Oracle) {
+            let mut seen: Vec<Option<String>> = Vec::new();
+            for t in &self.tables {
+                if !seen.contains(&t.schema) {
+                    seen.push(t.schema.clone());
+                }
+            }
+            ordered.sort_by_key(|t| {
+                (
+                    t.schema.is_some(),
+                    seen.iter()
+                        .position(|s| *s == t.schema)
+                        .unwrap_or(usize::MAX),
+                )
+            });
+        } else {
+            ordered.sort_by_key(|t| t.schema.is_some());
+        }
         for t in ordered {
             let head = match &t.schema {
                 // mssql goldens drop schema qualifiers entirely
@@ -1848,6 +2057,126 @@ fn add_default_for(s: &[Tok]) -> Option<(String, String)> {
     Some((v, col.clone()))
 }
 
+/// Oracle DEFAULT expression → DBML default value. String literals stay
+/// verbatim, numbers are re-rendered (trailing zeros trimmed), bare NULL
+/// clears, everything else becomes a backticked expression (golden rule
+/// from column_def_default: `SYSDATE`, `USER`, `test_seq.NEXTVAL`,
+/// `5000 + 1000`, `N'...'` all render backticked).
+fn oracle_default_value(dt: &[Tok]) -> String {
+    match dt {
+        [] => String::new(),
+        [Tok::S(v)] => format!("'{}'", v.replace('\'', "''")),
+        [Tok::N(n)] => oracle_number(n),
+        [Tok::W(w, false)] if w.eq_ignore_ascii_case("null") => "null".to_string(),
+        _ => format!("`{}`", tokens_text(dt, false)),
+    }
+}
+
+/// Oracle numeric default: goldens re-render the literal through a float,
+/// trimming trailing zeros (`10000.00` -> `10000`, `0.10` -> `0.1`,
+/// `0.00` -> `0`); `3.14` etc. pass through.
+fn oracle_number(n: &str) -> String {
+    if n.contains('.') {
+        if let Ok(v) = n.parse::<f64>() {
+            return format!("{v}");
+        }
+    }
+    parse_int_literal(n)
+}
+
+/// Oracle DEFAULT: optional `ON NULL` is skipped; the expression runs to
+/// the next constraint keyword or the end of the item.
+fn oracle_default(s: &[Tok], mut i: usize) -> (String, usize) {
+    if s.get(i).is_some_and(|x| x.is_w("ON")) && s.get(i + 1).is_some_and(|x| x.is_w("NULL")) {
+        i += 2;
+    }
+    let start = i;
+    let mut depth = 0i32;
+    while i < s.len() {
+        match &s[i] {
+            Tok::P('(') => depth += 1,
+            Tok::P(')') => depth = (depth - 1).max(0),
+            Tok::W(_, false) if depth == 0 && oracle_expr_stops(s, i) => break,
+            _ => {}
+        }
+        i += 1;
+    }
+    (oracle_default_value(&s[start..i]), i)
+}
+
+/// Does the word at `i` end an Oracle default expression? (`NOT NULL`,
+/// ENABLE/DISABLE/VALIDATE/RELY families, DEFERRABLE options and regular
+/// constraint keywords all terminate it; goldens drop these trailers.)
+fn oracle_expr_stops(s: &[Tok], i: usize) -> bool {
+    let Some(Tok::W(w, false)) = s.get(i) else {
+        return false;
+    };
+    if w.eq_ignore_ascii_case("not") && s.get(i + 1).is_some_and(|x| x.is_w("null")) {
+        return true;
+    }
+    [
+        "constraint",
+        "enable",
+        "disable",
+        "validate",
+        "novalidate",
+        "rely",
+        "norely",
+        "deferrable",
+        "initially",
+        "deferred",
+        "immediate",
+        "primary",
+        "unique",
+        "references",
+        "check",
+        "comment",
+    ]
+    .iter()
+    .any(|k| w.eq_ignore_ascii_case(k))
+}
+
+/// Oracle CREATE INDEX column list: each element is a plain column or an
+/// expression (`UPPER(x)`, `price * 1.1`) kept verbatim (function-based
+/// index goldens).
+fn oracle_index_exprs(s: &[Tok], mut i: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur: Vec<Tok> = Vec::new();
+    let mut depth = 0i32;
+    let flush = |out: &mut Vec<String>, cur: &mut Vec<Tok>| {
+        if cur.len() == 1 {
+            if let Tok::W(w, _) = &cur[0] {
+                out.push(w.clone());
+                cur.clear();
+                return;
+            }
+        }
+        if !cur.is_empty() {
+            out.push(tokens_text(cur, false));
+        }
+        cur.clear();
+    };
+    while i < s.len() {
+        match &s[i] {
+            Tok::P(')') if depth == 0 => {
+                flush(&mut out, &mut cur);
+                break;
+            }
+            Tok::P(',') if depth == 0 => flush(&mut out, &mut cur),
+            t => {
+                if *t == Tok::P('(') {
+                    depth += 1;
+                } else if *t == Tok::P(')') {
+                    depth = (depth - 1).max(0);
+                }
+                cur.push(t.clone());
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
 /// Render a numeric literal: 0b/0o/0x and leading-zero forms convert to
 /// their decimal value (golden rule from integer_literals).
 fn parse_int_literal(n: &str) -> String {
@@ -1929,12 +2258,20 @@ fn join_type(toks: &[String]) -> String {
     for t in toks {
         match t.as_str() {
             "(" | ")" | "," | "." | "[" | "]" => out.push_str(t),
+            // empty token = source whitespace inside the type
+            // (`NUMBER(10, 2)`): renders as one space
+            "" => {
+                if !out.is_empty() && !out.ends_with(' ') {
+                    out.push(' ');
+                }
+            }
             _ => {
                 if !out.is_empty()
                     && !out.ends_with('(')
                     && !out.ends_with(',')
                     && !out.ends_with('.')
                     && !out.ends_with('[')
+                    && !out.ends_with(' ')
                     && !t.starts_with('[')
                 {
                     out.push(' ');
@@ -1950,13 +2287,17 @@ fn join_type(toks: &[String]) -> String {
 /// and map vendor spellings to canonical DBML types).
 fn normalize_type(ty: &str, d: Dialect) -> String {
     let mut t = ty.trim().to_string();
-    for drop in [
-        "WITH TIME ZONE",
-        "WITHOUT TIME ZONE",
-        "with time zone",
-        "without time zone",
-    ] {
-        t = t.replace(drop, "");
+    // oracle goldens keep `... WITH TIME ZONE` verbatim (rendered as a
+    // quoted type); the drop is a pg/mysql normalization
+    if !matches!(d, Dialect::Oracle) {
+        for drop in [
+            "WITH TIME ZONE",
+            "WITHOUT TIME ZONE",
+            "with time zone",
+            "without time zone",
+        ] {
+            t = t.replace(drop, "");
+        }
     }
     if matches!(d, Dialect::Postgres) {
         // phrase replacements that keep any (n,m) suffix

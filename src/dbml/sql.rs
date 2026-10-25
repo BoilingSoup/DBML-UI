@@ -1046,7 +1046,7 @@ mod fixtures {
     // type suffixes — upstream artifacts, not real DBML
     // remaining importer skips: upstream table/section ordering in
     // complex multi-schema fixtures (content matches; ordering and
-    // section placement don't) and two unparseable goldens
+    // section placement don't) and three unparseable goldens
     const SKIPPED_IMPORTER: &[(&str, &str)] = &[
         ("mysql_importer", "ddl_create"),
         ("mysql_importer", "dml_test"),
@@ -1055,6 +1055,9 @@ mod fixtures {
         ("postgres_importer", "general_schema"),
         ("postgres_importer", "multiple_schema"),
         ("mysql_importer", "multiple_schema"),
+        // golden emits unquoted multi-word index columns (`date of birth`,
+        // `a aaa` from a string literal) that no DBML parser accepts
+        ("oracle_importer", "quoted_names"),
     ];
     const SKIPPED: &[(&str, &str)] = &[
         ("postgres_exporter", "insert_records"),
