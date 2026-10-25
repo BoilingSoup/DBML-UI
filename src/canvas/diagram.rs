@@ -139,6 +139,11 @@ impl canvas::Program<crate::app::Message> for Diagram<'_> {
     ) -> Vec<canvas::Geometry> {
         let mut frame = canvas::Frame::new(renderer, bounds.size());
         frame.fill_rectangle(Point::ORIGIN, bounds.size(), theme::BG);
+        // NOTE: canvas geometry is not clipped to the widget by default, but
+        // the pane container uses .clip(true) (view.rs) so boxes dragged to
+        // negative diagram coords never paint over the editor pane. Don't
+        // use Frame::with_clip here — its draft/paste misplaces mesh
+        // geometry on the wgpu backend in 0.13.
         paint(&mut frame, self.layout, self.zoom, self.pan, self.hover);
         vec![frame.into_geometry()]
     }
@@ -188,10 +193,18 @@ fn paint_edge(frame: &mut canvas::Frame, edge: &EdgeRoute, zoom: f32, pan: Vecto
         &path,
         Stroke {
             style: theme::EDGE.into(),
-            width: (1.5 * zoom / 20.0).max(0.75),
+            width: edge_stroke_width(zoom),
             ..Default::default()
         },
     );
+}
+
+/// Edge stroke thickness at `zoom`: proportional above 1:1, but never
+/// thinner than 1px on screen — sub-pixel strokes rasterize depending on
+/// their subpixel phase, so edges visibly flickered in and out while
+/// panning a zoomed-out diagram (the classic hairline-SVG problem).
+fn edge_stroke_width(zoom: f32) -> f32 {
+    (1.5 * zoom / 20.0).clamp(1.0, 12.0)
 }
 
 fn paint_table(frame: &mut canvas::Frame, b: &TableBox, zoom: f32, pan: Vector, hovered: bool) {
@@ -301,6 +314,20 @@ mod tests {
         dbml_ui::layout::layout(&dbml_ui::model::build(
             &dbml_ui::dbml::parser::parse("Table a { id integer [pk] }").doc,
         ))
+    }
+
+    #[test]
+    fn edge_strokes_never_drop_below_one_pixel() {
+        assert_eq!(edge_stroke_width(160.0), 12.0, "proportional at 8x");
+        assert_eq!(edge_stroke_width(20.0), 1.5, "proportional at 1:1");
+        for zoom in [5.0, 8.0, 10.0, 13.0] {
+            assert!(
+                edge_stroke_width(zoom) >= 1.0,
+                "zoom {zoom}: {}",
+                edge_stroke_width(zoom)
+            );
+        }
+        assert_eq!(edge_stroke_width(5.0), 1.0, "clamped at 25% zoom");
     }
 
     #[test]

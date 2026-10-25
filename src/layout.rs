@@ -199,11 +199,12 @@ pub fn layout_with_overrides(
         }
     }
 
-    // Dragged positions win over the automatic packing.
+    // Dragged positions win over the automatic packing. No clamping:
+    // boxes may sit above/left of the origin (negative diagram coords).
     for b in &mut placed {
         if let Some((x, y)) = overrides.get(&b.title) {
-            b.x = (*x).max(0);
-            b.y = (*y).max(0);
+            b.x = *x;
+            b.y = *y;
         }
     }
     // Recompute column extents and bounds from the final positions so

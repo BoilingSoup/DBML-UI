@@ -197,9 +197,10 @@ impl App {
             } => {
                 let moved = moved || p.distance(press) > 3.0;
                 let (cx, cy) = to_cell_f(p, self.zoom, self.pan);
+                // free positioning: boxes may go above/left of the origin
                 let pos = (
-                    ((cx - grab.0).round() as i32).max(0),
-                    ((cy - grab.1).round() as i32).max(0),
+                    ((cx - grab.0).round() as i32),
+                    ((cy - grab.1).round() as i32),
                 );
                 let src = self.source.clone();
                 self.table_pos.insert(title.clone(), pos);
@@ -896,6 +897,44 @@ mod tests {
             Message::CanvasReleased(Point::new(press.x + 80.0, press.y + 20.0)),
         );
         assert_eq!(app.pending_jump, None, "a real drag is not a click");
+    }
+
+    #[test]
+    fn table_drag_moves_above_and_left_of_origin() {
+        let mut app = app();
+        // users sits at (0,0): press it and drag up-left past the origin
+        let press = over_box(&app, "users", 3.0, 3.0);
+        let _ = update(&mut app, Message::CanvasPressed(press));
+        let s = crate::canvas::diagram::cell_size(app.zoom);
+        let _ = update(
+            &mut app,
+            Message::CanvasMoved(Point::new(
+                press.x - 6.0 * s.width,
+                press.y - 4.0 * s.height,
+            )),
+        );
+        let b = app
+            .diagram
+            .boxes
+            .iter()
+            .find(|b| b.title == "users")
+            .unwrap();
+        assert!(b.x < 0 && b.y < 0, "moved past origin: {:?}", (b.x, b.y));
+        assert_eq!(app.table_pos.get("users"), Some(&(b.x, b.y)));
+        // and it survives a re-parse (edit)
+        let src = app.source.clone();
+        app.set_source(&src);
+        let b = app
+            .diagram
+            .boxes
+            .iter()
+            .find(|b| b.title == "users")
+            .unwrap();
+        assert!(
+            b.x < 0 && b.y < 0,
+            "negative override survives: {:?}",
+            (b.x, b.y)
+        );
     }
 
     #[test]
