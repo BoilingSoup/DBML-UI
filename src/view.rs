@@ -322,6 +322,11 @@ fn help_overlay() -> Element<'static, Message> {
             "motions (counts work: 3w, 2gg, ...)"
         ),
         line("x dd dw cw cc d$ c0 yy p P diw ciw", "operators"),
+        line(
+            ":export sql [postgres|mysql|mssql|oracle]",
+            "write DDL for a dialect"
+        ),
+        line("open file.sql", "import a SQL dump as DBML"),
         line("r{c}", "replace char (with [count])"),
         line(
             "v + motions, y / d / u / U / o",
@@ -333,7 +338,7 @@ fn help_overlay() -> Element<'static, Message> {
             "scroll half/full page (animated)"
         ),
         line("arrows Home End Delete", "work in every mode"),
-        line(":w :q :q! :wq :o file :export f.svg", "ex commands"),
+        line(":w :q :q! :wq :o file :export f.svg|sql", "ex commands"),
         line("Ctrl-s / Ctrl-c", "save / quit"),
         line(
             "Ctrl-Space / type 2+ letters",

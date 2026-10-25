@@ -927,7 +927,24 @@ impl App {
     }
 
     pub fn open_file(&mut self, path: &str) -> std::io::Result<()> {
-        let content = std::fs::read_to_string(path)?;
+        let mut content = std::fs::read_to_string(path)?;
+        if path.to_ascii_lowercase().ends_with(".sql") {
+            // SQL dump -> DBML via the importer (postgres unless the file
+            // name mentions a dialect)
+            let lower = path.to_ascii_lowercase();
+            let dialect = if lower.contains("mysql") {
+                dbml::sql::Dialect::MySQL
+            } else if lower.contains("mssql") || lower.contains("sqlserver") {
+                dbml::sql::Dialect::MSSQL
+            } else if lower.contains("oracle") {
+                dbml::sql::Dialect::Oracle
+            } else {
+                dbml::sql::Dialect::Postgres
+            };
+            content = dbml::sqldump::import(&content, dialect).map_err(|e| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, format!("import: {e}"))
+            })?;
+        }
         self.table_pos.clear();
         self.file = Some(std::path::PathBuf::from(path));
         self.saved_text = content.clone();
@@ -1059,6 +1076,45 @@ impl App {
                 }
             }
             ExCommand::Export(arg) => {
+                // :export sql [dialect] writes DDL; anything else is the
+                // diagram exporter (svg/png)
+                let (first, rest) = match arg.split_once(' ') {
+                    Some((f, r)) => (f, r.trim()),
+                    None => (arg.as_str(), ""),
+                };
+                if first == "sql" {
+                    let dialect =
+                        dbml::sql::Dialect::from_name(rest).unwrap_or(dbml::sql::Dialect::Postgres);
+                    match dbml::sql::export(&self.editor.text(), dialect) {
+                        Ok(sql) => {
+                            let path = format!(
+                                "{}.{}.sql",
+                                self.file
+                                    .as_ref()
+                                    .and_then(|p| p.file_stem())
+                                    .map(|s| s.to_string_lossy().into_owned())
+                                    .unwrap_or_else(|| "diagram".into()),
+                                match dialect {
+                                    dbml::sql::Dialect::Postgres => "postgres",
+                                    dbml::sql::Dialect::MySQL => "mysql",
+                                    dbml::sql::Dialect::MSSQL => "mssql",
+                                    dbml::sql::Dialect::Oracle => "oracle",
+                                }
+                            );
+                            match std::fs::write(&path, sql) {
+                                Ok(()) => {
+                                    self.message = Some(format!(
+                                        "\"{path}\" written ({}B)",
+                                        std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
+                                    ))
+                                }
+                                Err(e) => self.message = Some(format!("export failed: {e}")),
+                            }
+                        }
+                        Err(e) => self.message = Some(format!("export failed: {e}")),
+                    }
+                    return;
+                }
                 let path = if arg.is_empty() {
                     "diagram.svg".to_string()
                 } else {
