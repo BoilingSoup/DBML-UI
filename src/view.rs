@@ -5,7 +5,7 @@ use crate::app::{App, Drag, Focus, Message};
 use crate::canvas::diagram::Diagram;
 use crate::canvas::editor::EditorView;
 use crate::theme;
-use iced::widget::{canvas, column, container, row, stack, text};
+use iced::widget::{button, canvas, column, container, horizontal_space, row, stack, text};
 use iced::{Color, Element, Fill, Length};
 
 /// Zoom at which one diagram cell maps 1:1 to a text line (~20px).
@@ -45,14 +45,83 @@ pub fn root(app: &App) -> Element<'_, Message> {
         .width(Length::FillPortion(((1.0 - app.split) * 1000.0) as u16))
         .height(Fill);
 
-    let panes = row![editor, divider(), diagram].spacing(4).height(Fill);
+    let panes = if !app.doc_open {
+        // start screen: the side pane is not collapsible, no divider
+        row![start_pane(), diagram].spacing(4).height(Fill)
+    } else if app.editor_collapsed {
+        row![diagram].spacing(4).height(Fill)
+    } else {
+        row![editor, divider(), diagram].spacing(4).height(Fill)
+    };
 
-    let base = column![panes, status_bar(app)].spacing(8).padding(8);
+    // toolbar with the collapse toggle (only once a document is open)
+    let body = if app.doc_open {
+        let toggle = button(
+            text(if app.editor_collapsed {
+                "Show editor ▸"
+            } else {
+                "◂ Hide editor"
+            })
+            .size(12.0)
+            .color(theme::TEXT),
+        )
+        .padding([4, 8])
+        .style(move |_t, _s| tool_button_style())
+        .on_press(Message::ToggleEditor);
+        column![row![horizontal_space(), toggle].padding([0, 4]), panes]
+            .spacing(4)
+            .height(Fill)
+    } else {
+        column![panes].spacing(4).height(Fill)
+    };
+
+    let base = column![body, status_bar(app)].spacing(8).padding(8);
 
     if app.show_help {
         stack![base, help_overlay()].into()
     } else {
         base.into()
+    }
+}
+
+/// The no-document start screen: Open file / New diagram. Shown in place
+/// of the editor pane; this state is not collapsible.
+fn start_pane() -> Element<'static, Message> {
+    let open = button(text("Open file…").size(14.0).color(theme::TEXT))
+        .padding([8, 16])
+        .width(180)
+        .style(move |_t, _s| tool_button_style())
+        .on_press(Message::OpenFilePrompt);
+    let new = button(text("New diagram").size(14.0).color(theme::TEXT))
+        .padding([8, 16])
+        .width(180)
+        .style(move |_t, _s| tool_button_style())
+        .on_press(Message::NewDiagram);
+    container(
+        column![
+            text("dbml-ui").size(20.0).color(theme::TEXT),
+            text("DBML diagram editor").size(12.0).color(theme::DIM),
+            open,
+            new,
+        ]
+        .spacing(12)
+        .align_x(iced::alignment::Horizontal::Center),
+    )
+    .align_x(iced::alignment::Horizontal::Center)
+    .width(Fill)
+    .height(Fill)
+    .padding(1.0)
+    .style(move |_t| panel_style(false))
+    .into()
+}
+
+/// Quiet chrome button (toolbar, start screen).
+fn tool_button_style() -> iced::widget::button::Style {
+    iced::widget::button::Style {
+        background: Some(iced::Background::Color(theme::PANEL)),
+        text_color: theme::TEXT,
+        border: iced::border::rounded(6).color(theme::BORDER),
+        ..Default::default()
     }
 }
 

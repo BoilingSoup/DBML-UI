@@ -18,7 +18,7 @@ fn main() -> Result<(), iced::Error> {
                 app
             }
         }
-        None => app::App::default(),
+        None => app::App::blank_start(),
     };
     let _ = &mut app;
     iced::application("dbml-ui", app::update, view::root)

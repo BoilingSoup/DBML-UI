@@ -33,6 +33,12 @@ pub enum Message {
     EditorHover(Option<Point>),
     /// Animation frame for the editor scroll.
     Tick,
+    /// Expand/collapse the editor pane (Space+e or the toolbar button).
+    ToggleEditor,
+    /// Start a new, unsaved diagram from the start screen.
+    NewDiagram,
+    /// Open-file button on the start screen: prefill the cmdline with `:o `.
+    OpenFilePrompt,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,6 +123,13 @@ pub struct App {
     pub editor: Editor,
     /// Which pane receives keys.
     pub focus: Focus,
+    /// A document is open (editor pane active). False only on the start
+    /// screen, where the pane is not collapsible.
+    pub doc_open: bool,
+    /// Editor pane collapsed: the diagram takes the full width.
+    pub editor_collapsed: bool,
+    /// Space was pressed awaiting the leader key (Space+e).
+    space_leader: bool,
     /// Editor viewport scroll, in lines.
     pub editor_scroll: f32,
     /// Horizontal viewport scroll in pixels, kept just large enough that
@@ -181,6 +194,9 @@ impl App {
             focus: Focus::Editor,
             editor_scroll: 0.0,
             editor_hscroll: 0.0,
+            doc_open: true,
+            editor_collapsed: false,
+            space_leader: false,
             scroll_anim: None,
             scroll_target: None,
             diagram: layout::layout(&model::build(&dbml::parser::parse("").doc)),
@@ -416,6 +432,16 @@ fn handle_message(app: &mut App, message: Message) {
         Message::WindowResized(w, h) => app.window_size = (w, h),
         Message::CompletionPicked(idx) => app.completion_accept(idx),
         Message::EditorHover(p) => app.editor_hover = p,
+        Message::ToggleEditor => app.toggle_editor(),
+        Message::NewDiagram => app.new_diagram(),
+        Message::OpenFilePrompt => {
+            // prefill the cmdline so Enter runs `:o <typed path>`
+            app.editor.cmdline = Some(editor::CmdLine {
+                kind: ':',
+                input: "o ".to_string(),
+            });
+            app.focus = Focus::Editor;
+        }
         Message::Tick => {
             let Some(anim) = app.scroll_anim.clone() else {
                 return;
@@ -472,6 +498,49 @@ fn handle_message(app: &mut App, message: Message) {
 impl App {
     pub fn is_modified(&self) -> bool {
         self.editor.text() != self.saved_text
+    }
+
+    /// Fresh app with no document: the side pane shows the start screen
+    /// (Open file / New diagram) and is not collapsible.
+    pub fn blank_start() -> Self {
+        let mut app = App {
+            file: None,
+            saved_text: String::new(),
+            doc_open: false,
+            message: None,
+            ..App::default()
+        };
+        app.editor.set_text("");
+        app.set_source("");
+        app
+    }
+
+    /// New, unsaved diagram: seed a minimal Project and open the editor.
+    pub fn new_diagram(&mut self) {
+        let tpl = "Project untitled {\n  database_type: 'PostgreSQL'\n}\n";
+        self.table_pos.clear();
+        self.file = None;
+        self.saved_text = tpl.to_string();
+        self.editor.set_text(tpl);
+        self.set_source(tpl);
+        self.editor_scroll = 0.0;
+        self.editor_hscroll = 0.0;
+        self.doc_open = true;
+        self.editor_collapsed = false;
+        self.focus = Focus::Editor;
+        self.message = Some("new diagram".to_string());
+    }
+
+    /// Collapse/expand the editor pane (Space+e or the toolbar button).
+    /// No-op on the start screen, where the pane holds the Open/New buttons.
+    pub fn toggle_editor(&mut self) {
+        if !self.doc_open {
+            return;
+        }
+        self.editor_collapsed = !self.editor_collapsed;
+        if self.editor_collapsed && self.focus == Focus::Editor {
+            self.focus = Focus::Canvas;
+        }
     }
 
     pub fn open_file(&mut self, path: &str) -> std::io::Result<()> {
@@ -619,6 +688,23 @@ impl App {
                 Focus::Editor => Focus::Canvas,
                 Focus::Canvas => Focus::Editor,
             };
+            return;
+        }
+        // Space+e toggles the editor pane (leader sequence, not in insert
+        // mode where Space types, nor while the cmdline is open)
+        if self.space_leader {
+            self.space_leader = false;
+            if key.code == KeyCode::Char('e') {
+                self.toggle_editor();
+                return;
+            }
+            // any other key processes normally after the leader
+        } else if key.code == KeyCode::Space
+            && self.editor.mode != editor::Mode::Insert
+            && self.editor.cmdline.is_none()
+            && !self.show_help
+        {
+            self.space_leader = true;
             return;
         }
         // the cmdline is reachable from either pane
@@ -1415,6 +1501,88 @@ mod completion_tests {
         );
         assert!(app.completion.is_none());
         assert_eq!(app.editor.mode, crate::editor::Mode::Insert);
+    }
+
+    #[test]
+    fn start_screen_is_not_collapsible() {
+        let mut app = App::blank_start();
+        assert!(!app.doc_open, "no document on the start screen");
+        // Space+e and the toggle message are both no-ops
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Space, KeyModifiers::NONE),
+        );
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('e'), KeyModifiers::NONE),
+        );
+        assert!(!app.editor_collapsed);
+        let _ = update(&mut app, Message::ToggleEditor);
+        assert!(!app.editor_collapsed);
+        // New diagram opens the editor pane
+        let _ = update(&mut app, Message::NewDiagram);
+        assert!(app.doc_open);
+        assert!(!app.editor_collapsed);
+        assert!(app.source.contains("Project"));
+        assert_eq!(app.focus, Focus::Editor);
+    }
+
+    #[test]
+    fn space_e_toggles_the_editor_pane() {
+        let mut app = App {
+            focus: Focus::Editor,
+            ..App::default()
+        };
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Space, KeyModifiers::NONE),
+        );
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('e'), KeyModifiers::NONE),
+        );
+        assert!(app.editor_collapsed, "Space+e collapses");
+        assert_eq!(app.focus, Focus::Canvas, "keys leave the hidden editor");
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Space, KeyModifiers::NONE),
+        );
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('e'), KeyModifiers::NONE),
+        );
+        assert!(!app.editor_collapsed, "Space+e expands again");
+        // the button message does the same
+        let _ = update(&mut app, Message::ToggleEditor);
+        assert!(app.editor_collapsed);
+        // a non-e key after Space processes normally: the leader is consumed
+        let mut app = App::default();
+        let before = app.editor.buf.pos();
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Space, KeyModifiers::NONE),
+        );
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('l'), KeyModifiers::NONE),
+        );
+        assert!(!app.editor_collapsed);
+        assert_ne!(app.editor.buf.pos(), before, "the l moved the cursor");
+    }
+
+    #[test]
+    fn space_types_in_insert_mode() {
+        let mut app = insert_app();
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Space, KeyModifiers::NONE),
+        );
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('e'), KeyModifiers::NONE),
+        );
+        assert!(!app.editor_collapsed, "no leader in insert mode");
+        assert!(app.source.contains(" e"), "space and e were typed");
     }
 
     #[test]
