@@ -3,7 +3,7 @@
 pub mod buffer;
 pub mod completion;
 
-use crate::editor::buffer::{Buffer, Move as CursorMove};
+use crate::editor::buffer::{Buffer, Move as CursorMove, ObjKind, Pos, TextObj};
 
 // Input shims mirroring the crossterm event types the engine was written
 // against; the app maps iced keyboard events into these.
@@ -94,17 +94,48 @@ enum Pending {
     D,
     C,
     Y,
-    /// `d i…` / `c i…` awaiting `w`
-    Di,
-    Ci,
-    /// `d a…` / `c a…` awaiting `w`
-    Da,
-    Ca,
     /// `d g…` / `c g…` awaiting `g`
     Dg,
     Cg,
     /// `r` awaiting the replacement character
     R,
+    /// operator + `i`/`a` awaiting the object char (diw, ci(, ya"…)
+    Obj {
+        op: ObjOp,
+        around: bool,
+    },
+    /// visual-mode `i`/`a` awaiting the object char (viw, va(…)
+    VisualObj {
+        around: bool,
+    },
+    /// vim-surround `ds…` awaiting the target pair
+    SurroundDelete,
+    /// vim-surround `cs…`: target, then replacement
+    SurroundChange {
+        target: Option<char>,
+    },
+    /// vim-surround `ys…`: motion/object, then the pair to add
+    SurroundAdd {
+        stage: AddStage,
+    },
+    /// visual-mode `S…` awaiting the pair to wrap the selection in
+    SurroundVisual,
+}
+
+/// Which operator preceded a text object.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ObjOp {
+    Delete,
+    Change,
+    Yank,
+}
+
+/// Stage of an `ys` sequence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AddStage {
+    Motion,
+    Obj { around: bool },
+    Range(buffer::TextObj),
 }
 
 pub struct Editor {
@@ -196,13 +227,39 @@ impl Editor {
             Some(Pending::D) => "d",
             Some(Pending::C) => "c",
             Some(Pending::Y) => "y",
-            Some(Pending::Di) => "di",
-            Some(Pending::Ci) => "ci",
-            Some(Pending::Da) => "da",
-            Some(Pending::Ca) => "ca",
             Some(Pending::Dg) => "dg",
             Some(Pending::Cg) => "cg",
             Some(Pending::R) => "r",
+            Some(Pending::Obj {
+                op: ObjOp::Delete,
+                around: false,
+            }) => "di",
+            Some(Pending::Obj {
+                op: ObjOp::Change,
+                around: false,
+            }) => "ci",
+            Some(Pending::Obj {
+                op: ObjOp::Yank,
+                around: false,
+            }) => "yi",
+            Some(Pending::Obj {
+                op: ObjOp::Delete,
+                around: true,
+            }) => "da",
+            Some(Pending::Obj {
+                op: ObjOp::Change,
+                around: true,
+            }) => "ca",
+            Some(Pending::Obj {
+                op: ObjOp::Yank,
+                around: true,
+            }) => "ya",
+            Some(Pending::VisualObj { around: false }) => "vi",
+            Some(Pending::VisualObj { around: true }) => "va",
+            Some(Pending::SurroundDelete) => "ds",
+            Some(Pending::SurroundChange { .. }) => "cs",
+            Some(Pending::SurroundAdd { .. }) => "ys",
+            Some(Pending::SurroundVisual) => "S",
             None => "",
         };
         s.push_str(p);
@@ -312,12 +369,7 @@ impl Editor {
     }
 
     fn handle_normal_key(&mut self, key: KeyEvent) -> Action {
-        if self.mode == Mode::Visual {
-            return self.handle_visual_key(key);
-        }
-        if self.accumulate_count(key.code) {
-            return Action::None;
-        }
+        // pending sequences run in every mode, so viw/S… work from visual
         if let Some(p) = self.pending.take() {
             let action = self.handle_sequence(p, key.code);
             if self.pending.is_none() {
@@ -325,6 +377,12 @@ impl Editor {
                 self.op_count = None;
             }
             return action;
+        }
+        if self.mode == Mode::Visual {
+            return self.handle_visual_key(key);
+        }
+        if self.accumulate_count(key.code) {
+            return Action::None;
         }
 
         let m = key.modifiers;
@@ -569,6 +627,19 @@ impl Editor {
                 self.buf.start_selection();
                 Action::None
             }
+            // text objects and vim-surround start sequences in visual too
+            KeyCode::Char('i') => {
+                self.pending = Some(Pending::VisualObj { around: false });
+                Action::None
+            }
+            KeyCode::Char('a') => {
+                self.pending = Some(Pending::VisualObj { around: true });
+                Action::None
+            }
+            KeyCode::Char('S') => {
+                self.pending = Some(Pending::SurroundVisual);
+                Action::None
+            }
             // operators conclude visual mode (vim): after u/U the session
             // returns to normal so motions extend nothing
             KeyCode::Char('u') if self.visual_linewise => {
@@ -671,6 +742,13 @@ impl Editor {
 
     fn handle_sequence(&mut self, leader: Pending, code: KeyCode) -> Action {
         use Pending::*;
+        // trailing count after an operator (d3w): accumulate and keep the
+        // operator pending (the count check used to run before this
+        // dispatcher; the pending check moved first for visual sequences)
+        if matches!(leader, D | C | Y | G | Dg | Cg) && self.accumulate_count(code) {
+            self.pending = Some(leader);
+            return Action::None;
+        }
         // vim multiplies leading and trailing counts: 2d3w == 6w
         let rep = (self.op_count.unwrap_or(1).max(1) as usize)
             .saturating_mul(self.count.unwrap_or(1).max(1) as usize);
@@ -797,29 +875,323 @@ impl Editor {
                 let target = self.line_target_row(true);
                 self.operate_lines(target, true)
             }
-            // text objects
+            // text objects: [cdy]i/a + w p quotes brackets
             (D, KeyCode::Char('i')) => {
-                self.pending = Some(Di);
+                self.pending = Some(Pending::Obj {
+                    op: ObjOp::Delete,
+                    around: false,
+                });
                 Action::None
             }
             (C, KeyCode::Char('i')) => {
-                self.pending = Some(Ci);
+                self.pending = Some(Pending::Obj {
+                    op: ObjOp::Change,
+                    around: false,
+                });
+                Action::None
+            }
+            (Y, KeyCode::Char('i')) => {
+                self.pending = Some(Pending::Obj {
+                    op: ObjOp::Yank,
+                    around: false,
+                });
                 Action::None
             }
             (D, KeyCode::Char('a')) => {
-                self.pending = Some(Da);
+                self.pending = Some(Pending::Obj {
+                    op: ObjOp::Delete,
+                    around: true,
+                });
                 Action::None
             }
             (C, KeyCode::Char('a')) => {
-                self.pending = Some(Ca);
+                self.pending = Some(Pending::Obj {
+                    op: ObjOp::Change,
+                    around: true,
+                });
                 Action::None
             }
-            (Di, KeyCode::Char('w')) => self.operate_word(false, false),
-            (Ci, KeyCode::Char('w')) => self.operate_word(false, true),
-            (Da, KeyCode::Char('w')) => self.operate_word(true, false),
-            (Ca, KeyCode::Char('w')) => self.operate_word(true, true),
+            (Y, KeyCode::Char('a')) => {
+                self.pending = Some(Pending::Obj {
+                    op: ObjOp::Yank,
+                    around: true,
+                });
+                Action::None
+            }
+            (Pending::Obj { .. }, KeyCode::Esc) => Action::None,
+            (Pending::Obj { op, around }, KeyCode::Char(c)) => {
+                match crate::editor::buffer::parse_obj_kind(c) {
+                    Some(kind) => self.apply_object(op, around, kind),
+                    None => Action::None,
+                }
+            }
+            // viw / va( … select the object, stay visual (vim)
+            (Pending::VisualObj { .. }, KeyCode::Esc) => Action::None,
+            (Pending::VisualObj { around }, KeyCode::Char(c)) => {
+                match crate::editor::buffer::parse_obj_kind(c) {
+                    Some(kind) => self.visual_select_object(around, kind),
+                    None => Action::None,
+                }
+            }
+            // vim-surround: ds pair / cs pair new / ys motion pair
+            (D, KeyCode::Char('s')) => {
+                self.pending = Some(Pending::SurroundDelete);
+                Action::None
+            }
+            (C, KeyCode::Char('s')) => {
+                self.pending = Some(Pending::SurroundChange { target: None });
+                Action::None
+            }
+            (Y, KeyCode::Char('s')) => {
+                self.pending = Some(Pending::SurroundAdd {
+                    stage: AddStage::Motion,
+                });
+                Action::None
+            }
+            (Pending::SurroundDelete, KeyCode::Esc) => Action::None,
+            (Pending::SurroundDelete, KeyCode::Char(c)) => {
+                if Buffer::surround_pair(c).is_some() && self.buf.delete_surround(c) {
+                    Action::Changed
+                } else {
+                    Action::None
+                }
+            }
+            (Pending::SurroundChange { .. }, KeyCode::Esc) => Action::None,
+            (Pending::SurroundChange { target: None }, KeyCode::Char(t)) => {
+                if Buffer::surround_pair(t).is_some() {
+                    self.pending = Some(Pending::SurroundChange { target: Some(t) });
+                }
+                Action::None
+            }
+            (Pending::SurroundChange { target: Some(t) }, KeyCode::Char(r)) => {
+                if Buffer::surround_pair(r).is_some() && self.buf.change_surround(t, r) {
+                    Action::Changed
+                } else {
+                    Action::None
+                }
+            }
+            (Pending::SurroundAdd { .. }, KeyCode::Esc) => Action::None,
+            (
+                Pending::SurroundAdd {
+                    stage: AddStage::Motion,
+                },
+                KeyCode::Char(c),
+            ) => match c {
+                'i' | 'a' => {
+                    self.pending = Some(Pending::SurroundAdd {
+                        stage: AddStage::Obj { around: c == 'a' },
+                    });
+                    Action::None
+                }
+                'w' | 'e' | 'b' | '$' | '0' | '^' => match self.motion_object(c) {
+                    Some(obj) => {
+                        self.pending = Some(Pending::SurroundAdd {
+                            stage: AddStage::Range(obj),
+                        });
+                        Action::None
+                    }
+                    None => Action::None,
+                },
+                _ => Action::None,
+            },
+            (
+                Pending::SurroundAdd {
+                    stage: AddStage::Obj { around },
+                },
+                KeyCode::Char(c),
+            ) => {
+                match crate::editor::buffer::parse_obj_kind(c)
+                    .and_then(|k| self.buf.text_object(around, k))
+                {
+                    Some(obj) => {
+                        self.pending = Some(Pending::SurroundAdd {
+                            stage: AddStage::Range(obj),
+                        });
+                        Action::None
+                    }
+                    None => Action::None,
+                }
+            }
+            (
+                Pending::SurroundAdd {
+                    stage: AddStage::Range(obj),
+                },
+                KeyCode::Char(t),
+            ) => match Buffer::surround_pair(t) {
+                Some(pair) => {
+                    self.buf.surround_insert(obj, pair);
+                    Action::Changed
+                }
+                None => Action::None,
+            },
+            // visual S…: wrap the selection
+            (Pending::SurroundVisual, KeyCode::Esc) => Action::None,
+            (Pending::SurroundVisual, KeyCode::Char(c)) => self.surround_visual(c),
             _ => Action::None,
         }
+    }
+
+    /// Apply a text object operator (di/ci/yi/da/ca/ya).
+    fn apply_object(&mut self, op: ObjOp, around: bool, kind: ObjKind) -> Action {
+        let Some(obj) = self.buf.text_object(around, kind) else {
+            return Action::None;
+        };
+        self.register = self
+            .buf
+            .range_text(obj)
+            .split('\n')
+            .map(str::to_string)
+            .collect();
+        match op {
+            ObjOp::Yank => {
+                self.buf
+                    .move_cursor(CursorMove::Jump(obj.start.row, obj.start.col));
+                Action::None
+            }
+            ObjOp::Delete => {
+                self.delete_object(obj);
+                Action::Changed
+            }
+            ObjOp::Change => {
+                self.delete_object(obj);
+                self.mode = Mode::Insert;
+                Action::Changed
+            }
+        }
+    }
+
+    fn delete_object(&mut self, obj: TextObj) {
+        self.buf.cancel_selection();
+        if obj.linewise {
+            let n = obj.end.row - obj.start.row + 1;
+            self.buf.move_cursor(CursorMove::Jump(obj.start.row, 0));
+            self.delete_lines(n);
+        } else {
+            self.buf
+                .move_cursor(CursorMove::Jump(obj.start.row, obj.start.col));
+            // delete_range takes an exclusive end; TextObj.end is inclusive
+            self.buf.delete_range(obj.start, self.buf.advance(obj.end));
+        }
+    }
+
+    /// Select a text object from visual mode (viw/va…): stays visual, with
+    /// the kind's linewise-ness (ip selects whole rows).
+    fn visual_select_object(&mut self, around: bool, kind: ObjKind) -> Action {
+        let Some(obj) = self.buf.text_object(around, kind) else {
+            return Action::None;
+        };
+        self.buf.cancel_selection();
+        self.visual_linewise = obj.linewise;
+        self.buf
+            .move_cursor(CursorMove::Jump(obj.start.row, obj.start.col));
+        self.buf.start_selection();
+        self.buf
+            .move_cursor(CursorMove::Jump(obj.end.row, obj.end.col));
+        Action::None
+    }
+
+    /// Span for the simple `ys` motions: w/e to the word end, b to the word
+    /// start, $ to the line end, 0/^ to the line start.
+    fn motion_object(&self, c: char) -> Option<TextObj> {
+        let (row, col) = self.buf.cursor();
+        let line: Vec<char> = self.buf.line(row).chars().collect();
+        let cur = self.buf.pos();
+        let at = |col: usize| line.get(col).copied();
+        match c {
+            '$' => {
+                if col + 1 >= line.len() {
+                    None
+                } else {
+                    Some(TextObj {
+                        start: cur,
+                        end: Pos {
+                            row,
+                            col: line.len() - 1,
+                        },
+                        linewise: false,
+                    })
+                }
+            }
+            '0' | '^' => {
+                if col == 0 {
+                    None
+                } else {
+                    Some(TextObj {
+                        start: Pos { row, col: 0 },
+                        end: Pos { row, col: col - 1 },
+                        linewise: false,
+                    })
+                }
+            }
+            'w' | 'e' => {
+                if at(col).is_none_or(char::is_whitespace) {
+                    return None;
+                }
+                let mut e = col;
+                while e + 1 < line.len() && !line[e + 1].is_whitespace() {
+                    e += 1;
+                }
+                Some(TextObj {
+                    start: cur,
+                    end: Pos { row, col: e },
+                    linewise: false,
+                })
+            }
+            'b' => {
+                if col == 0 || at(col).map_or(true, char::is_whitespace) {
+                    return None;
+                }
+                let mut st = col;
+                while st > 0 && !line[st - 1].is_whitespace() {
+                    st -= 1;
+                }
+                if st == col {
+                    None
+                } else {
+                    Some(TextObj {
+                        start: Pos { row, col: st },
+                        end: cur,
+                        linewise: false,
+                    })
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Visual `S{pair}`: wrap the selection and return to normal mode.
+    fn surround_visual(&mut self, c: char) -> Action {
+        let Some(pair) = Buffer::surround_pair(c) else {
+            return Action::None;
+        };
+        let obj = if self.visual_linewise {
+            let Some((from, n)) = self.selection_lines() else {
+                return Action::None;
+            };
+            let end_row = from + n - 1;
+            TextObj {
+                start: Pos { row: from, col: 0 },
+                end: Pos {
+                    row: end_row,
+                    col: self.buf.line(end_row).chars().count().saturating_sub(1),
+                },
+                linewise: false,
+            }
+        } else {
+            let Some((s, e)) = self.buf.selection_range() else {
+                return Action::None;
+            };
+            TextObj {
+                start: s,
+                end: e,
+                linewise: false,
+            }
+        };
+        self.buf.cancel_selection();
+        self.buf.surround_insert(obj, pair);
+        self.mode = Mode::Normal;
+        self.visual_linewise = false;
+        Action::Changed
     }
 
     /// Target row for G/gg operators: `[count]` is an absolute line number
@@ -1451,7 +1823,7 @@ mod tests {
 
 #[cfg(test)]
 mod polish_tests {
-    use super::tests::editor;
+    use super::tests::{editor, key};
     use super::*;
 
     #[test]
@@ -1519,6 +1891,211 @@ mod polish_tests {
         assert_eq!(e.text(), "ABC\nDEF\n");
         assert_eq!(e.mode, Mode::Normal, "U concludes visual");
         assert!(e.buf.selection_range().is_none());
+    }
+
+    // ---- text objects + vim-surround ----
+
+    #[test]
+    fn visual_inner_word_selects() {
+        let mut e = editor("one two three\n");
+        for c in "llllllviw".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.mode, Mode::Visual, "stays visual (vim)");
+        let (s, x) = e.buf.selection_range().unwrap();
+        assert_eq!((s.row, s.col), (0, 4));
+        assert_eq!((x.row, x.col), (0, 7), "two, exclusive end");
+        e.handle_key(key('d'));
+        assert_eq!(e.text(), "one  three\n");
+    }
+
+    #[test]
+    fn visual_around_word_takes_trailing_space() {
+        let mut e = editor("one two three\n");
+        for c in "lllllvaw".chars() {
+            e.handle_key(key(c));
+        }
+        let (s, x) = e.buf.selection_range().unwrap();
+        assert_eq!((s.row, s.col), (0, 4));
+        assert_eq!((x.row, x.col), (0, 8), "two + trailing blank");
+        e.handle_key(key('d'));
+        assert_eq!(e.text(), "one three\n");
+    }
+
+    #[test]
+    fn visual_paragraph_selects_linewise() {
+        let mut e = editor("a\nb\n\nc\n");
+        for c in "vip".chars() {
+            e.handle_key(key(c));
+        }
+        assert!(e.visual_linewise, "ip switches visual to linewise");
+        let (s, x) = e.buf.selection_range().unwrap();
+        assert_eq!((s.row, x.row), (0, 1), "the non-blank block");
+        e.handle_key(key('d'));
+        assert_eq!(e.text(), "\nc\n");
+        // ap includes the trailing blank row, so d leaves only "c"
+        let mut e = editor("a\nb\n\nc\n");
+        for c in "vapd".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "c\n");
+    }
+
+    #[test]
+    fn visual_quote_objects() {
+        let mut e = editor("say \"hello\" ok\n");
+        for c in "llllll".chars() {
+            e.handle_key(key(c));
+        }
+        e.handle_key(key('v'));
+        e.handle_key(key('i'));
+        e.handle_key(key('"'));
+        let (s, x) = e.buf.selection_range().unwrap();
+        assert_eq!((s.row, s.col), (0, 5));
+        assert_eq!((x.row, x.col), (0, 10), "hello, exclusive");
+        let mut e = editor("say \"hello\" ok\n");
+        for c in "llllll".chars() {
+            e.handle_key(key(c));
+        }
+        e.handle_key(key('v'));
+        e.handle_key(key('a'));
+        e.handle_key(key('"'));
+        e.handle_key(key('d'));
+        assert_eq!(e.text(), "say  ok\n");
+    }
+
+    #[test]
+    fn visual_bracket_objects() {
+        let mut e = editor("f(a, (b) c)g\n");
+        for c in "llllll".chars() {
+            e.handle_key(key(c));
+        }
+        e.handle_key(key('v'));
+        e.handle_key(key('i'));
+        e.handle_key(key('('));
+        let (s, x) = e.buf.selection_range().unwrap();
+        assert_eq!((s.row, s.col), (0, 6), "innermost pair's inside");
+        assert_eq!((x.row, x.col), (0, 7), "b, exclusive");
+        let mut e = editor("f(a, (b) c)g\n");
+        for c in "llllllva(d".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "f(a,  c)g\n");
+        // multiline inner body deletes cleanly (whole inner rows drop)
+        let mut e = editor("f(\n  a\n  b\n)g\n");
+        for c in "jvi(d".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "f(\n)g\n", "inner rows drop, brackets stay");
+    }
+
+    #[test]
+    fn change_and_delete_bracket_objects() {
+        let mut e = editor("f(a, b)g\n");
+        for c in "llci(".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "f()g\n");
+        assert_eq!(e.mode, Mode::Insert, "ci( enters insert");
+        let mut e = editor("f(a, b)g\n");
+        for c in "llda(".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "fg\n");
+        let mut e = editor("say \"hi\" x\n");
+        for c in "lllllldi\"".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "say \"\" x\n");
+        // aliases: vib == vi(, diB == di{
+        let mut e = editor("f(a)b\n");
+        for c in "llvibd".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "f()b\n");
+        let mut e = editor("f{a}b\n");
+        for c in "lldiB".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "f{}b\n");
+    }
+
+    #[test]
+    fn yank_objects_fill_the_register() {
+        let mut e = editor("f(a, b)g\n");
+        for c in "llyi(".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.register, vec!["a, b".to_string()]);
+        assert_eq!(e.text(), "f(a, b)g\n", "yank changes nothing");
+        let mut e = editor("one \"xx\" y\n");
+        for c in "lllllya\"".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(
+            e.register,
+            vec!["\"xx\"".to_string()],
+            "a\" includes quotes"
+        );
+    }
+
+    #[test]
+    fn surround_delete_and_change() {
+        let mut e = editor("f(w)g\n");
+        for c in "llds(".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "fwg\n", "ds( strips parens");
+        let mut e = editor("\"q\"\n");
+        for c in "ds\"".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "q\n", "ds\" strips quotes");
+        let mut e = editor("'q'\n");
+        for c in "cs'\"".chars() {
+            e.handle_key(key(c));
+        }
+        // cs<target><new>: ' -> "
+        assert_eq!(e.text(), "\"q\"\n", "cs swaps quote styles");
+        let mut e = editor("f[w]g\n");
+        for c in "llcs[{".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "f{w}g\n", "cs grows delimiters");
+        let mut e = editor("abc\n");
+        for c in "ds(".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "abc\n", "no enclosing pair: no-op");
+    }
+
+    #[test]
+    fn surround_add() {
+        let mut e = editor("one two\n");
+        for c in "lllllysiw)".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "one (two)\n", "ysiw) wraps the word");
+        let mut e = editor("one two\n");
+        for c in "llys$'".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "on'e two'\n", "ys$ wraps to line end");
+        let mut e = editor("a\nb\n");
+        for c in "ysip{".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "{a\nb}\n", "ysip wraps the paragraph");
+    }
+
+    #[test]
+    fn visual_s_wraps_the_selection() {
+        let mut e = editor("one two\n");
+        for c in "llllvleS)".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "one (two)\n");
+        assert_eq!(e.mode, Mode::Normal, "S concludes visual");
     }
 
     #[test]

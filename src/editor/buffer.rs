@@ -54,6 +54,49 @@ pub struct Buffer {
 }
 
 #[allow(dead_code)] // full editing surface kept for the engine
+/// Inclusive char span of a text object, or whole rows when `linewise`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextObj {
+    pub start: Pos,
+    pub end: Pos,
+    pub linewise: bool,
+}
+
+/// The object selector after `i`/`a`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjKind {
+    Word,
+    Paragraph,
+    /// `'` `"` or `` ` ``
+    Quote(char),
+    /// any member of the pair; stored as its opening char
+    Bracket(char),
+}
+
+/// Normalize an object key press to a kind: `w` `p` quotes, brackets
+/// (either member, plus vim's `b`/`B` aliases).
+pub fn parse_obj_kind(c: char) -> Option<ObjKind> {
+    match c {
+        'w' => Some(ObjKind::Word),
+        'p' => Some(ObjKind::Paragraph),
+        '\'' | '"' | '`' => Some(ObjKind::Quote(c)),
+        '(' | ')' | 'b' => Some(ObjKind::Bracket('(')),
+        '[' | ']' => Some(ObjKind::Bracket('[')),
+        '{' | '}' | 'B' => Some(ObjKind::Bracket('{')),
+        '<' | '>' => Some(ObjKind::Bracket('<')),
+        _ => None,
+    }
+}
+
+pub fn close_of(open: char) -> char {
+    match open {
+        '(' => ')',
+        '[' => ']',
+        '{' => '}',
+        _ => '>',
+    }
+}
+
 impl Buffer {
     pub fn from_lines(lines: impl IntoIterator<Item = impl Into<String>>) -> Self {
         let lines: Vec<String> = lines.into_iter().map(Into::into).collect();
@@ -67,12 +110,14 @@ impl Buffer {
         }
     }
 
+    #[allow(dead_code)] // kept tui-textarea API surface
     pub fn from_text(text: &str) -> Self {
         Self::from_lines(text.split('\n'))
     }
 
     /// Full text; a document always ends with a trailing newline when the
     /// source had one (lines.len() > 1 implies separators between them).
+    #[allow(dead_code)] // kept tui-textarea API surface
     pub fn text(&self) -> String {
         self.lines.join("\n")
     }
@@ -118,7 +163,7 @@ impl Buffer {
     }
 
     /// One cell past `p`, wrapping to the next line start after EOL.
-    fn advance(&self, p: Pos) -> Pos {
+    pub fn advance(&self, p: Pos) -> Pos {
         if p.col < self.line_len(p.row) {
             Pos {
                 row: p.row,
@@ -180,6 +225,388 @@ impl Buffer {
         self.push_history();
         self.delete_range(start, end);
         t.into()
+    }
+
+    // ---- vim text objects (i… / a…) ----
+
+    /// iw/aw: the whitespace-separated word run under the cursor (whitespace
+    /// is the only separator, matching the w/e/b motions); `a` extends over
+    /// trailing whitespace, else leading.
+    pub fn word_object(&self, around: bool) -> Option<TextObj> {
+        let (row, col) = (self.cursor.row, self.cursor.col);
+        let chars: Vec<char> = self.line(row).chars().collect();
+        if chars.is_empty() {
+            return None;
+        }
+        let probe = col.min(chars.len() - 1);
+        let ws = chars[probe].is_whitespace();
+        let mut s = probe;
+        while s > 0 && chars[s - 1].is_whitespace() == ws {
+            s -= 1;
+        }
+        let mut e = probe;
+        while e + 1 < chars.len() && chars[e + 1].is_whitespace() == ws {
+            e += 1;
+        }
+        if around && !ws {
+            let mut ne = e + 1;
+            while ne < chars.len() && chars[ne].is_whitespace() {
+                ne += 1;
+            }
+            if ne > e + 1 {
+                return Some(TextObj {
+                    start: Pos { row, col: s },
+                    end: Pos { row, col: ne - 1 },
+                    linewise: false,
+                });
+            }
+            let mut ns = s;
+            while ns > 0 && chars[ns - 1].is_whitespace() {
+                ns -= 1;
+            }
+            if ns < s {
+                return Some(TextObj {
+                    start: Pos { row, col: ns },
+                    end: Pos { row, col: e },
+                    linewise: false,
+                });
+            }
+        }
+        Some(TextObj {
+            start: Pos { row, col: s },
+            end: Pos { row, col: e },
+            linewise: false,
+        })
+    }
+
+    /// ip/ap: the block of lines sharing the cursor line's blankness; `a`
+    /// adds the trailing blank run (or the leading one at EOF, or the
+    /// following paragraph when the cursor is on a blank line).
+    pub fn paragraph_object(&self, around: bool) -> Option<TextObj> {
+        let n = self.lines.len();
+        if n == 0 {
+            return None;
+        }
+        let blank = |i: usize| self.lines[i].trim().is_empty();
+        let r = self.cursor.row.min(n - 1);
+        let is_b = blank(r);
+        let mut from = r;
+        while from > 0 && blank(from - 1) == is_b {
+            from -= 1;
+        }
+        let mut to = r;
+        while to + 1 < n && blank(to + 1) == is_b {
+            to += 1;
+        }
+        if around {
+            if is_b {
+                if to + 1 < n {
+                    to += 1;
+                    while to + 1 < n && !blank(to + 1) {
+                        to += 1;
+                    }
+                }
+            } else if to + 1 < n && blank(to + 1) {
+                to += 1;
+                while to + 1 < n && blank(to + 1) {
+                    to += 1;
+                }
+            } else if from > 0 && blank(from - 1) {
+                from -= 1;
+                while from > 0 && blank(from - 1) {
+                    from -= 1;
+                }
+            }
+        }
+        Some(TextObj {
+            start: Pos { row: from, col: 0 },
+            end: Pos {
+                row: to,
+                col: self.lines[to].chars().count().saturating_sub(1),
+            },
+            linewise: true,
+        })
+    }
+
+    /// i"/a" (also `'` and `` ` ``): the quote pair enclosing the cursor on
+    /// the current line. Inner excludes the quotes.
+    pub fn quote_object(&self, q: char, around: bool) -> Option<TextObj> {
+        let (row, col) = (self.cursor.row, self.cursor.col);
+        let chars: Vec<char> = self.line(row).chars().collect();
+        let marks: Vec<usize> = chars
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| **c == q)
+            .map(|(i, _)| i)
+            .collect();
+        for w in marks.windows(2) {
+            let (o, c) = (w[0], w[1]);
+            if col >= o && col <= c {
+                let (s, e) = if around { (o, c) } else { (o + 1, c - 1) };
+                if s > e {
+                    return None; // empty quoted string has no inner span
+                }
+                return Some(TextObj {
+                    start: Pos { row, col: s },
+                    end: Pos { row, col: e },
+                    linewise: false,
+                });
+            }
+        }
+        None
+    }
+
+    /// i(/a{ (multiline, balanced): the innermost bracket pair enclosing the
+    /// cursor. The cursor may sit on either bracket.
+    pub fn bracket_object(&self, open: char, around: bool) -> Option<TextObj> {
+        let close = close_of(open);
+        let cur = self.cursor;
+        let at =
+            |p: Pos| -> Option<char> { self.lines.get(p.row).and_then(|l| l.chars().nth(p.col)) };
+        let close_pos;
+        if at(cur) == Some(open) {
+            close_pos = self.match_forward(cur, open, close);
+        } else {
+            // scan forward for the first unmatched close
+            let mut depth = 0i32;
+            let mut p = cur;
+            loop {
+                match at(p) {
+                    Some(c) if c == open => depth += 1,
+                    Some(c) if c == close => {
+                        if depth == 0 {
+                            close_pos = Some(p);
+                            break;
+                        }
+                        depth -= 1;
+                    }
+                    _ => {}
+                }
+                p = self.next_pos(p)?;
+            }
+        }
+        let cp = close_pos?;
+        // scan backward from the cursor for the open matching that close
+        let mut open_pos = None;
+        let mut depth = 0i32;
+        let mut p = if at(cur) == Some(open) {
+            cur
+        } else {
+            self.prev_pos(cur)?
+        };
+        loop {
+            match at(p) {
+                Some(c) if c == close => depth += 1,
+                Some(c) if c == open => {
+                    if depth == 0 {
+                        open_pos = Some(p);
+                        break;
+                    }
+                    depth -= 1;
+                }
+                _ => {}
+            }
+            if p.row == 0 && p.col == 0 {
+                break;
+            }
+            p = self.prev_pos(p)?;
+        }
+        let op = open_pos?;
+        let (s, e) = if around {
+            (op, cp)
+        } else {
+            let s = self.next_pos(op)?;
+            let e = self.prev_pos(cp)?;
+            if self.before(e, s) {
+                return None; // empty body: no inner span
+            }
+            (s, e)
+        };
+        Some(TextObj {
+            start: s,
+            end: e,
+            linewise: false,
+        })
+    }
+
+    pub fn text_object(&self, around: bool, kind: ObjKind) -> Option<TextObj> {
+        match kind {
+            ObjKind::Word => self.word_object(around),
+            ObjKind::Paragraph => self.paragraph_object(around),
+            ObjKind::Quote(q) => self.quote_object(q, around),
+            ObjKind::Bracket(open) => self.bracket_object(open, around),
+        }
+    }
+
+    /// Char after `p` in buffer order (row-major).
+    fn next_pos(&self, p: Pos) -> Option<Pos> {
+        let len = self.lines.get(p.row)?.chars().count();
+        if p.col + 1 < len {
+            Some(Pos {
+                row: p.row,
+                col: p.col + 1,
+            })
+        } else if p.row + 1 < self.lines.len() {
+            Some(Pos {
+                row: p.row + 1,
+                col: 0,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Char before `p` in buffer order.
+    fn prev_pos(&self, p: Pos) -> Option<Pos> {
+        if p.col > 0 {
+            Some(Pos {
+                row: p.row,
+                col: p.col - 1,
+            })
+        } else if p.row > 0 {
+            let row = p.row - 1;
+            Some(Pos {
+                row,
+                col: self.lines[row].chars().count().saturating_sub(1),
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Buffer position of the `close` matching the `open` AT `from`.
+    fn match_forward(&self, from: Pos, open: char, close: char) -> Option<Pos> {
+        let at =
+            |p: Pos| -> Option<char> { self.lines.get(p.row).and_then(|l| l.chars().nth(p.col)) };
+        let mut depth = 0i32;
+        let mut p = from;
+        loop {
+            if let Some(c) = at(p) {
+                if c == open {
+                    depth += 1;
+                } else if c == close {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(p);
+                    }
+                }
+            }
+            p = self.next_pos(p)?;
+        }
+    }
+
+    /// Text of an inclusive char span (or whole rows when linewise).
+    pub fn range_text(&self, obj: TextObj) -> String {
+        if obj.linewise {
+            self.lines[obj.start.row..=obj.end.row].join("\n")
+        } else if obj.start.row == obj.end.row {
+            let line = self.line(obj.start.row);
+            let s = char_off(line, obj.start.col);
+            let e = char_off(line, obj.end.col + 1);
+            line[s..e].to_string()
+        } else {
+            let mut out = String::new();
+            let first = self.line(obj.start.row);
+            out.push_str(&first[char_off(first, obj.start.col)..]);
+            out.push('\n');
+            for row in obj.start.row + 1..obj.end.row {
+                out.push_str(&self.lines[row]);
+                out.push('\n');
+            }
+            let last = self.line(obj.end.row);
+            out.push_str(&last[..char_off(last, obj.end.col + 1)]);
+            out
+        }
+    }
+
+    // ---- vim-surround ----
+
+    /// The (open, close) glyphs a surround target char stands for; quotes
+    /// map to themselves.
+    pub fn surround_pair(c: char) -> Option<(char, char)> {
+        match c {
+            '\'' => Some(('\'', '\'')),
+            '"' => Some(('"', '"')),
+            '`' => Some(('`', '`')),
+            '(' | ')' => Some(('(', ')')),
+            '[' | ']' => Some(('[', ']')),
+            '{' | '}' => Some(('{', '}')),
+            '<' | '>' => Some(('<', '>')),
+            _ => None,
+        }
+    }
+
+    /// Delete the surrounding pair of kind `target` around the cursor.
+    /// Returns false when no such enclosing pair exists.
+    pub fn delete_surround(&mut self, target: char) -> bool {
+        let obj = self.surround_span(target);
+        let Some(o) = obj else { return false };
+        self.push_history();
+        self.delete_range(o.end, self.advance(o.end));
+        self.delete_range(o.start, self.advance(o.start));
+        self.move_cursor(Move::Jump(o.start.row, o.start.col));
+        true
+    }
+
+    /// Change the surrounding pair `target` to `replacement`.
+    pub fn change_surround(&mut self, target: char, replacement: char) -> bool {
+        let Some(o) = self.surround_span(target) else {
+            return false;
+        };
+        let Some((no, nc)) = Self::surround_pair(replacement) else {
+            return false;
+        };
+        self.push_history();
+        let mut line = self.lines[o.end.row].clone();
+        replace_char_at(&mut line, o.end.col, nc);
+        self.lines[o.end.row] = line;
+        let mut line = self.lines[o.start.row].clone();
+        replace_char_at(&mut line, o.start.col, no);
+        self.lines[o.start.row] = line;
+        self.move_cursor(Move::Jump(o.start.row, o.start.col));
+        true
+    }
+
+    /// Insert `pair` around the inclusive span `obj`.
+    pub fn surround_insert(&mut self, obj: TextObj, pair: (char, char)) {
+        self.push_history();
+        self.insert_at(
+            Pos {
+                row: obj.end.row,
+                col: obj.end.col + 1,
+            },
+            pair.1,
+        );
+        self.insert_at(obj.start, pair.0);
+        self.move_cursor(Move::Jump(obj.start.row, obj.start.col));
+    }
+
+    fn insert_at(&mut self, p: Pos, c: char) {
+        self.move_cursor(Move::Jump(p.row, p.col));
+        self.insert_char(c);
+    }
+
+    /// The enclosing span (quotes or brackets, both glyphs included) around
+    /// the cursor for a surround target char.
+    fn surround_span(&self, target: char) -> Option<TextObj> {
+        match target {
+            '\'' | '"' | '`' => self.quote_object(target, true),
+            c => {
+                let open = match c {
+                    ')' | ']' | '}' | '>' => {
+                        // normalize closes to opens for bracket_object
+                        match c {
+                            ')' => '(',
+                            ']' => '[',
+                            '}' => '{',
+                            _ => '<',
+                        }
+                    }
+                    _ => c,
+                };
+                self.bracket_object(open, true)
+            }
+        }
     }
 
     // ---- cursor movement ----
@@ -582,7 +1009,29 @@ impl Buffer {
         }
     }
 
-    fn delete_range(&mut self, start: Pos, end: Pos) {
+    pub fn delete_range(&mut self, start: Pos, end: Pos) {
+        // an exclusive `end` at or past a row's end with the span starting
+        // at a row start covers whole rows: drop them (vim joins full-line
+        // spans instead of leaving empty shells)
+        if start.row < end.row
+            && start.col == 0
+            // an exclusive end at col 0 starts a row, it never covers one
+            // (an empty row's "one past the end" is col 0, but so is its
+            // start — ambiguous, so never join those)
+            && end.col > 0
+            && end.col >= self.line_len(end.row)
+            && end.row + 1 < self.lines.len()
+        {
+            self.lines.drain(start.row..=end.row);
+            if self.lines.is_empty() {
+                self.lines.push(String::new());
+            }
+            self.cursor = Pos {
+                row: start.row.min(self.lines.len() - 1),
+                col: 0,
+            };
+            return;
+        }
         self.cursor = start;
         if start.row == end.row {
             let line = &mut self.lines[start.row];
@@ -658,6 +1107,7 @@ impl Buffer {
         }
     }
 
+    #[allow(dead_code)] // kept tui-textarea API surface
     pub fn has_search_pattern(&self) -> bool {
         self.search.is_some()
     }
@@ -731,6 +1181,11 @@ impl Buffer {
             false
         }
     }
+}
+
+fn replace_char_at(s: &mut String, col: usize, c: char) {
+    let off = char_off(s, col);
+    s.replace_range(off..off + c.len_utf8(), &c.to_string());
 }
 
 fn char_off(s: &str, col: usize) -> usize {
