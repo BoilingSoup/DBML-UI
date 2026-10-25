@@ -1316,8 +1316,11 @@ impl Editor {
         } else {
             self.buf
                 .move_cursor(CursorMove::Jump(obj.start.row, obj.start.col));
-            // delete_range takes an exclusive end; TextObj.end is inclusive
-            self.buf.delete_range(obj.start, self.buf.advance(obj.end));
+            // delete_str is one undo unit (raw delete_range never pushes);
+            // TextObj.end is inclusive, advance makes the end exclusive
+            let to = self.buf.advance(obj.end);
+            let n = self.chars_between((obj.start.row, obj.start.col), (to.row, to.col));
+            self.buf.delete_str(n);
         }
     }
 
@@ -2388,6 +2391,36 @@ mod polish_tests {
             e.handle_key(key(c));
         }
         assert_eq!(e.text(), "f{}b\n");
+    }
+
+    #[test]
+    fn object_ops_are_undoable() {
+        // di' then u restores the deleted inner text
+        let mut e = editor("say 'hello' ok\n");
+        for c in "lllllldi'".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "say '' ok\n");
+        e.handle_key(key('u'));
+        assert_eq!(e.text(), "say 'hello' ok\n");
+
+        // ci' + typing: the delete sits on the undo stack below the typed
+        // chars, so enough undos restore the original
+        let mut e = editor("say 'hello' ok\n");
+        for c in "llllllci'".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "say '' ok\n");
+        assert_eq!(e.mode, Mode::Insert);
+        for c in "hey".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "say 'hey' ok\n");
+        e.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        for _ in 0..4 {
+            e.handle_key(key('u'));
+        }
+        assert_eq!(e.text(), "say 'hello' ok\n", "the ci' delete is undoable");
     }
 
     #[test]
