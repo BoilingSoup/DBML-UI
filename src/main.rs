@@ -29,5 +29,14 @@ fn main() -> Result<(), iced::Error> {
         .theme(|_| theme::app())
         .subscription(app::subscription)
         .window_size(iced::Size::new(1400.0, 900.0))
-        .run_with(|| (app, iced::Task::none()))
+        .run_with(|| {
+            // iced 0.13 never focuses the main window itself, so keyboard
+            // input was ignored until the first click focused it. The main
+            // window is the only one: focus the oldest.
+            let focus = iced::window::get_oldest().then(|id| {
+                id.map(iced::window::gain_focus)
+                    .unwrap_or_else(iced::Task::none)
+            });
+            (app, focus)
+        })
 }
