@@ -93,12 +93,23 @@ fn tokenize(src: &str) -> Result<Vec<Tok>, String> {
             }
             '0'..='9' => {
                 let start = i;
-                while i < b.len() && (b[i].is_ascii_digit() || b[i] == '.' || b[i] == '-') {
-                    // stop '-' unless part of a number context (rare in DDL)
-                    if b[i] == '-' && !(i > start && b[i - 1] == 'e') {
-                        break;
+                if b[i] == '0'
+                    && i + 1 < b.len()
+                    && matches!(b[i + 1], 'b' | 'B' | 'o' | 'O' | 'x' | 'X')
+                {
+                    // radix literals: 0b1010, 0o52, 0x2A
+                    i += 2;
+                    while i < b.len() && b[i].is_ascii_alphanumeric() {
+                        i += 1;
                     }
-                    i += 1;
+                } else {
+                    while i < b.len() && (b[i].is_ascii_digit() || b[i] == '.' || b[i] == '-') {
+                        // stop '-' unless part of a number context (rare in DDL)
+                        if b[i] == '-' && !(i > start && b[i - 1] == 'e') {
+                            break;
+                        }
+                        i += 1;
+                    }
                 }
                 out.push(Tok::N(b[start..i].iter().collect()));
             }
@@ -163,6 +174,8 @@ fn statements(toks: &[Tok]) -> Vec<&[Tok]> {
 struct ICol {
     name: String,
     ty: String,
+    /// the type was quoted in SQL (spaces/symbols) — re-quote in DBML
+    ty_quoted: bool,
     pk: bool,
     increment: bool,
     unique: bool,
@@ -174,8 +187,8 @@ struct ICol {
     check: Option<String>,
 }
 
-/// One index entry: (columns, name, unique, index_type).
-type IndexDef = (Vec<String>, Option<String>, bool, Option<String>);
+/// One index entry: (columns, name, unique, index_type, pk).
+type IndexDef = (Vec<String>, Option<String>, bool, Option<String>, bool);
 
 #[derive(Debug, Default, Clone)]
 struct ITable {
@@ -183,7 +196,7 @@ struct ITable {
     name: String,
     cols: Vec<ICol>,
     note: Option<String>,
-    /// (columns, name, unique, index_type)
+    /// (columns, name, unique, index_type, pk)
     indexes: Vec<IndexDef>,
     /// (constraint name, expression)
     checks: Vec<(Option<String>, String)>,
@@ -408,7 +421,9 @@ impl Importer {
                 if self.dialect == Dialect::MySQL {
                     // mysql KEY/UNIQUE indexes render as an indexes block
                     if let Some(ti) = self.tables.iter().position(|t| t.name == table) {
-                        self.tables[ti].indexes.push((cols, name, !is_pk, None));
+                        self.tables[ti]
+                            .indexes
+                            .push((cols, name, !is_pk, None, false));
                     }
                 }
             }
@@ -512,9 +527,13 @@ impl Importer {
             i += 1;
         }
         let joined = join_type(&ty);
+        let ty_quoted = matches!(s.get(1), Some(Tok::W(_, true)));
+        col.ty_quoted = ty_quoted || joined.contains('[');
         if joined.contains('[') {
-            // array types (TEXT[], timetz(2)[]) are quoted in DBML
-            col.ty = format!("\"{joined}\"");
+            // array types (TEXT[], timetz(2)[]) are quoted in DBML —
+            // never double-quote an already-quoted type
+            let inner = joined.trim_matches('"');
+            col.ty = format!("\"{inner}\"");
         } else {
             col.ty = normalize_type(&joined, self.dialect);
         }
@@ -803,19 +822,24 @@ impl Importer {
             let Some(ti) = self.tables.iter().position(|t| t.name == table) else {
                 continue;
             };
-            if is_pk {
-                for c in &cols {
-                    if let Some(col) = self.tables[ti].cols.iter_mut().find(|x| x.name == *c) {
-                        col.pk = true;
-                    }
+            if is_pk && cols.len() == 1 {
+                if let Some(col) = self.tables[ti].cols.iter_mut().find(|x| x.name == cols[0]) {
+                    col.pk = true;
                 }
+            } else if is_pk {
+                // composite PK: an indexes-block [pk] entry (golden rule)
+                self.tables[ti]
+                    .indexes
+                    .insert(0, (cols, name, false, None, true));
             } else if cols.len() == 1 && name.is_none() {
                 if let Some(col) = self.tables[ti].cols.iter_mut().find(|x| x.name == cols[0]) {
                     col.unique = true;
                 }
             } else {
                 // composite/named constraints render as an indexes block
-                self.tables[ti].indexes.push((cols, name, !is_pk, None));
+                self.tables[ti]
+                    .indexes
+                    .push((cols, name, !is_pk, None, false));
             }
         }
         for (fk_table, fk_cols, ref_table, ref_cols) in std::mem::take(&mut self.fks) {
@@ -885,6 +909,10 @@ impl Importer {
                 }
                 let ty = if c.ty.is_empty() {
                     "int".to_string()
+                } else if c.ty.starts_with('"') && c.ty.ends_with('"') {
+                    c.ty.clone() // already quoted (arrays/pre-quoted)
+                } else if c.ty_quoted {
+                    q(&c.ty)
                 } else {
                     c.ty.clone()
                 };
@@ -896,9 +924,12 @@ impl Importer {
             }
             if !t.indexes.is_empty() {
                 out.push_str("\n  indexes {\n");
-                for (cols, name, unique, ty) in &t.indexes {
+                for (cols, name, unique, ty, pk) in &t.indexes {
                     let col_list = cols.iter().map(|c| q(c)).collect::<Vec<_>>().join(", ");
                     let mut settings = Vec::new();
+                    if *pk {
+                        settings.push("pk".into());
+                    }
                     if *unique {
                         settings.push("unique".into());
                     }
@@ -998,9 +1029,15 @@ fn ident_list(s: &[Tok], mut i: usize) -> (Vec<String>, usize) {
 /// DEFAULT value: string literal verbatim, backtick expr verbatim, bare
 /// token (possibly signed number or function call tokens joined).
 fn default_value(s: &[Tok], mut i: usize) -> (String, usize) {
+    if matches!(s.get(i), Some(Tok::P('('))) {
+        // parenthesized expression: backtick the group's content
+        let end = skip_group(s, i);
+        let expr = tokens_text(&s[i + 1..end - 1]).replace(' ', "");
+        return (format!("`{expr}`"), end);
+    }
     match s.get(i) {
         Some(Tok::S(v)) => (format!("'{}'", v.replace('\'', "''")), i + 1),
-        Some(Tok::N(n)) => (n.clone(), i + 1),
+        Some(Tok::N(n)) => (parse_int_literal(n), i + 1),
         Some(Tok::W(w, _)) => {
             let mut v = w.clone();
             i += 1;
@@ -1025,6 +1062,32 @@ fn default_value(s: &[Tok], mut i: usize) -> (String, usize) {
         }
         _ => (String::new(), i),
     }
+}
+
+/// Render a numeric literal: 0b/0o/0x and leading-zero forms convert to
+/// their decimal value (golden rule from integer_literals).
+fn parse_int_literal(n: &str) -> String {
+    let lower = n.to_ascii_lowercase();
+    if let Some(rest) = lower.strip_prefix("0b") {
+        if let Ok(v) = i64::from_str_radix(rest, 2) {
+            return v.to_string();
+        }
+    }
+    if let Some(rest) = lower.strip_prefix("0x") {
+        if let Ok(v) = i64::from_str_radix(rest, 16) {
+            return v.to_string();
+        }
+    }
+    if let Some(rest) = lower.strip_prefix("0o") {
+        if let Ok(v) = i64::from_str_radix(rest, 8) {
+            return v.to_string();
+        }
+    }
+    if lower.len() > 1 && lower.starts_with('0') && lower.chars().all(|c| c.is_ascii_digit()) {
+        // golden rule: leading zeros drop (decimal reading)
+        return lower.trim_start_matches('0').to_string();
+    }
+    n.to_string()
 }
 
 fn tokens_text(s: &[Tok]) -> String {
