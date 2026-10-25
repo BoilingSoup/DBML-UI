@@ -74,9 +74,17 @@ impl canvas::Program<Message> for DividerHandle {
         &self,
         _state: &mut Self::State,
         event: canvas::Event,
-        _bounds: iced::Rectangle,
-        _cursor: iced::mouse::Cursor,
+        bounds: iced::Rectangle,
+        cursor: iced::mouse::Cursor,
     ) -> (canvas::event::Status, Option<Message>) {
+        // The canvas widget forwards every window event; only start a
+        // divider drag when the press actually lands on the handle.
+        // (Ungated, any click in the editor also began a resize, so a
+        // click near the window's left edge snapped the split to its
+        // minimum.)
+        if cursor.position_over(bounds).is_none() {
+            return (canvas::event::Status::Ignored, None);
+        }
         match event {
             canvas::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => (
                 canvas::event::Status::Captured,
@@ -269,4 +277,45 @@ fn status_bar(app: &App) -> Element<'_, Message> {
             ..Default::default()
         })
         .into()
+}
+
+#[cfg(test)]
+mod divider_tests {
+    use super::*;
+    use iced::mouse::{self, Cursor};
+    use iced::widget::canvas::Program as _;
+    use iced::{Point, Rectangle, Size};
+
+    const HANDLE: Rectangle = Rectangle::new(Point::new(200.0, 0.0), Size::new(6.0, 300.0));
+
+    #[test]
+    fn press_on_the_handle_starts_a_drag() {
+        let h = DividerHandle;
+        let inside = Point::new(203.0, 50.0); // window coords, on the handle
+        let (status, message) = h.update(
+            &mut (),
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+            HANDLE,
+            Cursor::Available(inside),
+        );
+        assert!(matches!(message, Some(Message::DividerPressed)));
+        assert_eq!(status, canvas::event::Status::Captured);
+    }
+
+    #[test]
+    fn press_anywhere_else_is_ignored() {
+        // regression: an ungated divider turned every click in the editor
+        // into a pane resize (clicking near the left edge snapped the
+        // split to its minimum)
+        let h = DividerHandle;
+        let editor_area = Point::new(60.0, 50.0); // 2nd char of a line
+        let (status, message) = h.update(
+            &mut (),
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+            HANDLE,
+            Cursor::Available(editor_area),
+        );
+        assert!(message.is_none());
+        assert_eq!(status, canvas::event::Status::Ignored);
+    }
 }
