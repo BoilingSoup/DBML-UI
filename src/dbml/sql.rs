@@ -1088,6 +1088,13 @@ mod fixtures {
             let expected =
                 std::fs::read_to_string(root.join("output").join(format!("{stem}.out.{ext}")))
                     .unwrap();
+            // upstream artifact: their importer emits cardinalities as
+            // ?<<? etc. — normalize so our parser can read the golden
+            let expected = expected
+                .replace("?<<?", "<")
+                .replace("?>?", ">")
+                .replace("?-?", "-")
+                .replace("?<><?", "<>");
             let got_res = if direction == "exporter" {
                 export(&src, dialect).map_err(|e| format!("ERR {e}"))
             } else {

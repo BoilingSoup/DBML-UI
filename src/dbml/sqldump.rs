@@ -176,12 +176,18 @@ struct ICol {
     check: Option<String>,
 }
 
+/// One index entry: (columns, name, unique, index_type).
+type IndexDef = (Vec<String>, Option<String>, bool, Option<String>);
+
 #[derive(Debug, Default, Clone)]
 struct ITable {
     schema: Option<String>,
     name: String,
     cols: Vec<ICol>,
     note: Option<String>,
+    /// (columns, name, unique, index_type)
+    indexes: Vec<IndexDef>,
+    checks: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -191,8 +197,8 @@ struct Importer {
     enums: Vec<(Option<String>, String, Vec<String>)>,
     /// (fk_table, fk_cols, ref_table, ref_cols)
     fks: Vec<(String, Vec<String>, String, Vec<String>)>,
-    /// Uniques/PKs to merge: (table, cols, is_pk)
-    pending_uniques: Vec<(String, Vec<String>, bool)>,
+    /// Uniques/PKs to merge: (table, cols, is_pk, constraint name)
+    pending_uniques: Vec<(String, Vec<String>, bool, Option<String>)>,
 }
 
 pub fn import(source: &str, dialect: Dialect) -> Result<String, String> {
@@ -359,8 +365,35 @@ impl Importer {
                 i += 1;
                 (cols, i) = ident_list(s, i);
             }
+            // optional USING BTREE/HASH and other tail tokens
+            while i < s.len()
+                && !matches!(s[i], Tok::P(','))
+                && !s[i].is_w("CONSTRAINT")
+                && !s[i].is_w("PRIMARY")
+                && !s[i].is_w("FOREIGN")
+                && !s[i].is_w("UNIQUE")
+                && !s[i].is_w("CHECK")
+            {
+                i += 1;
+            }
             if !cols.is_empty() {
-                self.pending_uniques.push((table.to_string(), cols, is_pk));
+                self.pending_uniques
+                    .push((table.to_string(), cols.clone(), is_pk, name.clone()));
+                if self.dialect == Dialect::MySQL {
+                    // mysql KEY/UNIQUE indexes render as an indexes block
+                    if let Some(ti) = self.tables.iter().position(|t| t.name == table) {
+                        self.tables[ti].indexes.push((cols, name, !is_pk, None));
+                    }
+                }
+            }
+            consumed = i;
+        } else if t.is_w("CHECK") {
+            i += 1;
+            if matches!(s.get(i), Some(Tok::P('('))) {
+                let end = skip_group(s, i);
+                if let Some(ti) = self.tables.iter().position(|t| t.name == table) {
+                    self.tables[ti].checks.push(tokens_text(&s[i + 1..end - 1]));
+                }
             }
             consumed = i;
         } else if t.is_w("FOREIGN") {
@@ -398,9 +431,23 @@ impl Importer {
         // type: tokens until a constraint keyword
         let mut ty: Vec<String> = Vec::new();
         let mut i = 1;
+        let mut type_depth = 0i32;
         while i < s.len() {
             let t = &s[i];
-            let stop = matches!(t, Tok::W(w)
+            if *t == Tok::P('(') {
+                type_depth += 1;
+            }
+            let mut close = false;
+            if *t == Tok::P(')') {
+                if type_depth == 0 {
+                    break; // end of the column item
+                }
+                type_depth -= 1;
+                close = true;
+            }
+            let stop = type_depth == 0
+                && !close
+                && matches!(t, Tok::W(w)
                 if w.eq_ignore_ascii_case("NOT")
                     || w.eq_ignore_ascii_case("NULL")
                     || w.eq_ignore_ascii_case("DEFAULT")
@@ -421,17 +468,20 @@ impl Importer {
                     || w.eq_ignore_ascii_case("CHARACTER")
                     || w.eq_ignore_ascii_case("ENCODED")
                     || w.eq_ignore_ascii_case("NULLS"));
-            if stop || *t == Tok::P(',') {
+            if stop || (*t == Tok::P(',') && type_depth == 0) {
                 break;
             }
-            if let Tok::W(w) = t {
-                ty.push(w.clone());
-            } else if let Tok::N(n) = t {
-                ty.push(n.clone());
+            match t {
+                Tok::W(w) => ty.push(w.clone()),
+                Tok::N(n) => ty.push(n.clone()),
+                Tok::P('(') if !close => ty.push("(".into()),
+                Tok::P(')') => ty.push(")".into()),
+                Tok::P(',') if type_depth > 0 => ty.push(",".into()),
+                _ => {}
             }
             i += 1;
         }
-        col.ty = normalize_type(&ty.join(" "), self.dialect);
+        col.ty = normalize_type(&join_type(&ty), self.dialect);
         // options
         while i < s.len() {
             let t = &s[i];
@@ -503,7 +553,7 @@ impl Importer {
                 i += 1;
                 if matches!(s.get(i), Some(Tok::P('('))) {
                     let end = skip_group(s, i);
-                    col.check = Some(tokens_text(&s[i + 1..end - 1]));
+                    col.check = Some(format!("`{}`", tokens_text(&s[i + 1..end - 1])));
                     i = end;
                 }
             } else if t.is_w("CONSTRAINT") {
@@ -543,7 +593,7 @@ impl Importer {
             (cols, _) = ident_list(s, i + 1);
         }
         if !cols.is_empty() {
-            self.pending_uniques.push((table, cols, false));
+            self.pending_uniques.push((table, cols, false, None));
         }
         let _ = i;
     }
@@ -689,7 +739,7 @@ impl Importer {
 
     /// Merge pending uniques/PKs and inline FKs into the tables.
     fn finish(&mut self) {
-        for (table, cols, is_pk) in std::mem::take(&mut self.pending_uniques) {
+        for (table, cols, is_pk, name) in std::mem::take(&mut self.pending_uniques) {
             let Some(ti) = self.tables.iter().position(|t| t.name == table) else {
                 continue;
             };
@@ -699,13 +749,14 @@ impl Importer {
                         col.pk = true;
                     }
                 }
-            } else if cols.len() == 1 {
+            } else if cols.len() == 1 && name.is_none() {
                 if let Some(col) = self.tables[ti].cols.iter_mut().find(|x| x.name == cols[0]) {
                     col.unique = true;
                 }
+            } else {
+                // composite/named constraints render as an indexes block
+                self.tables[ti].indexes.push((cols, name, !is_pk, None));
             }
-            // composite uniques have no single-column DBML equivalent; the
-            // golden importer drops them too
         }
         for (fk_table, fk_cols, ref_table, ref_cols) in std::mem::take(&mut self.fks) {
             let Some(ti) = self.tables.iter().position(|t| t.name == fk_table) else {
@@ -769,6 +820,9 @@ impl Importer {
                 if let Some(n) = &c.note {
                     settings.push(format!("note: '{}'", n.replace('\'', "''")));
                 }
+                if let Some(ch) = &c.check {
+                    settings.push(format!("check: {ch}"));
+                }
                 let ty = if c.ty.is_empty() {
                     "int".to_string()
                 } else {
@@ -779,6 +833,36 @@ impl Importer {
                     out.push_str(&format!(" [{}]", settings.join(", ")));
                 }
                 out.push('\n');
+            }
+            if !t.indexes.is_empty() {
+                out.push_str("\n  indexes {\n");
+                for (cols, name, unique, ty) in &t.indexes {
+                    let col_list = cols.iter().map(|c| q(c)).collect::<Vec<_>>().join(", ");
+                    let mut settings = Vec::new();
+                    if *unique {
+                        settings.push("unique".into());
+                    }
+                    if let Some(n) = name {
+                        settings.push(format!("name: '{}'", n.replace('\'', "''")));
+                    }
+                    if let Some(ty) = ty {
+                        settings.push(format!("type: {ty}"));
+                    }
+                    let suffix = if settings.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" [{}]", settings.join(", "))
+                    };
+                    out.push_str(&format!("    ({col_list}){suffix}\n"));
+                }
+                out.push_str("  }\n");
+            }
+            if !t.checks.is_empty() {
+                out.push_str("\n  Checks {\n");
+                for c in &t.checks {
+                    out.push_str(&format!("    `{}`\n", c));
+                }
+                out.push_str("  }\n");
             }
             if let Some(n) = &t.note {
                 out.push_str(&format!("\n  Note: '{}'\n", n.replace('\'', "''")));
@@ -871,8 +955,18 @@ fn default_value(s: &[Tok], mut i: usize) -> (String, usize) {
 fn tokens_text(s: &[Tok]) -> String {
     let mut out = String::new();
     for (i, t) in s.iter().enumerate() {
+        let _ = i;
         if i > 0 {
-            if let Tok::W(_) | Tok::N(_) = t {
+            // space before word/number tokens, and before opening parens
+            // when they follow a word (LOWER(x)); never inside call groups
+            let needs_space = match t {
+                Tok::W(_) | Tok::N(_) => true,
+                Tok::P('(') => out.ends_with(|c: char| c.is_alphanumeric() || c == '_'),
+                Tok::P('>' | '<' | '=') => out
+                    .ends_with(|c: char| c.is_alphanumeric() || c == '_' || c == '\'' || c == ')'),
+                _ => false,
+            };
+            if needs_space && !out.ends_with(' ') {
                 out.push(' ');
             }
         }
@@ -885,6 +979,24 @@ fn tokens_text(s: &[Tok]) -> String {
                 out.push('\'');
             }
             Tok::P(c) => out.push(*c),
+        }
+    }
+    out
+}
+
+/// Join collected type tokens: no spaces inside parens, single spaces
+/// between words (`int ( 11 )` -> `int(11)`).
+fn join_type(toks: &[String]) -> String {
+    let mut out = String::new();
+    for t in toks {
+        match t.as_str() {
+            "(" | ")" | "," => out.push_str(t),
+            _ => {
+                if !out.is_empty() && !out.ends_with('(') && !out.ends_with(',') {
+                    out.push(' ');
+                }
+                out.push_str(t);
+            }
         }
     }
     out

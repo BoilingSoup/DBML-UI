@@ -214,6 +214,24 @@ fn note_value(input: &mut &str, base: usize) -> R<String> {
     }
 }
 
+/// Skip a balanced {...} group: returns the BYTE length of the content
+/// between the braces (the caller has already consumed '{').
+fn skip_group_len(input: &str) -> usize {
+    let bytes = input.as_bytes();
+    let mut depth = 1i32;
+    for (k, &bch) in bytes.iter().enumerate() {
+        if bch == b'{' {
+            depth += 1;
+        } else if bch == b'}' {
+            depth -= 1;
+            if depth == 0 {
+                return k;
+            }
+        }
+    }
+    bytes.len()
+}
+
 fn is_type_char(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '_' | '(' | ')' | ',' | '.' | ' ' | '\t')
 }
@@ -589,6 +607,26 @@ fn index(input: &mut &str, base: usize) -> R<Index> {
                 Some(SettingVal::Ref(..)) => {}
             }
         }
+    } else if eat(input, ",") {
+        // bare comma form used by some importers: `(cols), pk, name: 'x'`
+        let end = input.find(['\n', '}']).unwrap_or(input.len());
+        let line = input[..end].trim();
+        for kv in line.split(',') {
+            let kv = kv.trim();
+            if kv.eq_ignore_ascii_case("pk") || kv.eq_ignore_ascii_case("primary key") {
+                idx.pk = true;
+            } else if kv.eq_ignore_ascii_case("unique") {
+                idx.unique = true;
+            } else if let Some((k, v)) = kv.split_once(':') {
+                let v = v.trim().trim_matches('\'').trim_matches('"');
+                match k.trim().to_ascii_lowercase().as_str() {
+                    "name" => idx.name = Some(v.to_string()),
+                    "type" => idx.index_type = Some(v.to_string()),
+                    _ => {}
+                }
+            }
+        }
+        *input = &input[end..];
     }
     idx.span = start..offset(input, base);
     Ok(idx)
@@ -615,6 +653,26 @@ fn top_item(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Item
         ref_stmt(input, base).map(Item::Ref)
     } else if peek_kw(input, "Enum") {
         enum_def(input, base, errs).map(Item::Enm)
+    } else if peek_kw(input, "Records") {
+        // Records name(cols) { rows } — data samples; skipped (no model
+        // equivalent yet)
+        let _ = eat(input, "Records");
+        ws(input);
+        let _ = ident(input, base);
+        ws(input);
+        if peek_is(input, "(") {
+            let end = skip_group_len(input);
+            *input = &input[end - 1..];
+            let _ = eat(input, ")");
+        }
+        ws(input);
+        if peek_is(input, "{") {
+            let _ = eat(input, "{");
+            let end = skip_group_len(input);
+            *input = &input[end..];
+            let _ = eat(input, "}");
+        }
+        top_item(input, base, errs)
     } else {
         fail(
             offset(input, base),
@@ -690,11 +748,31 @@ fn table(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Table> 
             }
             continue;
         }
+        if peek_kw(input, "Records") {
+            // Records name(cols) { rows } — data samples; parsed and
+            // dropped (no diagram equivalent yet)
+            let _ = eat(input, "Records");
+            ws(input);
+            let _ = ident(input, base);
+            ws(input);
+            if peek_is(input, "(") {
+                let end = skip_group_len(input);
+                *input = &input[end - 1..];
+                let _ = eat(input, ")");
+            }
+            ws(input);
+            if peek_is(input, "{") {
+                let _ = eat(input, "{");
+                let end = skip_group_len(input);
+                *input = &input[end..];
+                let _ = eat(input, "}");
+            }
+            continue;
+        }
         if peek_kw_then(input, "Checks", '{') {
             let _ = eat(input, "Checks");
             ws(input);
             let _ = eat(input, "{");
-            let start_off = offset(input, base);
             let mut depth = 1i32;
             let bytes = input.as_bytes();
             let mut end = bytes.len();
