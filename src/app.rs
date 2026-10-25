@@ -435,6 +435,26 @@ fn pick_save_path_blocking() -> PickOutcome {
             ],
         ),
         ("kdialog", vec!["--getsavefilename", &start, "*.dbml"]),
+        (
+            "osascript",
+            vec![
+                "-e",
+                "POSIX path of (choose file name with prompt \"Save DBML file\")",
+            ],
+        ),
+        (
+            "powershell",
+            vec![
+                "-NoProfile",
+                "-WindowStyle",
+                "Hidden",
+                "-Command",
+                "Add-Type -AssemblyName System.Windows.Forms; \
+                 $f = New-Object System.Windows.Forms.SaveFileDialog; \
+                 $f.Filter = 'DBML (*.dbml)|*.dbml'; \
+                 if ($f.ShowDialog() -eq 'OK') { $f.FileName }",
+            ],
+        ),
     ] {
         let Ok(out) = std::process::Command::new(tool)
             .args(&args)

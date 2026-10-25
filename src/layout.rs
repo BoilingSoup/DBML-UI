@@ -16,12 +16,38 @@ pub struct Row {
     pub fk: bool,
     pub name: String,
     pub ty: String,
+    /// Some(true) = not null, Some(false) = explicit null.
+    pub not_null: Option<bool>,
+    pub unique: bool,
+    pub note: Option<String>,
 }
 
 impl Row {
-    /// "name ⚿ type" width in cells (marker icon after the name).
+    /// Extra width (cells) of the "Not Null" / "Unique" pills and the
+    /// trailing note icon.
+    pub const BADGE_CELL: f32 = 0.456; // one badge-font char in cells
+
+    pub fn badges(&self) -> Vec<&'static str> {
+        let mut v = Vec::new();
+        if self.not_null == Some(true) {
+            v.push("Not Null");
+        }
+        if self.unique {
+            v.push("Unique");
+        }
+        v
+    }
+
     pub fn width(&self) -> i32 {
-        2 + self.name.width() as i32 + 1 + self.ty.width() as i32
+        let mut w = 2.0 + self.name.width() as f32 + 1.9 + 0.5; // pad + name + icon band + gap
+        for b in self.badges() {
+            w += 0.8 + b.chars().count() as f32 * Self::BADGE_CELL;
+        }
+        w += 1.0 + self.ty.width() as f32; // gap + type
+        if self.note.is_some() {
+            w += 1.6; // note icon zone at the right edge
+        }
+        w.ceil() as i32
     }
 }
 
@@ -139,6 +165,9 @@ pub fn layout_with_overrides(
                     fk: c.fk,
                     name: c.name.clone(),
                     ty: c.ty.clone(),
+                    not_null: c.not_null,
+                    unique: c.unique,
+                    note: c.note.clone(),
                 })
                 .collect::<Vec<_>>();
             let content = rows

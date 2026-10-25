@@ -241,10 +241,11 @@ fn push_table(s: &mut String, b: &TableBox, show_text: bool) {
         // marker icon: key (pk) / chain link (fk), gray outline
         let cx = name_x + row.name.width() as f32 * char_w + 1.4 * CELL_W;
         let cy = ry - row_size * 0.35;
-        let (color, sw) = ("#8b909c", (0.11 * row_size).max(1.2));
+        let (color, sw) = ("#8b909c", (0.085 * row_size).max(1.0));
         if row.pk {
-            let r = 0.30 * row_size;
-            let bx = cx - 0.18 * row_size;
+            let g = 0.55 * CELL_H;
+            let r = 0.30 * g;
+            let bx = cx - 0.18 * g;
             let x0 = bx + r * 0.72;
             let x1 = cx + 0.45 * row_size;
             s.push_str(&format!(
@@ -268,11 +269,60 @@ fn push_table(s: &mut String, b: &TableBox, show_text: bool) {
                 cx + off
             ));
         }
+        // badges (Not Null / Unique) after the marker zone
+        let badge_size = 0.38 * CELL_H;
+        let badge_char = 0.6 * badge_size;
+        let mut bx = cx + 1.1 * CELL_W;
+        for label in row.badges() {
+            let tw = label.chars().count() as f32 * badge_char;
+            let pad = 0.30 * CELL_W;
+            s.push_str(&format!(
+                r##"<rect x="{:.1}" y="{:.1}" width="{:.1}" height="{:.1}" rx="{:.1}" fill="#8b909c" fill-opacity="0.14"/>"##,
+                bx,
+                ry - row_size * 0.5,
+                tw + 2.0 * pad,
+                0.60 * CELL_H,
+                0.12 * CELL_H
+            ));
+            s.push_str(&format!(
+                r##"<text x="{:.1}" y="{:.1}" font-family="monospace" font-size="{badge_size}" fill="#8b909c">{}</text>"##,
+                bx + pad,
+                ry + row_size * 0.02,
+                escape(label)
+            ));
+            bx += tw + 2.0 * pad + 0.30 * CELL_W;
+        }
         if !row.ty.is_empty() {
+            let right = if row.note.is_some() {
+                x + w - 1.8 * CELL_W
+            } else {
+                x + w - 1.2 * CELL_W
+            };
             s.push_str(&format!(
                 r##"<text x="{:.1}" y="{ry:.1}" font-family="monospace" font-size="{row_size}" fill="#8b909c" text-anchor="end">{}</text>"##,
-                x + w - 1.2 * CELL_W,
+                right,
                 escape(&row.ty)
+            ));
+        }
+        // note paper icon at the far right
+        if row.note.is_some() {
+            let nx = x + w - 1.0 * CELL_W;
+            let ny = ry - row_size * 0.35;
+            let g = 0.55 * CELL_H;
+            let x0 = nx - 0.40 * g;
+            let x1 = nx + 0.40 * g;
+            let y0 = ny - 0.50 * g;
+            let y1 = ny + 0.50 * g;
+            let fold = 0.22 * g;
+            let sw = (0.085 * g).max(1.0);
+            s.push_str(&format!(
+                r##"<path d="M {x0:.1} {y0:.1} L {x1f:.1} {y0:.1} L {x1:.1} {y0f:.1} L {x1:.1} {y1:.1} L {x0:.1} {y1:.1} Z M {x1f:.1} {y0:.1} L {x1f:.1} {y0f:.1} L {x1:.1} {y0f:.1} M {lx0:.1} {ly:.1} L {lx1:.1} {ly:.1} M {lx0:.1} {ly2:.1} L {lx1:.1} {ly2:.1}" fill="none" stroke="#8b909c" stroke-width="{sw:.1}"/>"##,
+                x1f = x1 - fold,
+                y0f = y0 + fold,
+                lx0 = x0 + 0.14 * g,
+                lx1 = x1 - 0.14 * g,
+                ly = y0 + 0.42 * g,
+                ly2 = y0 + 0.64 * g,
             ));
         }
     }

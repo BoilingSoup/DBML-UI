@@ -67,7 +67,7 @@ fn marker_band(b: &TableBox, row: usize, zoom: f32, pan: Vector) -> (f32, f32) {
     let top_left = to_px(b.x, b.y, zoom, pan);
     let s = cell_size(zoom);
     let name_end = top_left.x + 1.0 * s.width + b.rows[row].name.width() as f32 * char_px(zoom);
-    (name_end + 0.45 * s.width, name_end + 2.35 * s.width)
+    (name_end + 0.35 * s.width, name_end + 1.85 * s.width)
 }
 
 /// The pk/fk marker under a canvas point, if any: the icon band sits just
@@ -82,6 +82,29 @@ pub fn marker_hit(layout: &Layout, zoom: f32, pan: Vector, p: Point) -> Option<(
     }
     let (x0, x1) = marker_band(b, row, zoom, pan);
     (p.x >= x0 && p.x < x1 && (b.rows[row].pk || b.rows[row].fk)).then_some((b, row))
+}
+
+/// X range (frame px) of the note icon on a row that has one: the small
+/// paper glyph at the far right edge of the box.
+fn note_band(b: &TableBox, row: usize, zoom: f32, pan: Vector) -> Option<(f32, f32)> {
+    b.rows[row].note.as_ref()?;
+    let top_left = to_px(b.x, b.y, zoom, pan);
+    let s = cell_size(zoom);
+    let right = top_left.x + b.w as f32 * s.width;
+    Some((right - 1.5 * s.width, right - 0.5 * s.width))
+}
+
+/// The note under a canvas point, if the pointer is on its paper icon.
+pub fn note_hit(layout: &Layout, zoom: f32, pan: Vector, p: Point) -> Option<(&TableBox, usize)> {
+    let b = hit_test(layout, zoom, pan, p)?;
+    let top_left = to_px(b.x, b.y, zoom, pan);
+    let s = cell_size(zoom);
+    let row = (((p.y - top_left.y) / s.height) as usize).saturating_sub(1);
+    if row >= b.rows.len() {
+        return None;
+    }
+    let (x0, x1) = note_band(b, row, zoom, pan)?;
+    (p.x >= x0 && p.x < x1).then_some((b, row))
 }
 
 /// The hover label for a pk/fk marker row.
@@ -218,7 +241,46 @@ impl canvas::Program<crate::app::Message> for Diagram<'_> {
         // mesh could never cover the row text beneath it
         let mut tooltip_frame = None;
         if let Some(p) = self.hover {
-            if let Some((b, row)) = marker_hit(self.layout, self.zoom, self.pan, p) {
+            // note icons: hover shows the note text; then pk/fk markers
+            if let Some((b, row)) = note_hit(self.layout, self.zoom, self.pan, p) {
+                let top_left = to_px(b.x, b.y, self.zoom, self.pan);
+                let s = cell_size(self.zoom);
+                let local = Rectangle::new(Point::ORIGIN, bounds.size());
+                let (nx0, nx1) = note_band(b, row, self.zoom, self.pan).unwrap();
+                // 60-char cap keeps the pill readable
+                let mut text: String = b.rows[row].note.clone().unwrap_or_default();
+                if text.chars().count() > 60 {
+                    text = text.chars().take(60).collect::<String>() + "…";
+                }
+                let rect = marker_tooltip_rect(
+                    (nx0 + nx1) / 2.0,
+                    top_left.y,
+                    top_left.y + b.h as f32 * s.height,
+                    &text,
+                    self.zoom,
+                    local,
+                );
+                let mut tframe = canvas::Frame::new(renderer, bounds.size());
+                tframe.fill(
+                    &Path::rounded_rectangle(
+                        rect.position(),
+                        rect.size(),
+                        iced::border::Radius::from(4.0),
+                    ),
+                    theme::TIP_BG,
+                );
+                tframe.fill_text(Text {
+                    content: text,
+                    position: Point::new(rect.x + 8.0, rect.y + rect.height * 0.5),
+                    color: theme::TIP_TEXT,
+                    size: (0.42 * self.zoom).into(),
+                    font: Font::MONOSPACE,
+                    horizontal_alignment: iced::alignment::Horizontal::Left,
+                    vertical_alignment: iced::alignment::Vertical::Center,
+                    ..Default::default()
+                });
+                tooltip_frame = Some(tframe);
+            } else if let Some((b, row)) = marker_hit(self.layout, self.zoom, self.pan, p) {
                 let rowd = &b.rows[row];
                 let label = marker_label(rowd.pk);
                 let top_left = to_px(b.x, b.y, self.zoom, self.pan);
@@ -277,6 +339,9 @@ impl canvas::Program<crate::app::Message> for Diagram<'_> {
         if let Some(p) = cursor.position_over(bounds) {
             let local = Point::new(p.x - bounds.x, p.y - bounds.y);
             if hit_test(self.layout, self.zoom, self.pan, local).is_some() {
+                if note_hit(self.layout, self.zoom, self.pan, local).is_some() {
+                    return Interaction::Help;
+                }
                 return Interaction::Pointer;
             }
             // empty canvas: the open hand, signalling pan
@@ -395,7 +460,7 @@ fn edge_stroke_width(zoom: f32) -> f32 {
 
 /// Key icon (dbdiagram pk): circular bow, shaft, two teeth — stroked.
 fn draw_key_icon(frame: &mut canvas::Frame, center: Point, size: f32, color: Color) {
-    let w = (0.11 * size).max(1.2);
+    let w = (0.085 * size).max(1.0);
     let stroke = canvas::Stroke {
         style: color.into(),
         width: w,
@@ -425,7 +490,7 @@ fn draw_key_icon(frame: &mut canvas::Frame, center: Point, size: f32, color: Col
 
 /// Chain-link icon (dbdiagram fk): two interlocking rings — stroked.
 fn draw_link_icon(frame: &mut canvas::Frame, center: Point, size: f32, color: Color) {
-    let w = (0.11 * size).max(1.2);
+    let w = (0.085 * size).max(1.0);
     let stroke = canvas::Stroke {
         style: color.into(),
         width: w,
@@ -564,14 +629,50 @@ fn paint_table(frame: &mut canvas::Frame, b: &TableBox, zoom: f32, pan: Vector, 
         let (band_x0, band_x1) = marker_band(b, i, zoom, pan);
         let center = baseline((band_x0 + band_x1) / 2.0);
         if row.pk {
-            draw_key_icon(frame, center, 0.78 * s.height, theme::MARKER);
+            draw_key_icon(frame, center, 0.55 * s.height, theme::MARKER);
         } else if row.fk {
-            draw_link_icon(frame, center, 0.74 * s.height, theme::MARKER);
+            draw_link_icon(frame, center, 0.50 * s.height, theme::MARKER);
+        }
+        // dbdiagram-style badges: small pills for not null / unique
+        let badge_font = 0.38 * s.height;
+        let badge_char = 0.6 * badge_font;
+        let mut bx = band_x1 + 0.35 * s.width;
+        for label in row.badges() {
+            let tw = label.chars().count() as f32 * badge_char;
+            let pad = 0.30 * s.width;
+            let rect = Rectangle::new(
+                Point::new(bx, y - 0.30 * s.height),
+                Size::new(tw + 2.0 * pad, 0.60 * s.height),
+            );
+            frame.fill(
+                &Path::rounded_rectangle(
+                    rect.position(),
+                    rect.size(),
+                    iced::border::Radius::from(0.12 * s.height),
+                ),
+                Color::from_rgba(0.545, 0.565, 0.612, 0.14),
+            );
+            frame.fill_text(Text {
+                content: label.to_string(),
+                position: Point::new(rect.x + pad, y),
+                color: theme::TYPE_TEXT,
+                size: badge_font.into(),
+                font: Font::MONOSPACE,
+                horizontal_alignment: iced::alignment::Horizontal::Left,
+                vertical_alignment: iced::alignment::Vertical::Center,
+                ..Default::default()
+            });
+            bx = rect.x + rect.width + 0.30 * s.width;
         }
         if !row.ty.is_empty() {
+            let right = if row.note.is_some() {
+                top_left.x + size.width - 1.8 * s.width
+            } else {
+                top_left.x + size.width - 1.2 * s.width
+            };
             frame.fill_text(Text {
                 content: row.ty.clone(),
-                position: baseline(top_left.x + size.width - 1.2 * s.width),
+                position: baseline(right),
                 color: theme::TYPE_TEXT,
                 size: row_size.into(),
                 font: Font::MONOSPACE,
@@ -580,7 +681,49 @@ fn paint_table(frame: &mut canvas::Frame, b: &TableBox, zoom: f32, pan: Vector, 
                 ..Default::default()
             });
         }
+        // note paper icon at the far right; hover shows the note
+        if let Some((nx0, nx1)) = note_band(b, i, zoom, pan) {
+            let ncenter = baseline((nx0 + nx1) / 2.0);
+            draw_note_icon(frame, ncenter, 0.55 * s.height, theme::MARKER);
+        }
     }
+}
+
+/// Tiny page glyph (dbdiagram's note marker): outlined sheet with a
+/// folded corner and two text lines.
+fn draw_note_icon(frame: &mut canvas::Frame, center: Point, size: f32, color: Color) {
+    let w = (0.085 * size).max(1.0);
+    let stroke = canvas::Stroke {
+        style: color.into(),
+        width: w,
+        ..Default::default()
+    };
+    let x0 = center.x - 0.40 * size;
+    let x1 = center.x + 0.40 * size;
+    let y0 = center.y - 0.50 * size;
+    let y1 = center.y + 0.50 * size;
+    let fold = 0.22 * size;
+    frame.stroke(
+        &Path::new(|b| {
+            b.move_to(Point::new(x0, y0));
+            b.line_to(Point::new(x1 - fold, y0));
+            b.line_to(Point::new(x1, y0 + fold));
+            b.line_to(Point::new(x1, y1));
+            b.line_to(Point::new(x0, y1));
+            b.close();
+            // fold
+            b.move_to(Point::new(x1 - fold, y0));
+            b.line_to(Point::new(x1 - fold, y0 + fold));
+            b.line_to(Point::new(x1, y0 + fold));
+            // text lines
+            let ly = y0 + 0.42 * size;
+            b.move_to(Point::new(x0 + 0.14 * size, ly));
+            b.line_to(Point::new(x1 - 0.14 * size, ly));
+            b.move_to(Point::new(x0 + 0.14 * size, ly + 0.22 * size));
+            b.line_to(Point::new(x1 - 0.14 * size, ly + 0.22 * size));
+        }),
+        stroke,
+    );
 }
 
 #[cfg(test)]
@@ -637,6 +780,59 @@ mod tests {
             );
         }
         assert_eq!(edge_stroke_width(5.0), 1.0, "clamped at 25% zoom");
+    }
+
+    #[test]
+    fn note_hit_tests_the_paper_icon_band() {
+        let src = "Table a { id integer [pk, note: 'the identifier'] user_id integer }\n";
+        let l = dbml_ui::layout::layout(&dbml_ui::model::build(
+            &dbml_ui::dbml::parser::parse(src).doc,
+        ));
+        let zoom = 20.0;
+        let pan = Vector::new(40.0, 40.0);
+        let b = &l.boxes[0];
+        let top_left = to_px(b.x, b.y, zoom, pan);
+        let s = cell_size(zoom);
+        // row 0 (id) has the note; its icon sits at the far right
+        let (x0, x1) = note_band(b, 0, zoom, pan).expect("row 0 has a note");
+        let p = Point::new((x0 + x1) / 2.0, top_left.y + s.height * 1.5);
+        let hit = note_hit(&l, zoom, pan, p).expect("note icon hit");
+        assert_eq!(hit.0.title, "a");
+        assert_eq!(hit.1, 0);
+        // row 1 has no note: no band, no hit
+        assert!(note_band(b, 1, zoom, pan).is_none());
+        let p2 = Point::new((x0 + x1) / 2.0, top_left.y + s.height * 2.5);
+        assert!(note_hit(&l, zoom, pan, p2).is_none());
+        // and the marker band on row 0 does not overlap the note band
+        let (_, mx1) = marker_band(b, 0, zoom, pan);
+        assert!(mx1 < x0, "marker {mx1} vs note {x0}");
+    }
+
+    #[test]
+    fn badge_badges_follow_settings() {
+        let src = "Table a { id integer [pk, not null, unique] email varchar(80) }\n";
+        let l = dbml_ui::layout::layout(&dbml_ui::model::build(
+            &dbml_ui::dbml::parser::parse(src).doc,
+        ));
+        let r = &l.boxes[0].rows[0];
+        assert_eq!(r.badges(), vec!["Not Null", "Unique"]);
+        assert_eq!(l.boxes[0].rows[1].badges(), Vec::<&str>::new());
+        // null (explicit) is NOT the Not Null badge
+        let src2 = "Table b { x integer [null] }\n";
+        let l2 = dbml_ui::layout::layout(&dbml_ui::model::build(
+            &dbml_ui::dbml::parser::parse(src2).doc,
+        ));
+        assert!(l2.boxes[0].rows[0].badges().is_empty());
+        // widths account for badges + note icon
+        let w_plain = {
+            let src3 = "Table c { email varchar(80) }\n";
+            dbml_ui::layout::layout(&dbml_ui::model::build(
+                &dbml_ui::dbml::parser::parse(src3).doc,
+            ))
+            .boxes[0]
+                .w
+        };
+        assert!(l.boxes[0].w > w_plain, "badges widen the box");
     }
 
     #[test]

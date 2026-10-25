@@ -15,6 +15,10 @@ pub struct ColumnInfo {
     pub pk: bool,
     /// Participates in a relationship (foreign key side or referenced side).
     pub fk: bool,
+    /// Some(true) = not null, Some(false) = explicit null.
+    pub not_null: Option<bool>,
+    pub unique: bool,
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -71,6 +75,9 @@ pub fn build(doc: &Document) -> Schema {
                     ty: c.ty.clone(),
                     pk: c.settings.pk,
                     fk: false,
+                    not_null: c.settings.not_null,
+                    unique: c.settings.unique,
+                    note: c.settings.note.clone(),
                 })
                 .collect(),
             header_color: t.header_color.clone(),
@@ -90,6 +97,9 @@ pub fn build(doc: &Document) -> Schema {
                     ty: String::new(),
                     pk: false,
                     fk: false,
+                    not_null: None,
+                    unique: false,
+                    note: v.note.clone(),
                 })
                 .collect(),
             header_color: None,
