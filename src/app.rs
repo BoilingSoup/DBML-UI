@@ -966,17 +966,26 @@ impl App {
     /// a half page takes HALF_PAGE_MS, scaling linearly with distance.
     fn scroll_by_lines(&mut self, lines: f32, duration_ms: f32) {
         self.completion = None;
+        let pos = self.editor.buf.pos();
+        let rows = self.editor.buf.line_count() as i32;
+        let cursor_to = ((pos.row as f32 + lines).round() as i32).clamp(0, rows - 1) as usize;
         let base = self.scroll_target.unwrap_or(self.editor_scroll.round());
         let to = (base + lines).clamp(0.0, self.max_scroll()).round();
-        // cursor target travels the same distance as the view, clamped
-        let pos = self.editor.buf.pos();
-        let rows = self.editor.buf.line_count();
-        let cursor_to =
-            ((pos.row as f32 + lines).round() as i32).clamp(0, rows as i32 - 1) as usize;
-        let scroll_from = self.editor_scroll.round();
-        let cursor_from = ((cursor_to as f32 - (to - scroll_from)).max(0.0)).round() as usize;
-        self.animate_scroll(to, duration_ms, Some((cursor_from, cursor_to)));
         self.focus = Focus::Editor;
+        if (to - self.editor_scroll.round()).abs() < 0.5 {
+            // the view has nowhere to go (document fits / at an edge), but
+            // the cursor still moves — vim moves the cursor half a page
+            // even when the window cannot scroll
+            self.editor_scroll = to;
+            self.scroll_anim = None;
+            self.scroll_target = None;
+            self.editor
+                .buf
+                .move_cursor(crate::editor::buffer::Move::Jump(cursor_to, pos.col));
+            return;
+        }
+        // cursor travels WITH the view, from its ACTUAL current row
+        self.animate_scroll(to, duration_ms, Some((pos.row, cursor_to)));
     }
 
     /// Half-page scroll with the cursor (vim Ctrl-d / Ctrl-u).
@@ -1574,6 +1583,72 @@ mod scroll_tests {
             (App::scroll_duration_for(200.0, 40.0) - 0.6).abs() < 1e-3,
             "max"
         );
+    }
+
+    #[test]
+    fn page_keys_move_cursor_even_when_document_fits() {
+        // regression: after the neoscroll rework the cursor only moved via
+        // animation ticks, and with a document that fits the page the
+        // animation no-oped — Ctrl-d/u/PgUp/PgDn did literally nothing
+        let mut app = App {
+            window_size: (1400.0, 900.0),
+            ..App::default() // sample: ~40 lines, fits the page
+        };
+        let page = app.page_lines();
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        );
+        assert!(app.scroll_anim.is_none(), "nothing to scroll");
+        assert_eq!(
+            app.editor.buf.pos().row,
+            (page / 2.0).round() as usize,
+            "cursor still moves half a page"
+        );
+        // and Ctrl-u walks it back up
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(app.editor.buf.pos().row, 0);
+        // PgDn moves a full page, clamped to the buffer end
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::PageDown, KeyModifiers::NONE),
+        );
+        assert_eq!(
+            app.editor.buf.pos().row,
+            app.editor.buf.line_count() - 1,
+            "clamped to last line"
+        );
+    }
+
+    #[test]
+    fn cursor_at_buffer_bottom_does_not_yank_backward() {
+        // regression: cursor_from was reconstructed from the scroll delta,
+        // so a clamped cursor jumped UP before animating back down
+        let mut app = tall_app(120);
+        app.window_size = (1400.0, 900.0);
+        let last = app.editor.buf.line_count() - 1;
+        app.editor
+            .buf
+            .move_cursor(crate::editor::buffer::Move::Jump(last, 0));
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(
+            app.editor.buf.pos().row,
+            last,
+            "cursor never leaves the bottom"
+        );
+        // force the animation to its end: cursor still at the bottom
+        if let Some(a) = app.scroll_anim.as_mut() {
+            a.started -= std::time::Duration::from_secs(1);
+        }
+        let _ = update(&mut app, Message::Tick);
+        assert_eq!(app.editor.buf.pos().row, last);
+        assert!(app.editor_scroll >= 0.0);
     }
 
     #[test]
