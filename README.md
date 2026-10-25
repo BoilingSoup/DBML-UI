@@ -14,8 +14,13 @@ crisp text at any scale — no terminal graphics protocols involved.
   motions (`h j k l w b e 0 $ ^ gg G { }`) with `[count]` (`3j 5G 2$`), the
   `d`/`c` operators composed with counts, motions, and text objects
   (`d3w 2dd 2d2w d$ c0 dG cG dgg ggdG diw ciw daw caw cc dd C D yy p P x`),
-  undo/redo, `/` search with `n`/`N`, and ex commands (`:w :q :wq :q!
-  :e! :o <file> :export <f.svg|f.png>`).
+  `r` replace, visual `u`/`U` re-casing, undo/redo, `/` search with `n`/`N`,
+  and ex commands (`:w :q :wq :q! :e! :o <file> :export <f.svg|f.png>`).
+  Keywords are case-insensitive (`table`, `TABLE`, `TaBlE` all parse).
+- **Smooth scrolling**: `Ctrl-d`/`Ctrl-u` and PgUp/PgDn animate over 250ms
+  (neoscroll-style easing, re-targetable mid-flight); arrows, Home, End,
+  and Delete work in every mode; Shift and CapsLock behave like any text
+  editor.
 - **Live preview**: the diagram re-parses and re-renders on every
   keystroke (a 200-table document parses + lays out in ~0.2ms).
 - **Fluid canvas**: wheel zoom anchored at the cursor (continuous,

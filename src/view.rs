@@ -141,8 +141,17 @@ fn help_overlay() -> Element<'static, Message> {
             "motions (counts work: 3w, 2gg, ...)"
         ),
         line("x dd dw cw cc d$ c0 yy p P diw ciw", "operators"),
-        line("v + motions, y / d / o", "visual mode"),
+        line("r{c}", "replace char (with [count])"),
+        line(
+            "v + motions, y / d / u / U / o",
+            "visual: yank/delete/lower/upper/swap"
+        ),
         line("u Ctrl-r / pattern n N", "undo redo / search next prev"),
+        line(
+            "Ctrl-d Ctrl-u PgUp PgDn",
+            "scroll half/full page (animated)"
+        ),
+        line("arrows Home End Delete", "work in every mode"),
         line(":w :q :q! :wq :o file :export f.svg", "ex commands"),
         line("Ctrl-s / Ctrl-c", "save / quit"),
         line(
