@@ -43,24 +43,46 @@ pub enum Focus {
 
 /// Open completion popup: candidate items, the selected index, where the
 /// completed word starts in the buffer, and the typed prefix.
-/// An in-flight animated scroll.
+/// An in-flight animated scroll, neoscroll.nvim-style: the viewport
+/// advances in WHOLE-LINE steps (text never renders at a fractional
+/// offset), with the delay between steps shaped by an ease-out curve.
+/// `applied` tracks how many steps are already on screen so each tick
+/// only draws the difference.
 #[derive(Debug, Clone)]
 pub struct ScrollAnim {
     pub from: f32,
     pub to: f32,
     pub started: std::time::Instant,
+    /// Seconds; see `scroll_duration_override`.
+    pub duration: f32,
+    /// Whole-line steps already applied.
+    pub applied: f32,
+    /// Cursor rows coupled to the scroll (neoscroll scrolls the cursor one
+    /// line per step alongside the window, gj/gk with ctrl-e/y). None for
+    /// view-only animations (G/gg/jump-to-definition).
+    pub cursor: Option<(usize, usize)>,
 }
 
-/// neoscroll.nvim default speed.
-pub const SCROLL_DURATION: f32 = 0.25;
+/// Duration override in ms for slow-motion verification
+/// (DBML_UI_SCROLL_MS); None in normal use.
+fn scroll_duration_override() -> Option<f32> {
+    std::env::var("DBML_UI_SCROLL_MS")
+        .ok()
+        .and_then(|v| v.parse::<f32>().ok())
+        .map(|ms| ms / 1000.0)
+}
 
-/// Ease-in-out cubic (neoscroll's smooth feel).
-fn ease_in_out_cubic(t: f32) -> f32 {
-    if t < 0.5 {
-        4.0 * t * t * t
-    } else {
-        1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
-    }
+/// neoscroll's canonical mapping durations.
+pub const HALF_PAGE_MS: f32 = 250.0;
+pub const FULL_PAGE_MS: f32 = 450.0;
+
+/// Distance-progress at time-fraction `y` under neoscroll's quadratic
+/// easing. neoscroll applies easing to the TIME between line steps
+/// (ef(x) = 1 - (1-x)^(1/2) maps distance to time); inverting gives the
+/// distance covered by a given time — a quadratic ease-out in space:
+/// fast start, long decelerating arrival.
+fn scroll_progress(y: f32) -> f32 {
+    1.0 - (1.0 - y.clamp(0.0, 1.0)).powi(2)
 }
 
 #[derive(Debug, Clone)]
@@ -392,14 +414,49 @@ fn handle_message(app: &mut App, message: Message) {
         Message::CompletionPicked(idx) => app.completion_accept(idx),
         Message::EditorHover(p) => app.editor_hover = p,
         Message::Tick => {
-            if let Some(anim) = &app.scroll_anim {
-                let t = (anim.started.elapsed().as_secs_f32() / SCROLL_DURATION).min(1.0);
-                let eased = ease_in_out_cubic(t);
-                app.editor_scroll = anim.from + (anim.to - anim.from) * eased;
-                if t >= 1.0 {
-                    app.scroll_anim = None;
-                    app.scroll_target = None;
+            let Some(anim) = app.scroll_anim.clone() else {
+                return;
+            };
+            let y = (anim.started.elapsed().as_secs_f32() / anim.duration).min(1.0);
+            let range = (anim.to - anim.from).abs();
+            let dir = (anim.to - anim.from).signum();
+            // whole-line steps due by now (ease-out in space)
+            let due = (scroll_progress(y) * range).round();
+            if due != anim.applied {
+                let scroll = anim.from + due * dir;
+                if let Some((from_row, to_row)) = anim.cursor {
+                    let frac = if range > 0.0 { due / range } else { 1.0 };
+                    let row = ((from_row as f32 + (to_row as f32 - from_row as f32) * frac).round()
+                        as i32)
+                        .clamp(0, app.editor.buf.line_count() as i32 - 1)
+                        as usize;
+                    let col = app.editor.buf.pos().col;
+                    app.editor
+                        .buf
+                        .move_cursor(crate::editor::buffer::Move::Jump(row, col));
                 }
+                app.editor_scroll = scroll;
+                if let Some(a) = app.scroll_anim.as_mut() {
+                    a.applied = due;
+                }
+                if std::env::var("DBML_UI_DEBUG").is_ok() {
+                    eprintln!(
+                        "DBG tick y={y:.3} scroll={scroll:.0}/{:.0} cursor coupled={}",
+                        anim.to,
+                        anim.cursor.is_some()
+                    );
+                }
+            }
+            if y >= 1.0 {
+                app.editor_scroll = anim.to;
+                if let Some((_, to_row)) = anim.cursor {
+                    let col = app.editor.buf.pos().col;
+                    app.editor
+                        .buf
+                        .move_cursor(crate::editor::buffer::Move::Jump(to_row, col));
+                }
+                app.scroll_anim = None;
+                app.scroll_target = None;
             }
         }
         Message::EditorPressed(p) => {
@@ -881,62 +938,55 @@ impl App {
         (self.editor.buf.line_count() as f32 - self.page_lines()).max(0.0)
     }
 
-    /// Start/re-target an animated scroll. Repeated requests extend the
-    /// target from the accumulated one (neoscroll behavior).
-    fn animate_scroll_by(&mut self, delta: f32) {
-        let base = self.scroll_target.unwrap_or(self.editor_scroll);
-        let to = (base + delta).clamp(0.0, self.max_scroll());
-        self.scroll_target = Some(to);
-        self.scroll_anim = Some(ScrollAnim {
-            from: self.editor_scroll,
-            to,
-            started: std::time::Instant::now(),
-        });
-    }
-
-    fn animate_scroll_to(&mut self, target: f32) {
-        let to = target.clamp(0.0, self.max_scroll());
-        if (to - self.editor_scroll).abs() < 0.5 {
+    /// Start/re-target a line-stepped animated scroll. `duration_ms` is the
+    /// neoscroll duration for the WHOLE remaining distance; repeated
+    /// requests extend the accumulated target (neoscroll behavior) and the
+    /// animation restarts from the current stepped position.
+    fn animate_scroll(&mut self, to: f32, duration_ms: f32, cursor: Option<(usize, usize)>) {
+        let to = to.clamp(0.0, self.max_scroll()).round();
+        let from = self.editor_scroll.round();
+        if (to - from).abs() < 0.5 {
             self.editor_scroll = to;
             self.scroll_anim = None;
+            self.scroll_target = None;
             return;
         }
         self.scroll_target = Some(to);
         self.scroll_anim = Some(ScrollAnim {
-            from: self.editor_scroll,
+            from,
             to,
             started: std::time::Instant::now(),
+            duration: scroll_duration_override().unwrap_or(duration_ms / 1000.0),
+            applied: 0.0,
+            cursor,
         });
+    }
+
+    /// neoscroll's distance-proportional duration (z-command formula):
+    /// a half page takes HALF_PAGE_MS, scaling linearly with distance.
+    fn scroll_by_lines(&mut self, lines: f32, duration_ms: f32) {
+        self.completion = None;
+        let base = self.scroll_target.unwrap_or(self.editor_scroll.round());
+        let to = (base + lines).clamp(0.0, self.max_scroll()).round();
+        // cursor target travels the same distance as the view, clamped
+        let pos = self.editor.buf.pos();
+        let rows = self.editor.buf.line_count();
+        let cursor_to =
+            ((pos.row as f32 + lines).round() as i32).clamp(0, rows as i32 - 1) as usize;
+        let scroll_from = self.editor_scroll.round();
+        let cursor_from = ((cursor_to as f32 - (to - scroll_from)).max(0.0)).round() as usize;
+        self.animate_scroll(to, duration_ms, Some((cursor_from, cursor_to)));
+        self.focus = Focus::Editor;
     }
 
     /// Half-page scroll with the cursor (vim Ctrl-d / Ctrl-u).
     fn half_page(&mut self, dir: f32) {
-        self.completion = None;
-        let lines = (self.page_lines() / 2.0) * dir;
-        let pos = self.editor.buf.pos();
-        let rows = self.editor.buf.line_count();
-        let new_row = ((pos.row as f32 + lines).round() as i32).clamp(0, rows as i32 - 1) as usize;
-        let col = pos.col;
-        self.editor
-            .buf
-            .move_cursor(crate::editor::buffer::Move::Jump(new_row, col));
-        self.animate_scroll_by(lines);
-        self.focus = Focus::Editor;
+        self.scroll_by_lines((self.page_lines() / 2.0) * dir, HALF_PAGE_MS);
     }
 
     /// Full-page scroll with the cursor (PageDown / PageUp).
     fn page_scroll(&mut self, dir: f32) {
-        self.completion = None;
-        let lines = self.page_lines() * dir;
-        let pos = self.editor.buf.pos();
-        let rows = self.editor.buf.line_count();
-        let new_row = ((pos.row as f32 + lines).round() as i32).clamp(0, rows as i32 - 1) as usize;
-        let col = pos.col;
-        self.editor
-            .buf
-            .move_cursor(crate::editor::buffer::Move::Jump(new_row, col));
-        self.animate_scroll_by(lines);
-        self.focus = Focus::Editor;
+        self.scroll_by_lines(self.page_lines() * dir, FULL_PAGE_MS);
     }
 
     /// Scroll the editor viewport so the cursor stays on screen. Small
@@ -953,12 +1003,22 @@ impl App {
             return;
         };
         if (target - self.editor_scroll).abs() > page * 0.75 {
-            self.animate_scroll_to(target);
+            // view-only animation (cursor already at its destination),
+            // duration proportional to the remaining distance
+            let ms = Self::scroll_duration_for((target - self.editor_scroll).abs(), page) * 1000.0;
+            self.animate_scroll(target.round(), ms, None);
         } else {
             self.scroll_anim = None;
             self.scroll_target = None;
             self.editor_scroll = target.max(0.0);
         }
+    }
+
+    /// neoscroll z-command duration: a half page takes HALF_PAGE_MS,
+    /// scaling linearly with distance, clamped to keep tiny scrolls snappy
+    /// and huge ones bounded.
+    fn scroll_duration_for(lines: f32, page: f32) -> f32 {
+        (HALF_PAGE_MS * (lines / (page / 2.0)).max(0.05)).clamp(60.0, 600.0) / 1000.0
     }
 
     /// A click on a diagram table jumps the editor to its definition.
@@ -1365,8 +1425,15 @@ mod scroll_tests {
         App::with_source(src)
     }
 
+    fn force_finish(app: &mut App) {
+        if let Some(a) = app.scroll_anim.as_mut() {
+            a.started -= Duration::from_secs(1);
+        }
+        let _ = update(app, Message::Tick);
+    }
+
     #[test]
-    fn ctrl_d_moves_cursor_half_page_and_animates() {
+    fn ctrl_d_couples_cursor_and_uses_half_page_duration() {
         let mut app = tall_app(120);
         app.window_size = (1400.0, 900.0);
         let page = app.page_lines();
@@ -1374,13 +1441,54 @@ mod scroll_tests {
             &mut app,
             Message::KeyPressed(KeyCode::Char('d'), KeyModifiers::CONTROL),
         );
-        let pos = app.editor.buf.pos();
-        assert_eq!(pos.row, (page / 2.0).round() as usize, "cursor half page");
         let anim = app.scroll_anim.as_ref().expect("animation running");
-        assert!(
-            (anim.to - page / 2.0).abs() < 0.01,
-            "target half page: {anim:?}"
+        assert!((anim.duration - 0.25).abs() < 1e-3, "250ms: {anim:?}");
+        assert!((anim.to - page / 2.0).abs() < 1.0, "half page: {anim:?}");
+        // neoscroll moves the cursor WITH the view, not ahead of it
+        assert_eq!(app.editor.buf.pos().row, 0, "cursor not jumped");
+        force_finish(&mut app);
+        assert!((app.editor_scroll - page / 2.0).abs() < 1.0);
+        assert_eq!(
+            app.editor.buf.pos().row,
+            (page / 2.0).round() as usize,
+            "cursor arrives with the view"
         );
+    }
+
+    #[test]
+    fn page_scroll_uses_the_full_page_duration() {
+        let mut app = tall_app(120);
+        app.window_size = (1400.0, 900.0);
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::PageDown, KeyModifiers::NONE),
+        );
+        let anim = app.scroll_anim.as_ref().expect("anim");
+        assert!((anim.duration - 0.45).abs() < 1e-3, "450ms: {anim:?}");
+        assert!((anim.to - app.page_lines()).abs() < 1.0);
+    }
+
+    #[test]
+    fn steps_are_whole_lines_and_ease_out() {
+        // quadratic ease-out in space: at t=0.5, 75% of the distance is due
+        let mut app = tall_app(120);
+        app.window_size = (1400.0, 900.0);
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        );
+        let anim = app.scroll_anim.as_mut().unwrap();
+        let half = Duration::from_secs_f32(anim.duration / 2.0);
+        anim.started -= half;
+        let range = (anim.to - anim.from).abs();
+        let _ = update(&mut app, Message::Tick);
+        let expected = (scroll_progress(0.5) * range).round();
+        assert!(
+            (app.editor_scroll - expected).abs() < 0.01,
+            "half time -> 75% distance: got {} want {expected}",
+            app.editor_scroll
+        );
+        assert_eq!(app.editor_scroll, app.editor_scroll.round(), "whole lines");
     }
 
     #[test]
@@ -1391,10 +1499,7 @@ mod scroll_tests {
             &mut app,
             Message::KeyPressed(KeyCode::Char('d'), KeyModifiers::CONTROL),
         );
-        // let the first animation finish
-        app.scroll_anim.as_mut().unwrap().started -= Duration::from_secs(1);
-        let _ = update(&mut app, Message::Tick);
-        assert!(app.scroll_anim.is_none(), "finished");
+        force_finish(&mut app);
         let after_one = app.editor_scroll;
 
         let _ = update(
@@ -1403,7 +1508,7 @@ mod scroll_tests {
         );
         let anim = app.scroll_anim.as_ref().unwrap();
         assert!(
-            (anim.to - after_one - app.page_lines() / 2.0).abs() < 0.01,
+            (anim.to - after_one - app.page_lines() / 2.0).abs() < 1.0,
             "second ctrl-d extends by another half page: {anim:?}"
         );
     }
@@ -1417,26 +1522,22 @@ mod scroll_tests {
             Message::KeyPressed(KeyCode::Char('d'), KeyModifiers::CONTROL),
         );
         let to = app.scroll_anim.as_ref().unwrap().to;
-        app.scroll_anim.as_mut().unwrap().started -= Duration::from_secs(1);
-        let _ = update(&mut app, Message::Tick);
+        force_finish(&mut app);
         assert!(app.scroll_anim.is_none());
         assert!((app.editor_scroll - to).abs() < 0.001, "lands exactly");
+        assert!(app.editor_scroll >= 0.0);
     }
 
     #[test]
     fn scroll_clamps_at_buffer_bottom() {
-        let mut app = tall_app(40); // fewer lines than a page? make page small
+        let mut app = tall_app(40);
         app.window_size = (1400.0, 900.0);
-        // jump the cursor to the last line, then Ctrl-d repeatedly
         for _ in 0..12 {
             let _ = update(
                 &mut app,
                 Message::KeyPressed(KeyCode::Char('d'), KeyModifiers::CONTROL),
             );
-            if let Some(a) = app.scroll_anim.as_mut() {
-                a.started -= Duration::from_secs(1);
-            }
-            let _ = update(&mut app, Message::Tick);
+            force_finish(&mut app);
         }
         assert!(
             app.editor_scroll <= app.max_scroll() + 0.001,
@@ -1444,20 +1545,35 @@ mod scroll_tests {
             app.editor_scroll,
             app.max_scroll()
         );
-        assert!(app.editor_scroll >= 0.0);
     }
 
     #[test]
-    fn easing_is_monotonic_and_hits_endpoints() {
-        assert_eq!(ease_in_out_cubic(0.0), 0.0);
-        assert_eq!(ease_in_out_cubic(1.0), 1.0);
+    fn scroll_progress_curve_shape() {
+        // neoscroll quadratic easing, inverted: distance at time y
+        assert_eq!(scroll_progress(0.0), 0.0);
+        assert_eq!(scroll_progress(1.0), 1.0);
+        assert!((scroll_progress(0.5) - 0.75).abs() < 1e-6, "ease-out");
         let mut prev = -0.001;
         for i in 0..=100 {
-            let v = ease_in_out_cubic(i as f32 / 100.0);
+            let v = scroll_progress(i as f32 / 100.0);
             assert!(v > prev, "monotonic at {i}");
             assert!((0.0..=1.0).contains(&v));
             prev = v;
         }
+    }
+
+    #[test]
+    fn proportional_duration_clamps() {
+        assert!(
+            (App::scroll_duration_for(1.0, 40.0) - 60.0 / 1000.0).abs() < 1e-3,
+            "min"
+        );
+        let half_page = App::scroll_duration_for(20.0, 40.0);
+        assert!((half_page - 0.25).abs() < 1e-3, "half page = 250ms");
+        assert!(
+            (App::scroll_duration_for(200.0, 40.0) - 0.6).abs() < 1e-3,
+            "max"
+        );
     }
 
     #[test]

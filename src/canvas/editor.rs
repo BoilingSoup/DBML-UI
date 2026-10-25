@@ -22,7 +22,8 @@ pub fn char_width() -> f32 {
 pub fn pos_to_px(p: Pos, scroll: f32) -> Point {
     Point::new(
         GUTTER + p.col as f32 * char_width(),
-        (p.row as f32 - scroll) * LINE_HEIGHT,
+        // pixel-snapped so glyphs, cursor and marks always share one grid
+        ((p.row as f32 - scroll) * LINE_HEIGHT).round(),
     )
 }
 
@@ -170,7 +171,7 @@ impl canvas::Program<Message> for EditorView<'_> {
             line_starts.push(line_start);
             line_start += l.len() + 1;
         }
-        let mut y = -sub * LINE_HEIGHT;
+        let mut y = -(sub * LINE_HEIGHT).round();
         for (i, line) in lines.iter().enumerate().skip(first).take(visible.max(1)) {
             let text_y = y + LINE_HEIGHT * 0.5;
             if marks.iter().any(|m| m.row == i) {
@@ -220,8 +221,12 @@ impl canvas::Program<Message> for EditorView<'_> {
             y += LINE_HEIGHT;
         }
 
-        // fake cursor, styled by mode
+        // fake cursor, styled by mode — hidden while a scroll animation
+        // runs (neoscroll hides the cursor during scrolling)
         let cursor = app.editor.buf.pos();
+        if app.scroll_anim.is_some() {
+            return vec![frame.into_geometry()];
+        }
         let p = pos_to_px(cursor, scroll);
         if p.y > -LINE_HEIGHT && p.y < bounds.height + LINE_HEIGHT {
             let (color, filled) = match app.editor.mode {
