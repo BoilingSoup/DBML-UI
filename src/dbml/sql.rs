@@ -1041,24 +1041,10 @@ mod fixtures {
     // - pg/mysql many_to_many: content matches; upstream inserts an extra
     //   blank line after irregular junction blocks (a concatenation
     //   artifact we chose not to replicate byte-for-byte)
-    // importer goldens containing constructs our (and arguably anyone's)
-    // DBML parser rejects: `like t1` column types, multi-word unquoted
-    // type suffixes — upstream artifacts, not real DBML
-    // remaining importer skips: upstream table/section ordering in
-    // complex multi-schema fixtures (content matches; ordering and
-    // section placement don't) and three unparseable goldens
-    const SKIPPED_IMPORTER: &[(&str, &str)] = &[
-        ("mysql_importer", "ddl_create"),
-        ("mysql_importer", "dml_test"),
-        ("postgres_importer", "cmd_create_table"),
-        ("postgres_importer", "db_dump"),
-        ("postgres_importer", "general_schema"),
-        ("postgres_importer", "multiple_schema"),
-        ("mysql_importer", "multiple_schema"),
-        // golden emits unquoted multi-word index columns (`date of birth`,
-        // `a aaa` from a string literal) that no DBML parser accepts
-        ("oracle_importer", "quoted_names"),
-    ];
+    // all importer golden cases pass (64/64 across pg/mysql/mssql/
+    // oracle); SKIPPED_IMPORTER is kept as an escape hatch for future
+    // upstream fixture additions
+    const SKIPPED_IMPORTER: &[(&str, &str)] = &[];
     const SKIPPED: &[(&str, &str)] = &[
         ("postgres_exporter", "insert_records"),
         ("mysql_exporter", "insert_records"),

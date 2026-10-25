@@ -17,6 +17,27 @@ pub fn format_source(src: &str) -> Option<String> {
     Some(render(&out.doc))
 }
 
+/// DBML note literal: plain single-quoted, or triple-quoted with
+/// backslash-escaped quotes when the note contains quotes (upstream
+/// exporter convention — db_dump golden). An already-escaped `\'` in the
+/// content stays as-is so formatting is idempotent.
+pub(crate) fn quote_note(n: &str) -> String {
+    if n.contains('\'') {
+        let mut esc = String::with_capacity(n.len() + 1);
+        let mut prev: Option<char> = None;
+        for c in n.chars() {
+            if c == '\'' && prev != Some('\\') {
+                esc.push('\\');
+            }
+            esc.push(c);
+            prev = Some(c);
+        }
+        format!("'''{esc}'''")
+    } else {
+        format!("'{n}'")
+    }
+}
+
 fn render(doc: &Document) -> String {
     let mut s = String::new();
     if let Some(p) = &doc.project {
@@ -25,7 +46,7 @@ fn render(doc: &Document) -> String {
             s.push_str(&format!("  database_type: '{t}'\n"));
         }
         if let Some(n) = &p.note {
-            s.push_str(&format!("  note: '{n}'\n"));
+            s.push_str(&format!("  note: {}\n", quote_note(n)));
         }
         s.push_str("}\n\n");
     }
@@ -73,7 +94,7 @@ fn render(doc: &Document) -> String {
             s.push_str(&format!("  Checks {{\n{c}\n  }}\n"));
         }
         if let Some(n) = &t.note {
-            s.push_str(&format!("  note: '{n}'\n"));
+            s.push_str(&format!("  note: {}\n", quote_note(n)));
         }
         s.push_str("}\n\n");
     }
@@ -81,7 +102,7 @@ fn render(doc: &Document) -> String {
         s.push_str(&format!("Enum {} {{\n", e.name));
         for v in &e.values {
             if let Some(n) = &v.note {
-                s.push_str(&format!("  {} [note: '{n}']\n", v.name));
+                s.push_str(&format!("  {} [note: {}]\n", v.name, quote_note(n)));
             } else {
                 s.push_str(&format!("  {}\n", v.name));
             }
@@ -159,7 +180,7 @@ fn column_settings(st: &super::ast::ColumnSettings) -> Vec<String> {
         out.push(format!("check: {c}"));
     }
     if let Some(n) = &st.note {
-        out.push(format!("note: '{n}'"));
+        out.push(format!("note: {}", quote_note(n)));
     }
     out
 }

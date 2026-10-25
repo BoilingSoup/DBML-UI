@@ -94,7 +94,13 @@ fn tokenize(src: &str, d: Dialect) -> Result<Vec<Tok>, String> {
                 i += 2;
             }
             '[' => {
-                // mssql bracketed identifier
+                // mssql bracketed identifier — dialect-gated so pg ARRAY
+                // literals (`ARRAY['a'::text, 'b'::text]`) tokenize right
+                if !matches!(d, Dialect::MSSQL) {
+                    out.push(Tok::P('['));
+                    i += 1;
+                    continue;
+                }
                 let mut s = String::new();
                 i += 1;
                 while i < b.len() && b[i] != ']' {
@@ -125,6 +131,13 @@ fn tokenize(src: &str, d: Dialect) -> Result<Vec<Tok>, String> {
                     }
                 }
                 out.push(Tok::N(b[start..i].iter().collect()));
+            }
+            // mysql: `#` starts a line comment (`#begin`/`#end` dump
+            // markers); other dialects keep it as an identifier char
+            '#' if matches!(d, Dialect::MySQL) => {
+                while i < b.len() && b[i] != '\n' {
+                    i += 1;
+                }
             }
             c if c.is_alphanumeric() || c == '_' || c == '#' || c == '$' => {
                 let start = i;
@@ -244,14 +257,15 @@ type FkDef = (
     Vec<String>,
 );
 
-/// A queued PK/UNIQUE constraint merge: (table, cols, is_pk, name, type,
-/// declared in a CREATE TABLE body vs ALTER TABLE).
+/// A queued PK/UNIQUE/KEY merge: (table, cols, is_pk, name, type,
+/// declared in a CREATE TABLE body vs ALTER TABLE, renders `unique`).
 type PendingUnique = (
     String,
     Vec<String>,
     bool,
     Option<String>,
     Option<String>,
+    bool,
     bool,
 );
 
@@ -345,7 +359,13 @@ impl Importer {
         } else if kw.is_w("TYPE") {
             self.create_type(rest);
         }
-        // views/procs/triggers/sequences/schemas: ignored
+        // views/procs/triggers/sequences/schemas: ignored — but a
+        // `;`-less body (mysql dump: `... RETURN expr` with no
+        // terminator) can swallow a following CREATE statement, so
+        // process the tail from its CREATE
+        if let Some(off) = s.iter().skip(kind + 1).position(|t| t.is_w("CREATE")) {
+            self.create(&s[kind + 1 + off..]);
+        }
     }
 
     /// `[IF NOT EXISTS] [schema.]name`
@@ -378,6 +398,7 @@ impl Importer {
         };
         // parse items until the matching ')'
         let mut depth = 1;
+        let mut had_like = false;
         while i < s.len() {
             if s[i] == Tok::P(')') && depth == 0 {
                 break;
@@ -435,15 +456,50 @@ impl Importer {
                         }
                     };
                     take_using(&mut j, &mut ity);
-                    if (iname.is_some() || fulltext) && matches!(s.get(j), Some(Tok::P('('))) {
-                        let (icols, jj) = ident_list(s, j + 1);
-                        j = jj;
+                    let functional = matches!(s.get(j), Some(Tok::P('(')))
+                        && matches!(s.get(j + 1), Some(Tok::P('(')));
+                    if matches!(s.get(j), Some(Tok::P('(')))
+                        && (iname.is_some() || fulltext || functional)
+                    {
+                        // land AFTER the group's own ')' — nested prefix
+                        // groups (`(column1(20))`) stop ident_list early
+                        let gend = skip_group(s, j);
+                        let icols = if functional {
+                            // `INDEX ((CAST(data AS CHAR(30))))` — the
+                            // parenthesized expression is the "column"
+                            index_exprs(s, j + 1)
+                        } else {
+                            ident_list(s, j + 1).0
+                        };
+                        j = gend;
                         take_using(&mut j, &mut ity);
-                        while j < s.len() && !matches!(s[j], Tok::P(',')) {
+                        // tail to the next top-level ',' — the body's
+                        // closing ')' ends the scan (a PARTITION clause
+                        // after it must not leak in as an item)
+                        let mut d = 0i32;
+                        while j < s.len() {
+                            match s[j] {
+                                Tok::P('(') => d += 1,
+                                Tok::P(')') if d == 0 => break,
+                                Tok::P(')') => d -= 1,
+                                Tok::P(',') if d == 0 => break,
+                                _ => {}
+                            }
                             j += 1;
                         }
                         if !icols.is_empty() {
-                            table.indexes.push((icols, iname, false, ity, false));
+                            // queue, don't push: constraints and inline
+                            // KEYs merge into the indexes block in source
+                            // order (golden rule: mysql multiple_schema)
+                            self.pending_uniques.push((
+                                table.name.clone(),
+                                icols,
+                                false,
+                                iname,
+                                ity,
+                                true,
+                                false,
+                            ));
                             i = j;
                             if i < s.len() && s[i] == Tok::P(',') {
                                 i += 1;
@@ -461,10 +517,22 @@ impl Importer {
                         j += 1;
                     }
                     if matches!(s.get(j), Some(Tok::P('('))) {
-                        let (icols, jj) = ident_list(s, j + 1);
-                        j = jj;
+                        // land AFTER the group's own ')' (nested prefix
+                        // groups stop ident_list early)
+                        let gend = skip_group(s, j);
+                        let icols = ident_list(s, j + 1).0;
+                        j = gend;
                         let mut ity = None;
-                        while j < s.len() && !matches!(s[j], Tok::P(',')) {
+                        // depth-aware tail: the body's ')' ends the scan
+                        let mut d = 0i32;
+                        while j < s.len() {
+                            match s[j] {
+                                Tok::P('(') => d += 1,
+                                Tok::P(')') if d == 0 => break,
+                                Tok::P(')') => d -= 1,
+                                Tok::P(',') if d == 0 => break,
+                                _ => {}
+                            }
                             if s[j].is_w("USING") {
                                 if let Some(Tok::W(t, _)) = s.get(j + 1) {
                                     ity = Some(t.to_ascii_lowercase());
@@ -473,7 +541,16 @@ impl Importer {
                             j += 1;
                         }
                         if !icols.is_empty() {
-                            table.indexes.push((icols, iname, true, ity, false));
+                            // queued like KEYs: merges in source order
+                            self.pending_uniques.push((
+                                table.name.clone(),
+                                icols,
+                                false,
+                                iname,
+                                ity,
+                                true,
+                                true,
+                            ));
                             i = j;
                             if i < s.len() && s[i] == Tok::P(',') {
                                 i += 1;
@@ -533,9 +610,16 @@ impl Importer {
                             let end = skip_group(s, j);
                             table.checks.push((
                                 cname,
-                                tokens_text(&s[j + 1..end - 1], self.dialect == Dialect::MSSQL),
+                                tokens_text(&s[j + 1..end - 1], check_style(self.dialect)),
                             ));
                             i = end;
+                            // trailing ENFORCED / NOT ENFORCED attribute
+                            if s.get(i).is_some_and(|t| t.is_w("NOT")) {
+                                i += 1;
+                            }
+                            if s.get(i).is_some_and(|t| t.is_w("ENFORCED")) {
+                                i += 1;
+                            }
                             if i < s.len() && s[i] == Tok::P(',') {
                                 i += 1;
                             }
@@ -561,6 +645,9 @@ impl Importer {
             if matches!(&s[i], Tok::W(w, false) if w.eq_ignore_ascii_case("LIKE")
                 || w.eq_ignore_ascii_case("EXCLUDE"))
             {
+                if s[i].is_w("LIKE") {
+                    had_like = true;
+                }
                 i = item_end(s, i);
                 if i < s.len() && s[i] == Tok::P(',') {
                     i += 1;
@@ -599,31 +686,28 @@ impl Importer {
         // index order matches the source item order (finish() handles
         // only ALTER-time pendings)
         let pend: Vec<_> = std::mem::take(&mut self.pending_uniques);
-        let oracle = self.dialect == Dialect::Oracle;
-        for (tname, cols, is_pk, name, ity, _from_create) in pend {
+        // pg/oracle goldens never fold CREATE-time table-level PK/UNIQUE
+        // onto the column — they render as indexes entries in source
+        // order; mysql/mssql fold unnamed single-column ones
+        let no_fold = matches!(self.dialect, Dialect::Oracle | Dialect::Postgres);
+        for (tname, cols, is_pk, name, ity, _from_create, unique) in pend {
             if tname != table.name {
                 self.pending_uniques
-                    .push((tname, cols, is_pk, name, ity, true));
+                    .push((tname, cols, is_pk, name, ity, true, unique));
                 continue;
             }
-            if is_pk && cols.len() == 1 && !oracle {
+            if is_pk && cols.len() == 1 && !no_fold {
                 if let Some(col) = table.cols.iter_mut().find(|x| x.name == cols[0]) {
                     col.pk = true;
                 }
             } else if is_pk {
-                // oracle: table-level PKs always render as indexes-block
-                // entries, in constraint order (golden rule)
-                if oracle {
-                    table.indexes.push((cols, name, false, ity, true));
-                } else {
-                    table.indexes.insert(0, (cols, name, false, ity, true));
-                }
-            } else if cols.len() == 1 && name.is_none() && !oracle {
-                if let Some(col) = table.cols.iter_mut().find(|x| x.name == cols[0]) {
-                    col.unique = true;
-                }
+                table.indexes.push((cols, name, false, ity, true));
             } else {
-                table.indexes.push((cols, name, true, ity, false));
+                // table-level UNIQUE never folds at CREATE time — even an
+                // unnamed single-column one renders as an indexes entry
+                // (T0 golden: UNIQUE KEY(ID) -> `(ID), unique`), unlike a
+                // column-level `unique` which never reaches this loop
+                table.indexes.push((cols, name, unique, ity, false));
             }
         }
         // mysql table trailer: ) ... COMMENT[=]'...' or COMMENT "..." —
@@ -662,11 +746,22 @@ impl Importer {
                 _ => {}
             }
         }
+        // `CREATE TABLE x (LIKE y)`: no columns of its own — upstream
+        // emits no table at all (ddl_create golden)
+        if had_like && table.cols.is_empty() && table.indexes.is_empty() && table.checks.is_empty()
+        {
+            return;
+        }
         self.tables.push(table);
     }
 
     /// Is a table-level CONSTRAINT keyword at `i`? Returns its length hint.
+    /// Constraint keywords are always bare — a quoted word (`"primary"`)
+    /// is a column name (db_dump golden).
     fn constraint_kw(&self, s: &[Tok], i: usize) -> Option<usize> {
+        if !matches!(s.get(i), Some(Tok::W(_, false))) {
+            return None;
+        }
         let kw = |j: usize, w: &str| s.get(j).is_some_and(|t| t.is_w(w));
         if kw(i, "CONSTRAINT") {
             return Some(2); // CONSTRAINT name <kind>
@@ -784,7 +879,7 @@ impl Importer {
                     }
                     _ => {}
                 }
-                if s[i].is_w("USING") {
+                if self.dialect == Dialect::MySQL && s[i].is_w("USING") {
                     if let Some(Tok::W(tyw, _)) = s.get(i + 1) {
                         index_type = Some(tyw.to_ascii_lowercase());
                     }
@@ -799,6 +894,7 @@ impl Importer {
                     name.clone(),
                     index_type,
                     from_create,
+                    !is_pk,
                 ));
             }
             consumed = i;
@@ -814,7 +910,7 @@ impl Importer {
                 {
                     self.tables[ti].checks.push((
                         name.clone(),
-                        tokens_text(&s[i + 1..end - 1], self.dialect == Dialect::MSSQL),
+                        tokens_text(&s[i + 1..end - 1], check_style(self.dialect)),
                     ));
                 }
             }
@@ -944,12 +1040,22 @@ impl Importer {
                     || w.eq_ignore_ascii_case("UNSIGNED")
                     || w.eq_ignore_ascii_case("SIGNED")
                     || w.eq_ignore_ascii_case("ZEROFILL")
+                    // mysql `SMALLINT SERIAL DEFAULT VALUE`: SERIAL after
+                    // a type is dropped along with its DEFAULT VALUE
+                    || (w.eq_ignore_ascii_case("SERIAL") && !ty.is_empty())
+                    // mysql column visibility attributes
+                    || w.eq_ignore_ascii_case("INVISIBLE")
+                    || w.eq_ignore_ascii_case("VISIBLE")
                     // bare BINARY attribute after a type (varchar(22)
                     // binary) — but `binary` and binary(16) ARE types
                     || (w.eq_ignore_ascii_case("BINARY")
                         && !ty.is_empty()
                         && !matches!(s.get(i + 1), Some(Tok::P('('))))
                     || w.eq_ignore_ascii_case("ON")
+                    // mysql implicit generated column: `char(32) AS
+                    // (hex(id)) STORED` — AS ( starts the expression
+                    || (w.eq_ignore_ascii_case("AS")
+                        && matches!(s.get(i + 1), Some(Tok::P('('))))
                     || w.eq_ignore_ascii_case("COLLATE")
                     || w.eq_ignore_ascii_case("ENCODED")
                     || w.eq_ignore_ascii_case("NULLS"))
@@ -966,6 +1072,21 @@ impl Importer {
                 Tok::W(w, _) if w.eq_ignore_ascii_case("array") => {
                     array_pending = true;
                     ty.push("[]".into());
+                }
+                // [N] subscript after ARRAY replaces the bare [] (the
+                // tokenizer yields it as P-form now that bracket idents
+                // are mssql-gated)
+                Tok::P('[')
+                    if array_pending
+                        && matches!(s.get(i + 1), Some(Tok::N(_)))
+                        && matches!(s.get(i + 2), Some(Tok::P(']'))) =>
+                {
+                    array_pending = false;
+                    ty.pop(); // drop the bare []
+                    if let Some(Tok::N(n)) = s.get(i + 1) {
+                        ty.push(format!("[{}]", n.trim()));
+                    }
+                    i += 2; // skip N and ']'
                 }
                 // quoted [N] from the tokenizer (bracket-ident) after a
                 // base type is an array subscript
@@ -1063,9 +1184,12 @@ impl Importer {
                 i += 2;
             } else if t.is_w("NULL") {
                 i += 1;
-            } else if t.is_w("PRIMARY") || t.is_w("SERIAL") {
+            } else if t.is_w("PRIMARY") {
                 col.pk = true;
-                i += if t.is_w("PRIMARY") { 2 } else { 1 };
+                i += 2;
+            } else if t.is_w("SERIAL") {
+                // trailing SERIAL after a type: dropped (serval golden)
+                i += 1;
             } else if t.is_w("AUTO_INCREMENT") {
                 col.increment = true;
                 i += 1;
@@ -1102,8 +1226,17 @@ impl Importer {
                     } else if identity && constraint_kw(&s[j]) {
                         break;
                     }
+                    // the AS (expr) group holds commas — skip it whole
+                    if matches!(s[j], Tok::P('(')) {
+                        j = skip_group(s, j);
+                        continue;
+                    }
                     if s[j].is_w("STORED") || s[j].is_w("VIRTUAL") {
+                        // the clause ends here — a trailing NOT NULL (or
+                        // other options) belongs to column_options
                         stored = true;
+                        j += 1;
+                        break;
                     }
                     j += 1;
                 }
@@ -1114,8 +1247,28 @@ impl Importer {
             } else if t.is_w("UNIQUE") {
                 col.unique = true;
                 i += 1;
+            } else if t.is_w("AS") && matches!(s.get(i + 1), Some(Tok::P('('))) {
+                // implicit `GENERATED`: col AS (expr) [STORED|VIRTUAL] —
+                // a computed column, not an identity
+                i += 1;
+                if matches!(s.get(i), Some(Tok::P('('))) {
+                    i = skip_group(s, i);
+                }
+                if s.get(i)
+                    .is_some_and(|x| x.is_w("STORED") || x.is_w("VIRTUAL"))
+                {
+                    i += 1;
+                }
             } else if t.is_w("DEFAULT") {
                 i += 1;
+                // mysql serial shorthand: `SERIAL DEFAULT VALUE` — no
+                // default in the golden
+                if matches!(self.dialect, Dialect::MySQL)
+                    && s.get(i).is_some_and(|x| x.is_w("VALUE"))
+                {
+                    i += 1;
+                    continue;
+                }
                 let (v, next) = if matches!(self.dialect, Dialect::MSSQL) {
                     mssql_default(s, i)
                 } else if matches!(self.dialect, Dialect::Oracle) {
@@ -1141,7 +1294,10 @@ impl Importer {
             } else if t.is_w("COMMENT") {
                 i += 1;
                 if let Some(Tok::S(c)) = s.get(i) {
-                    col.note = Some(c.clone());
+                    // upstream drops empty notes (COMMENT '')
+                    if !c.is_empty() {
+                        col.note = Some(c.clone());
+                    }
                     i += 1;
                 }
             } else if t.is_w("CHECK") {
@@ -1150,7 +1306,7 @@ impl Importer {
                     let end = skip_group(s, i);
                     col.check = Some(format!(
                         "`{}`",
-                        tokens_text(&s[i + 1..end - 1], self.dialect == Dialect::MSSQL)
+                        tokens_text(&s[i + 1..end - 1], check_style(self.dialect))
                     ));
                     i = end;
                 }
@@ -1176,8 +1332,10 @@ impl Importer {
                 // ON UPDATE/CURRENT/DELETE actions after REFERENCES
                 i += 2;
                 if i < s.len() && s[i].is_w("CURRENT_TIMESTAMP") {
-                    // with AUTO_INCREMENT the golden drops the default
-                    if !col.increment {
+                    // with AUTO_INCREMENT the golden drops the default,
+                    // and an explicit DEFAULT (incl. DEFAULT NULL) wins
+                    // over ON UPDATE (ddl_create ts10/ts11)
+                    if !col.increment && col.default.is_none() {
                         col.default = Some("`CURRENT_TIMESTAMP`".into());
                     }
                     i += 1;
@@ -1209,12 +1367,18 @@ impl Importer {
         }
         let (_schema, table, j) = self.qual_name(&s[i..]);
         i += j;
+        // USING <type> between table and cols (postgres: ... ON t USING
+        // HASH (cols)) — the whole-statement scan below records the type
+        if s.get(i).is_some_and(|t| t.is_w("USING")) {
+            i += 2;
+        }
         let mut cols = Vec::new();
         if matches!(s.get(i), Some(Tok::P('('))) {
-            if matches!(self.dialect, Dialect::Oracle) {
+            let functional = matches!(s.get(i + 1), Some(Tok::P('(')));
+            if matches!(self.dialect, Dialect::Oracle) || functional {
                 // function-based indexes keep their expressions verbatim
-                // (`UPPER(x)`, `price * 1.1`, `TO_CHAR(...)` — goldens)
-                cols = oracle_index_exprs(s, i + 1);
+                // (`UPPER(x)`, `price * 1.1`, `(SUBSTRING(col1,1,10))`)
+                cols = index_exprs(s, i + 1);
             } else {
                 (cols, _) = ident_list(s, i + 1);
             }
@@ -1242,8 +1406,10 @@ impl Importer {
         else {
             return;
         };
-        // single-column unnamed unique folds onto the column
-        if cols.len() == 1 && name.is_none() && unique {
+        // single-column unnamed unique folds onto the column — unless it
+        // carries an index type (upstream renders `USING HASH` uniques
+        // as indexes-block entries: general_schema, multiple_schema)
+        if cols.len() == 1 && name.is_none() && unique && index_type.is_none() {
             if let Some(col) = self.tables[ti].cols.iter_mut().find(|x| x.name == cols[0]) {
                 col.unique = true;
             }
@@ -1500,18 +1666,24 @@ impl Importer {
             i += 1;
         }
         i += 1;
-        let Some(Tok::S(note)) = s.get(i) else { return };
-        let note = note.clone();
+        // IS 'text' sets the note; IS NULL clears it (multiple_schema
+        // golden drops the note that way)
+        let note = match s.get(i) {
+            // upstream drops empty notes (COMMENT ON ... IS '')
+            Some(Tok::S(note)) if !note.is_empty() => Some(note.clone()),
+            Some(Tok::W(w, _)) if w.eq_ignore_ascii_case("null") => None,
+            _ => return,
+        };
         let Some(ti) = self.table_index(&schema, &name) else {
             return;
         };
         match col {
             Some(c) => {
                 if let Some(col) = self.tables[ti].cols.iter_mut().find(|x| x.name == c) {
-                    col.note = Some(note);
+                    col.note = note;
                 }
             }
-            None => self.tables[ti].note = Some(note),
+            None => self.tables[ti].note = note,
         }
     }
 
@@ -1676,7 +1848,7 @@ impl Importer {
         // merge pending PK/UNIQUE constraints FIRST: bare REFERENCES t
         // resolves against the target's pk, and composite table-level
         // PKs only become visible to pk_of here
-        for (table, cols, is_pk, name, ity, from_create) in
+        for (table, cols, is_pk, name, ity, from_create, unique) in
             std::mem::take(&mut self.pending_uniques)
         {
             let Some(ti) = self.tables.iter().position(|t| t.name == table) else {
@@ -1699,7 +1871,9 @@ impl Importer {
                 if let Some(col) = self.tables[ti].cols.iter_mut().find(|x| x.name == cols[0]) {
                     col.pk = true;
                 }
-            } else if fold && !is_pk && cols.len() == 1 && name.is_none() {
+            } else if fold && !is_pk && cols.len() == 1 {
+                // pg folds ALTER-added named uniques too (db_dump:
+                // document_rowguid_key -> [unique] on the column)
                 if let Some(col) = self.tables[ti].cols.iter_mut().find(|x| x.name == cols[0]) {
                     col.unique = true;
                 }
@@ -1712,7 +1886,7 @@ impl Importer {
                 // composite/named constraints render as an indexes block
                 self.tables[ti]
                     .indexes
-                    .push((cols, name, !is_pk, ity, false));
+                    .push((cols, name, unique, ity, false));
             }
         }
         let mut fks = std::mem::take(&mut self.fks);
@@ -1777,10 +1951,11 @@ impl Importer {
             }
             out.push_str("}\n\n");
         }
-        // golden rule: default-schema tables first (creation order), then
-        // other schemas' tables — oracle groups the schema-qualified ones
-        // by schema, in each schema's first-appearance order (create_table
-        // golden); other dialects keep plain creation order
+        // golden rules: oracle groups the schema-qualified tables by
+        // schema, in each schema's first-appearance order; mysql/mssql
+        // put default-schema tables first (creation order), then the
+        // schema-qualified ones; postgres keeps plain creation order
+        // (general_schema keeps public-qualified tables inline)
         let mut ordered: Vec<&ITable> = self.tables.iter().collect();
         if matches!(self.dialect, Dialect::Oracle) {
             let mut seen: Vec<Option<String>> = Vec::new();
@@ -1797,7 +1972,7 @@ impl Importer {
                         .unwrap_or(usize::MAX),
                 )
             });
-        } else {
+        } else if matches!(self.dialect, Dialect::MySQL | Dialect::MSSQL) {
             ordered.sort_by_key(|t| t.schema.is_some());
         }
         for t in ordered {
@@ -1848,7 +2023,7 @@ impl Importer {
                     }
                 }
                 if let Some(n) = &c.note {
-                    settings.push(format!("note: '{}'", n.replace('\'', "''")));
+                    settings.push(format!("note: {}", super::fmt::quote_note(n)));
                 }
                 if let Some(ch) = &c.check {
                     settings.push(format!("check: {ch}"));
@@ -1857,7 +2032,11 @@ impl Importer {
                     "int".to_string()
                 } else if c.ty.starts_with('"') && c.ty.ends_with('"') {
                     c.ty.clone() // already quoted (arrays/pre-quoted)
-                } else if c.ty_quoted {
+                } else if c.ty_quoted
+                    // oracle unquotes single-word quoted types (`"string"`
+                    // -> string) and keeps ones with whitespace quoted
+                    && (self.dialect != Dialect::Oracle || c.ty.contains(char::is_whitespace))
+                {
                     q(&c.ty)
                 } else {
                     c.ty.clone()
@@ -1906,7 +2085,7 @@ impl Importer {
                 out.push_str("  }\n");
             }
             if let Some(n) = &t.note {
-                out.push_str(&format!("  note: '{}'\n", n.replace('\'', "''")));
+                out.push_str(&format!("  note: {}\n", super::fmt::quote_note(n)));
             }
             out.push_str("}\n\n");
         }
@@ -1955,11 +2134,13 @@ fn skip_group(s: &[Tok], i: usize) -> usize {
     j
 }
 
-/// `(a, b, c)` identifier list starting after the '('.
+/// `(a, b, c)` identifier list starting after the '('. ASC/DESC order
+/// qualifiers are dropped (mysql `UNIQUE KEY k (data ASC)` golden).
 fn ident_list(s: &[Tok], mut i: usize) -> (Vec<String>, usize) {
     let mut out = Vec::new();
     while i < s.len() {
         match &s[i] {
+            Tok::W(w, _) if w.eq_ignore_ascii_case("ASC") || w.eq_ignore_ascii_case("DESC") => {}
             Tok::W(w, _) => out.push(w.clone()),
             Tok::P(')') => {
                 i += 1;
@@ -1978,12 +2159,32 @@ fn default_value(s: &[Tok], mut i: usize) -> (String, usize) {
     if matches!(s.get(i), Some(Tok::P('('))) {
         // parenthesized expression: backtick the group's content
         let end = skip_group(s, i);
-        let expr = tokens_text(&s[i + 1..end - 1], false).replace(' ', "");
+        let expr = tokens_text(&s[i + 1..end - 1], QuoteStyle::Double).replace(' ', "");
         return (format!("`{expr}`"), end);
     }
-    match s.get(i) {
-        Some(Tok::S(v)) => (format!("'{}'", v.replace('\'', "''")), i + 1),
-        Some(Tok::N(n)) => (parse_int_literal(n), i + 1),
+    let base = match s.get(i) {
+        Some(Tok::S(v)) => Some((format!("'{}'", v.replace('\'', "''")), i + 1)),
+        Some(Tok::N(n)) => Some((parse_int_literal(n), i + 1)),
+        // negative literal: the tokenizer splits the sign off — upstream
+        // renders it as a backticked expression (ddl_create golden)
+        Some(Tok::P('-')) if matches!(s.get(i + 1), Some(Tok::N(_))) => {
+            if let Some(Tok::N(n)) = s.get(i + 1) {
+                Some((format!("`-{}`", parse_int_literal(n)), i + 2))
+            } else {
+                None
+            }
+        }
+        // mysql charset introducer `_utf8mb3'xxx'`: upstream emits the
+        // mangled `'utf8mb3'xxx'` verbatim (ddl_create golden)
+        Some(Tok::W(w, false))
+            if w.len() > 1 && w.starts_with('_') && matches!(s.get(i + 1), Some(Tok::S(_))) =>
+        {
+            if let Some(Tok::S(sv)) = s.get(i + 1) {
+                Some((format!("'{}'{}'", &w[1..], sv), i + 2))
+            } else {
+                None
+            }
+        }
         Some(Tok::W(w, _)) => {
             let mut v = w.clone();
             i += 1;
@@ -2000,14 +2201,65 @@ fn default_value(s: &[Tok], mut i: usize) -> (String, usize) {
             // function call: name(...)
             if matches!(s.get(i), Some(Tok::P('('))) {
                 let end = skip_group(s, i);
-                let args = tokens_text(&s[i + 1..end - 1], false).replace(' ', "");
+                let args = tokens_text(&s[i + 1..end - 1], QuoteStyle::Double).replace(' ', "");
                 v = format!("`{v}({args})`");
                 i = end;
             }
-            (v, i)
+            Some((v, i))
         }
-        _ => (String::new(), i),
+        _ => None,
+    };
+    match base {
+        None => (String::new(), i),
+        Some((v, next)) => match with_cast(s, next, v.clone()) {
+            Some(cast) => cast,
+            None => (v, next),
+        },
     }
+}
+
+/// `::type` cast suffix after a default literal — upstream keeps it
+/// verbatim inside a backticked expression (db_dump golden:
+/// `DEFAULT '/'::character varying` -> `'/'::charactervarying`).
+fn with_cast(s: &[Tok], i: usize, v: String) -> Option<(String, usize)> {
+    if s.get(i) != Some(&Tok::P(':')) || s.get(i + 1) != Some(&Tok::P(':')) {
+        return None;
+    }
+    let mut j = i + 2;
+    while j < s.len() {
+        match &s[j] {
+            Tok::W(w, _)
+                if [
+                    "not",
+                    "null",
+                    "primary",
+                    "unique",
+                    "references",
+                    "check",
+                    "constraint",
+                    "on",
+                    "comment",
+                    "generated",
+                    "identity",
+                    "default",
+                    "collate",
+                ]
+                .iter()
+                .any(|k| w.eq_ignore_ascii_case(k)) =>
+            {
+                break
+            }
+            Tok::P('(') => j = skip_group(s, j),
+            _ => j += 1,
+        }
+    }
+    // includes the leading `::`
+    let cast = tokens_text(&s[i..j], QuoteStyle::Double).replace(' ', "");
+    let inner = v
+        .strip_prefix('`')
+        .and_then(|x| x.strip_suffix('`'))
+        .unwrap_or(&v);
+    Some((format!("`{inner}{cast}`"), j))
 }
 
 /// MSSQL DEFAULT: redundant wrapping parens are peeled; a bare
@@ -2026,7 +2278,10 @@ fn mssql_default(s: &[Tok], i: usize) -> (String, usize) {
             _ => {}
         }
         return (
-            format!("`{}`", tokens_text(inner, false).replace(' ', "")),
+            format!(
+                "`{}`",
+                tokens_text(inner, QuoteStyle::Double).replace(' ', "")
+            ),
             end,
         );
     }
@@ -2068,7 +2323,7 @@ fn oracle_default_value(dt: &[Tok]) -> String {
         [Tok::S(v)] => format!("'{}'", v.replace('\'', "''")),
         [Tok::N(n)] => oracle_number(n),
         [Tok::W(w, false)] if w.eq_ignore_ascii_case("null") => "null".to_string(),
-        _ => format!("`{}`", tokens_text(dt, false)),
+        _ => format!("`{}`", tokens_text(dt, QuoteStyle::Double)),
     }
 }
 
@@ -2136,23 +2391,47 @@ fn oracle_expr_stops(s: &[Tok], i: usize) -> bool {
     .any(|k| w.eq_ignore_ascii_case(k))
 }
 
-/// Oracle CREATE INDEX column list: each element is a plain column or an
-/// expression (`UPPER(x)`, `price * 1.1`) kept verbatim (function-based
-/// index goldens).
-fn oracle_index_exprs(s: &[Tok], mut i: usize) -> Vec<String> {
+/// Index column list where each element is a plain column or an
+/// expression kept verbatim (`UPPER(x)`, `price * 1.1`,
+/// `(SUBSTRING(col1,1,10))` — function-based index goldens).
+/// Starts after the group's opening '('.
+fn index_exprs(s: &[Tok], mut i: usize) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur: Vec<Tok> = Vec::new();
     let mut depth = 0i32;
     let flush = |out: &mut Vec<String>, cur: &mut Vec<Tok>| {
         if cur.len() == 1 {
-            if let Tok::W(w, _) = &cur[0] {
-                out.push(w.clone());
-                cur.clear();
-                return;
+            match &cur[0] {
+                Tok::W(w, _) => {
+                    out.push(w.clone());
+                    cur.clear();
+                    return;
+                }
+                // a string literal in the column list is emitted as a raw
+                // name (upstream quirk: quoted_names golden)
+                Tok::S(v) => {
+                    out.push(v.clone());
+                    cur.clear();
+                    return;
+                }
+                _ => {}
             }
         }
         if !cur.is_empty() {
-            out.push(tokens_text(cur, false));
+            // expressions render getText-style: whitespace stripped and
+            // quoted idents as backticks (never `"` — it would break the
+            // outer quoting; create_index goldens)
+            let text = cur
+                .iter()
+                .map(|t| match t {
+                    Tok::W(w, true) => format!("`{w}`"),
+                    Tok::W(w, false) => w.clone(),
+                    Tok::N(n) => n.clone(),
+                    Tok::S(v) => format!("'{}'", v.replace('\'', "''")),
+                    Tok::P(c) => c.to_string(),
+                })
+                .collect::<String>();
+            out.push(text);
         }
         cur.clear();
     };
@@ -2203,7 +2482,25 @@ fn parse_int_literal(n: &str) -> String {
     n.to_string()
 }
 
-fn tokens_text(s: &[Tok], bracket_idents: bool) -> String {
+/// How quoted identifiers re-render inside expressions (the tokenizer
+/// collapses `"x"`, `` `x` `` and `[x]` into one token form — the goldens
+/// keep the source's quoting).
+#[derive(Clone, Copy)]
+enum QuoteStyle {
+    Double,
+    Bracket,
+    Backtick,
+}
+
+fn check_style(d: Dialect) -> QuoteStyle {
+    match d {
+        Dialect::MSSQL => QuoteStyle::Bracket,
+        Dialect::MySQL => QuoteStyle::Backtick,
+        _ => QuoteStyle::Double,
+    }
+}
+
+fn tokens_text(s: &[Tok], style: QuoteStyle) -> String {
     let mut out = String::new();
     for (i, t) in s.iter().enumerate() {
         let _ = i;
@@ -2225,11 +2522,12 @@ fn tokens_text(s: &[Tok], bracket_idents: bool) -> String {
         }
         match t {
             Tok::W(w, quoted) => {
-                if *quoted && bracket_idents {
-                    // mssql goldens keep bracket-quoted idents verbatim
-                    out.push_str(&format!("[{w}]"));
-                } else if *quoted {
-                    out.push_str(&format!("\"{w}\""));
+                if *quoted {
+                    match style {
+                        QuoteStyle::Bracket => out.push_str(&format!("[{w}]")),
+                        QuoteStyle::Backtick => out.push_str(&format!("`{w}`")),
+                        QuoteStyle::Double => out.push_str(&format!("\"{w}\"")),
+                    }
                 } else {
                     out.push_str(w);
                 }
@@ -2297,6 +2595,56 @@ fn normalize_type(ty: &str, d: Dialect) -> String {
             "without time zone",
         ] {
             t = t.replace(drop, "");
+        }
+    }
+    if matches!(d, Dialect::MySQL) {
+        // mysql drops the NATIONAL modifier and SRID attributes
+        // (T1/T2 goldens: `NATIONAL CHAR` -> CHAR, `GEOMETRY SRID 0` ->
+        // GEOMETRY)
+        let upper = t.to_ascii_uppercase();
+        if let Some(rest) = upper.strip_prefix("NATIONAL ") {
+            if rest.starts_with("CHAR") {
+                t = t[t.len() - rest.len()..].to_string();
+            }
+        }
+        if let Some(pos) = upper.find(" SRID ") {
+            let after = upper[pos + 6..].trim();
+            if after.chars().all(|c| c.is_ascii_digit()) && !after.is_empty() {
+                t = t[..pos].to_string();
+            }
+        }
+        // mysql collapses `CHAR VARYING(10)` to `CHAR(10)` — no mysql
+        // golden keeps the VARYING word — and `DOUBLE PRECISION(18,4)`
+        // to `DOUBLE(18,4)`
+        let lower = t.to_ascii_lowercase();
+        if let Some(pos) = lower.find("double precision") {
+            t = format!("{}double{}", &t[..pos], &t[pos + 16..]);
+        }
+        // `LONG VARCHAR` collapses to LONG; `LONG VARBINARY` stays
+        // quoted-verbatim (lvc/lvb goldens)
+        if let Some(pos) = lower.find("long varchar") {
+            t = format!(
+                "{}{}{}",
+                &t[..pos],
+                &t[pos..pos + 4], // keep the source's casing
+                &t[pos + "long varchar".len()..]
+            );
+        }
+        for pat in [" varying", "\tvarying"] {
+            let mut from = 0;
+            while let Some(pos) = lower[from..].find(pat) {
+                let at = from + pos;
+                let after = at + pat.len();
+                let boundary = lower[after..]
+                    .chars()
+                    .next()
+                    .map_or(true, |c| !c.is_alphanumeric());
+                if boundary {
+                    t = format!("{}{}", &t[..at], &t[after..]);
+                    return t.trim().to_string();
+                }
+                from = after;
+            }
         }
     }
     if matches!(d, Dialect::Postgres) {

@@ -296,13 +296,30 @@ fn value(input: &mut &str, base: usize) -> R<String> {
         return ident(input, base);
     }
     if input.starts_with('`') {
-        let rest = &input[1..];
-        let end = rest.find('`').ok_or(Fail {
-            offset: offset(input, base),
-            message: "unterminated backtick expression",
-        })?;
-        let v = rest[..end].to_string();
-        *input = &rest[end + 1..];
+        // a backtick closes the expression only when `,`/`]`/newline
+        // follows — nested `ident` groups inside (upstream emits
+        // `json_valid(`Privilege`)`) don't terminate it
+        let b = input.as_bytes();
+        let mut end = 1;
+        let mut closed = false;
+        while end < b.len() {
+            if b[end] == b'`' {
+                let mut k = end + 1;
+                while k < b.len() && (b[k] == b' ' || b[k] == b'\t') {
+                    k += 1;
+                }
+                if k >= b.len() || matches!(b[k], b',' | b']' | b'\n' | b'\r') {
+                    closed = true;
+                    break;
+                }
+            }
+            end += 1;
+        }
+        if !closed {
+            return fail(offset(input, base), "unterminated backtick expression");
+        }
+        let v = input[1..end].to_string();
+        *input = &input[end + 1..];
         return Ok(v);
     }
     let end = input.find([',', ']', '\n', '\r']).unwrap_or(input.len());
@@ -497,12 +514,40 @@ fn settings_list(input: &mut &str, base: usize) -> R<Vec<(String, Option<Setting
                     }
                     let v = input[..end.min(input.len())].to_string();
                     *input = &input[end.min(input.len())..];
-                    v
+                    // upstream importers emit dump text verbatim: a quoted
+                    // default can carry trailing junk (`'utf8mb3'xxx'`) —
+                    // extend to the terminator so it round-trips verbatim
+                    if input.starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '\'') {
+                        let end2 = input.find([',', ']', '\n', '\r']).unwrap_or(input.len());
+                        let whole = format!("{v}{}", &input[..end2]);
+                        *input = &input[end2..];
+                        whole
+                    } else {
+                        v
+                    }
                 } else if input.starts_with('`') {
-                    // keep the backticks: marks an expression for exporters
-                    let end = input[1..].find('`').map(|i| i + 1).unwrap_or(input.len());
-                    let v = input[..end + 1].to_string();
-                    *input = &input[end + 1..];
+                    // keep the backticks: marks an expression for exporters.
+                    // A backtick closes the value only when a `,`/`]`/
+                    // newline follows — nested `ident` groups inside the
+                    // expression (upstream emits `json_valid(`Privilege`)`)
+                    // don't terminate it
+                    let b = input.as_bytes();
+                    let mut end = 1;
+                    while end < b.len() {
+                        if b[end] == b'`' {
+                            let mut k = end + 1;
+                            while k < b.len() && (b[k] == b' ' || b[k] == b'\t') {
+                                k += 1;
+                            }
+                            if k >= b.len() || matches!(b[k], b',' | b']' | b'\n' | b'\r') {
+                                end += 1;
+                                break;
+                            }
+                        }
+                        end += 1;
+                    }
+                    let v = input[..end.min(input.len())].to_string();
+                    *input = &input[end.min(input.len())..];
                     v
                 } else {
                     let end = input.find([',', ']', '\n', '\r']).unwrap_or(input.len());
@@ -581,13 +626,64 @@ fn column(input: &mut &str, base: usize) -> R<Column> {
     })
 }
 
+/// Index column: an identifier. Upstream importers emit unquoted
+/// multi-word names (`date of birth`), so consecutive bare words on the
+/// same line join into one name.
+fn index_ident(input: &mut &str, base: usize) -> R<String> {
+    // functional-index expressions are backtick-quoted and can hold
+    // nested `ident` groups (`(cast(json_extract(`col`,…)))`) — a
+    // backtick inside the expression's parens is nested; one at paren
+    // depth 0 closes it
+    if input.starts_with('`') {
+        let b = input.as_bytes();
+        let mut depth = 0i32;
+        let mut end = None;
+        for (k, &c) in b.iter().enumerate().skip(1) {
+            match c {
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                b'`' if depth <= 0 => {
+                    end = Some(k);
+                    break;
+                }
+                b'\n' => break,
+                _ => {}
+            }
+        }
+        let Some(end) = end else {
+            return fail(offset(input, base), "unterminated index expression");
+        };
+        let name = input[1..end].to_string();
+        *input = &input[end + 1..];
+        return Ok(name);
+    }
+    let mut name = ident(input, base)?;
+    loop {
+        let save = *input;
+        let b = input.as_bytes();
+        let mut k = 0;
+        while k < b.len() && b[k].is_ascii_whitespace() && b[k] != b'\n' && b[k] != b'\r' {
+            k += 1;
+        }
+        if k < b.len() && is_bare_ident(b[k] as char) {
+            *input = &input[k..];
+            name.push(' ');
+            name.push_str(&ident(input, base)?);
+        } else {
+            *input = save;
+            break;
+        }
+    }
+    Ok(name)
+}
+
 fn index(input: &mut &str, base: usize) -> R<Index> {
     let start = offset(input, base);
     let mut columns = Vec::new();
     if eat(input, "(") {
         loop {
             ws(input);
-            columns.push(ident(input, base)?);
+            columns.push(index_ident(input, base)?);
             ws(input);
             if !eat(input, ",") {
                 break;
@@ -597,7 +693,7 @@ fn index(input: &mut &str, base: usize) -> R<Index> {
             return fail(offset(input, base), "expected ')' after index columns");
         }
     } else {
-        columns.push(ident(input, base)?);
+        columns.push(index_ident(input, base)?);
     }
     sp(input);
     let mut idx = Index {
@@ -747,11 +843,14 @@ fn table(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Table> 
             continue;
         }
         if peek_kw(input, "Records") {
-            // Records name(cols) { rows } — data samples; parsed and
-            // dropped (no diagram equivalent yet)
+            // Records name[.name](cols) { rows } — data samples; parsed
+            // and dropped (no diagram equivalent yet)
             let _ = eat(input, "Records");
             ws(input);
             let _ = ident(input, base);
+            while eat(input, ".") {
+                let _ = ident(input, base);
+            }
             ws(input);
             if peek_is(input, "(") {
                 let end = skip_group_len(input);
@@ -1101,6 +1200,9 @@ pub fn parse(src: &str) -> ParseOutput {
             let _ = eat(&mut r, "Records");
             ws(&mut r);
             let _ = ident(&mut r, base);
+            while eat(&mut r, ".") {
+                let _ = ident(&mut r, base);
+            }
             ws(&mut r);
             if peek_is(&r[..1.min(r.len())], "(") {
                 let _ = eat(&mut r, "(");
