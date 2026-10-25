@@ -35,6 +35,8 @@ pub struct TableBox {
     pub w: i32,
     pub h: i32,
     pub title: String,
+    /// `Table users as U` — the alias, for hover-docs and lookups.
+    pub alias: Option<String>,
     pub header_color: Option<String>,
     pub rows: Vec<Row>,
     /// Span of the table/enum name in the source (click-to-jump target).
@@ -151,6 +153,7 @@ pub fn layout_with_overrides(
                 w: content + 4,
                 h: rows.len() as i32 + 2,
                 title,
+                alias: node.alias.clone(),
                 header_color: node.header_color.clone(),
                 rows,
                 name_span: node.name_span.clone(),

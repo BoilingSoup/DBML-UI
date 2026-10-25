@@ -272,45 +272,112 @@ impl canvas::Program<Message> for EditorView<'_> {
             );
         }
 
-        // error tooltip on hover
+        // tooltips on hover: errors win, then definition docs; suppressed
+        // while the completion popup is open
         if let Some(hover) = app.editor_hover {
-            let pos = px_to_pos(app, hover);
-            if let Some(m) = marks
-                .iter()
-                .find(|m| m.row == pos.row && pos.col >= m.start && pos.col <= m.end)
-            {
-                let (rect, lines) = tooltip_layout(hover, &m.message, bounds);
-                frame.fill(
-                    &canvas::Path::rounded_rectangle(
-                        rect.position(),
-                        rect.size(),
-                        iced::border::Radius::from(6.0),
-                    ),
-                    theme::PANEL,
-                );
-                frame.stroke(
-                    &canvas::Path::rounded_rectangle(
-                        rect.position(),
-                        rect.size(),
-                        iced::border::Radius::from(6.0),
-                    ),
-                    canvas::Stroke {
-                        style: theme::ERR.into(),
-                        width: 1.0,
-                        ..Default::default()
-                    },
-                );
-                for (i, line) in lines.iter().enumerate() {
+            if app.completion.is_none() {
+                let pos = px_to_pos(app, hover);
+                if let Some(m) = marks
+                    .iter()
+                    .find(|m| m.row == pos.row && pos.col >= m.start && pos.col <= m.end)
+                {
+                    let (rect, lines) = tooltip_layout(hover, &m.message, bounds);
+                    frame.fill(
+                        &canvas::Path::rounded_rectangle(
+                            rect.position(),
+                            rect.size(),
+                            iced::border::Radius::from(6.0),
+                        ),
+                        theme::PANEL,
+                    );
+                    frame.stroke(
+                        &canvas::Path::rounded_rectangle(
+                            rect.position(),
+                            rect.size(),
+                            iced::border::Radius::from(6.0),
+                        ),
+                        canvas::Stroke {
+                            style: theme::ERR.into(),
+                            width: 1.0,
+                            ..Default::default()
+                        },
+                    );
+                    for (i, line) in lines.iter().enumerate() {
+                        frame.fill_text(Text {
+                            content: line.clone(),
+                            position: Point::new(rect.x + 12.0, rect.y + 12.0 + i as f32 * 18.0),
+                            color: theme::TEXT,
+                            size: (FONT_SIZE - 1.0).into(),
+                            font: Font::MONOSPACE,
+                            horizontal_alignment: iced::alignment::Horizontal::Left,
+                            vertical_alignment: iced::alignment::Vertical::Top,
+                            ..Default::default()
+                        });
+                    }
+                } else if let Some(doc) = doc_hover_at(app, hover) {
+                    let rect = doc_rect(hover, &doc, bounds);
+                    frame.fill(
+                        &canvas::Path::rounded_rectangle(
+                            rect.position(),
+                            rect.size(),
+                            iced::border::Radius::from(6.0),
+                        ),
+                        theme::PANEL,
+                    );
+                    frame.stroke(
+                        &canvas::Path::rounded_rectangle(
+                            rect.position(),
+                            rect.size(),
+                            iced::border::Radius::from(6.0),
+                        ),
+                        canvas::Stroke {
+                            style: theme::SYN_NAME.into(),
+                            width: 1.0,
+                            ..Default::default()
+                        },
+                    );
                     frame.fill_text(Text {
-                        content: line.clone(),
-                        position: Point::new(rect.x + 12.0, rect.y + 12.0 + i as f32 * 18.0),
-                        color: theme::TEXT,
+                        content: doc.title.clone(),
+                        position: Point::new(rect.x + 12.0, rect.y + 10.0),
+                        color: theme::SYN_NAME,
                         size: (FONT_SIZE - 1.0).into(),
-                        font: Font::MONOSPACE,
+                        font: Font {
+                            weight: iced::font::Weight::Bold,
+                            ..Font::MONOSPACE
+                        },
                         horizontal_alignment: iced::alignment::Horizontal::Left,
                         vertical_alignment: iced::alignment::Vertical::Top,
                         ..Default::default()
                     });
+                    for (i, (marker, text)) in doc.rows.iter().enumerate() {
+                        let ry = rect.y + 28.0 + i as f32 * 16.0;
+                        frame.fill_text(Text {
+                            content: marker.clone(),
+                            position: Point::new(rect.x + 12.0, ry),
+                            color: if marker == "\u{25c6}" {
+                                theme::PK
+                            } else if marker == "\u{25c7}" {
+                                theme::FK
+                            } else {
+                                theme::TEXT
+                            },
+                            size: (FONT_SIZE - 1.0).into(),
+                            font: Font::MONOSPACE,
+                            horizontal_alignment: iced::alignment::Horizontal::Left,
+                            vertical_alignment: iced::alignment::Vertical::Top,
+                            ..Default::default()
+                        });
+                        frame.fill_text(Text {
+                            content: text.clone(),
+                            position: Point::new(rect.x + 12.0 + 2.0 * char_width(), ry),
+                            color: theme::TEXT,
+                            size: (FONT_SIZE - 1.0).into(),
+                            font: Font::MONOSPACE,
+                            horizontal_alignment: iced::alignment::Horizontal::Left,
+                            vertical_alignment: iced::alignment::Vertical::Top,
+                            ..Default::default()
+                        });
+                    }
                 }
             }
         }
@@ -377,6 +444,13 @@ pub struct Mark {
     pub message: String,
 }
 
+/// A definition tooltip: title line plus (marker, text) rows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocHover {
+    pub title: String,
+    pub rows: Vec<(String, String)>,
+}
+
 /// Parse errors as per-line underline ranges: the token at the error
 /// offset, one char minimum (point errors still get a visible mark).
 pub fn error_marks(app: &App) -> Vec<Mark> {
@@ -407,6 +481,90 @@ pub fn error_marks(app: &App) -> Vec<Mark> {
         });
     }
     marks
+}
+
+/// The word under a hover point, if the pointer is on a word character.
+fn word_at(app: &App, p: Point) -> Option<String> {
+    let pos = px_to_pos(app, p);
+    let chars: Vec<char> = app.editor.buf.line(pos.row).chars().collect();
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    if !chars.get(pos.col).copied().is_some_and(is_word) {
+        return None;
+    }
+    let mut s = pos.col;
+    while s > 0 && is_word(chars[s - 1]) {
+        s -= 1;
+    }
+    let mut e = pos.col + 1;
+    while e < chars.len() && is_word(chars[e]) {
+        e += 1;
+    }
+    Some(chars[s..e].iter().collect())
+}
+
+/// Definition doc for the hovered word: a table/enum by name or alias.
+fn doc_hover_at(app: &App, p: Point) -> Option<DocHover> {
+    use dbml_ui::model::NodeKind;
+    let word = word_at(app, p)?;
+    let b = app
+        .diagram
+        .boxes
+        .iter()
+        .find(|b| b.title == word || b.alias.as_deref() == Some(word.as_str()))?;
+    let title = format!(
+        "{} {}",
+        match b.kind {
+            NodeKind::Enum => "Enum",
+            _ => "Table",
+        },
+        b.title
+    );
+    let rows = b
+        .rows
+        .iter()
+        .map(|r| {
+            let marker = if r.pk {
+                "\u{25c6}"
+            } else if r.fk {
+                "\u{25c7}"
+            } else {
+                " "
+            };
+            let text = if r.ty.is_empty() {
+                r.name.clone()
+            } else {
+                format!("{}  {}", r.name, r.ty)
+            };
+            (marker.to_string(), text)
+        })
+        .collect();
+    Some(DocHover { title, rows })
+}
+
+/// Doc tooltip geometry: same placement rules as the error tooltip.
+fn doc_rect(hover: Point, doc: &DocHover, bounds: Rectangle) -> Rectangle {
+    let text_w = (FONT_SIZE - 1.0) * CHAR_RATIO;
+    let widest = doc
+        .rows
+        .iter()
+        .map(|(m, t)| m.chars().count() + 2 + t.chars().count())
+        .chain(std::iter::once(doc.title.chars().count()))
+        .max()
+        .unwrap_or(10) as f32
+        * text_w
+        + 24.0;
+    let h = (doc.rows.len() + 1) as f32 * 16.0 + 12.0;
+    let mut x = hover.x + 14.0;
+    if x + widest > bounds.x + bounds.width - 4.0 {
+        x = bounds.x + bounds.width - 4.0 - widest;
+    }
+    x = x.max(bounds.x + 4.0);
+    let mut y = hover.y + LINE_HEIGHT + 4.0;
+    if y + h > bounds.y + bounds.height - 4.0 {
+        y = hover.y - h - 6.0;
+    }
+    y = y.max(bounds.y + 4.0);
+    Rectangle::new(Point::new(x, y), Size::new(widest, h))
 }
 
 /// Error tooltip: geometry plus the message wrapped to fit the pane,
@@ -504,6 +662,102 @@ fn popup_layout(app: &App, bounds: Rectangle) -> Option<(Rectangle, usize, usize
         first_row,
         visible,
     ))
+}
+
+#[cfg(test)]
+mod doc_tests {
+    use super::*;
+    use crate::app::{update, App};
+    use iced::Vector;
+
+    fn app() -> App {
+        let mut app = App::default();
+        let _ = update(
+            &mut app,
+            crate::app::Message::KeyPressed(
+                crate::editor::KeyCode::Char('i'),
+                crate::editor::KeyModifiers::NONE,
+            ),
+        );
+        app
+    }
+
+    #[test]
+    fn hovering_a_table_name_shows_its_columns() {
+        let app = app();
+        // last line: "Ref: comments.author_id > users.id" — hover "users"
+        let row = app.editor.buf.line_count() - 1;
+        let line = app.editor.buf.line(row);
+        let col = line.find("users").unwrap();
+        let p = pos_to_px(crate::editor::buffer::Pos { row, col }, app.editor_scroll);
+        let doc = doc_hover_at(&app, p + Vector::new(3.0, 10.0)).expect("doc");
+        assert_eq!(doc.title, "Table users");
+        assert!(doc.rows.iter().any(|(_, t)| t.contains("username")));
+        assert!(doc.rows.iter().any(|(m, _)| m == "\u{25c6}"), "pk marker");
+    }
+
+    #[test]
+    fn hovering_an_alias_shows_the_same_doc() {
+        let app = app();
+        // 0-based line 19: "user_id integer [not null, ref: > U.id]"
+        let line = app.editor.buf.line(19);
+        let col = line.find("U.").unwrap();
+        let p = pos_to_px(
+            crate::editor::buffer::Pos { row: 19, col },
+            app.editor_scroll,
+        );
+        let doc = doc_hover_at(&app, p + Vector::new(3.0, 10.0)).expect("alias doc");
+        assert_eq!(doc.title, "Table users");
+    }
+
+    #[test]
+    fn hovering_an_enum_name_shows_values() {
+        let app = app();
+        // line 34: "Enum post_status {"
+        let line = app.editor.buf.line(33);
+        let col = line.find("post_status").unwrap();
+        let p = pos_to_px(
+            crate::editor::buffer::Pos { row: 33, col },
+            app.editor_scroll,
+        );
+        let doc = doc_hover_at(&app, p + Vector::new(3.0, 10.0)).expect("enum doc");
+        assert_eq!(doc.title, "Enum post_status");
+        assert_eq!(doc.rows.len(), 3);
+        assert_eq!(doc.rows[0].1, "draft");
+    }
+
+    #[test]
+    fn non_name_words_get_no_doc() {
+        let app = app();
+        // hover "integer" on line 7 — not a definition name
+        let line = app.editor.buf.line(6);
+        let col = line.find("integer").unwrap();
+        let p = pos_to_px(
+            crate::editor::buffer::Pos { row: 6, col },
+            app.editor_scroll,
+        );
+        assert!(doc_hover_at(&app, p + Vector::new(3.0, 10.0)).is_none());
+        // hovering whitespace: no word at all
+        let p = pos_to_px(
+            crate::editor::buffer::Pos { row: 6, col: 0 },
+            app.editor_scroll,
+        );
+        assert!(word_at(&app, p + Vector::new(1.0, 10.0)).is_none());
+    }
+
+    #[test]
+    fn doc_rect_stays_inside_pane() {
+        let doc = DocHover {
+            title: "Table users".into(),
+            rows: (0..30)
+                .map(|i| (" ".into(), format!("col_{i} varchar(255)")))
+                .collect(),
+        };
+        let bounds = Rectangle::new(Point::new(0.0, 0.0), Size::new(400.0, 300.0));
+        let r = doc_rect(Point::new(390.0, 285.0), &doc, bounds);
+        assert!(r.x + r.width <= bounds.width + 0.5, "{r:?}");
+        assert!(r.y >= bounds.y, "{r:?}");
+    }
 }
 
 #[cfg(test)]
