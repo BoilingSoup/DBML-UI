@@ -221,12 +221,12 @@ impl canvas::Program<Message> for EditorView<'_> {
             y += LINE_HEIGHT;
         }
 
-        // fake cursor, styled by mode — hidden while a scroll animation
-        // runs (neoscroll hides the cursor during scrolling)
+        // fake cursor, styled by mode. Deliberately NOT hidden while a
+        // scroll animation runs: neoscroll hides only the terminal's
+        // hardware caret (the text still visibly scrolls), but here the
+        // gliding block IS the animation — hiding it made fitting-document
+        // scrolls look like an instant jump.
         let cursor = app.editor.buf.pos();
-        if app.scroll_anim.is_some() {
-            return vec![frame.into_geometry()];
-        }
         let p = pos_to_px(cursor, scroll);
         if p.y > -LINE_HEIGHT && p.y < bounds.height + LINE_HEIGHT {
             let (color, filled) = match app.editor.mode {
