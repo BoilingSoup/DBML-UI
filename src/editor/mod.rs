@@ -415,6 +415,13 @@ impl Editor {
     }
 
     fn handle_insert_key(&mut self, key: KeyEvent) -> Action {
+        // ctrl/alt chords never type (vim's insert-mode ctrl+d/u/k have no
+        // port here, and a flubbed modifier must not insert text)
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            || key.modifiers.contains(KeyModifiers::ALT)
+        {
+            return Action::None;
+        }
         match key.code {
             KeyCode::Esc => {
                 self.mode = Mode::Normal;
@@ -475,6 +482,17 @@ impl Editor {
     }
 
     fn handle_normal_key(&mut self, key: KeyEvent) -> Action {
+        // ctrl/alt-modified keys are never vim keys here — the app scrolls
+        // on ctrl+d/u itself, and an operator armed from a modified letter
+        // turned `ctrl+d … gg` into `dgg` (delete to the top). The lone
+        // ctrl chord vim uses in normal mode is Ctrl+r (redo).
+        let m = key.modifiers;
+        if m.contains(KeyModifiers::ALT)
+            || (m.contains(KeyModifiers::CONTROL)
+                && !(key.code == KeyCode::Char('r') && self.mode == Mode::Normal))
+        {
+            return Action::None;
+        }
         // pending sequences run in every mode, so viw/S… work from visual
         if let Some(p) = self.pending.take() {
             let action = self.handle_sequence(p, key.code);

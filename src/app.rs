@@ -117,6 +117,10 @@ pub const FULL_PAGE_MS: f32 = 450.0;
 /// cursor out to the margin before the view scrolls under it.
 const SCROLLOFF: f32 = 5.0;
 
+/// How long after a ctrl+d/u scroll chord a bare d/u is treated as the
+/// chord's roll-out rather than a vim key.
+const SCROLL_CHORD_ROLLOUT: std::time::Duration = std::time::Duration::from_millis(250);
+
 /// Distance-progress at time-fraction `y` under neoscroll's quadratic
 /// easing. neoscroll applies easing to the TIME between line steps
 /// (ef(x) = 1 - (1-x)^(1/2) maps distance to time); inverting gives the
@@ -369,6 +373,10 @@ pub struct App {
     pub pending_jump: Option<String>,
     /// Quit requested (window close Task follows).
     pub should_quit: bool,
+    /// When the last ctrl+d/u scroll chord fired: a bare d/u right after
+    /// it is the chord's roll-out (ctrl released a few ms early, or the
+    /// autorepeat tail), not a vim key — see `editor_key`.
+    last_scroll_chord: Option<std::time::Instant>,
     /// Status-bar toast.
     pub message: Option<String>,
     /// Open completion popup (insert mode) over the active buffer.
@@ -408,6 +416,7 @@ impl App {
             canvas_cursor: None,
             pending_jump: None,
             should_quit: false,
+            last_scroll_chord: None,
             message: None,
             completion: None,
             editor_hover: None,
@@ -1622,10 +1631,12 @@ impl App {
         // page scrolling works in every mode, before anything else
         match key.code {
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.last_scroll_chord = Some(std::time::Instant::now());
                 self.half_page(1.0);
                 return;
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.last_scroll_chord = Some(std::time::Instant::now());
                 self.half_page(-1.0);
                 return;
             }
@@ -1638,6 +1649,24 @@ impl App {
                 return;
             }
             _ => {}
+        }
+        // chord roll-out: releasing ctrl a few ms before the d/u (or the
+        // chord's autorepeat tail) makes the letter arrive bare, arming
+        // vim's `d` operator / firing `u` — `gg` then completed `dgg` and
+        // deleted to the top. The same letter right after its scroll chord
+        // is residue: swallow it, and each swallow refreshes the window so
+        // a held-key repeat tail is absorbed until release.
+        if let Some(t) = self.last_scroll_chord {
+            if t.elapsed() < SCROLL_CHORD_ROLLOUT {
+                if matches!(key.code, KeyCode::Char('d') | KeyCode::Char('u'))
+                    && !key.modifiers.contains(KeyModifiers::CONTROL)
+                {
+                    self.last_scroll_chord = Some(std::time::Instant::now());
+                    return;
+                }
+            } else {
+                self.last_scroll_chord = None;
+            }
         }
         // Ctrl+Space toggles the popup (VSCode muscle memory)
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Space {
@@ -3165,6 +3194,172 @@ mod scroll_tests {
         force_finish(&mut app);
         assert_eq!(app.editor_mut().buf.pos().row, last);
         assert!((app.cur().editor_scroll - max).abs() < 0.5);
+    }
+
+    #[test]
+    fn ctrl_d_then_gg_does_not_arm_the_delete_operator() {
+        // regression: ctrl+d to the bottom then gg deleted the whole
+        // document — the vim D operator must never see the ctrl+d key
+        let mut app = tall_app(120);
+        app.window_size = (1400.0, 900.0);
+        let rows = app.editor().buf.line_count();
+        for _ in 0..12 {
+            let _ = update(
+                &mut app,
+                Message::KeyPressed(KeyCode::Char('d'), KeyModifiers::CONTROL),
+            );
+            force_finish(&mut app);
+        }
+        let after_scroll = app.editor().buf.line_count();
+        assert_eq!(after_scroll, rows, "scrolling deletes nothing");
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('g'), KeyModifiers::NONE),
+        );
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('g'), KeyModifiers::NONE),
+        );
+        assert_eq!(
+            app.editor().buf.line_count(),
+            rows,
+            "gg after ctrl+d must not delete"
+        );
+        assert_eq!(app.editor().buf.pos().row, 0, "gg jumped to the top");
+        // and the same for ctrl+u + u: no undo may fire
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        );
+        force_finish(&mut app);
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('u'), KeyModifiers::NONE),
+        );
+        assert_eq!(
+            app.editor().buf.line_count(),
+            rows,
+            "u after ctrl+u must not undo"
+        );
+    }
+
+    #[test]
+    fn a_bare_chord_letter_right_after_the_scroll_is_rollout() {
+        // releasing ctrl a few ms before d (or the chord's autorepeat
+        // tail) delivers a bare `d` right after the scroll: that is chord
+        // residue, not a vim operator — `gg` must not turn it into `dgg`
+        let mut app = tall_app(120);
+        app.window_size = (1400.0, 900.0);
+        let rows = app.editor().buf.line_count();
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        );
+        force_finish(&mut app);
+        // the rolled-off bare d arrives within the rollout window
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('d'), KeyModifiers::NONE),
+        );
+        assert_eq!(
+            app.editor().buf.line_count(),
+            rows,
+            "residue d deletes nothing"
+        );
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('g'), KeyModifiers::NONE),
+        );
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('g'), KeyModifiers::NONE),
+        );
+        assert_eq!(app.editor().buf.line_count(), rows, "gg deletes nothing");
+        // ctrl+u's rollout letter is `u` — a bare u right after must not
+        // fire an undo
+        let src = app.editor().buf.lines().to_vec();
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        );
+        force_finish(&mut app);
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('u'), KeyModifiers::NONE),
+        );
+        let after = app.editor().buf.lines().to_vec();
+        assert_eq!(after, src, "residue u undoes nothing");
+    }
+
+    #[test]
+    fn a_genuine_d_after_the_rollout_window_still_arms_the_operator() {
+        // the residue window must not eat real vim keys: `d` pressed well
+        // after a scroll chord still arms the operator (then Esc cancels)
+        let mut app = tall_app(120);
+        app.window_size = (1400.0, 900.0);
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        );
+        force_finish(&mut app);
+        app.last_scroll_chord =
+            Some(std::time::Instant::now() - SCROLL_CHORD_ROLLOUT - std::time::Duration::from_millis(1));
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('d'), KeyModifiers::NONE),
+        );
+        assert_eq!(
+            app.editor().showcmd(),
+            Some("d".to_string()),
+            "a real d still arms the operator"
+        );
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Esc, KeyModifiers::NONE),
+        );
+        assert_eq!(app.editor().showcmd(), None, "esc cancels");
+    }
+
+    #[test]
+    fn ctrl_modified_keys_never_drive_vim_directly() {
+        // even if a ctrl-modified letter reaches the editor, it must not
+        // arm operators, undo, or type — vim's keymap is unmodified-only
+        let mut app = tall_app(120);
+        app.window_size = (1400.0, 900.0);
+        let src = app.editor().buf.lines().to_vec();
+        let rows = app.editor().buf.line_count();
+        // a ctrl'd d delivered straight to the editor (bypassing the app
+        // scroll): arms nothing
+        let _ = app.editor_mut().handle_key(KeyEvent::new(
+            KeyCode::Char('d'),
+            KeyModifiers::CONTROL,
+        ));
+        assert_eq!(app.editor().showcmd(), None, "ctrl+d arms no operator");
+        // ctrl+u straight to the editor: no undo
+        let _ = app.editor_mut().handle_key(KeyEvent::new(
+            KeyCode::Char('u'),
+            KeyModifiers::CONTROL,
+        ));
+        assert_eq!(app.editor().buf.lines(), src, "ctrl+u does not undo");
+        // in insert mode a ctrl'd letter does not type
+        let _ = app.editor_mut().handle_key(KeyEvent::new(
+            KeyCode::Char('i'),
+            KeyModifiers::NONE,
+        ));
+        let _ = app.editor_mut().handle_key(KeyEvent::new(
+            KeyCode::Char('x'),
+            KeyModifiers::CONTROL,
+        ));
+        let _ = app.editor_mut().handle_key(KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        ));
+        assert_eq!(
+            app.editor().buf.lines(),
+            src,
+            "insert-mode ctrl chord types nothing"
+        );
+        let _ = rows;
     }
 
     #[test]
