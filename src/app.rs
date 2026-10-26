@@ -1429,21 +1429,10 @@ fn handle_message(app: &mut App, message: Message) {
             }
         }
         Message::EditorPressed(p) => {
-            if app.regular_mode() {
-                // Regular mode: press-drag text selection (vim's visual
-                // selection stays keyboard-driven)
-                app.editor_select_pressed(p);
-            } else {
-                let pos = crate::canvas::editor::px_to_pos(app, p);
-                app.editor_mut()
-                    .buf
-                    .move_cursor(editor::buffer::Move::Jump(pos.row, pos.col));
-                if app.editor_mut().mode == editor::Mode::Visual {
-                    // clicking re-anchors the selection
-                    app.editor_mut().buf.cancel_selection();
-                    app.editor_mut().buf.start_selection();
-                }
-            }
+            // mouse press-drag text selection in EVERY mode (regular,
+            // vim normal/visual/insert): a click collapses to a caret at
+            // the pointer, a drag extends a selection like gvim's mouse
+            app.editor_select_pressed(p);
             app.focus = Focus::Editor;
             app.follow_cursor_horizontal();
         }
@@ -4615,15 +4604,38 @@ mod clipboard_menu_tests {
     }
 
     #[test]
-    fn mouse_drag_does_not_select_in_vim_mode() {
-        // vim keeps its keyboard-driven selection
-        let mut app = App::default();
+    fn mouse_drag_selects_in_vim_mode_too() {
+        // gvim-style mouse selection: a drag in vim normal mode extends a
+        // selection; a plain click collapses to a caret
+        let mut app = App::default(); // vim mode is the default
         let _ = update(&mut app, Message::EditorPressed(local_px(Pos { row: 0, col: 1 })));
-        assert_eq!(app.drag, Drag::None, "no selection drag in vim mode");
+        assert!(matches!(app.drag, Drag::EditorSelect));
         let to = window_px(Pos { row: 0, col: 4 });
         let _ = update(&mut app, Message::MouseMovedWindow(to.x, to.y));
         let _ = update(&mut app, Message::MouseReleased);
+        assert!(
+            app.editor().buf.selection_text().is_some(),
+            "drag selected in vim mode"
+        );
+        // a plain click collapses
+        let _ = update(&mut app, Message::EditorPressed(local_px(Pos { row: 0, col: 3 })));
+        let _ = update(&mut app, Message::MouseReleased);
         assert!(app.editor().buf.selection_anchor().is_none());
+        assert_eq!(app.editor().buf.pos(), Pos { row: 0, col: 3 });
+    }
+
+    #[test]
+    fn mouse_drag_selects_in_insert_mode_too() {
+        let mut app = App::default();
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('i'), KeyModifiers::NONE));
+        let _ = update(&mut app, Message::EditorPressed(local_px(Pos { row: 0, col: 1 })));
+        let to = window_px(Pos { row: 0, col: 4 });
+        let _ = update(&mut app, Message::MouseMovedWindow(to.x, to.y));
+        let _ = update(&mut app, Message::MouseReleased);
+        assert!(
+            app.editor().buf.selection_text().is_some(),
+            "drag selected in insert mode"
+        );
     }
 
     #[test]
