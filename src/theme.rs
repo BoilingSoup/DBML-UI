@@ -23,6 +23,10 @@ pub const TYPE_TEXT: iced::Color = iced::Color::from_rgb(0.545, 0.565, 0.612); /
 pub const MARKER: iced::Color = iced::Color::from_rgb(0.545, 0.565, 0.612); // #8b909c
 pub const LINE: iced::Color = iced::Color::from_rgb(0.498, 0.514, 0.553); // #7f838d
 
+/// dbdiagram's hovered-relationship blue, sampled off their canvas at
+/// 100% zoom (the gray #9b9ca4 line turns this when hovered).
+pub const EDGE_HOVER: iced::Color = iced::Color::from_rgb(0.278, 0.353, 1.0); // #475aff
+
 /// dbdiagram's hover tooltip is a light pill with dark text.
 pub const TIP_BG: iced::Color = iced::Color::from_rgb(0.941, 0.945, 0.953); // #f0f1f3
 pub const TIP_TEXT: iced::Color = iced::Color::from_rgb(0.2, 0.212, 0.239); // #33363d

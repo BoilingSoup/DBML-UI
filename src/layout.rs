@@ -100,6 +100,9 @@ pub struct EdgeRoute {
     pub ends: [(usize, usize); 2],
     /// Cardinality, for the crow's-foot / tick end markers.
     pub card: Cardinality,
+    /// The FK column is nullable — the hover cardinality label reads
+    /// `0..*` instead of `1..*` (dbdiagram's convention).
+    pub fk_nullable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -283,11 +286,19 @@ pub fn layout_with_overrides(
         .enumerate()
         .map(|(ei, e)| {
             let (pts, ends) = route(&placed, e, &cols);
+            // a pk FK column is implicitly not null
+            let fk_col = match e.card {
+                Cardinality::OneToMany => e.to_col,
+                _ => e.from_col,
+            };
+            let fk_column = &schema.nodes[fk_ref(e).0].columns[fk_col];
+            let fk_nullable = !fk_column.pk && fk_column.not_null != Some(true);
             EdgeRoute {
                 edge: ei,
                 pts,
                 ends,
                 card: e.card,
+                fk_nullable,
             }
         })
         .collect();
@@ -660,6 +671,23 @@ Table much_longer_name { id integer [pk] very_long_column integer }
         let l = layout_of("Table a { id integer }\nTable b { a_id integer }\nRef: b.a_id > a.id\n");
         assert_eq!(l.edges.len(), 1);
         assert_eq!(l.edges[0].card, Cardinality::ManyToOne);
+    }
+
+    #[test]
+    fn fk_nullable_follows_the_fk_column() {
+        // nullable FK -> 0..*; not-null FK -> 1..*; pk FK is never nullable
+        let l = layout_of(
+            "Table a { id integer [pk] }\nTable b { a_id integer }\nRef: b.a_id > a.id\n",
+        );
+        assert!(l.edges[0].fk_nullable, "plain a_id is nullable");
+        let l = layout_of(
+            "Table a { id integer [pk] }\nTable b { a_id integer [not null] }\nRef: b.a_id > a.id\n",
+        );
+        assert!(!l.edges[0].fk_nullable, "not null FK");
+        let l = layout_of(
+            "Table a { id integer }\nTable b { id integer [pk, ref: > a.id] }\n",
+        );
+        assert!(!l.edges[0].fk_nullable, "pk FK is implicitly not null");
     }
 
     #[test]

@@ -41,8 +41,9 @@ pub fn root(app: &App) -> Element<'_, Message> {
                 None
             },
             dragging: app.drag != Drag::None,
-            active_edges: &app.hover_edges,
-            flow_phase: app.flow_phase,
+            edge_anim: &app.edge_anim,
+            line_hover: app.line_hover,
+            clock: app.anim_clock,
         })
         .width(Fill)
         .height(Fill),

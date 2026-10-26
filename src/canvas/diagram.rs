@@ -4,6 +4,13 @@
 //! and gray curved relationship lines (side-anchored beziers) with
 //! markers. Mirrors the SVG exporter's geometry, but sized by `zoom`
 //! (pixels per diagram cell) so text stays crisp at every scale.
+//!
+//! Hover highlight (dbdiagram's): a highlighted route strokes
+//! dbdiagram-blue with a soft breathing glow around the whole path, bright
+//! packets flowing along it, and a brighter glow under the pointer;
+//! cardinality labels fade in at the ends. The highlight amount per edge
+//! is animated by the app (see `edge_anim`), so transitions ease in and
+//! out instead of popping.
 
 use crate::theme;
 use dbml_ui::layout::{many_ends, EdgeRoute, Layout, TableBox};
@@ -164,10 +171,13 @@ pub struct Diagram<'a> {
     pub hover: Option<Point>,
     /// A drag is in flight (table or pan) — show the grab cursor.
     pub dragging: bool,
-    /// Edge indices to highlight (hovered row's connections / hovered line).
-    pub active_edges: &'a [usize],
-    /// Phase of the flowing-packets animation (px along the path).
-    pub flow_phase: f32,
+    /// Per-edge highlight amount in 0..1 (animated by the app's tick);
+    /// parallel to `layout.edges`.
+    pub edge_anim: &'a [f32],
+    /// The edge under the pointer (line hover), for the cursor glow.
+    pub line_hover: Option<usize>,
+    /// Seconds of animation clock, drives the glow's breathing.
+    pub clock: f32,
 }
 
 impl canvas::Program<crate::app::Message> for Diagram<'_> {
@@ -243,9 +253,12 @@ impl canvas::Program<crate::app::Message> for Diagram<'_> {
             self.layout,
             self.zoom,
             self.pan,
-            self.hover,
-            self.active_edges,
-            self.flow_phase,
+            &HoverState {
+                anim: self.edge_anim,
+                line_hover: self.line_hover,
+                pointer: self.hover,
+                clock: self.clock,
+            },
         );
 
         // pk/fk marker tooltip (dbdiagram-style), as a SECOND geometry:
@@ -415,20 +428,30 @@ pub fn edge_hit(
     best.map(|(_, e)| e)
 }
 
+/// Hover-effect state the painter needs, threaded through `paint`.
+struct HoverState<'a> {
+    /// Per-edge highlight amount in 0..1, parallel to `layout.edges`.
+    anim: &'a [f32],
+    /// The edge under the pointer (line hover), for the cursor glow.
+    line_hover: Option<usize>,
+    /// Pointer position over the canvas (local px).
+    pointer: Option<Point>,
+    /// Animation clock in seconds, drives the glow's breathing.
+    clock: f32,
+}
+
 fn paint(
     frame: &mut canvas::Frame,
     layout: &Layout,
     zoom: f32,
     pan: Vector,
-    hover: Option<Point>,
-    active_edges: &[usize],
-    flow_phase: f32,
+    hs: &HoverState<'_>,
 ) {
     for edge in &layout.edges {
-        let active = active_edges.contains(&edge.edge);
-        paint_edge(frame, edge, zoom, pan, active, flow_phase);
+        let t = hs.anim.get(edge.edge).copied().unwrap_or(0.0);
+        paint_edge(frame, edge, zoom, pan, t, hs);
     }
-    let hovered = hover.and_then(|p| hit_test(layout, zoom, pan, p));
+    let hovered = hs.pointer.and_then(|p| hit_test(layout, zoom, pan, p));
     for b in &layout.boxes {
         let is_hovered = hovered.map(|h| h.title == b.title).unwrap_or(false);
         paint_table(frame, b, zoom, pan, is_hovered);
@@ -440,8 +463,8 @@ fn paint_edge(
     edge: &EdgeRoute,
     zoom: f32,
     pan: Vector,
-    active: bool,
-    flow_phase: f32,
+    t: f32,
+    hs: &HoverState<'_>,
 ) {
     let s = cell_size(zoom);
     // waypoints are f32 cell coords; rows anchor at their vertical center
@@ -455,33 +478,226 @@ fn paint_edge(
             )
         })
         .collect();
-    let path = rounded_edge_path(&pts, (0.9 * s.height).min(14.0));
-    let mut stroke = edge_stroke(zoom);
-    if active {
-        stroke.style = theme::SYN_NUMBER.into();
-        stroke.width += 0.8;
-    }
-    frame.stroke(&path, stroke);
-    if active {
-        paint_flow(frame, &pts, zoom, flow_phase);
-    }
     if pts.len() < 2 {
         return;
     }
+    let path = rounded_edge_path(&pts, (0.9 * s.height).min(14.0));
+
+    // dbdiagram's hovered route: the core eases gray -> blue and thickens
+    // ~1.5x while a soft glow breathes around the whole path and bright
+    // packets flow along it (dark-theme behavior; light mode only glows)
+    let mut core = edge_stroke(zoom);
+    core.style = lerp_color(theme::LINE, theme::EDGE_HOVER, t).into();
+    core.width *= 1.0 + 0.5 * t;
+    if t > 0.0 {
+        paint_glow(frame, &path, zoom, t, hs.clock);
+    }
+    frame.stroke(&path, core);
+    if t > 0.0 {
+        paint_flow(frame, &pts, zoom, hs.clock, t);
+    }
+
+    // a brighter pool of glow right under the pointer (line hover only)
+    if t > 0.0 && hs.line_hover == Some(edge.edge) {
+        if let Some(p) = hs.pointer.and_then(|h| nearest_on_path(&pts, h)) {
+            paint_cursor_glow(frame, p, zoom, t);
+        }
+    }
+
+    // cardinality labels fade in with the highlight (dbdiagram shows
+    // `1` / `0..*` beside the ends of a hovered relationship)
+    if t > 0.02 {
+        let labels = card_labels(edge);
+        let n = pts.len();
+        for (label, (end, inner)) in labels.iter().zip([(pts[0], pts[1]), (pts[n - 1], pts[n - 2])])
+        {
+            let (d, normal) = dir_and_normal(end, inner);
+            // perpendicular pointing up, or left along vertical runs
+            let mut normal = normal;
+            if normal.y > 0.0 || (normal.y == 0.0 && normal.x > 0.0) {
+                normal = -normal;
+            }
+            let pos = end + d * (1.4 * s.width) + normal * (0.55 * s.height);
+            frame.fill_text(Text {
+                content: (*label).to_string(),
+                position: pos,
+                color: with_alpha(theme::EDGE_HOVER, 0.95 * t),
+                size: (0.45 * zoom).into(),
+                font: Font::MONOSPACE,
+                horizontal_alignment: iced::alignment::Horizontal::Center,
+                vertical_alignment: iced::alignment::Vertical::Center,
+                ..Default::default()
+            });
+        }
+    }
+
     // cardinality end markers (dbdiagram): a crow's foot on the "many"
     // end, a perpendicular tick on the "one" end
     let (many_fk, many_ref) = many_ends(edge.card);
     let n = pts.len();
     if many_fk {
-        crow_foot(frame, pts[0], pts[1], zoom, stroke);
+        crow_foot(frame, pts[0], pts[1], zoom, core);
     } else {
-        one_tick(frame, pts[0], pts[1], zoom, stroke);
+        one_tick(frame, pts[0], pts[1], zoom, core);
     }
     if many_ref {
-        crow_foot(frame, pts[n - 1], pts[n - 2], zoom, stroke);
+        crow_foot(frame, pts[n - 1], pts[n - 2], zoom, core);
     } else {
-        one_tick(frame, pts[n - 1], pts[n - 2], zoom, stroke);
+        one_tick(frame, pts[n - 1], pts[n - 2], zoom, core);
     }
+}
+
+/// `1` / `0..*`-style labels for both route ends (fk end first). The many
+/// side reads `0..*` when the FK column is nullable, `1..*` otherwise;
+/// `<>` is many on both ends.
+fn card_labels(edge: &EdgeRoute) -> [&'static str; 2] {
+    let (many_fk, many_ref) = many_ends(edge.card);
+    let fk = match (many_fk, many_ref) {
+        (true, true) => "0..*",
+        (true, false) if edge.fk_nullable => "0..*",
+        (true, false) => "1..*",
+        (false, _) => "1",
+    };
+    let rf = if many_ref { "0..*" } else { "1" };
+    [fk, rf]
+}
+
+/// Soft halo around a highlighted route: the canvas has no blur, so three
+/// nested strokes fake the falloff. The alpha breathes slowly, like
+/// dbdiagram's pulsing hover glow.
+fn paint_glow(frame: &mut canvas::Frame, path: &Path, zoom: f32, t: f32, clock: f32) {
+    let breathe = 1.0 + 0.3 * (clock * std::f32::consts::TAU / 1.9).sin();
+    let k = zoom / 20.0;
+    for (w, a) in [(11.0, 0.045), (6.5, 0.085), (3.0, 0.15)] {
+        frame.stroke(
+            path,
+            Stroke {
+                style: with_alpha(theme::EDGE_HOVER, a * t * breathe).into(),
+                width: w * k,
+                ..Default::default()
+            },
+        );
+    }
+}
+
+/// Flowing packets along a highlighted route (dbdiagram's dark-theme
+/// hover): short round-capped beads advancing with the clock, evenly
+/// spaced. Two details make this fluid where a naive version strobes:
+/// packets fade in/out near the path ends (nothing pops in or out of
+/// existence) and a packet straddling the path's end→start wrap is drawn
+/// as two chords, never one straight line across the canvas.
+fn paint_flow(frame: &mut canvas::Frame, pts: &[Point], zoom: f32, clock: f32, t: f32) {
+    use iced::widget::canvas::LineCap;
+    let mut segs: Vec<(Point, Point, f32)> = Vec::new();
+    let mut total = 0.0f32;
+    for w in pts.windows(2) {
+        let len = ((w[1].x - w[0].x).powi(2) + (w[1].y - w[0].y).powi(2)).sqrt();
+        if len > f32::EPSILON {
+            segs.push((w[0], w[1], len));
+            total += len;
+        }
+    }
+    if total < f32::EPSILON {
+        return;
+    }
+    let point_at = |d: f32| -> Point {
+        let mut d = d.rem_euclid(total);
+        for (a, b, len) in &segs {
+            if d <= *len {
+                let tt = d / len;
+                return Point::new(a.x + (b.x - a.x) * tt, a.y + (b.y - a.y) * tt);
+            }
+            d -= len;
+        }
+        *pts.last().unwrap()
+    };
+    let count = ((total / (4.5 * zoom)).ceil() as usize).clamp(1, 8);
+    let spacing = total / count as f32;
+    let packet = (0.9 * zoom).clamp(6.0, 22.0).min(spacing * 0.5);
+    let width = edge_stroke_width(zoom) * 1.3;
+    for i in 0..count {
+        let center = clock * FLOW_SPEED + i as f32 * spacing;
+        // soft window over the packet center: 0 at the path ends so beads
+        // materialize and dissolve instead of popping across the wrap
+        let d = center.rem_euclid(total);
+        let f = (d.min(total - d) / (packet * 1.5)).min(1.0);
+        let alpha = 0.55 * t * f * f * (3.0 - 2.0 * f);
+        if alpha < 0.02 {
+            continue;
+        }
+        let start = (center - packet / 2.0).rem_euclid(total);
+        for (a, b) in flow_packet_chords(start, packet, total) {
+            frame.stroke(
+                &Path::line(point_at(a), point_at(b)),
+                Stroke {
+                    style: with_alpha(theme::SYN_STRING, alpha).into(),
+                    width,
+                    line_cap: LineCap::Round,
+                    ..Default::default()
+                },
+            );
+        }
+    }
+}
+
+/// Path-parameter ranges for one packet: a single run, or two pieces when
+/// the bead wraps past the path's end back to its start.
+fn flow_packet_chords(start: f32, packet: f32, total: f32) -> Vec<(f32, f32)> {
+    let end = start + packet;
+    if end <= total {
+        vec![(start, end)]
+    } else {
+        vec![(start, total), (0.0, end - total)]
+    }
+}
+
+/// Flow speed in px/s along the path.
+pub const FLOW_SPEED: f32 = 110.0;
+
+/// Small radial glow centered where the pointer touches the line —
+/// dbdiagram's hover glow is brightest at the cursor.
+fn paint_cursor_glow(frame: &mut canvas::Frame, p: Point, zoom: f32, t: f32) {
+    let k = zoom / 20.0;
+    for (r, a) in [(2.2, 0.30), (5.0, 0.16), (9.0, 0.07)] {
+        frame.fill(
+            &Path::circle(p, r * k),
+            with_alpha(theme::EDGE_HOVER, a * t),
+        );
+    }
+}
+
+/// The point on a polyline nearest to `p` (for the cursor glow).
+fn nearest_on_path(pts: &[Point], p: Point) -> Option<Point> {
+    let mut best: Option<(f32, Point)> = None;
+    for w in pts.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        let (vx, vy) = (b.x - a.x, b.y - a.y);
+        let len2 = vx * vx + vy * vy;
+        let tt = if len2 < f32::EPSILON {
+            0.0
+        } else {
+            (((p.x - a.x) * vx + (p.y - a.y) * vy) / len2).clamp(0.0, 1.0)
+        };
+        let q = Point::new(a.x + tt * vx, a.y + tt * vy);
+        let d = (q.x - p.x).powi(2) + (q.y - p.y).powi(2);
+        if best.is_none_or(|(bd, _)| d < bd) {
+            best = Some((d, q));
+        }
+    }
+    best.map(|(_, q)| q)
+}
+
+fn lerp_color(a: Color, b: Color, t: f32) -> Color {
+    Color::new(
+        a.r + (b.r - a.r) * t,
+        a.g + (b.g - a.g) * t,
+        a.b + (b.b - a.b) * t,
+        a.a,
+    )
+}
+
+fn with_alpha(c: Color, a: f32) -> Color {
+    Color { a: a.clamp(0.0, 1.0), ..c }
 }
 
 /// Orthogonal waypoint path with filleted corners: straight runs joined
@@ -514,53 +730,6 @@ fn rounded_edge_path(pts: &[Point], r: f32) -> Path {
         }
     })
 }
-
-/// Bright packets flowing along the highlighted polyline (dbdiagram's
-/// "flowing energy"): short round-capped segments advancing with phase.
-fn paint_flow(frame: &mut canvas::Frame, pts: &[Point], zoom: f32, phase: f32) {
-    use iced::widget::canvas::LineCap;
-    let mut segs: Vec<(Point, Point, f32)> = Vec::new();
-    let mut total = 0.0f32;
-    for w in pts.windows(2) {
-        let len = ((w[1].x - w[0].x).powi(2) + (w[1].y - w[0].y).powi(2)).sqrt();
-        if len > f32::EPSILON {
-            segs.push((w[0], w[1], len));
-            total += len;
-        }
-    }
-    if total < f32::EPSILON {
-        return;
-    }
-    let point_at = |d: f32| -> Point {
-        let mut d = d.rem_euclid(total);
-        for (a, b, len) in &segs {
-            if d <= *len {
-                let t = d / len;
-                return Point::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
-            }
-            d -= len;
-        }
-        *pts.last().unwrap()
-    };
-    let packet = (0.9 * zoom).clamp(6.0, 22.0).min(total / 2.0);
-    let count = ((total / (4.5 * zoom)).ceil() as usize).clamp(1, 8);
-    let spacing = total / count as f32;
-    let stroke = Stroke {
-        style: theme::SYN_STRING.into(),
-        width: edge_stroke_width(zoom) + 1.4,
-        line_cap: LineCap::Round,
-        ..Default::default()
-    };
-    for i in 0..count {
-        let center = phase * FLOW_SPEED + i as f32 * spacing;
-        let a = point_at(center - packet / 2.0);
-        let b = point_at(center + packet / 2.0);
-        frame.stroke(&Path::line(a, b), stroke);
-    }
-}
-
-/// Flow animation speed in px/s.
-pub const FLOW_SPEED: f32 = 110.0;
 
 fn edge_stroke(zoom: f32) -> Stroke<'static> {
     Stroke {
@@ -902,6 +1071,43 @@ mod tests {
     }
 
     #[test]
+    fn card_labels_match_dbdiagram_conventions() {
+        let mk = |src: &str| {
+            dbml_ui::layout::layout(&dbml_ui::model::build(&dbml_ui::dbml::parser::parse(src).doc))
+                .edges[0]
+                .clone()
+        };
+        // nullable fk: 0..* beside the fk end, 1 beside the referenced end
+        let e = mk("Table a { id integer [pk] }\nTable b { a_id integer }\nRef: b.a_id > a.id\n");
+        assert_eq!(card_labels(&e), ["0..*", "1"]);
+        // not-null fk reads 1..*
+        let e = mk(
+            "Table a { id integer [pk] }\nTable b { a_id integer [not null] }\nRef: b.a_id > a.id\n",
+        );
+        assert_eq!(card_labels(&e), ["1..*", "1"]);
+        // one-to-one: 1 on both ends
+        let e = mk("Table a { id integer [pk] }\nTable b { a_id integer [pk] }\nRef: b.a_id - a.id\n");
+        assert_eq!(card_labels(&e), ["1", "1"]);
+        // many-to-many: 0..* on both ends
+        let e = mk("Table a { id integer [pk] }\nTable b { id integer [pk] }\nRef: a.id <> b.id\n");
+        assert_eq!(card_labels(&e), ["0..*", "0..*"]);
+    }
+
+    #[test]
+    fn flow_packet_chords_split_at_the_wrap() {
+        // a packet fully inside the path is one run
+        assert_eq!(flow_packet_chords(10.0, 8.0, 100.0), vec![(10.0, 18.0)]);
+        // a bead hanging past the path end wraps as TWO pieces — the old
+        // bug drew the straddling piece as one chord across the canvas
+        assert_eq!(
+            flow_packet_chords(96.0, 8.0, 100.0),
+            vec![(96.0, 100.0), (0.0, 4.0)]
+        );
+        // a packet ending exactly at the path end stays one piece
+        assert_eq!(flow_packet_chords(92.0, 8.0, 100.0), vec![(92.0, 100.0)]);
+    }
+
+    #[test]
     fn marker_hit_tests_the_icon_band() {
         // fixture: Table a { id integer [pk] } — one pk row
         let l = layout();
@@ -1093,8 +1299,9 @@ mod interaction_tests {
             pan: Vector::default(),
             hover: None,
             dragging: false,
-            active_edges: &[],
-            flow_phase: 0.0,
+            edge_anim: &[],
+            line_hover: None,
+            clock: 0.0,
         }
     }
 

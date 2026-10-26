@@ -26,7 +26,9 @@ crisp text at any scale — no terminal graphics protocols involved.
   keystroke (a 200-table document parses + lays out in ~0.2ms).
 - **Fluid canvas**: wheel zoom anchored at the cursor (continuous,
   25%–800%), drag to pan (content moves offscreen freely), hover
-  highlights tables, drag a table to reposition it **live** (positions
+  highlights tables and relationship lines dbdiagram-style (the
+  connected refs glow blue with flowing packets and cardinality labels,
+  easing in and out), drag a table to reposition it **live** (positions
   survive edits for the session). Click a table to jump the editor to
   its definition.
 - **Files**: open via `dbml-ui <file>`, `:o`, or Ctrl+O (system file

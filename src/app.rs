@@ -150,8 +150,16 @@ pub struct App {
     pub config: crate::config::Config,
     /// Diagram edges to highlight (hovered row's connections / hovered line).
     pub hover_edges: Vec<usize>,
-    /// Phase of the flowing-packets animation on highlighted edges.
-    pub flow_phase: f32,
+    /// The edge under the pointer (line hover), for the cursor glow.
+    pub line_hover: Option<usize>,
+    /// Per-edge highlight amount in 0..1, eased toward `hover_edges` on
+    /// every tick so highlights fade in and out (parallel to
+    /// `diagram.edges`).
+    pub edge_anim: Vec<f32>,
+    /// Animation clock in seconds; drives the hover glow's breathing.
+    pub anim_clock: f32,
+    /// Instant of the last Tick, for the real elapsed delta.
+    last_tick: Option<std::time::Instant>,
     /// Editor viewport scroll, in lines.
     pub editor_scroll: f32,
     /// Horizontal viewport scroll in pixels, kept just large enough that
@@ -221,7 +229,10 @@ impl App {
             space_leader: false,
             config: crate::config::Config::default(),
             hover_edges: Vec::new(),
-            flow_phase: 0.0,
+            line_hover: None,
+            edge_anim: Vec::new(),
+            anim_clock: 0.0,
+            last_tick: None,
             scroll_anim: None,
             scroll_target: None,
             diagram: layout::layout(&model::build(&dbml::parser::parse("").doc)),
@@ -255,6 +266,12 @@ impl App {
         let out = dbml::parser::parse(src);
         let schema = model::build(&out.doc);
         self.diagram = layout::layout_with_overrides(&schema, &self.table_pos);
+        // keep highlight state aligned with the new edge list (indices are
+        // stable for an unchanged schema; edits may shift them, which just
+        // moves the highlight — the amounts ease back out)
+        if self.edge_anim.len() < self.diagram.edges.len() {
+            self.edge_anim.resize(self.diagram.edges.len(), 0.0);
+        }
         self.parse_errors = out.errors;
     }
 
@@ -274,13 +291,14 @@ impl App {
         }
     }
 
-    fn canvas_moved(&mut self, p: Point) {
-        self.canvas_cursor = Some(p);
-        // edge hover: lines under the pointer plus the hovered row's
-        // connections (dbdiagram highlights them with a flow animation)
+    /// Recompute the highlighted edges for a pointer position: the line
+    /// under the pointer plus the hovered row's connections (dbdiagram
+    /// lights up every ref touching the hovered column).
+    fn update_hover(&mut self, p: Point) {
         use crate::canvas::diagram as dia;
         let mut active: Vec<usize> = Vec::new();
-        if let Some(ei) = dia::edge_hit(&self.diagram, self.zoom, self.pan, p, 7.0) {
+        self.line_hover = dia::edge_hit(&self.diagram, self.zoom, self.pan, p, 7.0);
+        if let Some(ei) = self.line_hover {
             active.push(ei);
         }
         if let Some((b, row)) = dia::row_at(&self.diagram, self.zoom, self.pan, p) {
@@ -291,6 +309,15 @@ impl App {
             }
         }
         self.hover_edges = active;
+    }
+
+    fn canvas_moved(&mut self, p: Point) {
+        self.canvas_cursor = Some(p);
+        // Frozen during a drag (pan/table): re-highlighting while the
+        // canvas moves under the pointer reads as flicker.
+        if matches!(self.drag, Drag::None) {
+            self.update_hover(p);
+        }
         match self.drag.clone() {
             Drag::Pan { anchor } => {
                 self.pan = self.pan + Vector::new(p.x - anchor.x, p.y - anchor.y);
@@ -337,6 +364,8 @@ impl App {
             }
         }
         self.drag = Drag::None;
+        // the highlight froze while dragging; catch up to the pointer
+        self.update_hover(p);
     }
 
     /// Zoom continuously, keeping the point under the cursor stationary.
@@ -397,7 +426,13 @@ pub fn subscription(_app: &App) -> iced::Subscription<Message> {
         }
         _ => None,
     });
-    let tick = if _app.scroll_anim.is_some() || !_app.hover_edges.is_empty() {
+    // Ticks drive the scroll animation and the edge-highlight easing +
+    // breathing glow: hot while scrolling, while something is hovered
+    // (the glow keeps breathing), and until every fade-out has finished.
+    let tick = if _app.scroll_anim.is_some()
+        || !_app.hover_edges.is_empty()
+        || _app.edge_anim.iter().any(|&t| t > 0.0)
+    {
         iced::time::every(std::time::Duration::from_millis(16)).map(|_| Message::Tick)
     } else {
         iced::Subscription::none()
@@ -617,6 +652,7 @@ fn handle_message(app: &mut App, message: Message) {
         Message::MouseMovedWindow(x, _y) => {
             if x < app.editor_pane_width() + 30.0 && app.drag == Drag::None {
                 app.hover_edges.clear();
+                app.line_hover = None;
             }
             if app.drag == Drag::Divider {
                 const PAD: f32 = 16.0;
@@ -653,9 +689,21 @@ fn handle_message(app: &mut App, message: Message) {
         }
         Message::NewDiagram => app.new_diagram(),
         Message::Tick => {
-            if !app.hover_edges.is_empty() {
-                // 16ms cadence
-                app.flow_phase += 0.016 * crate::canvas::diagram::FLOW_SPEED;
+            // ease every edge's highlight toward its hover target with the
+            // real elapsed delta (fade-in ~0.22s, fade-out ~0.30s)
+            let now = std::time::Instant::now();
+            let dt = app
+                .last_tick
+                .map_or(0.016, |t| (now - t).as_secs_f32().min(0.1));
+            app.last_tick = Some(now);
+            app.anim_clock += dt;
+            for (i, t) in app.edge_anim.iter_mut().enumerate() {
+                let target = if app.hover_edges.contains(&i) { 1.0 } else { 0.0 };
+                if *t < target {
+                    *t = (*t + dt / 0.22).min(target);
+                } else {
+                    *t = (*t - dt / 0.30).max(target);
+                }
             }
             let Some(anim) = app.scroll_anim.clone() else {
                 return;
@@ -1529,7 +1577,9 @@ impl App {
         }
     }
 
-    /// Visible editor lines from the window size (panes + status bar).
+    /// Visible editor lines from the window size: the editor canvas gets
+    /// the window minus the root layout's chrome (toolbars, status bar,
+    /// paddings).
     fn page_lines(&self) -> f32 {
         ((self.window_size.1 - 62.0) / crate::canvas::editor::LINE_HEIGHT).max(5.0)
     }
@@ -1626,8 +1676,10 @@ impl App {
         self.editor_hscroll = hs.clamp(0.0, max).round();
     }
 
-    /// Scroll the editor viewport so the cursor stays on screen. Small
-    /// corrections snap; big jumps (G, click-to-jump) animate.
+    /// Scroll the editor viewport so the cursor stays on screen. Vim
+    /// motions jump instantly — gg, G, search hits and click-to-jump land
+    /// in place; the only animated scrolls are the explicit neoscroll
+    /// ones (Ctrl-d / Ctrl-u / Ctrl-f / Ctrl-b and the page keys).
     fn keep_cursor_visible(&mut self) {
         let row = self.editor.buf.pos().row as f32;
         let page = self.page_lines();
@@ -1639,23 +1691,10 @@ impl App {
         } else {
             return;
         };
-        if (target - self.editor_scroll).abs() > page * 0.75 {
-            // view-only animation (cursor already at its destination),
-            // duration proportional to the remaining distance
-            let ms = Self::scroll_duration_for((target - self.editor_scroll).abs(), page) * 1000.0;
-            self.animate_scroll(target.round(), ms, None);
-        } else {
-            self.scroll_anim = None;
-            self.scroll_target = None;
-            self.editor_scroll = target.max(0.0);
-        }
-    }
-
-    /// neoscroll z-command duration: a half page takes HALF_PAGE_MS,
-    /// scaling linearly with distance, clamped to keep tiny scrolls snappy
-    /// and huge ones bounded.
-    fn scroll_duration_for(lines: f32, page: f32) -> f32 {
-        (HALF_PAGE_MS * (lines / (page / 2.0)).max(0.05)).clamp(60.0, 600.0) / 1000.0
+        // an in-flight neoscroll animation would fight the jump — drop it
+        self.scroll_anim = None;
+        self.scroll_target = None;
+        self.editor_scroll = target.clamp(0.0, self.max_scroll());
     }
 
     /// A click on a diagram table jumps the editor to its definition.
@@ -2666,20 +2705,6 @@ mod scroll_tests {
     }
 
     #[test]
-    fn proportional_duration_clamps() {
-        assert!(
-            (App::scroll_duration_for(1.0, 40.0) - 60.0 / 1000.0).abs() < 1e-3,
-            "min"
-        );
-        let half_page = App::scroll_duration_for(20.0, 40.0);
-        assert!((half_page - 0.25).abs() < 1e-3, "half page = 250ms");
-        assert!(
-            (App::scroll_duration_for(200.0, 40.0) - 0.6).abs() < 1e-3,
-            "max"
-        );
-    }
-
-    #[test]
     fn cursor_at_buffer_bottom_does_not_yank_backward() {
         // regression: cursor_from was reconstructed from the scroll delta,
         // so a clamped cursor jumped UP before animating back down
@@ -2794,5 +2819,47 @@ mod scroll_tests {
         assert!(app.scroll_anim.is_some());
         let _ = update(&mut app, Message::EditorScrolled(-2.0));
         assert!(app.scroll_anim.is_none(), "wheel takes over");
+    }
+
+    #[test]
+    fn vim_jumps_land_instantly_and_cancel_neoscroll() {
+        // vim semantics: G / gg / click-to-jump snap the viewport; only the
+        // explicit neoscroll scrolls (Ctrl-d / Ctrl-u, page keys) animate
+        let mut app = tall_app(120);
+        app.window_size = (1400.0, 900.0);
+        // a running half-page animation...
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        );
+        assert!(app.scroll_anim.is_some());
+        // ...is cancelled by G, which lands instantly at the bottom
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('G'), KeyModifiers::NONE),
+        );
+        assert!(app.scroll_anim.is_none(), "jump cancels the animation");
+        assert_eq!(
+            app.editor.buf.pos().row,
+            app.editor.buf.line_count() - 1,
+            "cursor at the last line"
+        );
+        assert!(
+            (app.editor_scroll - app.max_scroll()).abs() < 0.5,
+            "view at the bottom: {} vs max {}",
+            app.editor_scroll,
+            app.max_scroll()
+        );
+        // gg is instant too
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('g'), KeyModifiers::NONE),
+        );
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('g'), KeyModifiers::NONE),
+        );
+        assert!(app.scroll_anim.is_none());
+        assert_eq!(app.editor_scroll, 0.0, "view back at the top");
     }
 }
