@@ -238,7 +238,12 @@ impl canvas::Program<Message> for TabStrip<'_> {
                 self.tab_at(l.x, l.y)
             })
             .unwrap_or(None);
-        for i in 0..self.app.tabs.len() {
+        // the dragged tab draws LAST and OPAQUE (Chrome): while it overlaps
+        // a displaced neighbor mid-slide, the neighbor's text must not
+        // bleed through it
+        let mut order: Vec<usize> = (0..self.app.tabs.len()).collect();
+        order.sort_by_key(|&i| i == self.app.active);
+        for i in order {
             let tab = &self.app.tabs[i];
             let off = self.app.tab_anim.get(i).copied().unwrap_or(0.0);
             let active = i == self.app.active;

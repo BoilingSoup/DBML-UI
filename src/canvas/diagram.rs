@@ -363,9 +363,16 @@ fn paint(
         paint_edge(frame, edge, zoom, pan, t, hs.clock);
     }
     let hovered = hs.pointer.and_then(|p| hit_test(layout, zoom, pan, p));
+    // the hovered column row (dbdiagram tints it); only when its box is
+    // the hovered one
+    let hovered_row = hs
+        .pointer
+        .and_then(|p| row_at(layout, zoom, pan, p))
+        .filter(|(b, _)| hovered.is_some_and(|h| h.title == b.title))
+        .map(|(_, r)| r);
     for b in &layout.boxes {
         let is_hovered = hovered.map(|h| h.title == b.title).unwrap_or(false);
-        paint_table(frame, b, zoom, pan, is_hovered);
+        paint_table(frame, b, zoom, pan, is_hovered, hovered_row);
     }
 }
 
@@ -449,15 +456,16 @@ fn hs_clock(clock: f32) -> f32 {
 fn paint_glow(frame: &mut canvas::Frame, path: &Path, zoom: f32, t: f32) {
     let k = zoom / 20.0;
     // approximate dbdiagram's gaussian shadow (blur 10, opacity .5) with
-    // nested rings; with MSAA the bands blend into a smooth falloff
+    // nested rings; with MSAA the bands blend into a smooth falloff. The
+    // profile stays clear of the core so the highlight does not read as a
+    // thicker line (their shadow sits behind the line, not around it).
     for (w, a) in [
-        (2.0, 0.16),
-        (3.5, 0.13),
-        (5.0, 0.10),
-        (6.5, 0.075),
-        (8.5, 0.05),
-        (10.5, 0.03),
-        (12.5, 0.015),
+        (4.0, 0.06),
+        (5.5, 0.05),
+        (7.0, 0.04),
+        (9.0, 0.03),
+        (11.0, 0.02),
+        (13.0, 0.012),
     ] {
         frame.stroke(
             path,
@@ -892,7 +900,14 @@ fn svg_icon(frame: &mut canvas::Frame, center: Point, size: f32, grid: f32, colo
     frame.fill(&path, color);
 }
 
-fn paint_table(frame: &mut canvas::Frame, b: &TableBox, zoom: f32, pan: Vector, hovered: bool) {
+fn paint_table(
+    frame: &mut canvas::Frame,
+    b: &TableBox,
+    zoom: f32,
+    pan: Vector,
+    hovered: bool,
+    hovered_row: Option<usize>,
+) {
     let s = cell_size(zoom);
     let top_left = to_px(b.x, b.y, zoom, pan);
     let size = Size::new(b.w as f32 * s.width, b.h as f32 * s.height);
@@ -923,7 +938,7 @@ fn paint_table(frame: &mut canvas::Frame, b: &TableBox, zoom: f32, pan: Vector, 
         &body,
         Stroke {
             style: if hovered {
-                theme::TABLE_HOVER
+                theme::TABLE_HOVER_BORDER
             } else {
                 theme::TABLE_BORDER
             }
@@ -992,6 +1007,15 @@ fn paint_table(frame: &mut canvas::Frame, b: &TableBox, zoom: f32, pan: Vector, 
     let row_size = 0.55 * s.height;
     for (i, row) in b.rows.iter().enumerate() {
         let y = top_left.y + (i as f32 + 1.0) * s.height + s.height * 0.5;
+        if hovered && hovered_row == Some(i) {
+            // dbdiagram tints the hovered column row, edge-to-edge inside
+            // the border
+            frame.fill_rectangle(
+                Point::new(top_left.x + 1.0, top_left.y + (i as f32 + 1.0) * s.height),
+                Size::new(size.width - 2.0, s.height),
+                theme::ROW_HOVER_BG,
+            );
+        }
         let baseline = |x: f32| Point::new(x, y);
         frame.fill_text(Text {
             content: row.name.clone(),

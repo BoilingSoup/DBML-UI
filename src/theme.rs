@@ -16,6 +16,12 @@ pub const CANVAS: iced::Color = iced::Color::from_rgb(0.169, 0.180, 0.212); // #
 pub const TABLE_BG: iced::Color = iced::Color::from_rgb(0.192, 0.208, 0.243); // #31353e
 pub const TABLE_BORDER: iced::Color = iced::Color::from_rgb(0.122, 0.133, 0.157); // #1f2228
 pub const TABLE_HOVER: iced::Color = iced::Color::from_rgb(0.290, 0.314, 0.376); // #4a5060
+/// dbdiagram's hovered-table border + hovered-row background, from their
+/// theme table (dark values).
+pub const TABLE_HOVER_BORDER: iced::Color =
+    iced::Color::from_rgb(0x61 as f32 / 255.0, 0x9B as f32 / 255.0, 0xCC as f32 / 255.0);
+pub const ROW_HOVER_BG: iced::Color =
+    iced::Color::from_rgb(0x4B as f32 / 255.0, 0x4C as f32 / 255.0, 0x53 as f32 / 255.0);
 pub const HEADER_BG: iced::Color = iced::Color::from_rgb(0.122, 0.129, 0.157); // #1f2128
 pub const ROW_TEXT: iced::Color = iced::Color::from_rgb(0.910, 0.918, 0.929); // #e8eaed
 pub const TYPE_TEXT: iced::Color = iced::Color::from_rgb(0.545, 0.565, 0.612); // #8b909c
