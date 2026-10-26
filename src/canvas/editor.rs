@@ -1314,7 +1314,7 @@ impl canvas::Program<Message> for EditorOverlay<'_> {
                             iced::border::Radius::from(6.0),
                         ),
                         canvas::Stroke {
-                            style: theme::SYN_NAME.into(),
+                            style: theme::BORDER.into(),
                             width: 1.0,
                             ..Default::default()
                         },
@@ -1322,7 +1322,7 @@ impl canvas::Program<Message> for EditorOverlay<'_> {
                     frame.fill_text(Text {
                         content: doc.title.clone(),
                         position: Point::new(rect.x + 12.0, rect.y + 10.0),
-                        color: theme::SYN_NAME,
+                        color: theme::TEXT,
                         size: (FONT_SIZE - 1.0).into(),
                         font: Font {
                             weight: iced::font::Weight::Bold,

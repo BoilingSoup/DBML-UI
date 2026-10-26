@@ -35,9 +35,9 @@ pub const LINE: iced::Color = iced::Color::from_rgb(0.498, 0.514, 0.553); // #7f
 pub const EDGE_HOVER: iced::Color =
     iced::Color::from_rgb(0x3E as f32 / 255.0, 0xA8 as f32 / 255.0, 0xDE as f32 / 255.0);
 
-/// dbdiagram's hover tooltip is a light pill with dark text.
-pub const TIP_BG: iced::Color = iced::Color::from_rgb(0.941, 0.945, 0.953); // #f0f1f3
-pub const TIP_TEXT: iced::Color = iced::Color::from_rgb(0.2, 0.212, 0.239); // #33363d
+/// dbdiagram's field-setting pill (NN): their dark FIELD_SETTING_BG/TEXT.
+pub const FIELD_SETTING_BG: iced::Color = iced::Color::from_rgb(0.4, 0.4, 0.4); // #666666
+pub const FIELD_SETTING_TEXT: iced::Color = iced::Color::from_rgb(0.773, 0.788, 0.8); // #c5c5c7
 
 pub const PK: iced::Color = iced::Color::from_rgb(0.824, 0.6, 0.133); // ◆ #d29922
 pub const FK: iced::Color = iced::Color::from_rgb(0.267, 0.576, 0.973); // ◇ #4493f8

@@ -20,34 +20,49 @@ pub struct Row {
     pub not_null: Option<bool>,
     pub unique: bool,
     pub note: Option<String>,
+    /// The type names an enum declared in the document (enum pill).
+    pub ty_enum: bool,
 }
 
 impl Row {
     /// Extra width (cells) of the "Not Null" / "Unique" pills and the
     /// trailing note icon.
+    /// One icon slot in the left cluster: a 10.5px glyph plus its 4px gap,
+    /// in cells (their WN.PADDING_X = 4 at the 20px 1:1 cell).
+    pub const ICON_CELL: f32 = (10.5 + 4.0) / 20.0;
+    /// One text-pill badge: glyph run plus its padding/gap, in cells.
     pub const BADGE_CELL: f32 = 0.456; // one badge-font char in cells
-
-    pub fn badges(&self) -> Vec<&'static str> {
-        let mut v = Vec::new();
-        if self.not_null == Some(true) {
-            v.push("Not Null");
-        }
-        if self.unique {
-            v.push("Unique");
-        }
-        v
+    pub fn badge_cell(text: &str) -> f32 {
+        0.8 + text.chars().count() as f32 * Self::BADGE_CELL
     }
+    /// Estimated cells per character of sans text at the row font:
+    /// ~0.55em average advance with slack, mirroring the canvas painter's
+    /// `char_px` so boxes hug their content like dbdiagram's measureText.
+    pub const CHAR_CELL: f32 = 0.62;
 
     pub fn width(&self) -> i32 {
-        let mut w = 2.0 + self.name.width() as f32 + 1.9 + 0.5; // pad + name + icon band + gap
-        for b in self.badges() {
-            w += 0.8 + b.chars().count() as f32 * Self::BADGE_CELL;
+        // left: name inset, then dbdiagram's icon cluster (pk, fk, unique,
+        // note — each 10.5px glyph + 4px gap)
+        let mut w = 1.0 + self.name.width() as f32 * Self::CHAR_CELL + 0.4;
+        if self.pk {
+            w += Self::ICON_CELL;
         }
-        w += 1.0 + self.ty.width() as f32; // gap + type
+        if self.fk {
+            w += Self::ICON_CELL;
+        }
+        if self.unique {
+            w += Self::badge_cell("Unique"); // text pill in the cluster slot
+        }
         if self.note.is_some() {
-            w += 1.6; // note icon zone at the right edge
+            w += Self::ICON_CELL;
         }
-        w.ceil() as i32
+        // right: type text, then the "Not Null" pill flush right
+        w += 0.6 + self.ty.width() as f32 * Self::CHAR_CELL;
+        if self.not_null == Some(true) {
+            w += Self::badge_cell("Not Null");
+        }
+        w += 0.4; // right inner padding
+        (w.max(6.0)).ceil() as i32
     }
 }
 
@@ -173,6 +188,13 @@ pub fn layout_with_overrides(
         .enumerate()
         .map(|(idx, node)| {
             let title = node.name.clone();
+            // enum type names, for the right-side enum pill flag
+            let enum_names: std::collections::HashSet<&str> = schema
+                .nodes
+                .iter()
+                .filter(|n| n.kind == NodeKind::Enum)
+                .map(|n| n.name.as_str())
+                .collect();
             let rows = node
                 .columns
                 .iter()
@@ -184,6 +206,7 @@ pub fn layout_with_overrides(
                     not_null: c.not_null,
                     unique: c.unique,
                     note: c.note.clone(),
+                    ty_enum: enum_names.contains(c.ty.replace('"', "").as_str()),
                 })
                 .collect::<Vec<_>>();
             let content = rows

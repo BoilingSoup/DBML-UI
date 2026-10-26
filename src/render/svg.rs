@@ -85,6 +85,11 @@ fn pt_px(x: f32, y: f32) -> (f32, f32) {
 }
 
 /// Unit direction `a -> b` and its perpendicular, in SVG units.
+/// dbdiagram's row icon paths (10.5-grid), shared with the canvas.
+const PK_ICON: &str = "M 6.5625 0.9844 C 8.1935 0.9844 9.5156 2.3065 9.5156 3.9375 C 9.5156 5.5685 8.1935 6.8906 6.5625 6.8906 C 6.1735 6.8906 5.8022 6.8153 5.462 6.6786 L 4.5938 7.5469 H 3.9375 V 8.5313 H 2.9531 V 9.5156 H 0.9844 V 7.5469 L 3.736 4.7952 C 3.6518 4.5171 3.6092 4.2281 3.6094 3.9375 C 3.6094 2.3065 4.9315 0.9844 6.5625 0.9844 Z M 6.5625 0 C 4.388 0 2.625 1.7627 2.625 3.9375 C 2.625 4.1186 2.6373 4.2989 2.6619 4.4772 L 0.1441 6.995 C 0.0519 7.0873 0 7.2125 0 7.343 L 0 10.0078 C 0 10.2797 0.2204 10.5 0.4922 10.5 H 3.4453 C 3.7171 10.5 3.9375 10.2797 3.9375 10.0078 V 9.5156 H 4.4297 C 4.7015 9.5156 4.9219 9.2953 4.9219 9.0234 V 8.6133 L 5.7432 7.7895 C 6.011 7.8464 6.2848 7.875 6.5625 7.875 C 8.737 7.875 10.5 6.1123 10.5 3.9375 C 10.5 1.763 8.7373 0 6.5625 0 Z";
+const FK_ICON: &str = "M 4.6244 6.6258 c -0.2002 0 -0.3885 -0.078 -0.5304 -0.2197 c -1.1204 -1.1205 -1.1204 -2.9437 0 -4.0641 l 1.5016 -1.5016 c 0.5419 -0.542 1.2635 -0.8405 2.032 -0.8405 s 1.4901 0.2985 2.032 0.8405 c 1.1204 1.1204 1.1204 2.9436 0 4.0641 l -1.001 1.001 c -0.1416 0.1417 -0.3299 0.2197 -0.5304 0.2198 c -0.2002 0 -0.3885 -0.078 -0.5304 -0.2197 c -0.1416 -0.1417 -0.2198 -0.3301 -0.2198 -0.5305 c 0 -0.2004 0.0781 -0.3888 0.2198 -0.5305 l 1.001 -1.001 c 0.5355 -0.5355 0.5355 -1.4068 0 -1.9423 c -0.2588 -0.2588 -0.6039 -0.4015 -0.9712 -0.4015 s -0.7123 0.1426 -0.9712 0.4015 l -1.5016 1.5016 c -0.5355 0.5355 -0.5355 1.4068 0 1.9422 c 0.2925 0.2925 0.2925 0.7684 0 1.0609 c -0.1419 0.1417 -0.3302 0.2197 -0.5304 0.2197 z M 2.8725 10.5 c -0.7685 0 -1.4901 -0.2985 -2.032 -0.8405 c -1.1204 -1.1204 -1.1204 -2.9436 0 -4.0641 l 0.7509 -0.7509 c 0.1416 -0.1416 0.3302 -0.2197 0.5304 -0.2197 c 0.2002 0 0.3888 0.0781 0.5304 0.2198 c 0.1416 0.1416 0.2198 0.33 0.2198 0.5304 c 0 0.2004 -0.0781 0.3888 -0.2198 0.5305 l -0.7509 0.7508 c -0.5355 0.5354 -0.5355 1.4067 0 1.9422 c 0.2588 0.2588 0.6039 0.4015 0.9712 0.4015 s 0.7123 -0.1425 0.9712 -0.4015 l 1.5016 -1.5016 c 0.5355 -0.5355 0.5355 -1.4068 0 -1.9422 c -0.1416 -0.1417 -0.2198 -0.3301 -0.2198 -0.5305 s 0.0781 -0.3888 0.2198 -0.5305 c 0.1416 -0.1417 0.3302 -0.2197 0.5304 -0.2197 s 0.3888 0.078 0.5304 0.2196 c 1.1204 1.1205 1.1204 2.9437 0 4.0641 l -1.5016 1.5016 c -0.5419 0.542 -1.2635 0.8405 -2.032 0.8405 z";
+const NOTE_ICON: &str = "M 9 1.125 C 9.2063 1.125 9.375 1.2938 9.375 1.5 V 6.75 H 7.5 C 7.0852 6.75 6.75 7.0852 6.75 7.5 V 9.375 H 1.5 C 1.2938 9.375 1.125 9.2063 1.125 9 V 1.5 C 1.125 1.2938 1.2938 1.125 1.5 1.125 H 9 Z M 1.5 10.5 H 6.75 H 6.8789 C 7.2773 10.5 7.6594 10.343 7.9406 10.0617 L 10.0617 7.9406 C 10.343 7.6594 10.5 7.2773 10.5 6.8789 V 6.75 V 1.5 C 10.5 0.6727 9.8273 0 9 0 H 1.5 C 0.6727 0 0 0.6727 0 1.5 V 9 C 0 9.8273 0.6727 10.5 1.5 10.5 Z M 3 7.6875 C 3 7.5383 2.9407 7.3952 2.8352 7.2897 C 2.7298 7.1843 2.5867 7.125 2.4375 7.125 C 2.2883 7.125 2.1452 7.1843 2.0398 7.2897 C 1.9343 7.3952 1.875 7.5383 1.875 7.6875 C 1.875 7.8367 1.9343 7.9798 2.0398 8.0853 C 2.1452 8.1907 2.2883 8.25 2.4375 8.25 C 2.5867 8.25 2.7298 8.1907 2.8352 8.0853 C 2.9407 7.9798 3 7.8367 3 7.6875 Z M 2.4375 2.25 C 2.2883 2.25 2.1452 2.3093 2.0398 2.4148 C 1.9343 2.5202 1.875 2.6633 1.875 2.8125 C 1.875 2.9617 1.9343 3.1048 2.0398 3.2102 C 2.1452 3.3157 2.2883 3.375 2.4375 3.375 C 2.5867 3.375 2.7298 3.3157 2.8352 3.2102 C 2.9407 3.1048 3 2.9617 3 2.8125 C 3 2.6633 2.9407 2.5202 2.8352 2.4148 C 2.7298 2.3093 2.5867 2.25 2.4375 2.25 Z M 3 5.25 C 3 5.1008 2.9407 4.9577 2.8352 4.8522 C 2.7298 4.7468 2.5867 4.6875 2.4375 4.6875 C 2.2883 4.6875 2.1452 4.7468 2.0398 4.8522 C 1.9343 4.9577 1.875 5.1008 1.875 5.25 C 1.875 5.3992 1.9343 5.5423 2.0398 5.6478 C 2.1452 5.7532 2.2883 5.8125 2.4375 5.8125 C 2.5867 5.8125 2.7298 5.7532 2.8352 5.6478 C 2.9407 5.5423 3 5.3992 3 5.25 Z";
+
 fn dir_normal(a: (f32, f32), b: (f32, f32)) -> ((f32, f32), (f32, f32)) {
     let (dx, dy) = (b.0 - a.0, b.1 - a.1);
     let len = (dx * dx + dy * dy).sqrt();
@@ -259,91 +264,74 @@ fn push_table(s: &mut String, b: &TableBox, show_text: bool) {
             r##"<text x="{name_x:.1}" y="{ry:.1}" font-family="sans-serif" font-size="{row_size}" fill="#e8eaed">{}</text>"##,
             escape(&row.name)
         ));
-        // marker icon: key (pk) / chain link (fk), gray outline
-        let cx = name_x + row.name.width() as f32 * char_w + 1.4 * CELL_W;
-        let cy = ry - row_size * 0.35;
-        let (color, sw) = ("#8b909c", (0.085 * row_size).max(1.0));
-        if row.pk {
-            let g = 0.55 * CELL_H;
-            let r = 0.30 * g;
-            let bx = cx - 0.18 * g;
-            let x0 = bx + r * 0.72;
-            let x1 = cx + 0.45 * row_size;
+        // dbdiagram's left icon cluster: pk, fk, unique, note — 10.5px
+        // glyphs with a 4px gap, at 40% opacity
+        let k = CELL_W / 10.0;
+        let mut ux = name_x + row.name.width() as f32 * char_w + 8.0 * k;
+        let icons = [
+            row.pk.then_some(PK_ICON),
+            row.fk.then_some(FK_ICON),
+            row.note.is_some().then_some(NOTE_ICON),
+        ];
+        for d in icons.into_iter().flatten() {
             s.push_str(&format!(
-                r#"<circle cx="{bx:.1}" cy="{cy:.1}" r="{r:.1}" fill="none" stroke="{color}" stroke-width="{sw:.1}"/>"#
+                r##"<path d="{d}" transform="translate({ux:.1} {ry:.1}) scale({:.3})" fill="#8b909c" fill-opacity="0.7"/>"##,
+                10.5 * k / 10.5
             ));
-            s.push_str(&format!(
-                r#"<path d="M {x0:.1} {cy:.1} L {x1:.1} {cy:.1} M {t1:.1} {cy:.1} V {te:.1} M {t2:.1} {cy:.1} V {te:.1}" fill="none" stroke="{color}" stroke-width="{sw:.1}"/>"#,
-                t1 = x1 - 0.16 * row_size,
-                t2 = x1 - 0.02 * row_size,
-                te = cy + 0.26 * row_size,
-            ));
-        } else if row.fk {
-            let r = 0.26 * row_size;
-            let off = 0.30 * row_size;
-            s.push_str(&format!(
-                r#"<circle cx="{:.1}" cy="{cy:.1}" r="{r:.1}" fill="none" stroke="{color}" stroke-width="{sw:.1}"/>"#,
-                cx - off
-            ));
-            s.push_str(&format!(
-                r#"<circle cx="{:.1}" cy="{cy:.1}" r="{r:.1}" fill="none" stroke="{color}" stroke-width="{sw:.1}"/>"#,
-                cx + off
-            ));
+            ux += 14.5 * k;
         }
-        // badges (Not Null / Unique) after the marker zone
-        let badge_size = 0.38 * CELL_H;
-        let badge_char = 0.6 * badge_size;
-        let mut bx = cx + 1.1 * CELL_W;
-        for label in row.badges() {
-            let tw = label.chars().count() as f32 * badge_char;
+        if row.unique {
+            let label = "Unique";
+            let tw = label.chars().count() as f32 * 0.456 * CELL_W;
             let pad = 0.30 * CELL_W;
             s.push_str(&format!(
                 r##"<rect x="{:.1}" y="{:.1}" width="{:.1}" height="{:.1}" rx="{:.1}" fill="#8b909c" fill-opacity="0.14"/>"##,
-                bx,
-                ry - row_size * 0.5,
+                ux,
+                ry - 0.30 * CELL_H,
                 tw + 2.0 * pad,
                 0.60 * CELL_H,
                 0.12 * CELL_H
             ));
             s.push_str(&format!(
-                r##"<text x="{:.1}" y="{:.1}" font-family="sans-serif" font-size="{badge_size}" fill="#8b909c">{}</text>"##,
-                bx + pad,
+                r##"<text x="{:.1}" y="{:.1}" font-family="sans-serif" font-size="{:.1}" fill="#8b909c">{}</text>"##,
+                ux + pad,
                 ry + row_size * 0.02,
+                0.38 * CELL_H,
                 escape(label)
             ));
-            bx += tw + 2.0 * pad + 0.30 * CELL_W;
         }
+        // right side: type, then the "Not Null" pill flush right; the
+        // type's right edge shifts left of the pill (their renderType)
+        let nn_w = if row.not_null == Some(true) {
+            0.8 * CELL_W + 8.0 * 0.456 * CELL_W
+        } else {
+            0.0
+        };
         if !row.ty.is_empty() {
-            let right = if row.note.is_some() {
-                x + w - 1.8 * CELL_W
-            } else {
-                x + w - 1.2 * CELL_W
-            };
+            let right = x + w - 0.5 * CELL_W - nn_w;
             s.push_str(&format!(
-                r##"<text x="{:.1}" y="{ry:.1}" font-family="sans-serif" font-size="{row_size}" fill="#8b909c" text-anchor="end">{}</text>"##,
-                right,
+                r##"<text x="{right:.1}" y="{ry:.1}" font-family="sans-serif" font-size="{row_size}" fill="#8b909c" text-anchor="end">{}</text>"##,
                 escape(&row.ty)
             ));
         }
-        // note paper icon at the far right
-        if row.note.is_some() {
-            let nx = x + w - 1.0 * CELL_W;
-            let ny = ry - row_size * 0.35;
-            let g = 0.55 * CELL_H;
-            let x0 = nx - 0.40 * g;
-            let x1 = nx + 0.40 * g;
-            let y0 = ny - 0.50 * g;
-            let y1 = ny + 0.50 * g;
-            let fold = 0.22 * g;
-            let sw = (0.085 * g).max(1.0);
+        if row.not_null == Some(true) {
+            let label = "Not Null";
+            let tw = label.chars().count() as f32 * 0.456 * CELL_W;
+            let pad = 0.30 * CELL_W;
+            let px = x + w - 0.5 * CELL_W - tw - 2.0 * pad;
             s.push_str(&format!(
-                r##"<path d="M {x0:.1} {y0:.1} L {x1f:.1} {y0:.1} L {x1:.1} {y0f:.1} L {x1:.1} {y1:.1} L {x0:.1} {y1:.1} Z M {x1f:.1} {y0:.1} L {x1f:.1} {y0f:.1} L {x1:.1} {y0f:.1} M {lx0:.1} {ly:.1} L {lx1:.1} {ly:.1} M {lx0:.1} {ly2:.1} L {lx1:.1} {ly2:.1}" fill="none" stroke="#8b909c" stroke-width="{sw:.1}"/>"##,
-                x1f = x1 - fold,
-                y0f = y0 + fold,
-                lx0 = x0 + 0.14 * g,
-                lx1 = x1 - 0.14 * g,
-                ly = y0 + 0.42 * g,
-                ly2 = y0 + 0.64 * g,
+                r##"<rect x="{px:.1}" y="{:.1}" width="{:.1}" height="{:.1}" rx="{:.1}" fill="#8b909c" fill-opacity="0.14"/>"##,
+                ry - 0.30 * CELL_H,
+                tw + 2.0 * pad,
+                0.60 * CELL_H,
+                0.12 * CELL_H
+            ));
+            s.push_str(&format!(
+                r##"<text x="{:.1}" y="{:.1}" font-family="sans-serif" font-size="{:.1}" fill="#8b909c">{}</text>"##,
+                px + pad,
+                ry + row_size * 0.02,
+                0.38 * CELL_H,
+                escape(label)
             ));
         }
     }
@@ -400,7 +388,7 @@ mod tests {
     #[test]
     fn dbdiagram_chrome_is_present() {
         let svg =
-            svg_of("Table a { id integer [pk] }\nTable b { a_id integer }\nRef: b.a_id > a.id\n");
+            svg_of("Table a { id integer [pk, not null] }\nTable b { a_id integer }\nRef: b.a_id > a.id\n");
         // flat charcoal canvas + monochrome box + near-black header band
         assert!(svg.contains(&format!("fill=\"{BG_COLOR}\"")));
         assert!(svg.contains("fill=\"#31353e\""), "table body");
@@ -408,8 +396,10 @@ mod tests {
         // soft drop shadow layers
         assert!(svg.contains("fill-opacity=\"0.30\""));
         assert!(svg.contains("fill-opacity=\"0.13\""));
-        // gray markers after the name (not gold/blue before it)
-        assert!(svg.contains("stroke=\"#8b909c\""));
+        // gray icon cluster after the name (filled dbdiagram glyphs), and
+        // the NN pill in the field-setting colors
+        assert!(svg.contains("fill=\"#8b909c\""));
+        assert!(svg.contains(">Not Null</text>"), "Not Null pill");
         assert!(!svg.contains("#d29922") && !svg.contains("#4493f8"));
         // line + cardinality end markers share the line color: the tick on
         // the "one" end and the arrow + circle on the "many" end
