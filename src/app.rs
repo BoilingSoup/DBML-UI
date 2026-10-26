@@ -1382,13 +1382,9 @@ impl App {
         Ok(())
     }
 
-    /// Format the whole buffer canonically. Skips sources with comments
-    /// (the AST does not carry them) or parse errors; reports why.
+    /// Format the whole buffer canonically (comments are preserved by the
+    /// formatter). Skips sources with parse errors; reports why.
     pub fn format_now(&mut self) {
-        if self.source().contains("//") || self.source().contains("/*") {
-            self.message = Some("format skipped: source has comments".to_string());
-            return;
-        }
         match dbml::fmt::format_source(self.source()) {
             Some(f) if f != self.source() => {
                 let f = if self.source().ends_with('\n') && !f.ends_with('\n') {
@@ -1423,11 +1419,9 @@ impl App {
                 }
             },
         };
-        // format-on-save (default on): skip sources with comments or parse
-        // errors — reformatting those would lose data
+        // format-on-save (default on): skips sources with parse errors —
+        // reformatting those would lose data (comments are preserved)
         if self.config.fmt_on_save
-            && !self.source().contains("//")
-            && !self.source().contains("/*")
             && dbml::fmt::format_source(&self.editor_mut().text()).is_some()
         {
             self.format_now();
@@ -2614,13 +2608,17 @@ mod completion_tests {
     }
 
     #[test]
-    fn format_skips_comments_and_parse_errors() {
+    fn format_keeps_comments_and_skips_parse_errors() {
         let mut app = App::default();
-        let noted = "// hello\nTable users { id integer }\n";
+        let noted = "// hello\nTable users {   id  integer }\n";
         app.editor_mut().set_text(noted);
         app.cur_mut().set_source(noted);
         let _ = update(&mut app, Message::FormatNow);
-        assert_eq!(app.source(), noted, "commented source untouched");
+        assert_eq!(
+            app.source(),
+            "// hello\nTable users {\n  id integer\n}\n",
+            "formatted with the comment preserved"
+        );
         let broken = "Table users { id integer";
         app.editor_mut().set_text(broken);
         app.cur_mut().set_source(broken);
