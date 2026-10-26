@@ -148,6 +148,18 @@ pub fn highlight(src: &str) -> Vec<Token> {
                 i += 1;
             }
             push(&mut out, start, i, Kind::Plain);
+        } else if bytes[i] == b'#' && rest[1..].chars().next().is_some_and(|c| c.is_ascii_hexdigit())
+        {
+            // a hex color (`headercolor: #2d5f8a`): the `#` plus the whole
+            // hex run is one number-colored token — without this the `#`
+            // fell to punct and the leading digits split off as a number,
+            // leaving the tail of the hex white
+            let start = i;
+            i += 1;
+            while i < bytes.len() && (bytes[i] as char).is_ascii_hexdigit() {
+                i += 1;
+            }
+            push(&mut out, start, i, Kind::Number);
         } else if (bytes[i] as char).is_ascii_digit() {
             let start = i;
             while i < bytes.len() && ((bytes[i] as char).is_ascii_digit() || bytes[i] == b'.') {
@@ -349,6 +361,20 @@ mod tests {
             at = t.end;
         }
         assert_eq!(at, src.len(), "not covering: {toks:?}");
+    }
+
+    #[test]
+    fn hex_colors_are_one_number_token() {
+        // regression: `#2d5f8a` split into punct `#`, number `2`, and a
+        // white ident `d5f8a` — the first chars highlighted blue while the
+        // rest of the hex stayed plain
+        let ks = kinds("Table users as U [headercolor: #2d5f8a] {\n id integer\n}\n");
+        assert!(ks.contains(&("#2d5f8a".into(), Kind::Number)), "{ks:?}");
+        // short and uppercase forms stay whole too
+        let ks = kinds("Table t [headercolor: #FFF] {}");
+        assert!(ks.contains(&("#FFF".into(), Kind::Number)), "{ks:?}");
+        let ks = kinds("Table t [headercolor: #2D5F8AAA] {}");
+        assert!(ks.contains(&("#2D5F8AAA".into(), Kind::Number)), "{ks:?}");
     }
 
     #[test]
