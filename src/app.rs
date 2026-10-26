@@ -1579,9 +1579,11 @@ impl App {
 
     /// Visible editor lines from the window size: the editor canvas gets
     /// the window minus the root layout's chrome (toolbars, status bar,
-    /// paddings).
+    /// paddings — see `view::EDITOR_CHROME` for the term-by-term total).
     fn page_lines(&self) -> f32 {
-        ((self.window_size.1 - 62.0) / crate::canvas::editor::LINE_HEIGHT).max(5.0)
+        ((self.window_size.1 - crate::view::EDITOR_CHROME)
+            / crate::canvas::editor::LINE_HEIGHT)
+            .max(5.0)
     }
 
     fn max_scroll(&self) -> f32 {
@@ -2737,10 +2739,16 @@ mod scroll_tests {
         // neoscroll: with a document that fits the page the window never
         // scrolls but the cursor still glides line by line — never an
         // instant jump (regression: this case jumped instantly)
-        let mut app = App {
-            window_size: (1400.0, 900.0),
-            ..App::default() // sample: ~40 lines, fits the page
-        };
+        // tall_app(8): 24 lines, comfortably inside the ~37.8-line page at
+        // 900px. (The 40-line default sample does NOT fit the true page —
+        // it only looked like it did while page_lines underestimated the
+        // chrome and hid its tail under the status bar.)
+        let mut app = tall_app(8);
+        app.window_size = (1400.0, 900.0);
+        assert!(
+            app.max_scroll() == 0.0,
+            "precondition: document fits the page"
+        );
         let page = app.page_lines();
         let _ = update(
             &mut app,
@@ -2861,5 +2869,53 @@ mod scroll_tests {
         );
         assert!(app.scroll_anim.is_none());
         assert_eq!(app.editor_scroll, 0.0, "view back at the top");
+    }
+
+    /// Ground truth measured with a real iced 0.13.1 layout pass over
+    /// `view::root` (flex/column/container/button metrics, text line
+    /// height 1.3x size): at a 900px window the editor canvas measures
+    /// 794.5px tall. If the root layout chrome ever changes, re-measure
+    /// this and `view::EDITOR_CHROME` together.
+    const CANVAS_H_AT_900: f32 = 794.5;
+
+    #[test]
+    fn page_lines_covers_the_real_chrome() {
+        // regression: page_lines subtracted a stale 62px chrome (written
+        // before the two toolbars existed), so max_scroll stopped ~2 lines
+        // short of the buffer end and the last lines rendered beneath the
+        // status bar, clipped out of view
+        let mut app = tall_app(120);
+        app.window_size = (1400.0, 900.0);
+        let canvas_h = app.page_lines() * crate::canvas::editor::LINE_HEIGHT;
+        assert!(
+            (canvas_h - CANVAS_H_AT_900).abs() < 0.6,
+            "page_lines shows {canvas_h:.1}px of editor canvas, \
+             the real layout gives {CANVAS_H_AT_900}px"
+        );
+    }
+
+    #[test]
+    fn last_line_sits_on_screen_at_max_scroll() {
+        // the user-visible invariant: scrolled all the way down, the last
+        // line's drawn text (centered in its line box) is inside the true
+        // canvas — nothing hides beneath the status bar. Scroll clamps
+        // then round, so allow the half-line rounding overshoot.
+        let mut app = tall_app(120);
+        app.window_size = (1400.0, 900.0);
+        let last = app.editor.buf.line_count() - 1;
+        app.editor_scroll = app.max_scroll();
+        let y = crate::canvas::editor::pos_to_px(
+            crate::editor::buffer::Pos { row: last, col: 0 },
+            app.editor_scroll,
+            0.0,
+        )
+        .y;
+        let text_center = y + crate::canvas::editor::LINE_HEIGHT * 0.5;
+        assert!(
+            text_center <= CANVAS_H_AT_900 + 0.6,
+            "last line's text center at {text_center} is below the \
+             {CANVAS_H_AT_900}px canvas: the line hides under the status bar"
+        );
+        assert!(y >= 0.0, "overscrolled past the buffer start: {y}");
     }
 }

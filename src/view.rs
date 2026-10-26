@@ -12,6 +12,22 @@ use iced::{Color, Element, Fill, Length};
 /// Zoom at which one diagram cell maps 1:1 to a text line (~20px).
 pub const BASE_ZOOM: f32 = 20.0;
 
+/// Vertical chrome around the editor canvas: every pixel of the root
+/// layout above and below it, which `App::page_lines` must subtract from
+/// the window height to get the true visible-line count.
+///
+/// Term by term (iced line height is 1.3x the text size):
+/// above the canvas — 8.0 base padding + 23.6 toolbar row (text 12 +
+/// button padding 8) + 4.0 body spacing + 1.0 pane padding + 20.3 editor
+/// toolbar (text 11 + button padding 6) + 4.0 editor spacing = 60.9;
+/// below the canvas — 1.0 pane padding + 8.0 base spacing + 27.6 status
+/// bar (text 12 + its padding 12) + 8.0 base padding = 44.6.
+///
+/// Verified against a real iced 0.13.1 layout pass: at a 900px window the
+/// canvas measures 794.5px tall (900 - 105.5). Keep this in sync with
+/// `root`; if the layout chrome changes, re-measure and update both.
+pub const EDITOR_CHROME: f32 = 105.5;
+
 pub fn root(app: &App) -> Element<'_, Message> {
     let editor_body: Element<'_, Message> = if app.doc_open {
         column![
