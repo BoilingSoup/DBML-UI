@@ -9,7 +9,7 @@ use crate::canvas::editor::{EditorOverlay, EditorView};
 use crate::editor::{KeyCode, KeyModifiers};
 use crate::theme;
 use iced::widget::{
-    button, canvas, column, container, horizontal_space, row, stack, text, vertical_space,
+    button, canvas, column, container, horizontal_space, row, stack, text,
 };
 use iced::{Color, Element, Fill, Length, Point, Rectangle, Size};
 
@@ -418,12 +418,18 @@ fn tab_menu_overlay(app: &App, menu: &TabMenu) -> Element<'static, Message> {
             ..Default::default()
         })
         .on_press(Message::DismissTabMenu);
+    // anchor by padding offset: hspace/vspace columns don't offset in
+    // iced 0.13 flex (the stack child would land at (0,0))
     stack![
         backdrop,
-        column![
-            horizontal_space().width(Length::Fixed(x)),
-            row![vertical_space().height(Length::Fixed(y)), panel]
-        ]
+        container(panel)
+            .padding(iced::Padding {
+                top: y,
+                left: x,
+                ..Default::default()
+            })
+            .width(Fill)
+            .height(Fill)
     ]
     .into()
 }
