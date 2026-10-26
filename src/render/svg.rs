@@ -239,7 +239,7 @@ fn push_table(s: &mut String, b: &TableBox, show_text: bool) {
             h2 = gy + g * 0.71,
         ));
         s.push_str(&format!(
-            r##"<text x="{:.1}" y="{:.1}" font-family="monospace" font-size="{title_size}" font-weight="bold" fill="#ffffff">{}</text>"##,
+            r##"<text x="{:.1}" y="{:.1}" font-family="sans-serif" font-size="{title_size}" font-weight="bold" fill="#ffffff">{}</text>"##,
             gx + g + 0.5 * CELL_W,
             y + CELL_H * 0.70,
             escape(&b.title)
@@ -256,7 +256,7 @@ fn push_table(s: &mut String, b: &TableBox, show_text: bool) {
         let ry = y + (i as f32 + 1.0) * CELL_H + CELL_H * 0.70;
         let name_x = x + 1.0 * CELL_W;
         s.push_str(&format!(
-            r##"<text x="{name_x:.1}" y="{ry:.1}" font-family="monospace" font-size="{row_size}" fill="#e8eaed">{}</text>"##,
+            r##"<text x="{name_x:.1}" y="{ry:.1}" font-family="sans-serif" font-size="{row_size}" fill="#e8eaed">{}</text>"##,
             escape(&row.name)
         ));
         // marker icon: key (pk) / chain link (fk), gray outline
@@ -306,7 +306,7 @@ fn push_table(s: &mut String, b: &TableBox, show_text: bool) {
                 0.12 * CELL_H
             ));
             s.push_str(&format!(
-                r##"<text x="{:.1}" y="{:.1}" font-family="monospace" font-size="{badge_size}" fill="#8b909c">{}</text>"##,
+                r##"<text x="{:.1}" y="{:.1}" font-family="sans-serif" font-size="{badge_size}" fill="#8b909c">{}</text>"##,
                 bx + pad,
                 ry + row_size * 0.02,
                 escape(label)
@@ -320,7 +320,7 @@ fn push_table(s: &mut String, b: &TableBox, show_text: bool) {
                 x + w - 1.2 * CELL_W
             };
             s.push_str(&format!(
-                r##"<text x="{:.1}" y="{ry:.1}" font-family="monospace" font-size="{row_size}" fill="#8b909c" text-anchor="end">{}</text>"##,
+                r##"<text x="{:.1}" y="{ry:.1}" font-family="sans-serif" font-size="{row_size}" fill="#8b909c" text-anchor="end">{}</text>"##,
                 right,
                 escape(&row.ty)
             ));

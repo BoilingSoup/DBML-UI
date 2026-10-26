@@ -963,7 +963,7 @@ fn paint_table(frame: &mut canvas::Frame, b: &TableBox, zoom: f32, pan: Vector, 
         size: title_size.into(),
         font: Font {
             weight: font::Weight::Bold,
-            ..Font::MONOSPACE
+            ..Font::DEFAULT
         },
         horizontal_alignment: iced::alignment::Horizontal::Left,
         vertical_alignment: iced::alignment::Vertical::Center,
@@ -981,7 +981,7 @@ fn paint_table(frame: &mut canvas::Frame, b: &TableBox, zoom: f32, pan: Vector, 
             position: baseline(top_left.x + 1.0 * s.width),
             color: theme::ROW_TEXT,
             size: row_size.into(),
-            font: Font::MONOSPACE,
+            font: Font::DEFAULT,
             horizontal_alignment: iced::alignment::Horizontal::Left,
             vertical_alignment: iced::alignment::Vertical::Center,
             ..Default::default()
@@ -1017,7 +1017,7 @@ fn paint_table(frame: &mut canvas::Frame, b: &TableBox, zoom: f32, pan: Vector, 
                 position: Point::new(rect.x + pad, y),
                 color: theme::TYPE_TEXT,
                 size: badge_font.into(),
-                font: Font::MONOSPACE,
+                font: Font::DEFAULT,
                 horizontal_alignment: iced::alignment::Horizontal::Left,
                 vertical_alignment: iced::alignment::Vertical::Center,
                 ..Default::default()
@@ -1035,7 +1035,7 @@ fn paint_table(frame: &mut canvas::Frame, b: &TableBox, zoom: f32, pan: Vector, 
                 position: baseline(right),
                 color: theme::TYPE_TEXT,
                 size: row_size.into(),
-                font: Font::MONOSPACE,
+                font: Font::DEFAULT,
                 horizontal_alignment: iced::alignment::Horizontal::Right,
                 vertical_alignment: iced::alignment::Vertical::Center,
                 ..Default::default()
@@ -1460,7 +1460,7 @@ impl canvas::Program<crate::app::Message> for DiagramOverlay<'_> {
                 position: Point::new(rect.x + 8.0, rect.y + rect.height * 0.5),
                 color: theme::TIP_TEXT,
                 size: (0.42 * self.zoom).into(),
-                font: Font::MONOSPACE,
+                font: Font::DEFAULT,
                 horizontal_alignment: iced::alignment::Horizontal::Left,
                 vertical_alignment: iced::alignment::Vertical::Center,
                 ..Default::default()
@@ -1496,7 +1496,7 @@ impl canvas::Program<crate::app::Message> for DiagramOverlay<'_> {
                 position: Point::new(rect.x + 8.0, rect.y + rect.height * 0.5),
                 color: theme::TIP_TEXT,
                 size: (0.5 * self.zoom).into(),
-                font: Font::MONOSPACE,
+                font: Font::DEFAULT,
                 horizontal_alignment: iced::alignment::Horizontal::Left,
                 vertical_alignment: iced::alignment::Vertical::Center,
                 ..Default::default()
