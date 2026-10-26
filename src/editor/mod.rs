@@ -438,6 +438,10 @@ impl Editor {
                 self.buf.insert_char(c);
                 Action::Changed
             }
+            KeyCode::Space => {
+                self.buf.insert_char(' ');
+                Action::Changed
+            }
             KeyCode::Enter => {
                 self.buf.insert_newline();
                 Action::Changed
@@ -2189,6 +2193,38 @@ mod tests {
         assert_eq!(e.cursor(), (1, 3));
         e.jump(0, 0);
         assert_eq!(e.cursor(), (0, 0));
+    }
+}
+
+#[cfg(test)]
+mod space_tests {
+    use super::*;
+
+    fn ed(text: &str) -> Editor {
+        let mut e = Editor::default();
+        e.set_text(text);
+        e.mode = Mode::Insert;
+        e
+    }
+
+    #[test]
+    fn space_types_in_insert_mode() {
+        // regression: Space fell through the insert match and typed nothing
+        let mut e = ed("ab");
+        e.buf.move_cursor(CursorMove::Jump(0, 1));
+        let _ = e.handle_key(KeyEvent::new(KeyCode::Space, KeyModifiers::NONE));
+        assert_eq!(e.buf.line(0), "a b");
+    }
+
+    #[test]
+    fn space_then_e_types_in_insert_mode() {
+        // the app-level Space+e leader is gated to non-insert modes; pin
+        // that insert-mode space is data, not a leader
+        let mut e = ed("x");
+        e.buf.move_cursor(CursorMove::Jump(0, 1));
+        let _ = e.handle_key(KeyEvent::new(KeyCode::Space, KeyModifiers::NONE));
+        let _ = e.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+        assert_eq!(e.buf.line(0), "x e");
     }
 }
 

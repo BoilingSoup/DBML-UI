@@ -180,6 +180,9 @@ pub enum Drag {
 /// Width of one tab slot in the strip: the fixed tab button plus its
 /// trailing gap. Drag-reorder slots are this wide.
 pub const TAB_SLOT_W: f32 = 164.0;
+/// The drawn tab width (slot minus the strip's tab gap); shared by the
+/// drag-swap thresholds and the canvas strip.
+pub const TAB_VISUAL_W: f32 = TAB_SLOT_W - 8.0;
 /// Left inset of the tab strip — the origin strip-relative pointer x is
 /// measured from (kept in sync with the strip container's padding).
 pub const STRIP_LEFT: f32 = 6.0;
@@ -192,7 +195,10 @@ const TAB_DRAG_THRESHOLD: f32 = 6.0;
 #[derive(Debug, Clone)]
 pub(crate) struct TabDrag {
     pub(crate) from: usize,
-    pub(crate) press_x: f32,
+    /// Pointer offset within the pressed tab at press time (strip px):
+    /// the dragged tab's left edge is always `x - grab_dx`, anchored to
+    /// the POINTER so the position is continuous across swaps.
+    pub(crate) grab_dx: f32,
     pub(crate) moved: bool,
     /// Current pointer x, strip-relative (drives the dragged tab's pose).
     pub(crate) x: f32,
@@ -556,7 +562,7 @@ impl App {
             .unwrap_or(idx as f32 * TAB_SLOT_W);
         self.tab_drag = Some(TabDrag {
             from: idx,
-            press_x,
+            grab_dx: press_x - idx as f32 * TAB_SLOT_W,
             moved: false,
             x: press_x,
         });
@@ -573,7 +579,11 @@ impl App {
         };
         drag.x = x;
         if !drag.moved {
-            if (x - drag.press_x).abs() < TAB_DRAG_THRESHOLD {
+            // pointer travel from the press point (grab_dx + the pressed
+            // slot's origin reconstructs the press x)
+            if (x - (drag.grab_dx + drag.from as f32 * TAB_SLOT_W)).abs()
+                < TAB_DRAG_THRESHOLD
+            {
                 return;
             }
             drag.moved = true;
@@ -582,19 +592,24 @@ impl App {
             self.tab_anim.resize(self.tabs.len(), 0.0);
         }
         let n = self.tabs.len();
-        // the dragged tab follows the pointer, clamped to the strip
-        let vx = ((drag.from as f32 * TAB_SLOT_W) + (x - drag.press_x))
-            .clamp(0.0, (n - 1) as f32 * TAB_SLOT_W);
-        // Chrome's swap rule: the dragged tab's leading/trailing edge
-        // crossing the neighbor slot's midpoint switches the two
-        if drag.from + 1 < n && vx > (drag.from as f32 + 0.5) * TAB_SLOT_W {
+        // the dragged tab's left edge, anchored to the POINTER (not the
+        // slot): continuous across swaps, so the same pointer position can
+        // never re-trigger the reverse swap (that oscillation made tabs
+        // overlap and appear to vanish)
+        let vx = (x - drag.grab_dx).clamp(0.0, (n - 1) as f32 * TAB_SLOT_W);
+        // Chrome's swap rule: the dragged tab's leading edge crossing the
+        // neighbor slot's midpoint switches the two. The two thresholds
+        // differ by SLOT - TAB_W (the gap), giving natural hysteresis.
+        if drag.from + 1 < n
+            && vx + TAB_VISUAL_W >= (drag.from as f32 + 1.5) * TAB_SLOT_W
+        {
             let j = drag.from + 1;
             move_element(&mut self.tabs, drag.from, j);
             self.active = j; // the dragged tab (was active) follows
             self.tab_anim[j] = 0.0;
             self.tab_anim[drag.from] = TAB_SLOT_W; // displaced: slides left
             drag.from = j;
-        } else if drag.from > 0 && vx < (drag.from as f32 - 0.5) * TAB_SLOT_W {
+        } else if drag.from > 0 && vx <= (drag.from as f32 - 0.5) * TAB_SLOT_W {
             let j = drag.from - 1;
             move_element(&mut self.tabs, drag.from, j);
             self.active = j;
@@ -784,6 +799,8 @@ pub fn subscription(_app: &App) -> iced::Subscription<Message> {
     let tick = if _app.cur().scroll_anim.is_some()
         || !_app.cur().hover_edges.is_empty()
         || _app.cur().edge_anim.iter().any(|&t| t > 0.0)
+        || _app.tab_drag.is_some()
+        || _app.tab_anim.iter().any(|o| o.abs() > 0.5)
     {
         iced::time::every(std::time::Duration::from_millis(16)).map(|_| Message::Tick)
     } else {
@@ -1012,7 +1029,7 @@ fn handle_message(app: &mut App, message: Message) {
                 app.cur_mut().hover_edges.clear();
             }
             if app.drag == Drag::Divider {
-                const PAD: f32 = 16.0;
+                const PAD: f32 = 0.0; // window content is flush, no outer padding
                 let usable = (app.window_size.0 - 2.0 * PAD).max(1.0);
                 app.split = ((x - PAD) / usable).clamp(0.15, 0.85);
             }
@@ -1027,7 +1044,7 @@ fn handle_message(app: &mut App, message: Message) {
                 if app.tab_anim.len() < app.tabs.len() {
                     app.tab_anim.resize(app.tabs.len(), 0.0);
                 }
-                let vx = ((drag.from as f32 * TAB_SLOT_W) + (drag.x - drag.press_x))
+                let vx = (drag.x - drag.grab_dx)
                     .clamp(0.0, (app.tabs.len() - 1) as f32 * TAB_SLOT_W);
                 app.tab_anim[drag.from] = vx - drag.from as f32 * TAB_SLOT_W;
             }
@@ -1993,7 +2010,9 @@ impl App {
     /// requests extend the accumulated target (neoscroll behavior) and the
     /// animation restarts from the current stepped position.
     fn animate_scroll(&mut self, to: f32, duration_ms: f32, cursor: Option<(usize, usize)>) {
-        let to = to.clamp(0.0, self.max_scroll()).round();
+        // round to the line step INSIDE the clamp: clamping a fractional
+        // max first and rounding after would land a line past the buffer
+        let to = to.round().clamp(0.0, self.max_scroll());
         let from = self.cur().editor_scroll.round();
         let cursor_moves = cursor.is_some_and(|(a, b)| a != b);
         if (to - from).abs() < 0.5 && !cursor_moves {
@@ -2031,7 +2050,7 @@ impl App {
         let pos = self.editor_mut().buf.pos();
         let rows = self.editor_mut().buf.line_count() as i32;
         let base = self.cur().scroll_target.unwrap_or(self.cur().editor_scroll.round());
-        let to = (base + lines).clamp(0.0, self.max_scroll()).round();
+        let to = (base + lines).round().clamp(0.0, self.max_scroll());
         // static scroll: the cursor keeps its screen line
         let mut cursor_to = pos.row as f32 + lines;
         // margin correction: from inside 'scrolloff', the cursor first
@@ -2065,18 +2084,20 @@ impl App {
     fn editor_pane_width(&self) -> f32 {
         let e = (self.split * 1000.0) as u16;
         let d = ((1.0 - self.split) * 1000.0) as u16;
-        ((self.window_size.0 - 16.0).max(60.0) * e as f32 / (e + d).max(1) as f32).max(60.0)
+        // the window content is flush (no outer horizontal padding)
+        (self.window_size.0.max(60.0) * e as f32 / (e + d).max(1) as f32).max(60.0)
     }
 
-    /// Window-x of the pane seam: the base column's left padding plus the
-    /// editor pane's width — the flush editor/diagram borders the edge
-    /// chevron and resize strip straddle. At the collapsed edge it is the
-    /// padding alone (the diagram's left border).
+    /// Window-x of the pane seam: the editor pane's width — the flush
+    /// editor/diagram borders the edge chevron and resize strip straddle
+    /// (the window content is flush, no outer left padding). At the
+    /// collapsed edge it is 0: the diagram's left border is the window's
+    /// left edge.
     pub fn seam_x(&self) -> f32 {
         if self.editor_collapsed {
-            8.0
+            0.0
         } else {
-            8.0 + self.editor_pane_width()
+            self.editor_pane_width()
         }
     }
 
@@ -3581,9 +3602,9 @@ mod scroll_tests {
     /// Ground truth measured with a real iced 0.13.1 layout pass over
     /// `view::root` (flex/column/container/button metrics, text line
     /// height 1.3x size): at a 900px window the editor canvas measures
-    /// 766.9px tall. If the root layout chrome ever changes, re-measure
+    /// 780.5px tall. If the root layout chrome ever changes, re-measure
     /// this and `view::EDITOR_CHROME` together.
-    const CANVAS_H_AT_900: f32 = 766.9;
+    const CANVAS_H_AT_900: f32 = 780.5;
 
     #[test]
     fn page_lines_covers_the_real_chrome() {
@@ -3645,11 +3666,15 @@ mod tab_tests {
         let mut app = two_tab_app();
         app.window_cursor = Some(Point::new(STRIP_LEFT, 12.0));
         let _ = update(&mut app, Message::TabPressed(0));
-        let _ = update(&mut app, Message::MouseMovedWindow(STRIP_LEFT + 90.0, 12.0));
-        assert_eq!(app.active, 1, "90px > the 82px midpoint: swapped");
+        // the swap fires when the dragged tab's leading edge crosses the
+        // right neighbor slot's midpoint: vx >= 1.5*SLOT - TAB_VISUAL_W
+        let x = STRIP_LEFT + 1.5 * TAB_SLOT_W - TAB_VISUAL_W + STRIP_LEFT + 20.0;
+        let vx = x - STRIP_LEFT - 0.0; // grab_dx = STRIP_LEFT (pressed at slot 0 left edge)
+        let _ = update(&mut app, Message::MouseMovedWindow(x, 12.0));
+        assert_eq!(app.active, 1, "leading edge past the neighbor midpoint: swapped");
         assert_eq!(app.tab_anim[0], TAB_SLOT_W, "displaced neighbor at the old slot");
         assert!(
-            (app.tab_anim[1] - (90.0 - TAB_SLOT_W)).abs() < 0.5,
+            (app.tab_anim[1] - (vx - TAB_SLOT_W)).abs() < 0.5,
             "dragged tab follows the pointer: {:?}",
             app.tab_anim[1]
         );
@@ -3672,6 +3697,39 @@ mod tab_tests {
             "all offsets settle: {:?}",
             app.tab_anim
         );
+    }
+
+    #[test]
+    fn dragging_the_right_tab_left_keeps_both_tabs_visible() {
+        // user report: dragging the right tab over the left one made a tab
+        // vanish from the strip (clickable but invisible)
+        let mut app = two_tab_app();
+        app.window_cursor = Some(Point::new(STRIP_LEFT + TAB_SLOT_W + 80.0, 12.0));
+        let _ = update(&mut app, Message::TabPressed(1));
+        // walk the pointer left in small steps across the midpoint
+        let mut x = STRIP_LEFT + TAB_SLOT_W + 80.0;
+        while x > STRIP_LEFT + 10.0 {
+            x -= 20.0;
+            let _ = update(&mut app, Message::MouseMovedWindow(x, 12.0));
+            // every tab's drawn slot+offset must land inside the strip
+            for (i, off) in app.tab_anim.iter().enumerate() {
+                let drawn = STRIP_LEFT + i as f32 * TAB_SLOT_W + off;
+                assert!(
+                    drawn >= 0.0 && drawn <= STRIP_LEFT + (app.tabs.len() - 1) as f32 * TAB_SLOT_W,
+                    "tab {i} drawn off-strip at {drawn} (anim {:?}, tabs {})",
+                    app.tab_anim,
+                    app.tabs.len()
+                );
+            }
+            assert_eq!(app.tabs.len(), 2, "no tab lost");
+        }
+        // settled after release + ticks
+        let _ = update(&mut app, Message::MouseReleased);
+        for _ in 0..40 {
+            let _ = update(&mut app, Message::Tick);
+        }
+        assert!(app.tab_anim.iter().all(|o| o.abs() < 0.5), "{:?}", app.tab_anim);
+        assert_eq!(app.tabs.len(), 2);
     }
 
     fn two_tab_app() -> App {

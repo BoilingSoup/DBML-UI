@@ -21,17 +21,19 @@ pub const BASE_ZOOM: f32 = 20.0;
 /// the window height to get the true visible-line count.
 ///
 /// Term by term (iced line height is 1.3x the text size):
-/// above the canvas — 23.6 tab strip (text 12 + tab padding 8) + 4.0
-/// strip spacing + 8.0 base padding + 23.6 toolbar row (text 12 + button
+/// above the canvas — 30.0 tab strip canvas (fixed height) + 4.0 strip
+/// spacing + 8.0 body top padding + 23.6 mode row (text 12 + button
 /// padding 8) + 4.0 body spacing + 1.0 pane padding + 20.3 editor
-/// toolbar (text 11 + button padding 6) + 4.0 editor spacing = 88.5;
-/// below the canvas — 1.0 pane padding + 8.0 base spacing + 27.6 status
-/// bar (text 12 + its padding 12) + 8.0 base padding = 44.6.
+/// toolbar (text 11 + button padding 6) + 4.0 editor spacing = 94.9;
+/// below the canvas — 1.0 pane padding + 8.0 body spacing + 15.6 status
+/// bar (text 12, no padding) + 0.0 (the bar is flush with the window's
+/// bottom edge) = 24.6.
 ///
-/// Verified against a real iced 0.13.1 layout pass: at a 900px window the
-/// canvas measures 766.9px tall (900 - 133.1). Keep this in sync with
-/// `root`; if the layout chrome changes, re-measure and update both.
-pub const EDITOR_CHROME: f32 = 133.1;
+/// Measured with a real iced 0.13.1 layout pass over a widget-for-widget
+/// replica of `root`: at a 900px window the canvas measures 780.5px tall
+/// (900 - 119.5). Keep this in sync with `root`; if the layout chrome
+/// changes, re-measure and update both.
+pub const EDITOR_CHROME: f32 = 119.5;
 
 pub fn root(app: &App) -> Element<'_, Message> {
     let editor_body: Element<'_, Message> = if app.doc_open() {
@@ -150,13 +152,17 @@ pub fn root(app: &App) -> Element<'_, Message> {
         column![panes].spacing(4).height(Fill)
     };
 
-    // the tab strip runs full-bleed across the top; the padded content
-    // sits below it
+    // the tab strip runs full-bleed across the top; the content sits below
+    // it, flush with the window's left/right/bottom edges (only a little
+    // top padding keeps the body off the strip)
     let base = column![
         canvas(TabStrip { app })
             .height(Length::Fixed(STRIP_H))
             .width(Fill),
-        column![body, status_bar(app)].spacing(8).padding(8)
+        column![body, status_bar(app)].spacing(8).padding(iced::Padding {
+            top: 8.0,
+            ..Default::default()
+        })
     ]
     .spacing(4);
 
@@ -792,25 +798,13 @@ enum Seam {
     Left,
 }
 
-fn seam_panel_style(focused: bool, seam: Seam) -> container::Style {
-    let mut radius = iced::border::Radius::from(8.0);
-    match seam {
-        Seam::None => {}
-        Seam::Right => {
-            radius.top_right = 0.0;
-            radius.bottom_right = 0.0;
-        }
-        Seam::Left => {
-            radius.top_left = 0.0;
-            radius.bottom_left = 0.0;
-        }
-    }
+fn seam_panel_style(focused: bool, _seam: Seam) -> container::Style {
     container::Style {
         background: Some(iced::Background::Color(theme::PANEL)),
         border: iced::border::Border {
             color: if focused { theme::FK } else { theme::BORDER },
             width: 1.0,
-            radius,
+            radius: iced::border::Radius::from(0.0),
         },
         ..Default::default()
     }
@@ -914,7 +908,6 @@ fn status_bar(app: &App) -> Element<'_, Message> {
     }
 
     container(bar.spacing(6))
-        .padding([6.0, 10.0])
         .width(Fill)
         .height(Length::Shrink)
         .style(|_t| container::Style {
