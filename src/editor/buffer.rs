@@ -567,16 +567,17 @@ impl Buffer {
     // ---- vim-surround ----
 
     /// The (open, close) glyphs a surround target char stands for; quotes
-    /// map to themselves.
+    /// map to themselves, and vim-surround's alias chars resolve to their
+    /// pair (`b` parens, `B` braces, `r` brackets, `a` angle brackets).
     pub fn surround_pair(c: char) -> Option<(char, char)> {
         match c {
             '\'' => Some(('\'', '\'')),
             '"' => Some(('"', '"')),
             '`' => Some(('`', '`')),
-            '(' | ')' => Some(('(', ')')),
-            '[' | ']' => Some(('[', ']')),
-            '{' | '}' => Some(('{', '}')),
-            '<' | '>' => Some(('<', '>')),
+            '(' | ')' | 'b' => Some(('(', ')')),
+            '[' | ']' | 'r' => Some(('[', ']')),
+            '{' | '}' | 'B' => Some(('{', '}')),
+            '<' | '>' | 'a' => Some(('<', '>')),
             _ => None,
         }
     }
@@ -612,7 +613,7 @@ impl Buffer {
         true
     }
 
-    /// Insert `pair` around the inclusive span `obj`.
+    /// Insert `pair` around the inclusive span `obj` as one undo unit.
     pub fn surround_insert(&mut self, obj: TextObj, pair: (char, char)) {
         self.push_history();
         self.insert_at(
@@ -626,9 +627,16 @@ impl Buffer {
         self.move_cursor(Move::Jump(obj.start.row, obj.start.col));
     }
 
+    /// Raw single-char insert at a position: no history push (the caller's
+    /// push_history covers the whole pair), no selection (cleared first).
     fn insert_at(&mut self, p: Pos, c: char) {
         self.move_cursor(Move::Jump(p.row, p.col));
-        self.insert_char(c);
+        self.delete_selection();
+        let (r, cpos) = (self.cursor.row, self.cursor.col);
+        let line = &mut self.lines[r];
+        let off = char_off(line, cpos);
+        line.insert(off, c);
+        self.cursor.col = cpos + 1;
     }
 
     /// The enclosing span (quotes or brackets, both glyphs included) around
@@ -638,15 +646,11 @@ impl Buffer {
             '\'' | '"' | '`' => self.quote_object(target, true),
             c => {
                 let open = match c {
-                    ')' | ']' | '}' | '>' => {
-                        // normalize closes to opens for bracket_object
-                        match c {
-                            ')' => '(',
-                            ']' => '[',
-                            '}' => '{',
-                            _ => '<',
-                        }
-                    }
+                    // vim-surround aliases and closers normalize to opens
+                    ')' | 'b' => '(',
+                    ']' | 'r' => '[',
+                    '}' | 'B' => '{',
+                    '>' | 'a' => '<',
                     _ => c,
                 };
                 self.bracket_object(open, true)

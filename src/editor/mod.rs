@@ -147,6 +147,9 @@ enum AddStage {
     Motion,
     Obj { around: bool },
     Range(buffer::TextObj),
+    /// `yss`: the cursor line (count-extended) minus its leading indent,
+    /// awaiting the pair
+    Line,
 }
 
 pub struct Editor {
@@ -1255,6 +1258,13 @@ impl Editor {
                     });
                     Action::None
                 }
+                // yss: surround the (count-extended) line, minus its indent
+                's' => {
+                    self.pending = Some(Pending::SurroundAdd {
+                        stage: AddStage::Line,
+                    });
+                    Action::None
+                }
                 'w' | 'e' | 'b' | '$' | '0' | '^' => match self.motion_object(c) {
                     Some(obj) => {
                         self.pending = Some(Pending::SurroundAdd {
@@ -1296,6 +1306,22 @@ impl Editor {
                 }
                 None => Action::None,
             },
+            // yss<pair>: wrap the line span (leading indent stays outside)
+            (
+                Pending::SurroundAdd {
+                    stage: AddStage::Line,
+                },
+                KeyCode::Char(t),
+            ) => {
+                if let (Some(pair), Some(obj)) =
+                    (Buffer::surround_pair(t), self.line_surround_span(rep))
+                {
+                    self.buf.surround_insert(obj, pair);
+                    Action::Changed
+                } else {
+                    Action::None
+                }
+            }
             // visual S…: wrap the selection
             (Pending::SurroundVisual, KeyCode::Esc) => Action::None,
             (Pending::SurroundVisual, KeyCode::Char(c)) => self.surround_visual(c),
@@ -1434,6 +1460,33 @@ impl Editor {
             }
             _ => None,
         }
+    }
+
+    /// Span for `yss`: the cursor row's first non-blank char through the
+    /// last char of the count-extended end row — leading whitespace stays
+    /// outside the pair, like vim-surround. Blank spans are a no-op.
+    fn line_surround_span(&self, rep: usize) -> Option<TextObj> {
+        let row = self.buf.cursor().0;
+        let rows = self.buf.lines().len();
+        let end_row = (row + rep.saturating_sub(1)).min(rows.saturating_sub(1));
+        let indent = self
+            .buf
+            .line(row)
+            .chars()
+            .take_while(|c| c.is_whitespace())
+            .count();
+        let end_len = self.buf.line(end_row).chars().count();
+        if row == end_row && indent >= end_len {
+            return None; // blank line: nothing to surround
+        }
+        Some(TextObj {
+            start: Pos { row, col: indent },
+            end: Pos {
+                row: end_row,
+                col: end_len.saturating_sub(1),
+            },
+            linewise: false,
+        })
     }
 
     /// Visual `S{pair}`: wrap the selection and return to normal mode.
@@ -2652,6 +2705,165 @@ mod polish_tests {
         }
         assert_eq!(e.text(), "one (two)\n");
         assert_eq!(e.mode, Mode::Normal, "S concludes visual");
+    }
+
+    // ---- vim-surround aliases (b B r a) + yss ----
+
+    #[test]
+    fn surround_aliases_resolve_as_replacements_and_targets() {
+        // cs'b: the b alias stands for ( )
+        let mut e = editor("'q'\n");
+        for c in "cs'b".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "(q)\n", "cs'b swaps quotes for parens");
+        // cs'B: braces
+        let mut e = editor("'q'\n");
+        for c in "cs'B".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "{q}\n", "cs'B swaps quotes for braces");
+        // csbr round-trips parens -> brackets; csb( is an identity
+        let mut e = editor("(q)\n");
+        for c in "csbr".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "[q]\n");
+        let mut e = editor("(q)\n");
+        for c in "csb(".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "(q)\n", "csb( round-trips unchanged");
+        // ds targets: b/B/r/a delete their bracket pair
+        let mut e = editor("f(w)g\n");
+        for c in "lldsb".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "fwg\n", "dsb strips parens");
+        let mut e = editor("f[w]g\n");
+        for c in "lldsr".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "fwg\n", "dsr strips brackets");
+        let mut e = editor("f{w}g\n");
+        for c in "lldsB".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "fwg\n", "dsB strips braces");
+        let mut e = editor("f<w>g\n");
+        for c in "lldsa".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "fwg\n", "dsa strips angle brackets");
+        // the literal glyphs still work beside the aliases
+        let mut e = editor("f(w)g\n");
+        for c in "llds(".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "fwg\n");
+    }
+
+    #[test]
+    fn yss_surrounds_the_line_excluding_indent() {
+        let mut e = editor("one two\n");
+        for c in "yss(".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "(one two)\n", "yss wraps the whole line");
+        // the open glyph sits after the leading whitespace
+        let mut e = editor("    indented text\n");
+        for c in "yss[".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "    [indented text]\n");
+        // alias pair: yssb == yss(
+        let mut e = editor("word\n");
+        for c in "yssb".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "(word)\n");
+        // blank line: nothing to surround
+        let mut e = editor("   \n");
+        for c in "yss(".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "   \n", "blank line is a no-op");
+        // [count]yss spans count lines
+        let mut e = editor("a\nb\nc\n");
+        for c in "2yss{".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "{a\nb}\nc\n");
+        e.buf.undo();
+        assert_eq!(e.text(), "a\nb\nc\n", "the pair insert is one undo unit");
+        // yss( then dsb is an identity round-trip
+        let mut e = editor("one two\n");
+        for c in "yss(".chars() {
+            e.handle_key(key(c));
+        }
+        for c in "dsb".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "one two\n", "yss( + dsb restores the line");
+    }
+
+    #[test]
+    fn ysiw_wraps_words_with_all_pair_kinds() {
+        let mut e = editor("one two\n");
+        for c in "lllllysiw(".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "one (two)\n", "ysiw( wraps the word");
+        let mut e = editor("one two\n");
+        for c in "lllllysiw'".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "one 'two'\n", "ysiw' wraps in quotes");
+        let mut e = editor("one two\n");
+        for c in "lllllysiwB".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "one {two}\n", "ysiwB wraps in braces via alias");
+        let mut e = editor("one two three\n");
+        for c in "lllllysiwb".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(
+            e.text(),
+            "one (two) three\n",
+            "ysiwb wraps in parens via alias"
+        );
+        // the plain motion stage: ys w wraps from the cursor to the word end
+        let mut e = editor("one two\n");
+        for c in "ysw(".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "(one) two\n");
+        // aw keeps vim's trailing space (leading when there is none)
+        let mut e = editor("one two three\n");
+        for c in "lllllysaw(".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(
+            e.text(),
+            "one (two )three\n",
+            "ysaw( keeps the trailing space"
+        );
+    }
+
+    #[test]
+    fn visual_s_accepts_alias_chars() {
+        let mut e = editor("one two\n");
+        for c in "llllvleSB".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "one {two}\n", "S B wraps in braces via alias");
+        assert_eq!(e.mode, Mode::Normal, "S concludes visual");
+        let mut e = editor("one two\n");
+        for c in "llllvleSr".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.text(), "one [two]\n", "S r wraps in brackets via alias");
     }
 
     #[test]
