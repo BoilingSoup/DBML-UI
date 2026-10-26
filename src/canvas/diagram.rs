@@ -738,54 +738,141 @@ fn edge_stroke_width(zoom: f32) -> f32 {
     (1.5 * zoom / 20.0).clamp(1.0, 12.0)
 }
 
-/// Key icon (dbdiagram pk): circular bow, shaft, two teeth — stroked.
-fn draw_key_icon(frame: &mut canvas::Frame, center: Point, size: f32, color: Color) {
-    let w = (0.085 * size).max(1.0);
-    let stroke = canvas::Stroke {
-        style: color.into(),
-        width: w,
-        ..Default::default()
-    };
-    let r = 0.30 * size;
-    let bow = Path::circle(Point::new(center.x - 0.18 * size, center.y), r);
-    frame.stroke(&bow, stroke);
-    let shaft_y = center.y;
-    let x0 = center.x - 0.18 * size + r * 0.72;
-    let x1 = center.x + 0.45 * size;
-    frame.stroke(
-        &Path::new(|b| {
-            b.move_to(Point::new(x0, shaft_y));
-            b.line_to(Point::new(x1, shaft_y));
-            // two teeth
-            let t1 = x1 - 0.16 * size;
-            let t2 = x1 - 0.02 * size;
-            b.move_to(Point::new(t1, shaft_y));
-            b.line_to(Point::new(t1, shaft_y + 0.26 * size));
-            b.move_to(Point::new(t2, shaft_y));
-            b.line_to(Point::new(t2, shaft_y + 0.26 * size));
-        }),
-        stroke,
-    );
+/// dbdiagram's row icons, as SVG path data lifted from their renderer
+/// (Path2D strings), authored on a 10.5px grid.
+const PK_ICON: &str = "M 6.5625 0.9844 C 8.1935 0.9844 9.5156 2.3065 9.5156 3.9375 C 9.5156 5.5685 8.1935 6.8906 6.5625 6.8906 C 6.1735 6.8906 5.8022 6.8153 5.462 6.6786 L 4.5938 7.5469 H 3.9375 V 8.5313 H 2.9531 V 9.5156 H 0.9844 V 7.5469 L 3.736 4.7952 C 3.6518 4.5171 3.6092 4.2281 3.6094 3.9375 C 3.6094 2.3065 4.9315 0.9844 6.5625 0.9844 Z M 6.5625 0 C 4.388 0 2.625 1.7627 2.625 3.9375 C 2.625 4.1186 2.6373 4.2989 2.6619 4.4772 L 0.1441 6.995 C 0.0519 7.0873 0 7.2125 0 7.343 L 0 10.0078 C 0 10.2797 0.2204 10.5 0.4922 10.5 H 3.4453 C 3.7171 10.5 3.9375 10.2797 3.9375 10.0078 V 9.5156 H 4.4297 C 4.7015 9.5156 4.9219 9.2953 4.9219 9.0234 V 8.6133 L 5.7432 7.7895 C 6.011 7.8464 6.2848 7.875 6.5625 7.875 C 8.737 7.875 10.5 6.1123 10.5 3.9375 C 10.5 1.763 8.7373 0 6.5625 0 Z M 6.5625 2.9531 C 6.5625 3.4968 7.0032 3.9375 7.5469 3.9375 C 8.0905 3.9375 8.5313 3.4968 8.5313 2.9531 C 8.5313 2.4095 8.0905 1.9688 7.5469 1.9688 C 7.0032 1.9688 6.5625 2.4095 6.5625 2.9531 Z";
+const FK_ICON: &str = "M 4.6244 6.6258 c -0.2002 0 -0.3885 -0.078 -0.5304 -0.2197 c -1.1204 -1.1205 -1.1204 -2.9437 0 -4.0641 l 1.5016 -1.5016 c 0.5419 -0.542 1.2635 -0.8405 2.032 -0.8405 s 1.4901 0.2985 2.032 0.8405 c 1.1204 1.1204 1.1204 2.9436 0 4.0641 l -1.001 1.001 c -0.1416 0.1417 -0.3299 0.2197 -0.5304 0.2198 c -0.2002 0 -0.3885 -0.078 -0.5304 -0.2197 c -0.1416 -0.1417 -0.2198 -0.3301 -0.2198 -0.5305 c 0 -0.2004 0.0781 -0.3888 0.2198 -0.5305 l 1.001 -1.001 c 0.5355 -0.5355 0.5355 -1.4068 0 -1.9423 c -0.2588 -0.2588 -0.6039 -0.4015 -0.9712 -0.4015 s -0.7123 0.1426 -0.9712 0.4015 l -1.5016 1.5016 c -0.5355 0.5355 -0.5355 1.4068 0 1.9422 c 0.2925 0.2925 0.2925 0.7684 0 1.0609 c -0.1419 0.1417 -0.3302 0.2197 -0.5304 0.2197 z M 2.8725 10.5 c -0.7685 0 -1.4901 -0.2985 -2.032 -0.8405 c -1.1204 -1.1204 -1.1204 -2.9436 0 -4.0641 l 0.7509 -0.7509 c 0.1416 -0.1416 0.3302 -0.2197 0.5304 -0.2197 c 0.2002 0 0.3888 0.0781 0.5304 0.2198 c 0.1416 0.1416 0.2198 0.33 0.2198 0.5304 c 0 0.2004 -0.0781 0.3888 -0.2198 0.5305 l -0.7509 0.7508 c -0.5355 0.5354 -0.5355 1.4067 0 1.9422 c 0.2588 0.2588 0.6039 0.4015 0.9712 0.4015 s 0.7123 -0.1425 0.9712 -0.4015 l 1.5016 -1.5016 c 0.5355 -0.5355 0.5355 -1.4068 0 -1.9422 c -0.1416 -0.1417 -0.2198 -0.3301 -0.2198 -0.5305 s 0.0781 -0.3888 0.2198 -0.5305 c 0.1416 -0.1417 0.3302 -0.2197 0.5304 -0.2197 s 0.3888 0.078 0.5304 0.2196 c 1.1204 1.1205 1.1204 2.9437 0 4.0641 l -1.5016 1.5016 c -0.5419 0.542 -1.2635 0.8405 -2.032 0.8405 z";
+const NOTE_ICON: &str = "M 9 1.125 C 9.2063 1.125 9.375 1.2938 9.375 1.5 V 6.75 H 7.5 C 7.0852 6.75 6.75 7.0852 6.75 7.5 V 9.375 H 1.5 C 1.2938 9.375 1.125 9.2063 1.125 9 V 1.5 C 1.125 1.2938 1.2938 1.125 1.5 1.125 H 9 Z M 1.5 10.5 H 6.75 H 6.8789 C 7.2773 10.5 7.6594 10.343 7.9406 10.0617 L 10.0617 7.9406 C 10.343 7.6594 10.5 7.2773 10.5 6.8789 V 6.75 V 1.5 C 10.5 0.6727 9.8273 0 9 0 H 1.5 C 0.6727 0 0 0.6727 0 1.5 V 9 C 0 9.8273 0.6727 10.5 1.5 10.5 Z M 3 7.6875 C 3 7.5383 2.9407 7.3952 2.8352 7.2897 C 2.7298 7.1843 2.5867 7.125 2.4375 7.125 C 2.2883 7.125 2.1452 7.1843 2.0398 7.2897 C 1.9343 7.3952 1.875 7.5383 1.875 7.6875 C 1.875 7.8367 1.9343 7.9798 2.0398 8.0853 C 2.1452 8.1907 2.2883 8.25 2.4375 8.25 C 2.5867 8.25 2.7298 8.1907 2.8352 8.0853 C 2.9407 7.9798 3 7.8367 3 7.6875 Z M 2.4375 2.25 C 2.2883 2.25 2.1452 2.3093 2.0398 2.4148 C 1.9343 2.5202 1.875 2.6633 1.875 2.8125 C 1.875 2.9617 1.9343 3.1048 2.0398 3.2102 C 2.1452 3.3157 2.2883 3.375 2.4375 3.375 C 2.5867 3.375 2.7298 3.3157 2.8352 3.2102 C 2.9407 3.1048 3 2.9617 3 2.8125 C 3 2.6633 2.9407 2.5202 2.8352 2.4148 C 2.7298 2.3093 2.5867 2.25 2.4375 2.25 Z M 3 5.25 C 3 5.1008 2.9407 4.9577 2.8352 4.8522 C 2.7298 4.7468 2.5867 4.6875 2.4375 4.6875 C 2.2883 4.6875 2.1452 4.7468 2.0398 4.8522 C 1.9343 4.9577 1.875 5.1008 1.875 5.25 C 1.875 5.3992 1.9343 5.5423 2.0398 5.6478 C 2.1452 5.7532 2.2883 5.8125 2.4375 5.8125 C 2.5867 5.8125 2.7298 5.7532 2.8352 5.6478 C 2.9407 5.5423 3 5.3992 3 5.25 Z";
+/// The table-with-records header glyph: a rounded-rect ring plus its row
+/// dashes, on an 18px grid.
+const TABLE_RING_ICON: &str = "M18 2c0-1.103-.897-2-2-2H2c-1.103 0-2 .897-2 2v14c0 1.103.897 2 2 2h14c1.103 0 2-.897 2-2zM2 16V2h14l.002 14z";
+const TABLE_ROWS_ICON: &str = "M4 4h1.998v2H4zm4 0h6v2h-6zm-4 4h1.998v2H4zm4 0h6v2h-6zm-4 4h1.998v2H4zm4 0h6v2h-6z";
+
+/// Tokenize SVG path data into (command, params) pairs.
+fn svg_path_cmds(data: &str) -> Vec<(u8, Vec<f32>)> {
+    let b = data.as_bytes();
+    let (mut i, mut out) = (0usize, Vec::new());
+    while i < b.len() {
+        let c = b[i];
+        if c.is_ascii_alphabetic() {
+            out.push((c, Vec::new()));
+            i += 1;
+        } else if c == b' ' || c == b',' {
+            i += 1;
+        } else {
+            let start = i;
+            if matches!(b[i], b'-' | b'+') {
+                i += 1;
+            }
+            // compact SVG notation glues the next number's dot to the
+            // previous one ("1.103.897" = 1.103, .897) — one dot per number
+            let mut dot = false;
+            while i < b.len()
+                && (b[i].is_ascii_digit() || (b[i] == b'.' && !dot))
+            {
+                dot |= b[i] == b'.';
+                i += 1;
+            }
+            if let Some(last) = out.last_mut() {
+                last.1
+                    .push(std::str::from_utf8(&b[start..i]).unwrap().parse().unwrap());
+            }
+        }
+    }
+    out
 }
 
-/// Chain-link icon (dbdiagram fk): two interlocking rings — stroked.
+/// Fill an icon authored as SVG path data (dbdiagram's Path2D strings),
+/// scaled from its `grid` to `size` px and centered on `center`.
+fn draw_key_icon(frame: &mut canvas::Frame, center: Point, size: f32, color: Color) {
+    svg_icon(frame, center, size, 10.5, color, PK_ICON);
+}
+
 fn draw_link_icon(frame: &mut canvas::Frame, center: Point, size: f32, color: Color) {
-    let w = (0.085 * size).max(1.0);
-    let stroke = canvas::Stroke {
-        style: color.into(),
-        width: w,
-        ..Default::default()
-    };
-    let r = 0.26 * size;
-    let off = 0.30 * size;
-    frame.stroke(
-        &Path::circle(Point::new(center.x - off, center.y), r),
-        stroke,
-    );
-    frame.stroke(
-        &Path::circle(Point::new(center.x + off, center.y), r),
-        stroke,
-    );
+    svg_icon(frame, center, size, 10.5, color, FK_ICON);
+}
+
+fn svg_icon(frame: &mut canvas::Frame, center: Point, size: f32, grid: f32, color: Color, data: &str) {
+    let k = size / grid;
+    let px = |x: f32, y: f32| Point::new(center.x - size / 2.0 + x * k, center.y - size / 2.0 + y * k);
+    let cmds = svg_path_cmds(data);
+    let path = Path::new(|b| {
+        let (mut x, mut y, mut sx, mut sy) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+        // previous cubic's second control, for the S/s smooth shorthand
+        let (mut qx, mut qy) = (0.0f32, 0.0f32);
+        for &(cmd, ref v) in &cmds {
+            let mut idx = 0usize;
+            loop {
+                let take = |idx: &mut usize| -> f32 {
+                    let val = v.get(*idx).copied().unwrap_or(0.0);
+                    *idx += 1;
+                    val
+                };
+                match cmd {
+                    b'M' => {
+                        x = take(&mut idx); y = take(&mut idx);
+                        sx = x; sy = y;
+                        b.move_to(px(x, y));
+                    }
+                    b'm' => {
+                        x += take(&mut idx); y += take(&mut idx);
+                        sx = x; sy = y;
+                        b.move_to(px(x, y));
+                    }
+                    b'L' => { x = take(&mut idx); y = take(&mut idx); b.line_to(px(x, y)); }
+                    b'l' => { x += take(&mut idx); y += take(&mut idx); b.line_to(px(x, y)); }
+                    b'H' => { x = take(&mut idx); b.line_to(px(x, y)); }
+                    b'h' => { x += take(&mut idx); b.line_to(px(x, y)); }
+                    b'V' => { y = take(&mut idx); b.line_to(px(x, y)); }
+                    b'v' => { y += take(&mut idx); b.line_to(px(x, y)); }
+                    b'C' => {
+                        let (x1, y1) = (take(&mut idx), take(&mut idx));
+                        let (x2, y2) = (take(&mut idx), take(&mut idx));
+                        x = take(&mut idx); y = take(&mut idx);
+                        b.bezier_curve_to(px(x1, y1), px(x2, y2), px(x, y));
+                        qx = x2; qy = y2;
+                    }
+                    b'c' => {
+                        let (x1, y1) = (x + take(&mut idx), y + take(&mut idx));
+                        let (x2, y2) = (x + take(&mut idx), y + take(&mut idx));
+                        x += take(&mut idx); y += take(&mut idx);
+                        b.bezier_curve_to(px(x1, y1), px(x2, y2), px(x, y));
+                        qx = x2; qy = y2;
+                    }
+                    b'S' | b's' => {
+                        let rel = cmd == b's';
+                        let (mut x2, mut y2) = (take(&mut idx), take(&mut idx));
+                        let (mut ex, mut ey) = (take(&mut idx), take(&mut idx));
+                        if rel { x2 += x; y2 += y; ex += x; ey += y; }
+                        b.bezier_curve_to(px(2.0 * x - qx, 2.0 * y - qy), px(x2, y2), px(x, y));
+                        x = ex; y = ey;
+                        qx = x2; qy = y2;
+                    }
+                    b'Z' | b'z' => { b.close(); x = sx; y = sy; }
+                    _ => {}
+                }
+                // for non-cubics the smooth-reflection anchor is the point itself
+                if !matches!(cmd, b'C' | b'c' | b'S' | b's') {
+                    qx = x; qy = y;
+                }
+                // implicit repetition: only these take repeated groups
+                let group = match cmd.to_ascii_uppercase() {
+                    b'M' | b'L' => 2,
+                    b'H' | b'V' => 1,
+                    _ => 0,
+                };
+                if group == 0 || idx >= v.len() {
+                    break;
+                }
+                if cmd == b'M' || cmd == b'm' {
+                    // subsequent pairs after moveto are lines
+                    let (letter, v) = if cmd == b'M' { (b'L', v.clone()) } else { (b'l', v.clone()) };
+                    let _ = (letter, v);
+                }
+            }
+        }
+    });
+    frame.fill(&path, color);
 }
 
 fn paint_table(frame: &mut canvas::Frame, b: &TableBox, zoom: f32, pan: Vector, hovered: bool) {
@@ -844,34 +931,27 @@ fn paint_table(frame: &mut canvas::Frame, b: &TableBox, zoom: f32, pan: Vector, 
         },
     );
 
-    // a tiny table glyph before the title, like dbdiagram's header icon
-    let glyph = 0.5 * s.height;
+    // the table-with-records glyph before the title (dbdiagram's
+    // records icon: rounded-rect ring over row dashes)
+    let glyph = 0.55 * s.height;
     let gx = top_left.x + 0.9 * s.width;
     let gy = top_left.y + (s.height - glyph) / 2.0;
-    let gstroke = Stroke {
-        style: Color::from_rgba(0.91, 0.92, 0.93, 0.9).into(),
-        width: 1.0,
-        ..Default::default()
-    };
-    frame.stroke(
-        &Path::new(|bd| {
-            let r = glyph * 0.2;
-            bd.move_to(Point::new(gx + r, gy));
-            bd.line_to(Point::new(gx + glyph - r, gy));
-            bd.line_to(Point::new(gx + glyph, gy + r));
-            bd.line_to(Point::new(gx + glyph, gy + glyph));
-            bd.line_to(Point::new(gx, gy + glyph));
-            bd.line_to(Point::new(gx, gy + r));
-            bd.close();
-            // header divider + one body line
-            let h1 = gy + glyph * 0.42;
-            bd.move_to(Point::new(gx, h1));
-            bd.line_to(Point::new(gx + glyph, h1));
-            let h2 = gy + glyph * 0.71;
-            bd.move_to(Point::new(gx, h2));
-            bd.line_to(Point::new(gx + glyph, h2));
-        }),
-        gstroke,
+    let gcolor = Color::from_rgba(0.91, 0.92, 0.93, 0.55);
+    svg_icon(
+        frame,
+        Point::new(gx + glyph / 2.0, gy + glyph / 2.0),
+        glyph,
+        18.0,
+        gcolor,
+        TABLE_RING_ICON,
+    );
+    svg_icon(
+        frame,
+        Point::new(gx + glyph / 2.0, gy + glyph / 2.0),
+        glyph,
+        18.0,
+        gcolor,
+        TABLE_ROWS_ICON,
     );
 
     // title, bold white, after the glyph
@@ -964,47 +1044,11 @@ fn paint_table(frame: &mut canvas::Frame, b: &TableBox, zoom: f32, pan: Vector, 
         // note paper icon at the far right; hover shows the note
         if let Some((nx0, nx1)) = note_band(b, i, zoom, pan) {
             let ncenter = baseline((nx0 + nx1) / 2.0);
-            draw_note_icon(frame, ncenter, 0.55 * s.height, theme::MARKER);
+            svg_icon(frame, ncenter, 0.55 * s.height, 10.5, theme::MARKER, NOTE_ICON);
         }
     }
 }
 
-/// Tiny page glyph (dbdiagram's note marker): outlined sheet with a
-/// folded corner and two text lines.
-fn draw_note_icon(frame: &mut canvas::Frame, center: Point, size: f32, color: Color) {
-    let w = (0.085 * size).max(1.0);
-    let stroke = canvas::Stroke {
-        style: color.into(),
-        width: w,
-        ..Default::default()
-    };
-    let x0 = center.x - 0.40 * size;
-    let x1 = center.x + 0.40 * size;
-    let y0 = center.y - 0.50 * size;
-    let y1 = center.y + 0.50 * size;
-    let fold = 0.22 * size;
-    frame.stroke(
-        &Path::new(|b| {
-            b.move_to(Point::new(x0, y0));
-            b.line_to(Point::new(x1 - fold, y0));
-            b.line_to(Point::new(x1, y0 + fold));
-            b.line_to(Point::new(x1, y1));
-            b.line_to(Point::new(x0, y1));
-            b.close();
-            // fold
-            b.move_to(Point::new(x1 - fold, y0));
-            b.line_to(Point::new(x1 - fold, y0 + fold));
-            b.line_to(Point::new(x1, y0 + fold));
-            // text lines
-            let ly = y0 + 0.42 * size;
-            b.move_to(Point::new(x0 + 0.14 * size, ly));
-            b.line_to(Point::new(x1 - 0.14 * size, ly));
-            b.move_to(Point::new(x0 + 0.14 * size, ly + 0.22 * size));
-            b.line_to(Point::new(x1 - 0.14 * size, ly + 0.22 * size));
-        }),
-        stroke,
-    );
-}
 
 #[cfg(test)]
 mod tests {
