@@ -11,6 +11,9 @@ pub enum NodeKind {
 #[derive(Debug, Clone)]
 pub struct ColumnInfo {
     pub name: String,
+    /// Span of the name token in the source (the jump target when a
+    /// diagram column row is clicked).
+    pub name_span: Span,
     pub ty: String,
     pub pk: bool,
     /// Participates in a relationship (foreign key side or referenced side).
@@ -89,6 +92,7 @@ pub fn build(doc: &Document) -> Schema {
                 .iter()
                 .map(|c| ColumnInfo {
                     name: c.name.clone(),
+                    name_span: c.name_span.clone(),
                     // display form: unquoted (the AST keeps verbatim quotes)
                     ty: c.ty.replace('"', ""),
                     pk: c.settings.pk,
@@ -113,6 +117,7 @@ pub fn build(doc: &Document) -> Schema {
                 .iter()
                 .map(|v| ColumnInfo {
                     name: v.name.clone(),
+                    name_span: v.name_span.clone(),
                     ty: String::new(),
                     pk: false,
                     fk: false,

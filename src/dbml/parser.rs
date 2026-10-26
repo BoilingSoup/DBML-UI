@@ -1250,8 +1250,10 @@ fn enum_def(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Enum
         if eat(input, "}") {
             break;
         }
+        let v_off = offset(input, base);
         match ident(input, base) {
             Ok(vname) => {
+                let v_end = offset(input, base);
                 sp(input);
                 let mut note = None;
                 if peek_is(input, "[") {
@@ -1262,6 +1264,7 @@ fn enum_def(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Enum
                             skip_line(input);
                             e.values.push(EnumValue {
                                 name: vname,
+                                name_span: v_off..v_end,
                                 note: None,
                             });
                             continue;
@@ -1275,7 +1278,11 @@ fn enum_def(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Enum
                         }
                     }
                 }
-                e.values.push(EnumValue { name: vname, note });
+                e.values.push(EnumValue {
+                    name: vname,
+                    name_span: v_off..v_end,
+                    note,
+                });
             }
             Err(err) => {
                 errs.push(err_at(err.offset, err.message));
@@ -1656,7 +1663,39 @@ Ref: a.id > a.id // trailing ref comment
         assert_eq!(&src[t.columns[0].name_span.clone()], "id");
         let e = &out.doc.enums[0];
         assert_eq!(&src[e.name_span.clone()], "st");
+        assert_eq!(&src[e.values[0].name_span.clone()], "a");
         assert_eq!(&src[t.span.clone()], "Table users {\n  id integer\n}");
+    }
+
+    #[test]
+    fn column_name_spans_cover_the_name_token() {
+        // plain, quoted (the quotes stay in the span, like table name
+        // spans), backticked, and an inline-ref column (the ref settings
+        // must not shift the name span)
+        let src = concat!(
+            "Table t {\n",
+            "  id integer [pk]\n",
+            "  \"full name\" varchar [ref: > u.id]\n",
+            "  `weird` int\n",
+            "}\n",
+            "Table u { id int [pk] }\n"
+        );
+        let out = parse(src);
+        assert!(out.errors.is_empty(), "{:?}", out.errors);
+        let cols = &tables(&out)[0].columns;
+        assert_eq!(&src[cols[0].name_span.clone()], "id");
+        assert_eq!(&src[cols[1].name_span.clone()], "\"full name\"");
+        assert!(
+            cols[1].settings.inline_ref.is_some(),
+            "inline ref parsed alongside the span"
+        );
+        assert_eq!(&src[cols[2].name_span.clone()], "`weird`");
+        // every column's span starts on its own definition line (the
+        // click-to-jump target)
+        for (i, c) in cols.iter().enumerate() {
+            let (line, _) = line_col_at(src, c.name_span.start);
+            assert_eq!(line, i + 1, "column {}: {:?}", i, c.name);
+        }
     }
 
     #[test]

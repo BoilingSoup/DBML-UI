@@ -15,6 +15,9 @@ pub struct Row {
     pub pk: bool,
     pub fk: bool,
     pub name: String,
+    /// Span of the name token in the source (the jump target when a
+    /// diagram column row is clicked).
+    pub name_span: Span,
     pub ty: String,
     /// Some(true) = not null, Some(false) = explicit null.
     pub not_null: Option<bool>,
@@ -399,6 +402,7 @@ pub fn layout_with_overrides(
                     pk: c.pk,
                     fk: c.fk,
                     name: c.name.clone(),
+                    name_span: c.name_span.clone(),
                     ty: c.ty.clone(),
                     not_null: c.not_null,
                     unique: c.unique,

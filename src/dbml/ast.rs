@@ -170,6 +170,8 @@ pub struct Enum {
 #[derive(Debug, Clone)]
 pub struct EnumValue {
     pub name: String,
+    /// Just the value token; the jump target when clicking an enum row.
+    pub name_span: Span,
     pub note: Option<String>,
 }
 

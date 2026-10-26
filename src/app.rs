@@ -2,6 +2,7 @@
 
 use crate::canvas::diagram::{hit_test, to_cell_f, CELL_ASPECT, MARGIN_CELLS};
 use crate::editor::{self, Action, Editor, KeyCode, KeyEvent, KeyModifiers};
+use dbml_ui::dbml::ast::Span;
 use dbml_ui::layout::{self, Layout};
 use dbml_ui::{dbml, model};
 use iced::{Point, Vector};
@@ -215,6 +216,16 @@ pub enum Drag {
     /// the char under the pointer, MouseMovedWindow extends it,
     /// MouseReleased finalizes (a click collapses it).
     EditorSelect,
+}
+
+/// A click (no drag) on the diagram: the editor jump target, resolved at
+/// release time. A press on a column row carries that column's name span;
+/// any other press on a box (header band, padding) the table/enum name
+/// span, so the caret lands on the definition line either way.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PendingJump {
+    /// Span of the name token to land the caret on.
+    pub span: Span,
 }
 
 // ---------------------------------------------------------------- tabs --
@@ -455,9 +466,9 @@ pub struct App {
     pub drag: Drag,
     /// Last known cursor position over the diagram canvas (local px).
     pub canvas_cursor: Option<Point>,
-    /// Table that was clicked (no drag) — the editor jumps to its
-    /// definition.
-    pub pending_jump: Option<String>,
+    /// Table or column row that was clicked (no drag) — the editor jumps
+    /// to its definition line (the column's own, else the table's name).
+    pub pending_jump: Option<PendingJump>,
     /// Quit requested (window close Task follows).
     pub should_quit: bool,
     /// When the last ctrl+d/u scroll chord fired: a bare d/u right after
@@ -1020,6 +1031,7 @@ impl App {
     }
 
     fn canvas_released(&mut self, p: Point) {
+        use crate::canvas::diagram as dia;
         self.canvas_cursor = Some(p);
         if let Drag::Table {
             title,
@@ -1029,7 +1041,23 @@ impl App {
         } = &self.drag
         {
             if !*moved && p.distance(*press) <= 3.0 {
-                self.pending_jump = Some(title.clone());
+                // A click, not a drag. The layout did not move (only a real
+                // drag re-lays-out), so the press point still resolves: a
+                // column row jumps to THAT column's definition line, the
+                // header band or any other part of the box to the table's
+                // name line.
+                let d = &self.cur().diagram;
+                let span = match dia::row_at(d, self.cur().zoom, self.cur().pan, *press) {
+                    Some((b, row)) => Some(b.rows[row].name_span.clone()),
+                    None => d
+                        .boxes
+                        .iter()
+                        .find(|b| b.title == *title)
+                        .and_then(|b| b.name_span.clone()),
+                };
+                if let Some(span) = span {
+                    self.pending_jump = Some(PendingJump { span });
+                }
             }
         }
         // an in-flight Regular-mode selection drag is finalized by
@@ -2643,18 +2671,16 @@ impl App {
         self.cur_mut().editor_scroll = target.clamp(0.0, self.max_scroll());
     }
 
-    /// A click on a diagram table jumps the editor to its definition.
+    /// A click on a diagram table — or one of its column rows — jumps the
+    /// editor to the definition: the clicked column's own name token, or
+    /// the table's name line for a header press.
     fn consume_pending_jump(&mut self) {
-        if let Some(title) = self.pending_jump.take() {
-            if let Some(b) = self.cur().diagram.boxes.iter().find(|b| b.title == title) {
-                if let Some(span) = b.name_span.clone() {
-                    let (row, col) = dbml::parser::line_col_at(self.source(), span.start);
-                    self.editor_mut().jump(row, col);
-                    self.focus = Focus::Editor;
-                    self.keep_cursor_visible();
-                    self.follow_cursor_horizontal();
-                }
-            }
+        if let Some(jump) = self.pending_jump.take() {
+            let (row, col) = dbml::parser::line_col_at(self.source(), jump.span.start);
+            self.editor_mut().jump(row, col);
+            self.focus = Focus::Editor;
+            self.keep_cursor_visible();
+            self.follow_cursor_horizontal();
         }
     }
 }
@@ -2900,6 +2926,7 @@ mod tests {
     fn click_without_drag_jumps_editor_to_definition() {
         let mut app = app();
         let before = app.editor_mut().buf.cursor();
+        // the header band is not a column row: the jump goes to the table
         let p = over_box(&app, "posts", 4.0, 4.0);
         let _ = update(&mut app, Message::CanvasPressed(p));
         let _ = update(&mut app, Message::CanvasReleased(p));
@@ -2908,6 +2935,61 @@ mod tests {
         assert_ne!(before, after, "cursor moved to the definition");
         let line = app.editor_mut().buf.line(after.0);
         assert!(line.contains("posts"), "on the posts line: {line:?}");
+        // the caret lands on the name token, not just the line
+        assert_eq!(after.1, line.find("posts").unwrap());
+    }
+
+    #[test]
+    fn click_on_a_column_row_jumps_to_that_column() {
+        let mut app = app();
+        // the "username" row of the users box: the header band is one cell
+        // tall, so row i's band spans (i + 1)..(i + 2) cells from the top
+        let row = app
+            .diagram()
+            .boxes
+            .iter()
+            .find(|b| b.title == "users")
+            .unwrap()
+            .rows
+            .iter()
+            .position(|r| r.name == "username")
+            .unwrap();
+        let s = crate::canvas::diagram::cell_size(app.cur().zoom);
+        let p = over_box(&app, "users", 4.0, (row as f32 + 1.5) * s.height);
+        let _ = update(&mut app, Message::CanvasPressed(p));
+        let _ = update(&mut app, Message::CanvasReleased(p));
+        assert_eq!(app.focus, Focus::Editor);
+        let after = app.editor_mut().buf.cursor();
+        let line = app.editor_mut().buf.line(after.0);
+        assert!(
+            line.contains("username"),
+            "on the username line, not the table's: {line:?}"
+        );
+        // the caret sits at the column's name token on that line
+        assert_eq!(after.1, line.find("username").unwrap());
+    }
+
+    #[test]
+    fn click_on_an_enum_row_jumps_to_that_value() {
+        let mut app = app();
+        let row = app
+            .diagram()
+            .boxes
+            .iter()
+            .find(|b| b.title == "post_status")
+            .unwrap()
+            .rows
+            .iter()
+            .position(|r| r.name == "published")
+            .unwrap();
+        let s = crate::canvas::diagram::cell_size(app.cur().zoom);
+        let p = over_box(&app, "post_status", 4.0, (row as f32 + 1.5) * s.height);
+        let _ = update(&mut app, Message::CanvasPressed(p));
+        let _ = update(&mut app, Message::CanvasReleased(p));
+        let after = app.editor_mut().buf.cursor();
+        let line = app.editor_mut().buf.line(after.0);
+        assert!(line.contains("published"), "on the value line: {line:?}");
+        assert_eq!(after.1, line.find("published").unwrap());
     }
 }
 
