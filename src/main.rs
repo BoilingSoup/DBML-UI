@@ -25,7 +25,8 @@ fn main() -> Result<(), iced::Error> {
     // persisted preferences (vim/Regular) + recent files
     app.config = config::Config::load();
     let _ = &mut app;
-    iced::application("dbml-ui", app::update, view::root)
+    // the window title follows the active tab's file
+    iced::application(|app: &app::App| app.window_title(), app::update, view::root)
         .theme(|_| theme::app())
         .subscription(app::subscription)
         .window_size(iced::Size::new(1400.0, 900.0))

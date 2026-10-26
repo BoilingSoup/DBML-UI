@@ -1,12 +1,16 @@
-//! Window layout: editor pane | divider | diagram pane, status bar below,
-//! help overlay on top.
+//! Window layout: tab strip on top, editor pane | divider | diagram pane
+//! below, status bar at the bottom; help overlay and the tab context menu
+//! stack above everything.
 
-use crate::app::{App, Drag, Focus, Message};
+use crate::app::{App, Drag, Focus, Message, TabMenu, STRIP_LEFT, TAB_SLOT_W};
 use crate::canvas::diagram::Diagram;
 use crate::canvas::editor::EditorView;
 use crate::editor::{KeyCode, KeyModifiers};
 use crate::theme;
-use iced::widget::{button, canvas, column, container, horizontal_space, row, stack, text};
+use iced::widget::{
+    button, canvas, column, container, horizontal_space, mouse_area, row, stack, text,
+    vertical_space,
+};
 use iced::{Color, Element, Fill, Length};
 
 /// Zoom at which one diagram cell maps 1:1 to a text line (~20px).
@@ -17,19 +21,20 @@ pub const BASE_ZOOM: f32 = 20.0;
 /// the window height to get the true visible-line count.
 ///
 /// Term by term (iced line height is 1.3x the text size):
-/// above the canvas — 8.0 base padding + 23.6 toolbar row (text 12 +
-/// button padding 8) + 4.0 body spacing + 1.0 pane padding + 20.3 editor
-/// toolbar (text 11 + button padding 6) + 4.0 editor spacing = 60.9;
+/// above the canvas — 23.6 tab strip (text 12 + tab padding 8) + 4.0
+/// strip spacing + 8.0 base padding + 23.6 toolbar row (text 12 + button
+/// padding 8) + 4.0 body spacing + 1.0 pane padding + 20.3 editor
+/// toolbar (text 11 + button padding 6) + 4.0 editor spacing = 88.5;
 /// below the canvas — 1.0 pane padding + 8.0 base spacing + 27.6 status
 /// bar (text 12 + its padding 12) + 8.0 base padding = 44.6.
 ///
 /// Verified against a real iced 0.13.1 layout pass: at a 900px window the
-/// canvas measures 794.5px tall (900 - 105.5). Keep this in sync with
+/// canvas measures 766.9px tall (900 - 133.1). Keep this in sync with
 /// `root`; if the layout chrome changes, re-measure and update both.
-pub const EDITOR_CHROME: f32 = 105.5;
+pub const EDITOR_CHROME: f32 = 133.1;
 
 pub fn root(app: &App) -> Element<'_, Message> {
-    let editor_body: Element<'_, Message> = if app.doc_open {
+    let editor_body: Element<'_, Message> = if app.doc_open() {
         column![
             editor_toolbar(app),
             canvas(EditorView { app }).width(Fill).height(Fill)
@@ -48,17 +53,17 @@ pub fn root(app: &App) -> Element<'_, Message> {
 
     let diagram_pane = container(
         canvas(Diagram {
-            layout: &app.diagram,
-            zoom: app.zoom,
-            pan: app.pan,
+            layout: app.diagram(),
+            zoom: app.cur().zoom,
+            pan: app.cur().pan,
             hover: if app.drag == Drag::None {
                 app.canvas_cursor
             } else {
                 None
             },
             dragging: app.drag != Drag::None,
-            edge_anim: &app.edge_anim,
-            line_hover: app.line_hover,
+            edge_anim: &app.cur().edge_anim,
+            line_hover: app.cur().line_hover,
             clock: app.anim_clock,
         })
         .width(Fill)
@@ -76,7 +81,7 @@ pub fn root(app: &App) -> Element<'_, Message> {
         .width(Length::FillPortion(((1.0 - app.split) * 1000.0) as u16))
         .height(Fill);
 
-    let panes = if !app.doc_open {
+    let panes = if !app.doc_open() {
         // start screen: the side pane is not collapsible, no divider
         let start = container(start_pane(app))
             .width(Length::FillPortion((app.split * 1000.0) as u16))
@@ -89,7 +94,7 @@ pub fn root(app: &App) -> Element<'_, Message> {
     };
 
     // toolbar with the collapse toggle (only once a document is open)
-    let body = if app.doc_open {
+    let body = if app.doc_open() {
         let toggle = button(
             text(if app.editor_collapsed {
                 "Show editor ▸"
@@ -124,13 +129,176 @@ pub fn root(app: &App) -> Element<'_, Message> {
         column![panes].spacing(4).height(Fill)
     };
 
-    let base = column![body, status_bar(app)].spacing(8).padding(8);
+    // the tab strip runs full-bleed across the top; the padded content
+    // sits below it
+    let base = column![
+        tab_strip(app),
+        column![body, status_bar(app)].spacing(8).padding(8)
+    ]
+    .spacing(4);
 
+    let base: Element<'_, Message> = if let Some(menu) = &app.tab_menu {
+        stack![base, tab_menu_overlay(app, menu)].into()
+    } else {
+        base.into()
+    };
     if app.show_help {
         stack![base, help_overlay()].into()
     } else {
-        base.into()
+        base
     }
+}
+
+/// Chrome-like tab strip: one tab per open document (or start screen),
+/// each with a close X, then a + that opens a fresh start-screen tab.
+/// Click activates, click & drag reorders (the math lives in
+/// `App::tab_drag_moved`), right-click opens the context menu.
+fn tab_strip(app: &App) -> Element<'static, Message> {
+    let mut tabs = row![].spacing(8);
+    for i in 0..app.tabs.len() {
+        tabs = tabs.push(tab_button(app, i));
+    }
+    let plus = button(text("+").size(13.0).color(theme::DIM))
+        .padding([2, 8])
+        .style(move |_t, _s| tool_button_style())
+        .on_press(Message::NewTab);
+    container(tabs.push(plus))
+        .padding([0.0, STRIP_LEFT])
+        .width(Fill)
+        .style(|_t| container::Style {
+            background: Some(iced::Background::Color(theme::BG)),
+            ..Default::default()
+        })
+        .into()
+}
+
+/// One tab: title (with a • while it has unsaved changes) plus a close X,
+/// wrapped in a mouse_area for activate / right-click menu / middle-click
+/// close. The X is a real button inside it: it captures its own press, so
+/// closing never activates the tab (Chrome semantics). Width is
+/// `TAB_SLOT_W` minus the strip's 8px tab gap so drag-drop slots line up.
+fn tab_button(app: &App, i: usize) -> Element<'static, Message> {
+    let tab = &app.tabs[i];
+    let active = i == app.active;
+    let mut title = tab.title();
+    if tab.is_modified() {
+        title = format!("• {title}");
+    }
+    let label = text(truncate_title(&title, 22))
+        .size(12.0)
+        .color(if active { theme::TEXT } else { theme::DIM })
+        .width(Fill);
+    let close = button(text("×").size(10.0).color(theme::DIM))
+        .padding([1, 3])
+        .style(move |_t, _s| close_button_style())
+        .on_press(Message::CloseTab(i));
+    let content = row![label, close]
+        .spacing(4)
+        .align_y(iced::alignment::Vertical::Center);
+    mouse_area(
+        container(content)
+            .padding([4, 8])
+            .width(Length::Fixed(TAB_SLOT_W - 8.0))
+            .style(move |_t| tab_style(active)),
+    )
+    .on_press(Message::TabPressed(i))
+    .on_right_press(Message::TabMenu(i))
+    .on_middle_press(Message::CloseTab(i))
+    .into()
+}
+
+/// Clip a tab title to `max` chars, ellipsis at the end.
+fn truncate_title(title: &str, max: usize) -> String {
+    let count = title.chars().count();
+    if count <= max {
+        return title.to_string();
+    }
+    format!(
+        "{}…",
+        title.chars().take(max.saturating_sub(1)).collect::<String>()
+    )
+}
+
+/// Chrome-like tab shape: the active tab is a PANEL card with rounded top
+/// corners sitting on the strip; inactive tabs melt into it.
+fn tab_style(active: bool) -> container::Style {
+    container::Style {
+        background: active.then_some(iced::Background::Color(theme::PANEL)),
+        border: iced::border::Border {
+            radius: iced::border::Radius {
+                top_left: 6.0,
+                top_right: 6.0,
+                bottom_right: 0.0,
+                bottom_left: 0.0,
+            },
+            color: if active {
+                theme::BORDER
+            } else {
+                Color::TRANSPARENT
+            },
+            width: 1.0,
+        },
+        ..Default::default()
+    }
+}
+
+/// Quiet close X: no background of its own.
+fn close_button_style() -> iced::widget::button::Style {
+    iced::widget::button::Style {
+        background: None,
+        text_color: theme::DIM,
+        border: iced::border::rounded(4),
+        ..Default::default()
+    }
+}
+
+/// The tab context menu (Close / Close all), anchored at the pointer and
+/// clamped into the window, over an invisible click-away backdrop.
+fn tab_menu_overlay(app: &App, menu: &TabMenu) -> Element<'static, Message> {
+    const MENU_W: f32 = 150.0;
+    const MENU_H: f32 = 78.0;
+    let x = menu.at.x.min((app.window_size.0 - MENU_W).max(0.0));
+    let y = menu.at.y.min((app.window_size.1 - MENU_H).max(0.0));
+    let item = |label: &'static str, msg: Message| {
+        button(text(label).size(12.0).color(theme::TEXT))
+            .padding([5, 10])
+            .width(Fill)
+            .style(move |_t, _s| tool_button_style())
+            .on_press(msg)
+    };
+    let panel = container(
+        column![
+            item("Close", Message::TabMenuClose),
+            item("Close all", Message::TabMenuCloseAll),
+        ]
+        .spacing(2)
+        .padding(4),
+    )
+    .width(Length::Fixed(MENU_W))
+    .style(|_t| container::Style {
+        background: Some(iced::Background::Color(iced::Color::from_rgba(
+            0.08, 0.09, 0.11, 0.98,
+        ))),
+        border: iced::border::rounded(8).color(theme::BORDER),
+        ..Default::default()
+    });
+    // click anywhere outside the menu dismisses it
+    let backdrop = button(text(""))
+        .width(Fill)
+        .height(Fill)
+        .style(|_t, _s| iced::widget::button::Style {
+            background: None,
+            ..Default::default()
+        })
+        .on_press(Message::DismissTabMenu);
+    stack![
+        backdrop,
+        column![
+            horizontal_space().width(Length::Fixed(x)),
+            row![vertical_space().height(Length::Fixed(y)), panel]
+        ]
+    ]
+    .into()
 }
 
 /// Small toolbar above the editor: Save, Save As, Format, fmt-on-save
@@ -357,6 +525,7 @@ fn help_overlay() -> Element<'static, Message> {
         line("arrows Home End Delete", "work in every mode"),
         line(":w :q :q! :wq :o file :export f.svg|sql", "ex commands"),
         line("Ctrl-s / Ctrl-c", "save / quit"),
+        line("Ctrl+T / Ctrl+W", "new / close tab (right-click a tab: menu)"),
         line(
             "Ctrl-Space / type 2+ letters",
             "completion popup (insert mode)"
@@ -408,14 +577,14 @@ fn mode_chip(mode: &crate::editor::Mode, linewise: bool) -> (&'static str, Color
 
 fn status_bar(app: &App) -> Element<'_, Message> {
     let tables = app
-        .diagram
+        .diagram()
         .boxes
         .iter()
         .filter(|b| b.kind == dbml_ui::model::NodeKind::Table)
         .count();
-    let zoom = format!("zoom {:.0}%", app.zoom / BASE_ZOOM * 100.0);
-    let errors = format!("errors {}", app.parse_errors.len());
-    let (crow, ccol) = app.editor.buf.cursor();
+    let zoom = format!("zoom {:.0}%", app.cur().zoom / BASE_ZOOM * 100.0);
+    let errors = format!("errors {}", app.cur().parse_errors.len());
+    let (crow, ccol) = app.editor().buf.cursor();
 
     let seg = |s: &str, color: Color| -> Element<'_, Message> {
         text(s.to_string())
@@ -427,7 +596,7 @@ fn status_bar(app: &App) -> Element<'_, Message> {
 
     // leading segment: the cmdline when open, else mode + showcmd + focus
     let mut items: Vec<Element<'_, Message>> = Vec::new();
-    if let Some(cmd) = &app.editor.cmdline {
+    if let Some(cmd) = &app.editor().cmdline {
         items.push(seg(
             &format!(" {}{}▏ ", cmd.kind, cmd.input),
             iced::Color::BLACK,
@@ -436,7 +605,7 @@ fn status_bar(app: &App) -> Element<'_, Message> {
         let (mode, color) = if app.regular_mode() {
             (" REGULAR ", Color::from_rgb(0.55, 0.75, 0.95))
         } else {
-            mode_chip(&app.editor.mode, app.editor.visual_linewise)
+            mode_chip(&app.editor().mode, app.editor().visual_linewise)
         };
         items.push(
             container(seg(mode, Color::BLACK))
@@ -447,7 +616,7 @@ fn status_bar(app: &App) -> Element<'_, Message> {
                 })
                 .into(),
         );
-        if let Some(sc) = app.editor.showcmd() {
+        if let Some(sc) = app.editor().showcmd() {
             items.push(seg(&sc, theme::DIM));
         }
         match app.focus {
@@ -460,7 +629,7 @@ fn status_bar(app: &App) -> Element<'_, Message> {
         items.push(seg(msg, theme::FK));
     } else {
         let name = app
-            .file
+            .file()
             .as_ref()
             .map(|f| f.display().to_string())
             .unwrap_or_else(|| "[No Name]".to_string());

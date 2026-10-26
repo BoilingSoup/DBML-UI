@@ -30,9 +30,9 @@ pub fn pos_to_px(p: Pos, scroll: f32, hscroll: f32) -> Point {
 
 /// Buffer position under a local point (clamped into the text).
 pub fn px_to_pos(app: &App, p: Point) -> Pos {
-    let lines = app.editor.buf.lines();
+    let lines = app.editor().buf.lines();
     let row = ((p.y / LINE_HEIGHT).floor() as usize)
-        .saturating_add(app.editor_scroll as usize)
+        .saturating_add(app.cur().editor_scroll as usize)
         .min(lines.len().saturating_sub(1));
     let max_col = lines.get(row).map(|l| l.chars().count()).unwrap_or(0);
     let col = if p.x <= GUTTER {
@@ -40,7 +40,7 @@ pub fn px_to_pos(app: &App, p: Point) -> Pos {
     } else {
         // floor: the char under the pointer, also used for hit-testing
         // (+ hscroll: the view may be scrolled sideways)
-        (((p.x - GUTTER + app.editor_hscroll) / char_width()).floor() as usize).min(max_col)
+        (((p.x - GUTTER + app.cur().editor_hscroll) / char_width()).floor() as usize).min(max_col)
     };
     Pos { row, col }
 }
@@ -122,18 +122,18 @@ impl canvas::Program<Message> for EditorView<'_> {
         frame.fill_rectangle(Point::ORIGIN, bounds.size(), theme::PANEL);
 
         let app = self.app;
-        let lines = app.editor.buf.lines();
-        let scroll = app.editor_scroll;
-        let hs = app.editor_hscroll;
+        let lines = app.editor().buf.lines();
+        let scroll = app.cur().editor_scroll;
+        let hs = app.cur().editor_hscroll;
         let visible = (bounds.height / LINE_HEIGHT).ceil() as usize + 1;
         let first = scroll.floor() as usize;
         let sub = scroll - first as f32;
 
         // selection spans (visual mode); V paints whole rows regardless
         // of column
-        if app.editor.visual_linewise && app.editor.mode == crate::editor::Mode::Visual {
-            if let Some(anchor) = app.editor.buf.selection_anchor() {
-                let cursor = app.editor.buf.pos();
+        if app.editor().visual_linewise && app.editor().mode == crate::editor::Mode::Visual {
+            if let Some(anchor) = app.editor().buf.selection_anchor() {
+                let cursor = app.editor().buf.pos();
                 let from = anchor.row.min(cursor.row);
                 let to = anchor.row.max(cursor.row);
                 for r in from..=to {
@@ -147,7 +147,7 @@ impl canvas::Program<Message> for EditorView<'_> {
                     }
                 }
             }
-        } else if let Some((start, end)) = app.editor.buf.selection_range() {
+        } else if let Some((start, end)) = app.editor().buf.selection_range() {
             let top = pos_to_px(start, scroll, hs);
             let bottom = pos_to_px(end, scroll, hs);
             let full_rows = end.row.saturating_sub(start.row + 1);
@@ -183,7 +183,7 @@ impl canvas::Program<Message> for EditorView<'_> {
         let marks = error_marks(app);
 
         // gutter + text, token-colored
-        let src = app.source.as_str();
+        let src = app.source();
         // byte offset of each line start in `source` (highlight spans index it)
         let mut line_start = 0usize;
         let mut line_starts = Vec::with_capacity(lines.len());
@@ -215,8 +215,8 @@ impl canvas::Program<Message> for EditorView<'_> {
                 let le = ls + line.len();
                 // token chunks intersecting this line, drawn at their char
                 // column on the same monospace grid the cursor math uses
-                let first_tok = app.highlights.partition_point(|t| t.end <= ls);
-                for t in &app.highlights[first_tok..] {
+                let first_tok = app.cur().highlights.partition_point(|t| t.end <= ls);
+                for t in &app.cur().highlights[first_tok..] {
                     if t.start >= le {
                         break;
                     }
@@ -246,14 +246,14 @@ impl canvas::Program<Message> for EditorView<'_> {
         // hardware caret (the text still visibly scrolls), but here the
         // gliding block IS the animation — hiding it made fitting-document
         // scrolls look like an instant jump.
-        let cursor = app.editor.buf.pos();
+        let cursor = app.editor().buf.pos();
         let p = pos_to_px(cursor, scroll, hs);
         if p.y > -LINE_HEIGHT && p.y < bounds.height + LINE_HEIGHT {
             // Regular mode always shows the thin caret (no block cursor)
             let (color, filled) = if app.regular_mode() {
                 (theme::TEXT, false)
             } else {
-                match app.editor.mode {
+                match app.editor().mode {
                     crate::editor::Mode::Insert => (theme::TEXT, false),
                     _ => (theme::TEXT, true),
                 }
@@ -474,7 +474,7 @@ impl canvas::Program<Message> for EditorView<'_> {
         // canvas mouse_interaction is not bounds-gated by iced, so check
         // hover here: I-beam only while typing, plain arrow otherwise
         // (normal/visual motions are keyboard-driven)
-        if cursor.position_over(bounds).is_some() && self.app.editor.mode == Mode::Insert {
+        if cursor.position_over(bounds).is_some() && self.app.editor().mode == Mode::Insert {
             return iced::mouse::Interaction::Text;
         }
         iced::mouse::Interaction::default()
@@ -505,9 +505,9 @@ pub struct DocHover {
 /// Parse errors as per-line underline ranges: the token at the error
 /// offset, one char minimum (point errors still get a visible mark).
 pub fn error_marks(app: &App) -> Vec<Mark> {
-    let src = app.source.as_str();
+    let src = app.source();
     let mut marks = Vec::new();
-    for e in &app.parse_errors {
+    for e in &app.cur().parse_errors {
         let (row, byte_col) = dbml_ui::dbml::parser::line_col_at(src, e.offset);
         let Some(line) = src.split('\n').nth(row) else {
             continue;
@@ -537,7 +537,7 @@ pub fn error_marks(app: &App) -> Vec<Mark> {
 /// The word under a hover point, if the pointer is on a word character.
 fn word_at(app: &App, p: Point) -> Option<String> {
     let pos = px_to_pos(app, p);
-    let chars: Vec<char> = app.editor.buf.line(pos.row).chars().collect();
+    let chars: Vec<char> = app.editor().buf.line(pos.row).chars().collect();
     let is_word = |c: char| c.is_alphanumeric() || c == '_';
     if !chars.get(pos.col).copied().is_some_and(is_word) {
         return None;
@@ -558,7 +558,7 @@ pub fn doc_hover_at(app: &App, p: Point) -> Option<DocHover> {
     use dbml_ui::model::NodeKind;
     let word = word_at(app, p)?;
     let b = app
-        .diagram
+        .diagram()
         .boxes
         .iter()
         .find(|b| b.title == word || b.alias.as_deref() == Some(word.as_str()))?;
@@ -691,7 +691,7 @@ fn popup_layout(app: &App, bounds: Rectangle) -> Option<(Rectangle, usize, usize
         * char_width()
         + 20.0;
     let height = visible as f32 * ROW_H + 6.0;
-    let caret = pos_to_px(app.editor.buf.pos(), app.editor_scroll, app.editor_hscroll);
+    let caret = pos_to_px(app.editor().buf.pos(), app.cur().editor_scroll, app.cur().editor_hscroll);
     let mut x = caret.x + char_width() + 2.0;
     let mut y = caret.y + LINE_HEIGHT + 2.0;
     if y + height > bounds.y + bounds.height - 2.0 {
@@ -737,13 +737,13 @@ mod doc_tests {
     fn hovering_a_table_name_shows_its_columns() {
         let app = app();
         // last line: "Ref: comments.author_id > users.id" — hover "users"
-        let row = app.editor.buf.line_count() - 1;
-        let line = app.editor.buf.line(row);
+        let row = app.editor().buf.line_count() - 1;
+        let line = app.editor().buf.line(row);
         let col = line.find("users").unwrap();
         let p = pos_to_px(
             crate::editor::buffer::Pos { row, col },
-            app.editor_scroll,
-            app.editor_hscroll,
+            app.cur().editor_scroll,
+            app.cur().editor_hscroll,
         );
         let doc = doc_hover_at(&app, p + Vector::new(3.0, 10.0)).expect("doc");
         assert_eq!(doc.title, "Table users");
@@ -755,12 +755,12 @@ mod doc_tests {
     fn hovering_an_alias_shows_the_same_doc() {
         let app = app();
         // 0-based line 19: "user_id integer [not null, ref: > U.id]"
-        let line = app.editor.buf.line(19);
+        let line = app.editor().buf.line(19);
         let col = line.find("U.").unwrap();
         let p = pos_to_px(
             crate::editor::buffer::Pos { row: 19, col },
-            app.editor_scroll,
-            app.editor_hscroll,
+            app.cur().editor_scroll,
+            app.cur().editor_hscroll,
         );
         let doc = doc_hover_at(&app, p + Vector::new(3.0, 10.0)).expect("alias doc");
         assert_eq!(doc.title, "Table users");
@@ -770,12 +770,12 @@ mod doc_tests {
     fn hovering_an_enum_name_shows_values() {
         let app = app();
         // line 34: "Enum post_status {"
-        let line = app.editor.buf.line(33);
+        let line = app.editor().buf.line(33);
         let col = line.find("post_status").unwrap();
         let p = pos_to_px(
             crate::editor::buffer::Pos { row: 33, col },
-            app.editor_scroll,
-            app.editor_hscroll,
+            app.cur().editor_scroll,
+            app.cur().editor_hscroll,
         );
         let doc = doc_hover_at(&app, p + Vector::new(3.0, 10.0)).expect("enum doc");
         assert_eq!(doc.title, "Enum post_status");
@@ -787,19 +787,19 @@ mod doc_tests {
     fn non_name_words_get_no_doc() {
         let app = app();
         // hover "integer" on line 7 — not a definition name
-        let line = app.editor.buf.line(6);
+        let line = app.editor().buf.line(6);
         let col = line.find("integer").unwrap();
         let p = pos_to_px(
             crate::editor::buffer::Pos { row: 6, col },
-            app.editor_scroll,
-            app.editor_hscroll,
+            app.cur().editor_scroll,
+            app.cur().editor_hscroll,
         );
         assert!(doc_hover_at(&app, p + Vector::new(3.0, 10.0)).is_none());
         // hovering whitespace: no word at all
         let p = pos_to_px(
             crate::editor::buffer::Pos { row: 6, col: 0 },
-            app.editor_scroll,
-            app.editor_hscroll,
+            app.cur().editor_scroll,
+            app.cur().editor_hscroll,
         );
         assert!(word_at(&app, p + Vector::new(1.0, 10.0)).is_none());
     }
@@ -840,12 +840,12 @@ mod error_tests {
     #[test]
     fn parse_errors_become_line_marks() {
         let app = broken_app();
-        assert!(!app.parse_errors.is_empty(), "fixture is broken");
+        assert!(!app.cur().parse_errors.is_empty(), "fixture is broken");
         let marks = error_marks(&app);
         assert!(!marks.is_empty());
         for m in &marks {
             assert!(m.end > m.start, "non-empty: {m:?}");
-            let line_len = app.editor.buf.line(m.row).chars().count();
+            let line_len = app.editor().buf.line(m.row).chars().count();
             assert!(m.start <= line_len && m.end <= line_len + 1, "{m:?}");
         }
         // the sample's error sits on the first line
@@ -863,8 +863,8 @@ mod error_tests {
                 row: m.row,
                 col: m.start,
             },
-            app.editor_scroll,
-            app.editor_hscroll,
+            app.cur().editor_scroll,
+            app.cur().editor_hscroll,
         );
         let pos = px_to_pos(&app, p);
         let hit = marks
@@ -882,13 +882,13 @@ mod error_tests {
         let app = broken_app();
         let marks = error_marks(&app);
         // hover a different line than any mark
-        let other = (0..app.editor.buf.line_count())
+        let other = (0..app.editor().buf.line_count())
             .find(|r| !marks.iter().any(|m| m.row == *r))
             .expect("fixture has non-error lines");
         let p = pos_to_px(
             crate::editor::buffer::Pos { row: other, col: 0 },
-            app.editor_scroll,
-            app.editor_hscroll,
+            app.cur().editor_scroll,
+            app.cur().editor_hscroll,
         );
         let pos = px_to_pos(&app, p);
         assert!(!marks
@@ -933,9 +933,7 @@ mod popup_tests {
                 crate::editor::KeyModifiers::NONE,
             ),
         );
-        app.editor
-            .buf
-            .move_cursor(crate::editor::buffer::Move::Jump(row, col));
+        app.editor_mut().buf.move_cursor(crate::editor::buffer::Move::Jump(row, col));
         let _ = update(
             &mut app,
             crate::app::Message::KeyPressed(
@@ -957,10 +955,8 @@ mod popup_tests {
                 crate::editor::KeyModifiers::NONE,
             ),
         );
-        app.editor
-            .buf
-            .move_cursor(crate::editor::buffer::Move::Bottom);
-        app.editor_scroll = app.editor.buf.line_count() as f32 - 20.0;
+        app.editor_mut().buf.move_cursor(crate::editor::buffer::Move::Bottom);
+        app.cur_mut().editor_scroll = app.editor().buf.line_count() as f32 - 20.0;
         let _ = update(
             &mut app,
             crate::app::Message::KeyPressed(
@@ -970,7 +966,7 @@ mod popup_tests {
         );
         assert!(app.completion.is_some(), "popup open");
         let (rect, _, _) = popup_layout(&app, PANE).unwrap();
-        let caret = pos_to_px(app.editor.buf.pos(), app.editor_scroll, app.editor_hscroll);
+        let caret = pos_to_px(app.editor().buf.pos(), app.cur().editor_scroll, app.cur().editor_hscroll);
         assert!(
             rect.y + rect.height <= caret.y,
             "popup should sit above the caret: rect={rect:?} caret_y={}",
@@ -992,7 +988,7 @@ mod popup_tests {
                 },
             );
         }
-        app.editor_scroll = 0.0;
+        app.cur_mut().editor_scroll = 0.0;
         // a pane the popup can fit in but not at the caret's default spot
         let narrow = Rectangle::new(Point::new(0.0, 0.0), Size::new(720.0, 300.0));
         let (rect, _, _) = popup_layout(&app, narrow).unwrap();
@@ -1103,7 +1099,7 @@ mod tests {
             (Mode::Normal, Interaction::default()),
             (Mode::Visual, Interaction::default()),
         ] {
-            app.editor.mode = mode;
+            app.editor_mut().mode = mode;
             let view = EditorView { app: &app };
             assert_eq!(
                 view.mouse_interaction(&(), BOUNDS, inside),
@@ -1112,7 +1108,7 @@ mod tests {
             );
         }
         // outside the pane: no opinion even in insert mode
-        app.editor.mode = Mode::Insert;
+        app.editor_mut().mode = Mode::Insert;
         let view = EditorView { app: &app };
         assert_eq!(
             view.mouse_interaction(&(), BOUNDS, Cursor::Available(Point::new(900.0, 100.0))),
