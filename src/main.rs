@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)] // the whole editor is written in safe Rust
 mod app;
 mod canvas;
+mod clipboard;
 mod config;
 mod editor;
 mod theme;

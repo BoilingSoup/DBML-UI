@@ -5,6 +5,10 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.104"
+# System-clipboard text (copy/paste) on X11/Wayland/Windows/macOS. Text
+# only: no image-data feature. Unreachable clipboards (headless CI, SSH)
+# are a handled error, never a panic.
+arboard = { version = "3.7", default-features = false }
 iced = { version = "=0.13.1", features = ["canvas", "smol"] }
 # iced's runtime (smol feature); also hands the file-picker thread's result
 # back to the update loop

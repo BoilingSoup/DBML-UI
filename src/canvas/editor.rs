@@ -216,6 +216,12 @@ impl canvas::Program<Message> for EditorView<'_> {
                     Some(Message::EditorPressed(local)),
                 )
             }
+            // right-press opens the editor context menu (Copy / Cut /
+            // Paste / Format); the app anchors it via the window cursor
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => (
+                canvas::event::Status::Captured,
+                Some(Message::EditorMenu(local)),
+            ),
             _ => (canvas::event::Status::Ignored, None),
         }
     }
@@ -440,9 +446,12 @@ impl canvas::Program<Message> for EditorView<'_> {
         cursor: iced::mouse::Cursor,
     ) -> iced::mouse::Interaction {
         // canvas mouse_interaction is not bounds-gated by iced, so check
-        // hover here: I-beam only while typing, plain arrow otherwise
-        // (normal/visual motions are keyboard-driven)
-        if cursor.position_over(bounds).is_some() && self.app.editor().mode == Mode::Insert {
+        // hover here: I-beam while typing or in Regular mode (where the
+        // mouse selects text), plain arrow otherwise (normal/visual
+        // motions are keyboard-driven)
+        if cursor.position_over(bounds).is_some()
+            && (self.app.editor().mode == Mode::Insert || self.app.regular_mode())
+        {
             return iced::mouse::Interaction::Text;
         }
         iced::mouse::Interaction::default()
@@ -1045,6 +1054,41 @@ mod tests {
     }
 
     #[test]
+    fn right_press_inside_opens_the_context_menu() {
+        let app = App::default();
+        let view = EditorView { app: &app };
+        let (status, message) = view.update(
+            &mut BlinkState::default(),
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)),
+            BOUNDS,
+            Cursor::Available(Point::new(100.0 + GUTTER + 30.0, 50.0 + 40.0)),
+        );
+        assert_eq!(status, canvas::event::Status::Captured);
+        match message {
+            Some(Message::EditorMenu(p)) => {
+                // canvas-LOCAL coords; the app anchors the overlay
+                assert!((p.x - (GUTTER + 30.0)).abs() < 0.01);
+                assert!((p.y - 40.0).abs() < 0.01);
+            }
+            other => panic!("expected EditorMenu, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn right_press_outside_the_pane_is_ignored() {
+        let app = App::default();
+        let view = EditorView { app: &app };
+        let (status, message) = view.update(
+            &mut BlinkState::default(),
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)),
+            BOUNDS,
+            Cursor::Available(Point::new(900.0, 100.0)),
+        );
+        assert_eq!(status, canvas::event::Status::Ignored);
+        assert!(message.is_none());
+    }
+
+    #[test]
     fn wheel_outside_editor_does_not_scroll() {
         // regression: zooming the diagram scrolled the editor pane
         let app = App::default();
@@ -1123,6 +1167,18 @@ mod tests {
             ),
             Interaction::default()
         );
+        // Regular mode: the mouse selects text, so it gets the I-beam in
+        // every vim mode
+        app.config.vim = false;
+        for mode in [Mode::Normal, Mode::Visual, Mode::Insert] {
+            app.editor_mut().mode = mode;
+            let view = EditorView { app: &app };
+            assert_eq!(
+                view.mouse_interaction(&BlinkState::default(), BOUNDS, inside),
+                Interaction::Text,
+                "regular {mode:?}"
+            );
+        }
     }
 }
 

@@ -70,6 +70,20 @@ pub enum Message {
     TabMenuCloseAll,
     /// A click anywhere outside the context menu dismisses it.
     DismissTabMenu,
+    /// Right-press in the editor pane: open its Copy/Cut/Paste/Format
+    /// context menu (canvas-local px).
+    EditorMenu(Point),
+    /// Context-menu item: copy the selection to the register and the
+    /// system clipboard (the selection stays).
+    EditorMenuCopy,
+    /// Context-menu item: cut the selection (register + system clipboard).
+    EditorMenuCut,
+    /// Context-menu item: paste the system clipboard at the cursor.
+    EditorMenuPaste,
+    /// Context-menu item: run the canonical formatter (Message::FormatNow).
+    EditorMenuFormat,
+    /// A click anywhere outside the editor context menu dismisses it.
+    DismissEditorMenu,
     /// Open the record view for the table node at this schema index.
     OpenRecords(usize),
     /// Close the record view overlay.
@@ -172,6 +186,10 @@ pub enum Drag {
     },
     /// Dragging the pane divider.
     Divider,
+    /// Regular-mode mouse text selection in the editor: press anchors at
+    /// the char under the pointer, MouseMovedWindow extends it,
+    /// MouseReleased finalizes (a click collapses it).
+    EditorSelect,
 }
 
 // ---------------------------------------------------------------- tabs --
@@ -228,6 +246,20 @@ pub struct TabMenu {
     pub tab: usize,
     /// Window-relative anchor (last known pointer position).
     pub at: Point,
+}
+
+/// Right-click context menu over the editor pane, anchored at the pointer.
+/// Item availability is snapshotted at open time: Copy/Cut need a buffer
+/// selection, Paste needs text on the system clipboard (queried lazily
+/// here, on the UI thread; a failed read just disables the item).
+#[derive(Debug, Clone)]
+pub struct EditorMenu {
+    /// Window-relative anchor (last known pointer position).
+    pub at: Point,
+    /// The buffer has a selection: Copy and Cut are enabled.
+    pub has_selection: bool,
+    /// The system clipboard had text when the menu opened: Paste enabled.
+    pub clipboard_has_text: bool,
 }
 
 /// Chrome-style drop slot for strip-relative pointer `x` over `tabs`
@@ -372,6 +404,13 @@ pub struct App {
     pub(crate) tab_drag: Option<TabDrag>,
     /// Open tab context menu, if any.
     pub tab_menu: Option<TabMenu>,
+    /// Open editor context menu (right-click), if any.
+    pub editor_menu: Option<EditorMenu>,
+    /// System-clipboard seam (src/clipboard.rs): `None` until the first
+    /// use lazily creates the arboard backend — a display may not exist,
+    /// and creation is only attempted from user actions. Tests swap in a
+    /// stub; a real backend that fails at use time surfaces as a toast.
+    clipboard: Option<Box<dyn crate::clipboard::ClipboardBackend + Send>>,
     /// Last known window-relative pointer position (drives the tab menu
     /// anchor and the drag threshold math).
     window_cursor: Option<Point>,
@@ -431,6 +470,8 @@ impl App {
             tab_drag: None,
             tab_anim: Vec::new(),
             tab_menu: None,
+            editor_menu: None,
+            clipboard: None,
             window_cursor: None,
             focus: Focus::Editor,
             editor_collapsed: false,
@@ -568,6 +609,7 @@ impl App {
         self.pending_jump = None;
         self.drag = Drag::None;
         self.tab_menu = None;
+        self.editor_menu = None;
         self.tab_drag = None;
         self.space_leader = false;
         // the record view indexes the previous tab's schema nodes
@@ -665,6 +707,163 @@ impl App {
         self.tab_menu = Some(TabMenu { tab: idx, at });
     }
 
+    // ------------------------ clipboard ------------------------
+    //
+    // Everything here is failure-tolerant: arboard needs a display, and
+    // headless sessions (CI, SSH) must degrade to toasts, not panics.
+
+    /// The system clipboard, creating the real backend on first use. None
+    /// when no system clipboard is reachable; callers degrade.
+    fn clipboard(&mut self) -> Option<&mut Box<dyn crate::clipboard::ClipboardBackend + Send>> {
+        if self.clipboard.is_none() {
+            self.clipboard = crate::clipboard::system_backend()
+                .ok()
+                .map(|b| Box::new(b) as Box<dyn crate::clipboard::ClipboardBackend + Send>);
+        }
+        self.clipboard.as_mut()
+    }
+
+    /// Current system-clipboard text: None when the clipboard is empty,
+    /// unreachable or the read failed. (Menu Paste's enable flag and the
+    /// Ctrl+V paths both funnel through here.)
+    pub fn clipboard_text(&mut self) -> Option<String> {
+        self.clipboard()?.get_text().ok().filter(|t| !t.is_empty())
+    }
+
+    /// Push `text` to the system clipboard; Err carries the reason (the
+    /// caller turns it into a status-bar toast).
+    fn copy_to_system(&mut self, text: &str) -> Result<(), String> {
+        match self.clipboard() {
+            Some(cb) => cb.set_text(text.to_string()),
+            None => Err("no system clipboard".to_string()),
+        }
+    }
+
+    /// Ctrl+C / menu Copy: the selection into the register and the system
+    /// clipboard; the selection itself STAYS (a follow-up paste replaces
+    /// it). A no-op without a selection.
+    fn copy_selection(&mut self) {
+        let Some(t) = self.editor_mut().buf.selection_text() else {
+            return;
+        };
+        self.editor_mut()
+            .set_register(t.split('\n').map(str::to_string).collect());
+        self.message = Some(match self.copy_to_system(&t) {
+            Ok(()) => format!("copied {} chars", t.chars().count()),
+            Err(e) => format!("clipboard: {e}"),
+        });
+    }
+
+    /// Ctrl+X / menu Cut: the selection into the register and the system
+    /// clipboard, then deleted from the buffer.
+    fn cut_selection(&mut self) {
+        let Some(t) = self.editor_mut().buf.cut_selection() else {
+            return;
+        };
+        self.editor_mut()
+            .set_register(t.split('\n').map(str::to_string).collect());
+        self.message = Some(match self.copy_to_system(&t) {
+            Ok(()) => format!("cut {} chars", t.chars().count()),
+            Err(e) => format!("clipboard: {e}"),
+        });
+        self.after_edit(editor::Action::Changed);
+        self.follow_cursor_horizontal();
+        self.keep_cursor_visible();
+    }
+
+    /// Ctrl+V / menu Paste: the system clipboard at the cursor (an active
+    /// selection is replaced by the first inserted line). Falls back to
+    /// the internal register when no system clipboard is reachable.
+    fn paste_from_system(&mut self) {
+        let text = match self.clipboard_text() {
+            Some(t) => t,
+            None => {
+                let reg = self.editor().register_lines();
+                if reg.is_empty() {
+                    self.message = Some("nothing to paste".to_string());
+                    return;
+                }
+                reg.join("\n")
+            }
+        };
+        self.paste_text(&text);
+        self.after_edit(editor::Action::Changed);
+        self.follow_cursor_horizontal();
+        self.keep_cursor_visible();
+    }
+
+    /// Insert `text` at the cursor as a multi-line paste: '\n' becomes
+    /// real line breaks ('\r\n' endings are normalized), and the first
+    /// inserted op replaces an active selection (Buffer edits clear it).
+    fn paste_text(&mut self, text: &str) {
+        for (i, line) in text
+            .split('\n')
+            .map(|l| l.strip_suffix('\r').unwrap_or(l))
+            .enumerate()
+        {
+            if i > 0 {
+                self.editor_mut().buf.insert_newline();
+            }
+            if !line.is_empty() {
+                self.editor_mut().buf.insert_str(line);
+            }
+        }
+    }
+
+    /// Right-press in the editor pane: open its context menu anchored at
+    /// the pointer, snapshotting item availability (a failed clipboard
+    /// read disables Paste — never a panic).
+    fn editor_menu_open(&mut self, local: Point) {
+        let at = self.window_cursor.unwrap_or(Point::new(
+            local.x,
+            local.y + crate::view::EDITOR_CANVAS_TOP,
+        ));
+        let menu = EditorMenu {
+            at,
+            has_selection: self.editor().buf.selection_anchor().is_some(),
+            clipboard_has_text: self.clipboard_text().is_some(),
+        };
+        self.editor_menu = Some(menu);
+    }
+
+    // ---------------- regular-mode mouse selection ----------------
+
+    /// A press in the editor pane while in Regular mode: anchor the
+    /// selection at the char under the pointer and start the drag
+    /// (MouseMovedWindow extends, MouseReleased finalizes).
+    fn editor_select_pressed(&mut self, local: Point) {
+        let pos = crate::canvas::editor::px_to_pos(self, local);
+        self.editor_mut().buf.cancel_selection();
+        self.editor_mut()
+            .buf
+            .move_cursor(editor::buffer::Move::Jump(pos.row, pos.col));
+        self.editor_mut().buf.start_selection();
+        self.drag = Drag::EditorSelect;
+    }
+
+    /// Selection-drag extension: move the cursor to the buffer position
+    /// under the (canvas-local) pointer. Points outside the pane (the
+    /// drag left it) clamp to the buffer edges via px_to_pos.
+    fn editor_select_moved(&mut self, local: Point) {
+        let pos = crate::canvas::editor::px_to_pos(self, local);
+        self.editor_mut()
+            .buf
+            .move_cursor(editor::buffer::Move::Jump(pos.row, pos.col));
+        self.follow_cursor_horizontal();
+    }
+
+    /// Selection-drag end: finalize. A click that never extended the
+    /// selection (anchor still on the cursor) collapses it — a plain
+    /// click places the caret and selects nothing.
+    fn editor_select_released(&mut self) {
+        self.drag = Drag::None;
+        let ed = self.editor_mut();
+        if ed.buf.selection_anchor().is_some_and(|a| a == ed.buf.pos()) {
+            ed.buf.cancel_selection();
+        }
+        self.keep_cursor_visible();
+    }
+
     fn canvas_pressed(&mut self, p: Point) {
         use crate::canvas::diagram as dia;
         self.canvas_cursor = Some(p);
@@ -760,7 +959,7 @@ impl App {
                     moved,
                 };
             }
-            Drag::Divider | Drag::None => {}
+            Drag::Divider | Drag::EditorSelect | Drag::None => {}
         }
     }
 
@@ -777,7 +976,11 @@ impl App {
                 self.pending_jump = Some(title.clone());
             }
         }
-        self.drag = Drag::None;
+        // an in-flight Regular-mode selection drag is finalized by
+        // MouseReleased (which knows whether the click selected anything)
+        if !matches!(self.drag, Drag::EditorSelect) {
+            self.drag = Drag::None;
+        }
         // the highlight froze while dragging; catch up to the pointer
         self.update_hover(p);
     }
@@ -1074,6 +1277,14 @@ fn handle_message(app: &mut App, message: Message) {
             if app.tab_drag.is_some() {
                 app.tab_drag_moved(x - STRIP_LEFT);
             }
+            // a Regular-mode selection drag also follows the pointer
+            // window-wide: dragging below the pane or into the diagram
+            // clamps to the buffer edges instead of stopping (the canvas
+            // top offset converts window px to the canvas-local coords
+            // px_to_pos expects — see EDITOR_CANVAS_TOP)
+            if app.drag == Drag::EditorSelect {
+                app.editor_select_moved(Point::new(x, y - crate::view::EDITOR_CANVAS_TOP));
+            }
             if x < app.editor_pane_width() + 30.0 && app.drag == Drag::None {
                 app.cur_mut().hover_edges.clear();
             }
@@ -1086,6 +1297,11 @@ fn handle_message(app: &mut App, message: Message) {
         Message::MouseReleased => {
             if app.drag == Drag::Divider {
                 app.drag = Drag::None;
+            }
+            // a Regular-mode selection drag finalizes: a real drag keeps
+            // its selection, a plain click collapses it
+            if app.drag == Drag::EditorSelect {
+                app.editor_select_released();
             }
             // drop: the dragged tab glides from its released pose to its
             // slot via the same easing as the displaced neighbors
@@ -1131,6 +1347,24 @@ fn handle_message(app: &mut App, message: Message) {
         }
         Message::TabMenuCloseAll => app.close_all_tabs(),
         Message::DismissTabMenu => app.tab_menu = None,
+        Message::EditorMenu(p) => app.editor_menu_open(p),
+        Message::EditorMenuCopy => {
+            app.editor_menu = None;
+            app.copy_selection();
+        }
+        Message::EditorMenuCut => {
+            app.editor_menu = None;
+            app.cut_selection();
+        }
+        Message::EditorMenuPaste => {
+            app.editor_menu = None;
+            app.paste_from_system();
+        }
+        Message::EditorMenuFormat => {
+            app.editor_menu = None;
+            app.format_now();
+        }
+        Message::DismissEditorMenu => app.editor_menu = None,
         Message::OpenRecords(node) => app.open_records(node),
         Message::CloseRecords => app.record_view = None,
         Message::RecordsFollow(node, row) => {
@@ -1195,14 +1429,20 @@ fn handle_message(app: &mut App, message: Message) {
             }
         }
         Message::EditorPressed(p) => {
-            let pos = crate::canvas::editor::px_to_pos(app, p);
-            app.editor_mut()
-                .buf
-                .move_cursor(editor::buffer::Move::Jump(pos.row, pos.col));
-            if app.editor_mut().mode == editor::Mode::Visual {
-                // clicking re-anchors the selection
-                app.editor_mut().buf.cancel_selection();
-                app.editor_mut().buf.start_selection();
+            if app.regular_mode() {
+                // Regular mode: press-drag text selection (vim's visual
+                // selection stays keyboard-driven)
+                app.editor_select_pressed(p);
+            } else {
+                let pos = crate::canvas::editor::px_to_pos(app, p);
+                app.editor_mut()
+                    .buf
+                    .move_cursor(editor::buffer::Move::Jump(pos.row, pos.col));
+                if app.editor_mut().mode == editor::Mode::Visual {
+                    // clicking re-anchors the selection
+                    app.editor_mut().buf.cancel_selection();
+                    app.editor_mut().buf.start_selection();
+                }
             }
             app.focus = Focus::Editor;
             app.follow_cursor_horizontal();
@@ -1370,35 +1610,18 @@ impl App {
                 self.editor_mut().buf.move_cursor(editor::buffer::Move::End);
             }
             KeyCode::Char('c') => {
-                // Ctrl+C: copy the selection into the register
-                if let Some(t) = self.editor_mut().buf.copy_selection() {
-                    self.editor_mut()
-                        .set_register(t.split('\n').map(str::to_string).collect());
-                    self.message = Some(format!("copied {} chars", t.chars().count()));
-                }
+                // Ctrl+C: copy the selection (register + system clipboard),
+                // keeping it (a follow-up paste replaces it)
+                self.copy_selection();
             }
             KeyCode::Char('x') => {
-                if let Some(t) = self.editor_mut().buf.cut_selection() {
-                    self.editor_mut()
-                        .set_register(t.split('\n').map(str::to_string).collect());
-                    self.after_edit(editor::Action::Changed);
-                }
+                // Ctrl+X: cut the selection (register + system clipboard)
+                self.cut_selection();
             }
             KeyCode::Char('v') => {
-                // Ctrl+V: paste the register inline at the cursor
-                let reg = self.editor_mut().register_lines();
-                if !reg.is_empty() {
-                    self.editor_mut().buf.cancel_selection();
-                    for (i, line) in reg.iter().enumerate() {
-                        if i > 0 {
-                            self.editor_mut().buf.insert_newline();
-                        }
-                        if !line.is_empty() {
-                            self.editor_mut().buf.insert_str(line);
-                        }
-                    }
-                    self.after_edit(editor::Action::Changed);
-                }
+                // Ctrl+V: paste the system clipboard at the cursor
+                // (register fallback when no system clipboard exists)
+                self.paste_from_system();
             }
             _ => {}
         }
@@ -1620,9 +1843,10 @@ impl App {
 
     fn key_pressed(&mut self, code: KeyCode, mods: KeyModifiers) {
         let key = KeyEvent::new(code, mods);
-        // the tab context menu is modal: any key just dismisses it
-        if self.tab_menu.is_some() {
+        // the context menus are modal: any key just dismisses them
+        if self.tab_menu.is_some() || self.editor_menu.is_some() {
             self.tab_menu = None;
+            self.editor_menu = None;
             return;
         }
         // the record view is modal: Escape closes it, other keys are
@@ -1789,6 +2013,16 @@ impl App {
             } else {
                 self.last_scroll_chord = None;
             }
+        }
+        // Ctrl+V pastes the system clipboard in insert mode (regular mode
+        // handles it in regular_key; vim's p/P stay register-based, and
+        // there is no block-visual for vim's Ctrl+V binding to serve)
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && key.code == KeyCode::Char('v')
+            && self.editor_mut().mode == editor::Mode::Insert
+        {
+            self.paste_from_system();
+            return;
         }
         // Ctrl+Space toggles the popup (VSCode muscle memory)
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Space {
@@ -2046,6 +2280,14 @@ impl App {
     }
 
     fn after_edit(&mut self, action: Action) {
+        // a vim yank (y/yy/yiw/…) rides along to the system clipboard:
+        // the Editor queues the text, the app pushes it (failures become
+        // a toast, never a panic)
+        if let Some(text) = self.editor_mut().take_system_yank() {
+            if let Err(e) = self.copy_to_system(&text) {
+                self.message = Some(format!("clipboard: {e}"));
+            }
+        }
         match action {
             Action::None => {}
             Action::Changed => {
@@ -4150,5 +4392,380 @@ mod tab_tests {
         assert_eq!(tab.title(), "notes.dbml");
         tab.editor.set_text("Table t { id }");
         assert!(tab.is_modified());
+    }
+}
+
+#[cfg(test)]
+mod clipboard_menu_tests {
+    use super::*;
+    use crate::clipboard::FakeClipboard;
+    use crate::editor::buffer::Pos;
+
+    fn regular_app() -> App {
+        let mut app = App {
+            config: crate::config::Config {
+                vim: false,
+                ..Default::default()
+            },
+            ..App::default()
+        };
+        app.editor_mut().set_text("hello world\nsecond line\n");
+        app.cur_mut().set_source("hello world\nsecond line\n");
+        app
+    }
+
+    /// Select "hello" (chars 0..5 of line 0) with shift+arrows.
+    fn select_hello(app: &mut App) {
+        app.editor_mut()
+            .buf
+            .move_cursor(crate::editor::buffer::Move::Jump(0, 0));
+        for _ in 0..4 {
+            let _ = update(app, Message::KeyPressed(KeyCode::Right, KeyModifiers::SHIFT));
+        }
+    }
+
+    fn key(mods: KeyModifiers, c: char) -> Message {
+        Message::KeyPressed(KeyCode::Char(c), mods)
+    }
+
+    // canvas-local px inside a buffer position's cell (pos_to_px alone
+    // sits on the exact cell boundary, where the px_to_pos floor flips on
+    // float rounding — a real pointer lands inside the cell)
+    fn local_px(pos: Pos) -> Point {
+        let p = crate::canvas::editor::pos_to_px(pos, 0.0, 0.0);
+        Point::new(p.x + 2.0, p.y + 2.0)
+    }
+
+    // window px of a buffer position: the drag path converts back with
+    // view::EDITOR_CANVAS_TOP, so the roundtrip must be exact
+    fn window_px(pos: Pos) -> Point {
+        let l = local_px(pos);
+        Point::new(l.x, l.y + crate::view::EDITOR_CANVAS_TOP)
+    }
+
+    #[test]
+    fn regular_ctrl_c_copies_to_system_and_keeps_the_selection() {
+        let mut app = regular_app();
+        app.clipboard = Some(Box::new(FakeClipboard::default()));
+        select_hello(&mut app);
+        let _ = update(&mut app, key(KeyModifiers::CONTROL, 'c'));
+        assert_eq!(app.clipboard_text().as_deref(), Some("hello"));
+        assert_eq!(app.message.as_deref(), Some("copied 5 chars"));
+        assert_eq!(
+            app.editor().buf.selection_text().as_deref(),
+            Some("hello"),
+            "the selection survives a copy"
+        );
+        assert_eq!(app.editor().register_lines(), vec!["hello".to_string()]);
+    }
+
+    #[test]
+    fn clipboard_failures_become_toasts_not_panics() {
+        let mut app = regular_app();
+        app.clipboard = Some(Box::new(FakeClipboard {
+            fail_set: true,
+            ..Default::default()
+        }));
+        select_hello(&mut app);
+        let _ = update(&mut app, key(KeyModifiers::CONTROL, 'c'));
+        assert_eq!(app.message.as_deref(), Some("clipboard: no display"));
+        // the register still got the text
+        assert_eq!(app.editor().register_lines(), vec!["hello".to_string()]);
+    }
+
+    #[test]
+    fn regular_ctrl_x_cuts_to_system() {
+        let mut app = regular_app();
+        app.clipboard = Some(Box::new(FakeClipboard::default()));
+        select_hello(&mut app);
+        let _ = update(&mut app, key(KeyModifiers::CONTROL, 'x'));
+        assert_eq!(app.clipboard_text().as_deref(), Some("hello"));
+        assert_eq!(app.editor().buf.line(0), " world");
+        assert!(app.editor().buf.selection_anchor().is_none());
+    }
+
+    #[test]
+    fn regular_ctrl_v_pastes_multiline_from_system() {
+        let mut app = regular_app();
+        app.clipboard = Some(Box::new(FakeClipboard::with_text("x\ny")));
+        let _ = update(&mut app, key(KeyModifiers::CONTROL, 'v'));
+        assert_eq!(app.editor().buf.lines(), ["x", "yhello world", "second line"]);
+    }
+
+    #[test]
+    fn regular_paste_replaces_the_selection() {
+        let mut app = regular_app();
+        app.clipboard = Some(Box::new(FakeClipboard::with_text("PASTED")));
+        select_hello(&mut app);
+        let _ = update(&mut app, key(KeyModifiers::CONTROL, 'v'));
+        assert_eq!(app.editor().buf.line(0), "PASTED world");
+    }
+
+    #[test]
+    fn paste_falls_back_to_the_register_without_a_system_clipboard() {
+        let mut app = regular_app();
+        // an unreachable system clipboard: reads fail, so the internal
+        // register (the pre-arboard paste source) is used
+        app.clipboard = Some(Box::new(FakeClipboard {
+            fail_get: true,
+            ..Default::default()
+        }));
+        app.editor_mut().set_register(vec!["reg text".to_string()]);
+        let _ = update(&mut app, key(KeyModifiers::CONTROL, 'v'));
+        assert_eq!(app.editor().buf.line(0), "reg texthello world");
+
+        // nothing anywhere: a toast, no panic
+        app.editor_mut().set_register(Vec::new());
+        let _ = update(&mut app, key(KeyModifiers::CONTROL, 'v'));
+        assert_eq!(app.message.as_deref(), Some("nothing to paste"));
+    }
+
+    #[test]
+    fn crlf_paste_is_normalized() {
+        let mut app = regular_app();
+        app.clipboard = Some(Box::new(FakeClipboard::with_text("a\r\nb")));
+        let _ = update(&mut app, key(KeyModifiers::CONTROL, 'v'));
+        assert_eq!(app.editor().buf.lines(), ["a", "bhello world", "second line"]);
+    }
+
+    #[test]
+    fn insert_mode_ctrl_v_pastes_from_system() {
+        let mut app = App {
+            clipboard: Some(Box::new(FakeClipboard::with_text("INS"))),
+            ..App::default()
+        }; // vim mode
+        let _ = update(&mut app, key(KeyModifiers::NONE, 'i'));
+        let _ = update(&mut app, key(KeyModifiers::CONTROL, 'v'));
+        assert!(app.source().starts_with("INS"));
+    }
+
+    #[test]
+    fn vim_yank_reaches_the_system_clipboard() {
+        // the sample: line 0 "Project blog {"
+        let mut app = App {
+            clipboard: Some(Box::new(FakeClipboard::default())),
+            ..App::default()
+        };
+        // yy
+        let _ = update(&mut app, key(KeyModifiers::NONE, 'y'));
+        let _ = update(&mut app, key(KeyModifiers::NONE, 'y'));
+        assert_eq!(app.clipboard_text().as_deref(), Some("Project blog {\n"));
+
+        // visual y (drain happens through after_edit after each key)
+        app.clipboard = Some(Box::new(FakeClipboard::default()));
+        let _ = update(&mut app, key(KeyModifiers::NONE, 'v'));
+        let _ = update(&mut app, key(KeyModifiers::NONE, 'e'));
+        let _ = update(&mut app, key(KeyModifiers::NONE, 'y'));
+        assert_eq!(app.clipboard_text().as_deref(), Some("Project"));
+    }
+
+    #[test]
+    fn vim_delete_leaves_the_system_clipboard_alone() {
+        let mut app = App {
+            clipboard: Some(Box::new(FakeClipboard::with_text("keepme"))),
+            ..App::default()
+        };
+        let _ = update(&mut app, key(KeyModifiers::NONE, 'd'));
+        let _ = update(&mut app, key(KeyModifiers::NONE, 'd'));
+        assert_eq!(
+            app.clipboard_text().as_deref(),
+            Some("keepme"),
+            "a delete is not a yank"
+        );
+        assert_eq!(app.editor().register_lines()[0], "Project blog {");
+    }
+
+    #[test]
+    fn mouse_drag_selects_in_regular_mode() {
+        let mut app = regular_app();
+        let _ = update(&mut app, Message::EditorPressed(local_px(Pos { row: 0, col: 1 })));
+        assert!(matches!(app.drag, Drag::EditorSelect));
+        let to = window_px(Pos { row: 0, col: 4 });
+        let _ = update(&mut app, Message::MouseMovedWindow(to.x, to.y));
+        let _ = update(&mut app, Message::MouseReleased);
+        assert_eq!(app.drag, Drag::None);
+        assert_eq!(
+            app.editor().buf.selection_text().as_deref(),
+            Some("ello"),
+            "anchor at col 1, drag to col 4"
+        );
+    }
+
+    #[test]
+    fn mouse_drag_clamps_when_it_leaves_the_pane() {
+        let mut app = regular_app();
+        let _ = update(&mut app, Message::EditorPressed(local_px(Pos { row: 0, col: 0 })));
+        // way below/right of the buffer: clamps to the buffer end
+        let _ = update(&mut app, Message::MouseMovedWindow(10_000.0, 10_000.0));
+        let _ = update(&mut app, Message::MouseReleased);
+        assert_eq!(
+            app.editor().buf.selection_text().as_deref(),
+            Some("hello world\nsecond line"),
+            "drag extends to the last char"
+        );
+    }
+
+    #[test]
+    fn mouse_click_collapses_the_selection() {
+        let mut app = regular_app();
+        let _ = update(&mut app, Message::EditorPressed(local_px(Pos { row: 0, col: 3 })));
+        let _ = update(&mut app, Message::MouseReleased);
+        assert!(app.editor().buf.selection_anchor().is_none(), "a click places the caret");
+        assert_eq!(app.editor().buf.pos(), Pos { row: 0, col: 3 });
+    }
+
+    #[test]
+    fn mouse_drag_does_not_select_in_vim_mode() {
+        // vim keeps its keyboard-driven selection
+        let mut app = App::default();
+        let _ = update(&mut app, Message::EditorPressed(local_px(Pos { row: 0, col: 1 })));
+        assert_eq!(app.drag, Drag::None, "no selection drag in vim mode");
+        let to = window_px(Pos { row: 0, col: 4 });
+        let _ = update(&mut app, Message::MouseMovedWindow(to.x, to.y));
+        let _ = update(&mut app, Message::MouseReleased);
+        assert!(app.editor().buf.selection_anchor().is_none());
+    }
+
+    #[test]
+    fn editor_menu_flags_snapshot_at_open() {
+        // no selection, empty clipboard: both disabled
+        let mut app = regular_app();
+        app.clipboard = Some(Box::new(FakeClipboard::default()));
+        let _ = update(&mut app, Message::EditorMenu(Point::new(30.0, 120.0)));
+        let menu = app.editor_menu.as_ref().expect("menu open");
+        assert!(!menu.has_selection);
+        assert!(!menu.clipboard_has_text);
+
+        // a selection and clipboard text: both enabled
+        select_hello(&mut app);
+        // any key dismissed the menu above; reopen
+        let _ = update(&mut app, Message::EditorMenu(Point::new(30.0, 120.0)));
+        let menu = app.editor_menu.as_ref().expect("menu open");
+        assert!(menu.has_selection);
+        assert!(!menu.clipboard_has_text, "the default fake holds no text");
+
+        // a FAILED clipboard read disables Paste, never panics
+        let mut app = regular_app();
+        app.clipboard = Some(Box::new(FakeClipboard {
+            fail_get: true,
+            text: Some("unreachable".to_string()),
+            ..Default::default()
+        }));
+        let _ = update(&mut app, Message::EditorMenu(Point::new(30.0, 120.0)));
+        let menu = app.editor_menu.as_ref().expect("menu open");
+        assert!(!menu.clipboard_has_text);
+    }
+
+    #[test]
+    fn editor_menu_dismisses_on_any_key_or_backdrop() {
+        let mut app = regular_app();
+        app.clipboard = Some(Box::new(FakeClipboard::default()));
+        let _ = update(&mut app, Message::EditorMenu(Point::new(30.0, 120.0)));
+        assert!(app.editor_menu.is_some());
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.editor_menu.is_none(), "any key dismisses");
+        let _ = update(&mut app, Message::EditorMenu(Point::new(30.0, 120.0)));
+        let _ = update(&mut app, Message::DismissEditorMenu);
+        assert!(app.editor_menu.is_none(), "backdrop click dismisses");
+    }
+
+    #[test]
+    fn editor_menu_actions_run() {
+        // Copy: selection reaches the system clipboard, menu closes
+        let mut app = regular_app();
+        app.clipboard = Some(Box::new(FakeClipboard::default()));
+        select_hello(&mut app);
+        let _ = update(&mut app, Message::EditorMenu(Point::new(30.0, 120.0)));
+        let _ = update(&mut app, Message::EditorMenuCopy);
+        assert!(app.editor_menu.is_none());
+        assert_eq!(app.clipboard_text().as_deref(), Some("hello"));
+
+        // Cut
+        let mut app = regular_app();
+        app.clipboard = Some(Box::new(FakeClipboard::default()));
+        select_hello(&mut app);
+        let _ = update(&mut app, Message::EditorMenu(Point::new(30.0, 120.0)));
+        let _ = update(&mut app, Message::EditorMenuCut);
+        assert_eq!(app.editor().buf.line(0), " world");
+        assert_eq!(app.clipboard_text().as_deref(), Some("hello"));
+
+        // Paste
+        let mut app = regular_app();
+        app.clipboard = Some(Box::new(FakeClipboard::with_text("P")));
+        let _ = update(&mut app, Message::EditorMenu(Point::new(30.0, 120.0)));
+        let _ = update(&mut app, Message::EditorMenuPaste);
+        assert_eq!(app.editor().buf.line(0), "Phello world");
+
+        // Format (a formattable source, so the change is observable)
+        let mut app = App::with_source("Table users{id integer}\n".into());
+        let _ = update(&mut app, Message::EditorMenu(Point::new(30.0, 120.0)));
+        let _ = update(&mut app, Message::EditorMenuFormat);
+        assert_eq!(app.message.as_deref(), Some("formatted"));
+    }
+
+    #[test]
+    fn dragging_then_menu_items_use_the_shared_paths() {
+        // a mouse-dragged selection feeds Copy through the same code as
+        // shift+arrows: drag, then menu Copy
+        let mut app = regular_app();
+        app.clipboard = Some(Box::new(FakeClipboard::default()));
+        let _ = update(&mut app, Message::EditorPressed(local_px(Pos { row: 0, col: 0 })));
+        let to = window_px(Pos { row: 0, col: 4 });
+        let _ = update(&mut app, Message::MouseMovedWindow(to.x, to.y));
+        let _ = update(&mut app, Message::MouseReleased);
+        let _ = update(&mut app, Message::EditorMenu(Point::new(30.0, 120.0)));
+        assert!(app.editor_menu.as_ref().unwrap().has_selection);
+        let _ = update(&mut app, Message::EditorMenuCopy);
+        assert_eq!(app.clipboard_text().as_deref(), Some("hello"));
+        // pasting a DIFFERENT text replaces the drag's selection (the
+        // first inserted op consumes it)
+        app.clipboard = Some(Box::new(FakeClipboard::with_text("XY")));
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('v'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(app.editor().buf.line(0), "XY world");
+    }
+
+    #[test]
+    fn selecting_with_the_mouse_then_typing_replaces_it() {
+        let mut app = regular_app();
+        app.clipboard = Some(Box::new(FakeClipboard::default()));
+        let _ = update(&mut app, Message::EditorPressed(local_px(Pos { row: 0, col: 0 })));
+        let to = window_px(Pos { row: 0, col: 4 });
+        let _ = update(&mut app, Message::MouseMovedWindow(to.x, to.y));
+        let _ = update(&mut app, Message::MouseReleased);
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('X'), KeyModifiers::NONE));
+        assert_eq!(app.editor().buf.line(0), "X world", "typing replaced the selection");
+    }
+
+    #[test]
+    fn tab_switch_closes_the_editor_menu() {
+        let mut app = two_tab_app();
+        app.clipboard = Some(Box::new(FakeClipboard::default()));
+        let _ = update(&mut app, Message::EditorMenu(Point::new(30.0, 120.0)));
+        assert!(app.editor_menu.is_some());
+        let _ = update(&mut app, Message::TabPressed(1));
+        assert!(app.editor_menu.is_none());
+    }
+
+    // a local twin of tab_tests::two_tab_app keeps the modules independent
+    fn two_tab_app() -> App {
+        let mut app = regular_app();
+        app.tabs.push(Tab::with_source("second".into()));
+        app
+    }
+
+    #[test]
+    fn the_drag_anchor_clamps_into_the_buffer() {
+        // px_to_pos clamps: a press far left of the text anchors at
+        // column 0 of the pressed row
+        let mut app = regular_app();
+        let _ = update(
+            &mut app,
+            Message::EditorPressed(Point::new(2.0, local_px(Pos { row: 1, col: 0 }).y)),
+        );
+        assert_eq!(app.editor().buf.pos(), Pos { row: 1, col: 0 });
+        let _ = update(&mut app, Message::MouseReleased);
     }
 }

@@ -166,6 +166,12 @@ pub struct Editor {
     op_count: Option<u32>,
     pub cmdline: Option<CmdLine>,
     register: Vec<String>,
+    /// The most recent YANK (the `y` family: y/yy/yiw/visual y…), queued
+    /// for the app to push to the SYSTEM clipboard — the Editor has no
+    /// arboard access, so the app drains this after every key
+    /// (`take_system_yank`). Deletes fill the register but never queue a
+    /// system copy (vim's unnamed-register semantics).
+    system_yank: Option<String>,
     /// Last f/F/t/T (forward, till, char) for `;` and `,`
     last_find: Option<(bool, bool, char)>,
     /// Source ended with a newline; preserved by `text()` for byte-identical
@@ -202,6 +208,7 @@ impl Editor {
             op_count: None,
             cmdline: None,
             register: Vec::new(),
+            system_yank: None,
             last_find: None,
             trailing_newline: source.ends_with('\n'),
         }
@@ -240,6 +247,19 @@ impl Editor {
     /// Snapshot of the yank register (used by Regular-mode paste).
     pub fn register_lines(&self) -> Vec<String> {
         self.register.clone()
+    }
+
+    /// The queued system-clipboard copy of the last vim yank, if any —
+    /// drained by the app after each key (see the `system_yank` field).
+    pub fn take_system_yank(&mut self) -> Option<String> {
+        self.system_yank.take()
+    }
+
+    /// Charwise yank: the text into the register AND queued for the
+    /// system clipboard.
+    fn yank_chars(&mut self, text: String) {
+        self.register = text.split('\n').map(str::to_string).collect();
+        self.system_yank = Some(text);
     }
 
     /// Vim-style showcmd: the in-progress count and pending operator, e.g.
@@ -721,7 +741,7 @@ impl Editor {
             KeyCode::Char('y') if self.visual_linewise => {
                 if let Some((from, n)) = self.selection_lines() {
                     self.buf.move_cursor(CursorMove::Jump(from, 0));
-                    self.yank_lines(n);
+                    self.yank_lines(n, true);
                 }
                 self.buf.cancel_selection();
                 self.mode = Mode::Normal;
@@ -729,7 +749,7 @@ impl Editor {
             }
             KeyCode::Char('y') => {
                 if let Some(t) = self.buf.copy_selection() {
-                    self.register = t.split('\n').map(str::to_string).collect();
+                    self.yank_chars(t);
                 }
                 // copy() leaves selection_start set, which would make later
                 // normal-mode motions extend an invisible selection
@@ -744,7 +764,7 @@ impl Editor {
                 self.buf.cancel_selection();
                 if let Some((from, n)) = lines {
                     self.buf.move_cursor(CursorMove::Jump(from, 0));
-                    self.yank_lines(n);
+                    self.yank_lines(n, false);
                     self.delete_lines(n);
                 }
                 self.mode = Mode::Normal;
@@ -757,7 +777,7 @@ impl Editor {
                 self.buf.cancel_selection();
                 if let Some((from, n)) = lines {
                     self.buf.move_cursor(CursorMove::Jump(from, 0));
-                    self.yank_lines(n);
+                    self.yank_lines(n, false);
                     self.buf.change_lines(n);
                 }
                 self.mode = Mode::Insert;
@@ -932,7 +952,7 @@ impl Editor {
                 self.buf.start_selection();
                 self.buf.move_cursor(CursorMove::Jump(row, col));
                 if let Some(t) = self.buf.copy_selection() {
-                    self.register = t.split('\n').map(str::to_string).collect();
+                    self.yank_chars(t);
                 }
                 self.buf.cancel_selection();
                 self.buf
@@ -1006,18 +1026,18 @@ impl Editor {
                 Action::None
             }
             (Y, KeyCode::Char('y')) => {
-                self.yank_lines(rep);
+                self.yank_lines(rep, true);
                 Action::None
             }
             (D, KeyCode::Char('d')) => {
-                self.yank_lines(rep);
+                self.yank_lines(rep, false);
                 self.delete_lines(rep);
                 Action::Changed
             }
             (C, KeyCode::Char('c')) => {
                 // [count]cc deletes the lines and edits one empty line
                 // (one undo unit: change_lines snapshots before both steps)
-                self.yank_lines(rep);
+                self.yank_lines(rep, false);
                 self.buf.change_lines(rep);
                 self.mode = Mode::Insert;
                 Action::Changed
@@ -1334,26 +1354,32 @@ impl Editor {
         let Some(obj) = self.buf.text_object(around, kind) else {
             return Action::None;
         };
-        self.register = self
-            .buf
-            .range_text(obj)
-            .split('\n')
-            .map(str::to_string)
-            .collect();
         match op {
             ObjOp::Yank => {
+                self.yank_chars(self.buf.range_text(obj));
                 self.buf
                     .move_cursor(CursorMove::Jump(obj.start.row, obj.start.col));
                 Action::None
             }
-            ObjOp::Delete => {
-                self.delete_object(obj);
-                Action::Changed
-            }
-            ObjOp::Change => {
-                self.delete_object(obj);
-                self.mode = Mode::Insert;
-                Action::Changed
+            ObjOp::Delete | ObjOp::Change => {
+                // a delete fills the register but never the system clipboard
+                self.register = self
+                    .buf
+                    .range_text(obj)
+                    .split('\n')
+                    .map(str::to_string)
+                    .collect();
+                match op {
+                    ObjOp::Delete => {
+                        self.delete_object(obj);
+                        Action::Changed
+                    }
+                    _ => {
+                        self.delete_object(obj);
+                        self.mode = Mode::Insert;
+                        Action::Changed
+                    }
+                }
             }
         }
     }
@@ -1545,7 +1571,7 @@ impl Editor {
         let from = row.min(target);
         let n = row.abs_diff(target) + 1;
         self.buf.move_cursor(CursorMove::Jump(from, 0));
-        self.yank_lines(n);
+        self.yank_lines(n, false);
         if insert {
             // cG/cgg: one empty editable line, one undo unit
             self.buf.change_lines(n);
@@ -1585,12 +1611,21 @@ impl Editor {
         }
     }
 
-    /// Yank `n` lines from the cursor row into the register.
-    fn yank_lines(&mut self, n: usize) {
+    /// Yank `n` lines from the cursor row into the register; `to_system`
+    /// also queues a system-clipboard copy (linewise, the lines end with
+    /// a trailing newline like nvim's clipboard=unnamedplus yy). Deletes
+    /// reuse this to fill the register with `to_system = false`: a `d`
+    /// never touches the system clipboard.
+    fn yank_lines(&mut self, n: usize, to_system: bool) {
         let (row, _) = self.buf.cursor();
         let lines = self.buf.lines();
         let end = (row + n.max(1)).min(lines.len());
         self.register = lines[row..end].to_vec();
+        if to_system {
+            let mut text = self.register.join("\n");
+            text.push('\n');
+            self.system_yank = Some(text);
+        }
     }
 
     /// Delete `n` lines starting at the cursor row.
@@ -3037,5 +3072,49 @@ mod vline_tests {
                                 // still exactly one row selected
         e.handle_key(key('d'));
         assert_eq!(e.text(), "second\n", "whole first line gone");
+    }
+
+    #[test]
+    fn yanks_queue_a_system_copy_deletes_do_not() {
+        // yy: linewise — the system text ends with a trailing newline
+        // (nvim's clipboard=unnamedplus), the register keeps bare lines
+        let mut e = editor("hello world\nsecond\n");
+        e.handle_key(key('y'));
+        e.handle_key(key('y'));
+        assert_eq!(e.take_system_yank().as_deref(), Some("hello world\n"));
+        assert_eq!(e.register_lines(), vec!["hello world".to_string()]);
+
+        // yiw: charwise — the object text, no trailing newline
+        e.handle_key(key('y'));
+        e.handle_key(key('i'));
+        e.handle_key(key('w'));
+        assert_eq!(e.take_system_yank().as_deref(), Some("hello"));
+
+        // visual y: the selection
+        e.handle_key(key('v'));
+        e.handle_key(key('e'));
+        e.handle_key(key('y'));
+        assert_eq!(e.take_system_yank().as_deref(), Some("hello"));
+        assert_eq!(e.mode, Mode::Normal);
+
+        // dd fills the register but NEVER queues a system copy
+        e.handle_key(key('d'));
+        e.handle_key(key('d'));
+        assert!(e.take_system_yank().is_none(), "delete is not a yank");
+        assert_eq!(e.register_lines(), vec!["hello world".to_string()]);
+        assert_eq!(e.text(), "second\n");
+
+        // and the queue drains: a second take is empty
+        assert!(e.take_system_yank().is_none());
+    }
+
+    #[test]
+    fn y_operator_motions_queue_a_system_copy() {
+        // yf through the found char
+        let mut e = editor("hello world");
+        e.handle_key(key('y'));
+        e.handle_key(key('f'));
+        e.handle_key(key('o'));
+        assert_eq!(e.take_system_yank().as_deref(), Some("hello"));
     }
 }

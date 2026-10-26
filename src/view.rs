@@ -4,7 +4,9 @@
 //! the bottom; help overlay, the record view and the tab context menu
 //! stack above all.
 
-use crate::app::{App, Drag, Focus, Message, RecordView, TabMenu, STRIP_LEFT, TAB_SLOT_W};
+use crate::app::{
+    App, Drag, EditorMenu, Focus, Message, RecordView, TabMenu, STRIP_LEFT, TAB_SLOT_W,
+};
 use crate::canvas::diagram::{Diagram, DiagramOverlay};
 use crate::canvas::editor::{EditorOverlay, EditorView};
 use dbml_ui::dbml::ast::RecordValue;
@@ -36,6 +38,15 @@ pub const BASE_ZOOM: f32 = 20.0;
 /// (900 - 119.5). Keep this in sync with `root`; if the layout chrome
 /// changes, re-measure and update both.
 pub const EDITOR_CHROME: f32 = 119.5;
+
+/// Window-y of the editor canvas's top edge: every pixel of chrome above
+/// it (tab strip 30 + spacing 4 + body top padding 8 + mode row 23.6 +
+/// spacing 4 + pane padding 1 + toolbar 20.3 + spacing 4 = 94.9). The
+/// Regular-mode selection drag converts window pointer px to the
+/// canvas-local coords px_to_pos expects with this constant, so it must
+/// move in lockstep with `EDITOR_CHROME` (which is this plus the 24.6
+/// below-canvas chrome) and `root`.
+pub const EDITOR_CANVAS_TOP: f32 = 94.9;
 
 pub fn root(app: &App) -> Element<'_, Message> {
     let editor_body: Element<'_, Message> = if app.doc_open() {
@@ -177,6 +188,11 @@ pub fn root(app: &App) -> Element<'_, Message> {
     };
     let base: Element<'_, Message> = if let Some(menu) = &app.tab_menu {
         stack![base, tab_menu_overlay(app, menu)].into()
+    } else {
+        base
+    };
+    let base: Element<'_, Message> = if let Some(menu) = &app.editor_menu {
+        stack![base, editor_menu_overlay(app, menu)].into()
     } else {
         base
     };
@@ -804,6 +820,68 @@ fn tab_menu_overlay(app: &App, menu: &TabMenu) -> Element<'static, Message> {
         .on_press(Message::DismissTabMenu);
     // anchor by padding offset: hspace/vspace columns don't offset in
     // iced 0.13 flex (the stack child would land at (0,0))
+    stack![
+        backdrop,
+        container(panel)
+            .padding(iced::Padding {
+                top: y,
+                left: x,
+                ..Default::default()
+            })
+            .width(Fill)
+            .height(Fill)
+    ]
+    .into()
+}
+
+/// The editor context menu (Copy / Cut / Paste / Format), anchored at the
+/// pointer and clamped into the window, over an invisible click-away
+/// backdrop — same pattern as `tab_menu_overlay`. Items whose snapshot
+/// condition failed (no selection / no clipboard text) render dimmed and
+/// do not press.
+fn editor_menu_overlay(app: &App, menu: &EditorMenu) -> Element<'static, Message> {
+    const MENU_W: f32 = 150.0;
+    const MENU_H: f32 = 130.0;
+    let x = menu.at.x.min((app.window_size.0 - MENU_W).max(0.0));
+    let y = menu.at.y.min((app.window_size.1 - MENU_H).max(0.0));
+    let item = |label: &'static str, msg: Message, enabled: bool| {
+        button(
+            text(label)
+                .size(12.0)
+                .color(if enabled { theme::TEXT } else { theme::DIM }),
+        )
+        .padding([5, 10])
+        .width(Fill)
+        .style(move |_t, _s| tool_button_style())
+        .on_press_maybe(enabled.then_some(msg))
+    };
+    let panel = container(
+        column![
+            item("Copy", Message::EditorMenuCopy, menu.has_selection),
+            item("Cut", Message::EditorMenuCut, menu.has_selection),
+            item("Paste", Message::EditorMenuPaste, menu.clipboard_has_text),
+            item("Format", Message::EditorMenuFormat, true),
+        ]
+        .spacing(2)
+        .padding(4),
+    )
+    .width(Length::Fixed(MENU_W))
+    .style(|_t| container::Style {
+        background: Some(iced::Background::Color(iced::Color::from_rgba(
+            0.08, 0.09, 0.11, 0.98,
+        ))),
+        border: iced::border::rounded(8).color(theme::BORDER),
+        ..Default::default()
+    });
+    // click anywhere outside the menu dismisses it
+    let backdrop = button(text(""))
+        .width(Fill)
+        .height(Fill)
+        .style(|_t, _s| iced::widget::button::Style {
+            background: None,
+            ..Default::default()
+        })
+        .on_press(Message::DismissEditorMenu);
     stack![
         backdrop,
         container(panel)
