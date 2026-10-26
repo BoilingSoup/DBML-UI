@@ -154,19 +154,19 @@ pub fn root(app: &App) -> Element<'_, Message> {
         .width(Length::FillPortion(((1.0 - app.split) * 1000.0) as u16))
         .height(Fill);
 
-    let panes = if !app.doc_open() {
-        // start screen: the side pane is not collapsible, no seam
-        let start = container(start_pane(app))
-            .width(Length::FillPortion((app.split * 1000.0) as u16))
-            .height(Fill);
-        row![start, diagram].spacing(4).height(Fill)
+    let panes: Element<'_, Message> = if !app.doc_open() {
+        // start screen: one centered welcome view — no split, no diagram
+        container(start_screen(app))
+            .width(Fill)
+            .height(Fill)
+            .into()
     } else if app.editor_collapsed {
-        row![diagram].height(Fill)
+        row![diagram].height(Fill).into()
     } else {
         // flush panes: the seam is the two pane borders back to back —
         // one crisp vertical edge, no gap. The collapse chevron and the
         // invisible resize strip are stacked over it below.
-        row![editor, diagram].height(Fill)
+        row![editor, diagram].height(Fill).into()
     };
 
     // mode row + panes (only once a document is open)
@@ -976,52 +976,111 @@ fn editor_toolbar(app: &App) -> Element<'static, Message> {
 
 /// The no-document start screen: Open file / New diagram. Shown in place
 /// of the editor pane; this state is not collapsible.
-fn start_pane(app: &App) -> Element<'static, Message> {
-    let open = button(text("Open file…".to_string()).size(14.0).color(theme::TEXT))
-        .padding([8, 16])
-        .width(200)
-        .style(move |_t, _s| tool_button_style())
-        .on_press(Message::OpenFilePicker);
-    let new = button(
+/// The start screen (a tab with no document): one full-width, centered
+/// welcome view — title, New/Open actions, recent files. No diagram pane
+/// and no split: a fresh tab has nothing to show beside it yet.
+fn start_screen(app: &App) -> Element<'static, Message> {
+    let primary = button(
         text("New diagram".to_string())
             .size(14.0)
-            .color(theme::TEXT),
+            .color(iced::Color::WHITE),
     )
-    .padding([8, 16])
-    .width(200)
-    .style(move |_t, _s| tool_button_style())
+    .padding([10, 24])
+    .style(|_t, s| iced::widget::button::Style {
+        background: Some(iced::Background::Color(match s {
+            iced::widget::button::Status::Hovered => {
+                iced::Color::from_rgb(0.39, 0.64, 0.98)
+            }
+            _ => theme::FK,
+        })),
+        text_color: iced::Color::WHITE,
+        border: iced::border::rounded(6),
+        ..Default::default()
+    })
     .on_press(Message::NewDiagram);
+    let open = button(text("Open file…".to_string()).size(14.0).color(theme::TEXT))
+        .padding([10, 24])
+        .style(move |_t, s| {
+            let mut st = tool_button_style();
+            if s == iced::widget::button::Status::Hovered {
+                st.background = Some(iced::Background::Color(theme::TOOLTIP));
+            }
+            st
+        })
+        .on_press(Message::OpenFilePicker);
+
     let mut list = column![
-        text("dbml-ui".to_string()).size(20.0).color(theme::TEXT),
+        text("dbml-ui".to_string()).size(30.0).color(theme::TEXT),
         text("DBML diagram editor".to_string())
-            .size(12.0)
+            .size(13.0)
             .color(theme::DIM),
-        open,
-        new,
+        row![primary, open].spacing(12),
     ]
-    .spacing(12)
+    .spacing(16)
     .align_x(iced::alignment::Horizontal::Center);
+
     if !app.config.recent.is_empty() {
-        list = list.push(text("Recent".to_string()).size(12.0).color(theme::DIM));
-        for path in app.config.recent.iter().take(5) {
-            let label = match path.rsplit('/').next() {
-                Some(base) if !base.is_empty() => base.to_string(),
-                _ => path.clone(),
-            };
-            list = list.push(
-                button(text(label).size(12.0).color(theme::TEXT))
-                    .padding([4, 10])
-                    .width(200)
-                    .style(move |_t, _s| tool_button_style())
-                    .on_press(Message::OpenRecent(path.clone())),
+        list = list.push(
+            text("RECENT FILES".to_string())
+                .size(11.0)
+                .color(theme::DIM),
+        );
+        let mut recents = column![].spacing(2);
+        for path in app.config.recent.iter().take(8) {
+            let base = path.rsplit('/').next().unwrap_or(path).to_string();
+            let label = format!("{base}  —  {path}");
+            recents = recents.push(
+                button(
+                    text(label)
+                        .size(12.0)
+                        .color(theme::TEXT)
+                        .width(Fill),
+                )
+                .padding([6, 12])
+                .width(Fill)
+                .style(move |_t, st| iced::widget::button::Style {
+                    background: Some(iced::Background::Color(
+                        if st == iced::widget::button::Status::Hovered {
+                            theme::PANEL
+                        } else {
+                            iced::Color::TRANSPARENT
+                        },
+                    )),
+                    text_color: theme::TEXT,
+                    border: iced::border::rounded(6).color(iced::Color::TRANSPARENT),
+                    ..Default::default()
+                })
+                .on_press(Message::OpenRecent(path.clone())),
             );
         }
+        list = list.push(
+            container(recents)
+                .width(Length::Fixed(520.0))
+                .style(|_t| container::Style {
+                    background: Some(iced::Background::Color(theme::BG)),
+                    border: iced::border::rounded(8).color(theme::BORDER),
+                    ..Default::default()
+                }),
+        );
     }
-    container(list)
-        .align_x(iced::alignment::Horizontal::Center)
+
+    let hints = if app.config.vim {
+        "Ctrl+N New   ·   Ctrl+O Open"
+    } else {
+        "Ctrl+N New   ·   Ctrl+O Open   ·   Ctrl+S Save"
+    };
+    let content = column![
+        list,
+        text(hints.to_string()).size(11.0).color(theme::DIM),
+    ]
+    .spacing(28)
+    .align_x(iced::alignment::Horizontal::Center);
+
+    container(container(content).padding([24, 0]))
         .width(Fill)
         .height(Fill)
-        .padding(1.0)
+        .align_x(iced::alignment::Horizontal::Center)
+        .align_y(iced::alignment::Vertical::Center)
         .style(move |_t| panel_style(false))
         .into()
 }
