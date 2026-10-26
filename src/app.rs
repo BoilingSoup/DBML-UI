@@ -83,7 +83,6 @@ pub enum Message {
     /// Context-menu item: paste the system clipboard at the cursor.
     EditorMenuPaste,
     /// Context-menu item: run the canonical formatter (Message::FormatNow).
-    EditorMenuFormat,
     /// A click anywhere outside the editor context menu dismisses it.
     DismissEditorMenu,
     /// Open the record view for the table node at this schema index.
@@ -1503,10 +1502,6 @@ fn handle_message(app: &mut App, message: Message) {
         Message::EditorMenuPaste => {
             app.editor_menu = None;
             app.paste_from_system();
-        }
-        Message::EditorMenuFormat => {
-            app.editor_menu = None;
-            app.format_now();
         }
         Message::DismissEditorMenu => app.editor_menu = None,
         Message::Undo => app.undo_step(),
@@ -5048,11 +5043,6 @@ mod clipboard_menu_tests {
         let _ = update(&mut app, Message::EditorMenuPaste);
         assert_eq!(app.editor().buf.line(0), "Phello world");
 
-        // Format (a formattable source, so the change is observable)
-        let mut app = App::with_source("Table users{id integer}\n".into());
-        let _ = update(&mut app, Message::EditorMenu(Point::new(30.0, 120.0)));
-        let _ = update(&mut app, Message::EditorMenuFormat);
-        assert_eq!(app.message.as_deref(), Some("formatted"));
     }
 
     #[test]

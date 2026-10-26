@@ -866,7 +866,7 @@ fn tab_menu_overlay(app: &App, menu: &TabMenu) -> Element<'static, Message> {
 /// do not press.
 fn editor_menu_overlay(app: &App, menu: &EditorMenu) -> Element<'static, Message> {
     const MENU_W: f32 = 150.0;
-    const MENU_H: f32 = 130.0;
+    const MENU_H: f32 = 105.0;
     let x = menu.at.x.min((app.window_size.0 - MENU_W).max(0.0));
     let y = menu.at.y.min((app.window_size.1 - MENU_H).max(0.0));
     let item = |label: &'static str, msg: Message, enabled: bool| {
@@ -885,7 +885,6 @@ fn editor_menu_overlay(app: &App, menu: &EditorMenu) -> Element<'static, Message
             item("Copy", Message::EditorMenuCopy, menu.has_selection),
             item("Cut", Message::EditorMenuCut, menu.has_selection),
             item("Paste", Message::EditorMenuPaste, menu.clipboard_has_text),
-            item("Format", Message::EditorMenuFormat, true),
         ]
         .spacing(2)
         .padding(4),
