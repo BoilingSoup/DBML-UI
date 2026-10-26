@@ -1385,7 +1385,6 @@ impl Editor {
     }
 
     fn delete_object(&mut self, obj: TextObj) {
-        eprintln!("DBG delete_object start={:?} end={:?} linewise={}", obj.start, obj.end, obj.linewise);
         self.buf.cancel_selection();
         if obj.linewise {
             let n = obj.end.row - obj.start.row + 1;
