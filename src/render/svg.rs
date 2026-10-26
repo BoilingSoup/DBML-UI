@@ -96,40 +96,39 @@ fn dir_normal(a: (f32, f32), b: (f32, f32)) -> ((f32, f32), (f32, f32)) {
     }
 }
 
-/// The "one" end: a perpendicular dash across the line at the table edge.
+/// The "one" end: a perpendicular tick across the line, sitting in the
+/// 10px marker gap before the table edge (their PGt).
 fn one_tick_path(end: (f32, f32), inner: (f32, f32)) -> String {
-    let (_, n) = dir_normal(end, inner);
-    let half = 0.30 * CELL_H;
+    let (d, n) = dir_normal(end, inner);
+    let half = 4.0;
+    let out = (end.0 + d.0 * 10.0, end.1 + d.1 * 10.0);
     format!(
         r##"<path d="M {:.1} {:.1} L {:.1} {:.1}" fill="none" stroke="#7f838d" stroke-width="1.5"/>"##,
-        end.0 - n.0 * half,
-        end.1 - n.1 * half,
-        end.0 + n.0 * half,
-        end.1 + n.1 * half
+        out.0 - n.0 * half,
+        out.1 - n.1 * half,
+        out.0 + n.0 * half,
+        out.1 + n.1 * half
     )
 }
 
-/// The "many" end (dbdiagram): an open circle on the line just before the
-/// table edge and an arrowhead pointing into the table.
+/// The "many" end: a chevron whose wings sit on the table edge and whose
+/// tip points back along the line (9px out), plus an open circle (r=3px)
+/// just past the tip at 13px out — their NGt + FGt.
 fn many_marker_path(end: (f32, f32), inner: (f32, f32)) -> String {
     let (d, n) = dir_normal(end, inner);
-    let back = 0.32 * CELL_H;
-    let spread = 0.20 * CELL_H;
-    let wx = end.0 - d.0 * back;
-    let wy = end.1 - d.1 * back;
-    let (cx, cy) = (end.0 - d.0 * 0.60 * CELL_H, end.1 - d.1 * 0.60 * CELL_H);
-    let r = 0.14 * CELL_H;
+    let spread = 4.0;
+    let tip = (end.0 + d.0 * 9.0, end.1 + d.1 * 9.0);
+    let c = (end.0 + d.0 * 13.0, end.1 + d.1 * 13.0);
     format!(
-        r##"<path d="M {ax:.1} {ay:.1} L {ex:.1} {ey:.1} L {bx:.1} {by:.1}" fill="none" stroke="#7f838d" stroke-width="1.5"/><circle cx="{cx:.1}" cy="{cy:.1}" r="{r:.1}" fill="none" stroke="#7f838d" stroke-width="1.5"/>"##,
-        ex = end.0,
-        ey = end.1,
-        ax = wx + n.0 * spread,
-        ay = wy + n.1 * spread,
-        bx = wx - n.0 * spread,
-        by = wy - n.1 * spread,
-        cx = cx,
-        cy = cy,
-        r = r,
+        r##"<path d="M {ax:.1} {ay:.1} L {tx:.1} {ty:.1} L {bx:.1} {by:.1}" fill="none" stroke="#7f838d" stroke-width="1.5"/><circle cx="{cx:.1}" cy="{cy:.1}" r="3" fill="none" stroke="#7f838d" stroke-width="1.5"/>"##,
+        tx = tip.0,
+        ty = tip.1,
+        ax = end.0 - n.0 * spread,
+        ay = end.1 - n.1 * spread,
+        bx = end.0 + n.0 * spread,
+        by = end.1 + n.1 * spread,
+        cx = c.0,
+        cy = c.1,
     )
 }
 

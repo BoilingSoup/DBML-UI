@@ -250,8 +250,6 @@ pub struct Tab {
     pub pan: Vector,
     /// Diagram edges to highlight (hovered row's connections / hovered line).
     pub hover_edges: Vec<usize>,
-    /// The edge under the pointer (line hover), for the cursor glow.
-    pub line_hover: Option<usize>,
     /// Per-edge highlight amount in 0..1, eased toward `hover_edges` on
     /// every tick so highlights fade in and out (parallel to
     /// `diagram.edges`).
@@ -282,7 +280,6 @@ impl Tab {
             zoom: crate::view::BASE_ZOOM,
             pan: Vector::default(),
             hover_edges: Vec::new(),
-            line_hover: None,
             edge_anim: Vec::new(),
             file: None,
             saved_text: String::new(),
@@ -606,8 +603,7 @@ impl App {
     fn update_hover(&mut self, p: Point) {
         use crate::canvas::diagram as dia;
         let mut active: Vec<usize> = Vec::new();
-        self.cur_mut().line_hover = dia::edge_hit(&self.cur().diagram, self.cur().zoom, self.cur().pan, p, 7.0);
-        if let Some(ei) = self.cur().line_hover {
+        if let Some(ei) = dia::edge_hit(&self.cur().diagram, self.cur().zoom, self.cur().pan, p, 7.0) {
             active.push(ei);
         }
         if let Some((b, row)) = dia::row_at(&self.cur().diagram, self.cur().zoom, self.cur().pan, p) {
@@ -967,7 +963,6 @@ fn handle_message(app: &mut App, message: Message) {
             }
             if x < app.editor_pane_width() + 30.0 && app.drag == Drag::None {
                 app.cur_mut().hover_edges.clear();
-                app.cur_mut().line_hover = None;
             }
             if app.drag == Drag::Divider {
                 const PAD: f32 = 16.0;

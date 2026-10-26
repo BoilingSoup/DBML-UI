@@ -5,12 +5,15 @@
 //! markers. Mirrors the SVG exporter's geometry, but sized by `zoom`
 //! (pixels per diagram cell) so text stays crisp at every scale.
 //!
-//! Hover highlight (dbdiagram's): a highlighted route strokes
-//! dbdiagram-blue with a soft breathing glow around the whole path, bright
-//! packets flowing along it, and a brighter glow under the pointer;
-//! cardinality labels fade in at the ends. The highlight amount per edge
-//! is animated by the app (see `edge_anim`), so transitions ease in and
-//! out instead of popping.
+//! Hover highlight — ported from dbdiagram's renderer (their Konva
+//! sceneFunc, extracted from their JS bundle): the line eases to their
+//! dark-theme highlight blue and doubles in width; a dashed overlay
+//! (dash 3, gap 40 in 1:1 px) rides the SAME filleted path with an
+//! animated dash offset (~33px/s, flowing referenced→foreign-key), over
+//! a static glow; endpoint markers (tick at the "one" end, chevron +
+//! circle at the "many" end) sit in a trimmed gap the dashes never
+//! enter. No text. The highlight amount per edge is animated by the app
+//! (`edge_anim`), so transitions ease in and out instead of popping.
 
 use crate::theme;
 use dbml_ui::layout::{many_ends, EdgeRoute, Layout, TableBox};
@@ -174,9 +177,7 @@ pub struct Diagram<'a> {
     /// Per-edge highlight amount in 0..1 (animated by the app's tick);
     /// parallel to `layout.edges`.
     pub edge_anim: &'a [f32],
-    /// The edge under the pointer (line hover), for the cursor glow.
-    pub line_hover: Option<usize>,
-    /// Seconds of animation clock, drives the glow's breathing.
+    /// Animation clock in seconds; advances the dash-flow phase.
     pub clock: f32,
 }
 
@@ -255,7 +256,6 @@ impl canvas::Program<crate::app::Message> for Diagram<'_> {
             self.pan,
             &HoverState {
                 anim: self.edge_anim,
-                line_hover: self.line_hover,
                 pointer: self.hover,
                 clock: self.clock,
             },
@@ -432,11 +432,9 @@ pub fn edge_hit(
 struct HoverState<'a> {
     /// Per-edge highlight amount in 0..1, parallel to `layout.edges`.
     anim: &'a [f32],
-    /// The edge under the pointer (line hover), for the cursor glow.
-    line_hover: Option<usize>,
     /// Pointer position over the canvas (local px).
     pointer: Option<Point>,
-    /// Animation clock in seconds, drives the glow's breathing.
+    /// Animation clock in seconds; advances the dash-flow phase.
     clock: f32,
 }
 
@@ -449,7 +447,7 @@ fn paint(
 ) {
     for edge in &layout.edges {
         let t = hs.anim.get(edge.edge).copied().unwrap_or(0.0);
-        paint_edge(frame, edge, zoom, pan, t, hs);
+        paint_edge(frame, edge, zoom, pan, t, hs.clock);
     }
     let hovered = hs.pointer.and_then(|p| hit_test(layout, zoom, pan, p));
     for b in &layout.boxes {
@@ -464,7 +462,7 @@ fn paint_edge(
     zoom: f32,
     pan: Vector,
     t: f32,
-    hs: &HoverState<'_>,
+    clock: f32,
 ) {
     let s = cell_size(zoom);
     // waypoints are f32 cell coords; rows anchor at their vertical center
@@ -481,64 +479,41 @@ fn paint_edge(
     if pts.len() < 2 {
         return;
     }
-    let path = rounded_edge_path(&pts, (0.9 * s.height).min(14.0));
+    // dbdiagram caps the corner fillet at 10px in 1:1 pixels
+    let r = (0.9 * s.height).min(10.0 * zoom / 20.0);
+    let path = rounded_edge_path(&pts, r);
 
-    // dbdiagram's hovered route: the core eases gray -> blue and thickens
-    // ~1.5x while a soft glow breathes around the whole path and bright
-    // packets flow along it (dark-theme behavior; light mode only glows)
+    // dbdiagram's hovered route: the core eases gray -> their highlight
+    // blue and doubles in width (their LINE_WIDTH_NORMAL 1 -> HIGHLIGHT 2)
     let mut core = edge_stroke(zoom);
     core.style = lerp_color(theme::LINE, theme::EDGE_HOVER, t).into();
-    core.width *= 1.0 + 0.5 * t;
-    if t > 0.0 {
-        paint_glow(frame, &path, zoom, t, hs.clock);
-    }
-    frame.stroke(&path, core);
-    if t > 0.0 {
-        // dbdiagram's packets flow referenced key → foreign key; the
-        // route's first point is the fk end, so run them against it
-        let rev: Vec<Point> = pts.iter().rev().copied().collect();
-        paint_flow(frame, &rev, zoom, hs.clock, t);
-    }
+    core.width *= 1.0 + t;
 
-    // a brighter pool of glow right under the pointer (line hover only)
-    if t > 0.0 && hs.line_hover == Some(edge.edge) {
-        if let Some(p) = hs.pointer.and_then(|h| nearest_on_path(&pts, h)) {
-            paint_cursor_glow(frame, p, zoom, t);
-        }
-    }
-
-    // cardinality labels fade in with the highlight (dbdiagram shows
-    // `1` / `0..*` beside the ends of a hovered relationship)
-    if t > 0.02 {
-        let labels = card_labels(edge);
-        let n = pts.len();
-        for (label, (end, inner)) in labels.iter().zip([(pts[0], pts[1]), (pts[n - 1], pts[n - 2])])
-        {
-            let (d, normal) = dir_and_normal(end, inner);
-            // perpendicular pointing up, or left along vertical runs
-            let mut normal = normal;
-            if normal.y > 0.0 || (normal.y == 0.0 && normal.x > 0.0) {
-                normal = -normal;
-            }
-            let pos = end + d * (1.4 * s.width) + normal * (0.55 * s.height);
-            frame.fill_text(Text {
-                content: (*label).to_string(),
-                position: pos,
-                color: with_alpha(theme::EDGE_HOVER, 0.95 * t),
-                size: (0.45 * zoom).into(),
-                font: Font::MONOSPACE,
-                horizontal_alignment: iced::alignment::Horizontal::Center,
-                vertical_alignment: iced::alignment::Vertical::Center,
-                ..Default::default()
-            });
-        }
-    }
-
-    // cardinality end markers (dbdiagram): the "many" end gets an open
-    // circle + arrowhead into the table, the "one" end a perpendicular
-    // tick — and the hover packets flow from the tick into the circle
+    // end markers: the "many" end gets a chevron + open circle, the "one"
+    // end a perpendicular tick. Each end also trims the flow path by the
+    // marker gap (their LGt: 10px at a one end, 16px at a many end), so
+    // the dashes stop at the circle instead of painting over the markers.
     let (many_fk, many_ref) = many_ends(edge.card);
     let n = pts.len();
+    let trim_fk = if many_fk { 0.8 * zoom } else { 0.5 * zoom };
+    let trim_ref = if many_ref { 0.8 * zoom } else { 0.5 * zoom };
+
+    if t > 0.0 {
+        // static glow hugging the path (their shape shadow: blur 10,
+        // opacity .5 in the dark theme — no pulsing)
+        paint_glow(frame, &path, zoom, t);
+        frame.stroke(&path, core);
+        // the flow: a dashed stroke on the SAME filleted path (their
+        // setLineDash([3, 40]) with lineDashOffset = time/30), so dashes
+        // ride the corners instead of cutting them. Increasing the offset
+        // shifts the pattern toward the path start; pts[0] is the fk end,
+        // so the flow reads referenced key → foreign key.
+        let phase = hs_clock(clock) * zoom / 20.0;
+        paint_flow(frame, &pts, r, phase, t, (trim_fk, trim_ref));
+    } else {
+        frame.stroke(&path, core);
+    }
+
     if many_fk {
         many_marker(frame, pts[0], pts[1], zoom, core);
     } else {
@@ -551,32 +526,20 @@ fn paint_edge(
     }
 }
 
-/// `1` / `0..*`-style labels for both route ends (fk end first). The many
-/// side reads `0..*` when the FK column is nullable, `1..*` otherwise;
-/// `<>` is many on both ends.
-fn card_labels(edge: &EdgeRoute) -> [&'static str; 2] {
-    let (many_fk, many_ref) = many_ends(edge.card);
-    let fk = match (many_fk, many_ref) {
-        (true, true) => "0..*",
-        (true, false) if edge.fk_nullable => "0..*",
-        (true, false) => "1..*",
-        (false, _) => "1",
-    };
-    let rf = if many_ref { "0..*" } else { "1" };
-    [fk, rf]
+fn hs_clock(clock: f32) -> f32 {
+    // their createAnimation: dashOffset = time_ms / 30 → ~33.3 px/s at 1:1
+    clock * 1000.0 / 30.0
 }
 
-/// Soft halo around a highlighted route: the canvas has no blur, so three
-/// nested strokes fake the falloff. The alpha breathes slowly, like
-/// dbdiagram's pulsing hover glow.
-fn paint_glow(frame: &mut canvas::Frame, path: &Path, zoom: f32, t: f32, clock: f32) {
-    let breathe = 1.0 + 0.3 * (clock * std::f32::consts::TAU / 1.9).sin();
+/// Static halo around a highlighted route: the canvas has no blur, so
+/// three nested strokes fake the falloff of dbdiagram's shape shadow.
+fn paint_glow(frame: &mut canvas::Frame, path: &Path, zoom: f32, t: f32) {
     let k = zoom / 20.0;
-    for (w, a) in [(11.0, 0.045), (6.5, 0.085), (3.0, 0.15)] {
+    for (w, a) in [(11.0, 0.05), (6.5, 0.09), (3.0, 0.15)] {
         frame.stroke(
             path,
             Stroke {
-                style: with_alpha(theme::EDGE_HOVER, a * t * breathe).into(),
+                style: with_alpha(theme::EDGE_HOVER, a * t).into(),
                 width: w * k,
                 ..Default::default()
             },
@@ -584,112 +547,49 @@ fn paint_glow(frame: &mut canvas::Frame, path: &Path, zoom: f32, t: f32, clock: 
     }
 }
 
-/// Flowing packets along a highlighted route (dbdiagram's dark-theme
-/// hover): short round-capped beads advancing with the clock from the
-/// referenced end toward the foreign key's circle, evenly spaced. Two
-/// details make this fluid where a naive version strobes: packets fade
-/// in/out near the path ends (nothing pops in or out of existence) and a
-/// packet straddling the path's end→start wrap is drawn as two chords,
-/// never one straight line across the canvas.
-fn paint_flow(frame: &mut canvas::Frame, pts: &[Point], zoom: f32, clock: f32, t: f32) {
-    use iced::widget::canvas::LineCap;
-    let mut segs: Vec<(Point, Point, f32)> = Vec::new();
-    let mut total = 0.0f32;
-    for w in pts.windows(2) {
-        let len = ((w[1].x - w[0].x).powi(2) + (w[1].y - w[0].y).powi(2)).sqrt();
-        if len > f32::EPSILON {
-            segs.push((w[0], w[1], len));
-            total += len;
-        }
-    }
-    if total < f32::EPSILON {
+/// The flowing dashes of a highlighted route: 3px dashes with 40px gaps
+/// (1:1 px), 4px wide, gliding along the filleted path. Rendered by
+/// stroking each dash's sub-range of the flattened path — a dash pattern
+/// can never cut a corner the way bead chords did.
+fn paint_flow(
+    frame: &mut canvas::Frame,
+    pts: &[Point],
+    radius: f32,
+    phase: f32,
+    t: f32,
+    trims: (f32, f32),
+) {
+    let flat = flatten_pieces(&rounded_pieces(pts, radius));
+    if flat.total <= 0.0 {
         return;
     }
-    let point_at = |d: f32| -> Point {
-        let mut d = d.rem_euclid(total);
-        for (a, b, len) in &segs {
-            if d <= *len {
-                let tt = d / len;
-                return Point::new(a.x + (b.x - a.x) * tt, a.y + (b.y - a.y) * tt);
-            }
-            d -= len;
-        }
-        *pts.last().unwrap()
-    };
-    let count = ((total / (4.5 * zoom)).ceil() as usize).clamp(1, 8);
-    let spacing = total / count as f32;
-    let packet = (0.9 * zoom).clamp(6.0, 22.0).min(spacing * 0.5);
-    let width = edge_stroke_width(zoom) * 1.3;
-    for i in 0..count {
-        let center = clock * FLOW_SPEED + i as f32 * spacing;
-        // soft window over the packet center: 0 at the path ends so beads
-        // materialize and dissolve instead of popping across the wrap
-        let d = center.rem_euclid(total);
-        let f = (d.min(total - d) / (packet * 1.5)).min(1.0);
-        let alpha = 0.55 * t * f * f * (3.0 - 2.0 * f);
-        if alpha < 0.02 {
-            continue;
-        }
-        let start = (center - packet / 2.0).rem_euclid(total);
-        for (a, b) in flow_packet_chords(start, packet, total) {
-            frame.stroke(
-                &Path::line(point_at(a), point_at(b)),
-                Stroke {
-                    style: with_alpha(theme::SYN_STRING, alpha).into(),
-                    width,
-                    line_cap: LineCap::Round,
-                    ..Default::default()
-                },
-            );
-        }
+    let lo = trims.0;
+    let hi = (flat.total - trims.1).max(lo);
+    for (a, b) in dash_windows(phase, 43.0, 3.0, lo, hi) {
+        stroke_arc_range(frame, &flat, a, b, 4.0, t);
     }
 }
 
-/// Path-parameter ranges for one packet: a single run, or two pieces when
-/// the bead wraps past the path's end back to its start.
-fn flow_packet_chords(start: f32, packet: f32, total: f32) -> Vec<(f32, f32)> {
-    let end = start + packet;
-    if end <= total {
-        vec![(start, end)]
-    } else {
-        vec![(start, total), (0.0, end - total)]
+/// Where the [dash, cycle] pattern lands on the path for a given phase:
+/// increasing phase shifts windows toward the path start (the canvas
+/// lineDashOffset semantics), each clipped to the drawable [lo, hi].
+fn dash_windows(phase: f32, cycle: f32, dash: f32, lo: f32, hi: f32) -> Vec<(f32, f32)> {
+    let mut out = Vec::new();
+    if (hi - lo).abs() < f32::EPSILON {
+        return out;
     }
-}
-
-/// Flow speed in px/s along the path.
-pub const FLOW_SPEED: f32 = 110.0;
-
-/// Small radial glow centered where the pointer touches the line —
-/// dbdiagram's hover glow is brightest at the cursor.
-fn paint_cursor_glow(frame: &mut canvas::Frame, p: Point, zoom: f32, t: f32) {
-    let k = zoom / 20.0;
-    for (r, a) in [(2.2, 0.30), (5.0, 0.16), (9.0, 0.07)] {
-        frame.fill(
-            &Path::circle(p, r * k),
-            with_alpha(theme::EDGE_HOVER, a * t),
-        );
-    }
-}
-
-/// The point on a polyline nearest to `p` (for the cursor glow).
-fn nearest_on_path(pts: &[Point], p: Point) -> Option<Point> {
-    let mut best: Option<(f32, Point)> = None;
-    for w in pts.windows(2) {
-        let (a, b) = (w[0], w[1]);
-        let (vx, vy) = (b.x - a.x, b.y - a.y);
-        let len2 = vx * vx + vy * vy;
-        let tt = if len2 < f32::EPSILON {
-            0.0
-        } else {
-            (((p.x - a.x) * vx + (p.y - a.y) * vy) / len2).clamp(0.0, 1.0)
-        };
-        let q = Point::new(a.x + tt * vx, a.y + tt * vy);
-        let d = (q.x - p.x).powi(2) + (q.y - p.y).powi(2);
-        if best.is_none_or(|(bd, _)| d < bd) {
-            best = Some((d, q));
+    // first window start at or before lo
+    let shift = phase.rem_euclid(cycle);
+    let mut start = lo - shift;
+    while start < hi {
+        let a = start.max(lo);
+        let b = (start + dash).min(hi);
+        if b > a {
+            out.push((a, b));
         }
+        start += cycle;
     }
-    best.map(|(_, q)| q)
+    out
 }
 
 fn lerp_color(a: Color, b: Color, t: f32) -> Color {
@@ -705,35 +605,158 @@ fn with_alpha(c: Color, a: f32) -> Color {
     Color { a: a.clamp(0.0, 1.0), ..c }
 }
 
-/// Orthogonal waypoint path with filleted corners: straight runs joined
-/// by quadratic bends (a quadratic B(c;t) equals a cubic with both
+/// One segment of the filleted orthogonal path: a straight run or a
+/// quadratic corner bend (a quadratic B(c;t) equals a cubic with both
 /// controls at c, which iced's builder has).
+enum Piece {
+    Line(Point, Point),
+    Quad(Point, Point, Point),
+}
+
+/// The filleted path as geometric pieces: straight runs with each corner
+/// replaced by `cut`-length entry/exit runs joined by a quadratic through
+/// the corner point (dbdiagram's RGt, cut capped at `r`).
+fn rounded_pieces(pts: &[Point], r: f32) -> Vec<Piece> {
+    let mut pieces = Vec::new();
+    let Some(first) = pts.first() else {
+        return pieces;
+    };
+    let mut cursor = *first;
+    for i in 1..pts.len().saturating_sub(1) {
+        let (p, v, n) = (pts[i - 1], pts[i], pts[i + 1]);
+        let seg_in = ((v.x - p.x).powi(2) + (v.y - p.y).powi(2)).sqrt();
+        let seg_out = ((n.x - v.x).powi(2) + (n.y - v.y).powi(2)).sqrt();
+        if seg_in < f32::EPSILON || seg_out < f32::EPSILON {
+            continue;
+        }
+        let cut = r.min(seg_in / 2.0).min(seg_out / 2.0);
+        let din = ((v.x - p.x) / seg_in, (v.y - p.y) / seg_in);
+        let dout = ((n.x - v.x) / seg_out, (n.y - v.y) / seg_out);
+        let entry = Point::new(v.x - din.0 * cut, v.y - din.1 * cut);
+        let exit = Point::new(v.x + dout.0 * cut, v.y + dout.1 * cut);
+        pieces.push(Piece::Line(cursor, entry));
+        pieces.push(Piece::Quad(entry, v, exit));
+        cursor = exit;
+    }
+    if let Some(last) = pts.last() {
+        pieces.push(Piece::Line(cursor, *last));
+    }
+    pieces
+}
+
+/// Orthogonal waypoint path with filleted corners.
 fn rounded_edge_path(pts: &[Point], r: f32) -> Path {
     Path::new(|builder| {
-        let Some(first) = pts.first() else {
+        let pieces = rounded_pieces(pts, r);
+        let Some(first) = pieces.first() else {
             return;
         };
-        builder.move_to(*first);
-        for i in 1..pts.len().saturating_sub(1) {
-            let (p, v, n) = (pts[i - 1], pts[i], pts[i + 1]);
-            let seg_in = ((v.x - p.x).powi(2) + (v.y - p.y).powi(2)).sqrt();
-            let seg_out = ((n.x - v.x).powi(2) + (n.y - v.y).powi(2)).sqrt();
-            if seg_in < f32::EPSILON || seg_out < f32::EPSILON {
-                continue;
+        let start = match first {
+            Piece::Line(a, _) | Piece::Quad(a, _, _) => *a,
+        };
+        builder.move_to(start);
+        for piece in &pieces {
+            match piece {
+                Piece::Line(_, b) => builder.line_to(*b),
+                Piece::Quad(_, c, b) => builder.quadratic_curve_to(*c, *b),
             }
-            let cut = r.min(seg_in / 2.0).min(seg_out / 2.0);
-            let din = ((v.x - p.x) / seg_in, (v.y - p.y) / seg_in);
-            let dout = ((n.x - v.x) / seg_out, (n.y - v.y) / seg_out);
-            builder.line_to(Point::new(v.x - din.0 * cut, v.y - din.1 * cut));
-            builder.quadratic_curve_to(
-                Point::new(v.x, v.y),
-                Point::new(v.x + dout.0 * cut, v.y + dout.1 * cut),
-            );
-        }
-        if let Some(last) = pts.last() {
-            builder.line_to(*last);
         }
     })
+}
+
+/// A flat arc-length parameterization of the path: sampled points with
+/// cumulative distance, plus the total length.
+struct Flat {
+    pts: Vec<(Point, f32)>,
+    total: f32,
+}
+
+/// Flatten the pieces into a dense polyline (corners at 8 samples) so any
+/// sub-range of the path can be stroked following its curves exactly.
+fn flatten_pieces(pieces: &[Piece]) -> Flat {
+    let mut pts: Vec<(Point, f32)> = Vec::new();
+    let mut total = 0.0f32;
+    for piece in pieces {
+        let (a, b, quad) = match *piece {
+            Piece::Line(a, b) => (a, b, None),
+            Piece::Quad(a, c, b) => (a, b, Some(c)),
+        };
+        if pts.is_empty() {
+            pts.push((a, 0.0));
+        }
+        // sample lines in one step, corners at 8 quadratic steps
+        let steps = if quad.is_some() { 8 } else { 1 };
+        for k in 1..=steps {
+            let t = k as f32 / steps as f32;
+            let p = match quad {
+                None => Point::new(
+                    a.x + (b.x - a.x) * t,
+                    a.y + (b.y - a.y) * t,
+                ),
+                Some(c) => {
+                    let mt = 1.0 - t;
+                    Point::new(
+                        mt * mt * a.x + 2.0 * mt * t * c.x + t * t * b.x,
+                        mt * mt * a.y + 2.0 * mt * t * c.y + t * t * b.y,
+                    )
+                }
+            };
+            let (last, _) = *pts.last().unwrap();
+            let d = ((p.x - last.x).powi(2) + (p.y - last.y).powi(2)).sqrt();
+            if d < f32::EPSILON {
+                continue;
+            }
+            total += d;
+            pts.push((p, total));
+        }
+    }
+    Flat { pts, total }
+}
+
+/// The path point at arc distance `s` (linear within the sampled pieces).
+fn flat_point(flat: &Flat, s: f32) -> Point {
+    let s = s.clamp(0.0, flat.total);
+    let idx = match flat.pts.binary_search_by(|(_, d)| d.partial_cmp(&s).unwrap()) {
+        Ok(i) => i,
+        Err(i) => i.saturating_sub(1),
+    };
+    let (a, sa) = flat.pts[idx];
+    match flat.pts.get(idx + 1) {
+        Some((b, sb)) if *sb > sa => {
+            let t = (s - sa) / (*sb - sa);
+            Point::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
+        }
+        _ => a,
+    }
+}
+
+/// Stroke the path sub-range `[a, b]` (arc distances) as a polyline.
+fn stroke_arc_range(frame: &mut canvas::Frame, flat: &Flat, a: f32, b: f32, width: f32, t: f32) {
+    if b <= a {
+        return;
+    }
+    let path = Path::new(|builder| {
+        builder.move_to(flat_point(flat, a));
+        // sample every few px so straight runs stay cheap and corners curve
+        let mut s = a;
+        while s < b {
+            s = (s + 2.0).min(b);
+            builder.line_to(flat_point(flat, s));
+        }
+    });
+    frame.stroke(
+        &path,
+        Stroke {
+            style: with_alpha(brighten(theme::EDGE_HOVER, 1.2), 0.9 * t).into(),
+            width,
+            ..Default::default()
+        },
+    );
+}
+
+/// Multiply an RGB color's brightness by `f` (their colorFactor brighten).
+fn brighten(c: Color, f: f32) -> Color {
+    Color::new((c.r * f).min(1.0), (c.g * f).min(1.0), (c.b * f).min(1.0), c.a)
 }
 
 fn edge_stroke(zoom: f32) -> Stroke<'static> {
@@ -756,37 +779,42 @@ fn dir_and_normal(a: Point, b: Point) -> (Vector, Vector) {
     }
 }
 
-/// The "one" end: a short dash across the line where it meets the table.
+/// The "one" end: a perpendicular tick across the line, sitting in the
+/// 10px marker gap before the table edge (their PGt, ±4px at 10px out).
 fn one_tick(frame: &mut canvas::Frame, end: Point, inner: Point, zoom: f32, stroke: Stroke) {
-    let (_, n) = dir_and_normal(end, inner);
-    let half = 0.30 * zoom;
+    let (d, n) = dir_and_normal(end, inner);
+    let half = 4.0 * zoom / 20.0;
+    let out = end + d * (0.5 * zoom);
     frame.stroke(
         &Path::new(|b| {
-            b.move_to(end - n * half);
-            b.line_to(end + n * half);
+            b.move_to(out - n * half);
+            b.line_to(out + n * half);
         }),
         stroke,
     );
 }
 
-/// The "many" end (dbdiagram): an open circle sitting on the line a short
-/// way before the table edge and an arrowhead pointing into the table —
-/// the hover packets flow along the line and into this circle.
+/// The "many" end: a chevron whose wings sit on the table edge and whose
+/// tip points back along the line (9px out), plus an open circle (r=3px)
+/// just past the tip at 13px out — their NGt + FGt; the flow's dashes
+/// stop at this circle.
 fn many_marker(frame: &mut canvas::Frame, end: Point, inner: Point, zoom: f32, stroke: Stroke) {
+    let k = zoom / 20.0;
     let (d, n) = dir_and_normal(end, inner);
-    let back = 0.32 * zoom;
-    let spread = 0.20 * zoom;
-    let wing = end - d * back;
+    let spread = 4.0 * k;
+    let tip = end + d * (9.0 * k);
     frame.stroke(
         &Path::new(|b| {
-            b.move_to(wing + n * spread);
-            b.line_to(end);
-            b.line_to(wing - n * spread);
+            b.move_to(end - n * spread);
+            b.line_to(tip);
+            b.line_to(end + n * spread);
         }),
         stroke,
     );
-    let circle_center = end - d * (0.60 * zoom);
-    frame.stroke(&Path::circle(circle_center, 0.14 * zoom), stroke);
+    frame.stroke(
+        &Path::circle(end + d * (13.0 * k), 3.0 * k),
+        stroke,
+    );
 }
 
 /// Edge stroke thickness at `zoom`: proportional above 1:1, but never
@@ -1076,40 +1104,53 @@ mod tests {
     }
 
     #[test]
-    fn card_labels_match_dbdiagram_conventions() {
-        let mk = |src: &str| {
-            dbml_ui::layout::layout(&dbml_ui::model::build(&dbml_ui::dbml::parser::parse(src).doc))
-                .edges[0]
-                .clone()
-        };
-        // nullable fk: 0..* beside the fk end, 1 beside the referenced end
-        let e = mk("Table a { id integer [pk] }\nTable b { a_id integer }\nRef: b.a_id > a.id\n");
-        assert_eq!(card_labels(&e), ["0..*", "1"]);
-        // not-null fk reads 1..*
-        let e = mk(
-            "Table a { id integer [pk] }\nTable b { a_id integer [not null] }\nRef: b.a_id > a.id\n",
-        );
-        assert_eq!(card_labels(&e), ["1..*", "1"]);
-        // one-to-one: 1 on both ends
-        let e = mk("Table a { id integer [pk] }\nTable b { a_id integer [pk] }\nRef: b.a_id - a.id\n");
-        assert_eq!(card_labels(&e), ["1", "1"]);
-        // many-to-many: 0..* on both ends
-        let e = mk("Table a { id integer [pk] }\nTable b { id integer [pk] }\nRef: a.id <> b.id\n");
-        assert_eq!(card_labels(&e), ["0..*", "0..*"]);
+    fn dash_windows_tile_and_clip() {
+        // the dash pattern tiles the drawable window; increasing the phase
+        // shifts windows toward the path start (canvas lineDashOffset)
+        let w = dash_windows(0.0, 43.0, 3.0, 0.0, 200.0);
+        assert_eq!(w[0], (0.0, 3.0));
+        assert_eq!(w[1], (43.0, 46.0));
+        // phase shifts the tiling back
+        let w = dash_windows(2.0, 43.0, 3.0, 0.0, 200.0);
+        assert_eq!(w[0], (0.0, 1.0));
+        assert_eq!(w[1], (41.0, 44.0));
+        // windows clip at both ends of the drawable range — the marker
+        // gap trims mean a dash at the boundary is cut, never wrapped
+        let w = dash_windows(0.0, 43.0, 3.0, 16.0, 18.0);
+        assert_eq!(w, vec![(16.0, 18.0)]);
+        // an empty window yields nothing
+        assert!(dash_windows(0.0, 43.0, 3.0, 10.0, 10.0).is_empty());
     }
 
     #[test]
-    fn flow_packet_chords_split_at_the_wrap() {
-        // a packet fully inside the path is one run
-        assert_eq!(flow_packet_chords(10.0, 8.0, 100.0), vec![(10.0, 18.0)]);
-        // a bead hanging past the path end wraps as TWO pieces — the old
-        // bug drew the straddling piece as one chord across the canvas
-        assert_eq!(
-            flow_packet_chords(96.0, 8.0, 100.0),
-            vec![(96.0, 100.0), (0.0, 4.0)]
+    fn flattened_path_measures_and_follows_corners() {
+        // an L-shaped route with a fillet: two 40px straight runs joined
+        // by the corner quadratic (~16px), total ≈ 96
+        let pts = [
+            Point::new(0.0, 0.0),
+            Point::new(50.0, 0.0),
+            Point::new(50.0, 50.0),
+        ];
+        let flat = flatten_pieces(&rounded_pieces(&pts, 10.0));
+        assert!(
+            flat.total > 94.0 && flat.total < 98.0,
+            "total: {}",
+            flat.total
         );
-        // a packet ending exactly at the path end stays one piece
-        assert_eq!(flow_packet_chords(92.0, 8.0, 100.0), vec![(92.0, 100.0)]);
+        // a point 20px along sits on the horizontal run, before the corner
+        let p = flat_point(&flat, 20.0);
+        assert_eq!(p, Point::new(20.0, 0.0));
+        // a point inside the corner bend sits on the quadratic, which hugs
+        // the corner through ~(47.5, 2.5) at its midpoint: the flow's
+        // dashes ride this curve instead of cutting it
+        let bend = flat_point(&flat, 48.0);
+        assert!(
+            (bend.x - 50.0).abs() < 4.0 && bend.y > 1.0 && bend.y < 12.0,
+            "bend point: {bend:?}"
+        );
+        // endpoints survive
+        assert_eq!(flat_point(&flat, 0.0), pts[0]);
+        assert_eq!(flat_point(&flat, flat.total), pts[2]);
     }
 
     #[test]
@@ -1305,7 +1346,6 @@ mod interaction_tests {
             hover: None,
             dragging: false,
             edge_anim: &[],
-            line_hover: None,
             clock: 0.0,
         }
     }

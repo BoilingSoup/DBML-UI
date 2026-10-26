@@ -63,7 +63,6 @@ pub fn root(app: &App) -> Element<'_, Message> {
             },
             dragging: app.drag != Drag::None,
             edge_anim: &app.cur().edge_anim,
-            line_hover: app.cur().line_hover,
             clock: app.anim_clock,
         })
         .width(Fill)

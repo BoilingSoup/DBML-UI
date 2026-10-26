@@ -23,10 +23,11 @@ pub const TYPE_TEXT: iced::Color = iced::Color::from_rgb(0.545, 0.565, 0.612); /
 pub const MARKER: iced::Color = iced::Color::from_rgb(0.545, 0.565, 0.612); // #8b909c
 pub const LINE: iced::Color = iced::Color::from_rgb(0.498, 0.514, 0.553); // #7f838d
 
-/// dbdiagram's hovered-relationship blue in their DARK theme, sampled off
-/// their canvas (the app is dark-themed, so this is the faithful value;
-/// their light theme uses a violet-blue instead).
-pub const EDGE_HOVER: iced::Color = iced::Color::from_rgb(0.286, 0.784, 0.980); // #49c8fa
+/// dbdiagram's hovered-relationship highlight, from their theme table in
+/// the site JS (`REF_HIGHLIGHT_COLOR`): `#3EA8DE` in the dark theme,
+/// `#475aff` in light. The app is dark, so this is the faithful value.
+pub const EDGE_HOVER: iced::Color =
+    iced::Color::from_rgb(0x3E as f32 / 255.0, 0xA8 as f32 / 255.0, 0xDE as f32 / 255.0);
 
 /// dbdiagram's hover tooltip is a light pill with dark text.
 pub const TIP_BG: iced::Color = iced::Color::from_rgb(0.941, 0.945, 0.953); // #f0f1f3
