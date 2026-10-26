@@ -48,6 +48,20 @@ pub const EDITOR_CHROME: f32 = 119.5;
 /// below-canvas chrome) and `root`.
 pub const EDITOR_CANVAS_TOP: f32 = 94.9;
 
+/// Window-y of the diagram canvas's top edge: the pane row starts 69.6px
+/// down (tab strip 30 + spacing 4 + body top padding 8 + mode row 23.6 +
+/// body spacing 4) and the pane's 1px padding. Only true while a document
+/// is open (the mode row exists); the start screen's empty diagram never
+/// needs fit math. Keep in sync with `root`.
+pub const DIAGRAM_CANVAS_TOP: f32 = 70.6;
+
+/// Every pixel of chrome around the diagram canvas: DIAGRAM_CANVAS_TOP
+/// above it; below it the diagram button row (column spacing 4 + buttons
+/// 20.3, text 11 + padding [3,8]), the pane's bottom padding 1, body
+/// spacing 8 and the status bar 15.6. The canvas height is
+/// `window height - DIAGRAM_CHROME`. Keep in sync with `root`.
+pub const DIAGRAM_CHROME: f32 = DIAGRAM_CANVAS_TOP + 4.0 + 20.3 + 1.0 + 8.0 + 15.6;
+
 pub fn root(app: &App) -> Element<'_, Message> {
     let editor_body: Element<'_, Message> = if app.doc_open() {
         column![
@@ -79,38 +93,49 @@ pub fn root(app: &App) -> Element<'_, Message> {
     // flattens one canvas widget's geometries into a mesh pass + a text
     // pass, so a second-geometry tooltip pill painted behind the box row
     // text (see DiagramOverlay)
-    let diagram_pane = container(
-        stack![
-            canvas(Diagram {
-                layout: app.diagram(),
-                zoom: app.cur().zoom,
-                pan: app.cur().pan,
-                hover: if app.drag == Drag::None {
-                    app.canvas_cursor
-                } else {
-                    None
-                },
-                dragging: app.drag != Drag::None,
-                edge_anim: &app.cur().edge_anim,
-                clock: app.anim_clock,
-            })
-            .width(Fill)
-            .height(Fill),
-            canvas(DiagramOverlay {
-                layout: app.diagram(),
-                zoom: app.cur().zoom,
-                pan: app.cur().pan,
-                hover: if app.drag == Drag::None {
-                    app.canvas_cursor
-                } else {
-                    None
-                },
-            })
-            .width(Fill)
-            .height(Fill),
-        ]
+    let diagram_canvas = stack![
+        canvas(Diagram {
+            layout: app.diagram(),
+            zoom: app.cur().zoom,
+            pan: app.cur().pan,
+            hover: if app.drag == Drag::None {
+                app.canvas_cursor
+            } else {
+                None
+            },
+            dragging: app.drag != Drag::None,
+            edge_anim: &app.cur().edge_anim,
+            clock: app.anim_clock,
+        })
         .width(Fill)
         .height(Fill),
+        canvas(DiagramOverlay {
+            layout: app.diagram(),
+            zoom: app.cur().zoom,
+            pan: app.cur().pan,
+            hover: if app.drag == Drag::None {
+                app.canvas_cursor
+            } else {
+                None
+            },
+        })
+        .width(Fill)
+        .height(Fill),
+    ]
+    .width(Fill)
+    .height(Fill);
+    // dbdiagram-style diagram actions under the canvas: auto-arrange the
+    // tables left-to-right along their refs, and zoom so everything fits.
+    let diagram_buttons = row![
+        diagram_button("Auto-arrange", Message::AutoArrange),
+        horizontal_space(),
+        diagram_button("Zoom to Fit", Message::ZoomToFit),
+    ]
+    .padding([0, 4]);
+    let diagram_pane = container(
+        column![diagram_canvas, diagram_buttons]
+            .spacing(4)
+            .height(Fill),
     )
     .padding(1.0)
     .width(Fill)
@@ -1009,6 +1034,16 @@ fn tool_button_style() -> iced::widget::button::Style {
         border: iced::border::rounded(6).color(theme::BORDER),
         ..Default::default()
     }
+}
+
+/// Small button in the diagram pane's bottom row (Auto-arrange, Zoom to
+/// Fit) — same look and metrics as the editor toolbar's (text 11 +
+/// padding [3,8] = the 20.3px row height DIAGRAM_CHROME counts).
+fn diagram_button(label: &'static str, msg: Message) -> iced::widget::Button<'static, Message> {
+    button(text(label).size(11.0).color(theme::TEXT))
+        .padding([3, 8])
+        .style(move |_t, _s| tool_button_style())
+        .on_press(msg)
 }
 
 /// dbdiagram-style edge handle over the pane seam: a small chevron pill

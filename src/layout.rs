@@ -134,20 +134,26 @@ pub fn layout(schema: &Schema) -> Layout {
     layout_with_overrides(schema, &std::collections::HashMap::new())
 }
 
-/// Layout with user-dragged table positions (diagram coordinates, keyed by
-/// table/enum name). Overridden boxes keep their dragged position; column
-/// extents, content bounds, and edge routes are computed from the final
-/// positions. New/renamed tables fall back to the automatic placement.
-pub fn layout_with_overrides(
-    schema: &Schema,
-    overrides: &std::collections::HashMap<String, (i32, i32)>,
-) -> Layout {
-    let n = schema.nodes.len();
+/// Gaps of the auto-arrange layout, in cells, translating the ELK layered
+/// options dbdiagram's "Left-right" arrange uses (1 cell = 10px wide x
+/// 20px tall at 1:1):
+/// - `edgeNodeBetweenLayers: 120` -> 12 cells horizontal between layers
+pub const ARRANGE_LAYER_GAP_X: i32 = 12;
+/// - `spacing.baseValue: 40` -> 2 cells vertical between tables in a layer
+pub const ARRANGE_LAYER_GAP_Y: i32 = 2;
+/// - `spacing.componentComponent: 80` -> 8 cells between disconnected
+///   components
+pub const ARRANGE_COMPONENT_GAP: i32 = 8;
 
+/// Longest-path layering over ref edges: the referenced table is the
+/// predecessor and FK tables come after it, so diagrams read left-to-right
+/// like dbdiagram's. Cycles are tolerated: Kahn's order processes what it
+/// can (longest-path relaxations are order-independent); members stuck in
+/// a cycle never enter the queue and are parked one layer past the deepest.
+fn ref_layers(schema: &Schema) -> Vec<usize> {
+    let n = schema.nodes.len();
     let mut indeg = vec![0usize; n];
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
-    // Layering puts the referenced table first and FK tables after it, so
-    // diagrams read left-to-right like dbdiagram's.
     for e in &schema.edges {
         let (fk, rf) = fk_ref(e);
         // self-references don't order layers (a table always comes before
@@ -178,6 +184,205 @@ pub fn layout_with_overrides(
             *l = max_layer + 1;
         }
     }
+    layer
+}
+
+/// dbdiagram's "Auto-arrange / Left-right" (ELK layered, left-to-right):
+/// referenced tables LEFT of their FK tables, long relationship chains
+/// become long left-to-right runs. Returns the same shape as the
+/// drag-override map — table/enum name -> (x, y) in CELLS — for the app to
+/// write into `table_pos` and re-layout with `layout_with_overrides`; it
+/// never mutates `layout()` itself.
+///
+/// ELK options it mirrors (1 cell = 10px wide x 20px tall at 1:1):
+/// - layering: longest-path (INTERACTIVE), cycles parked after the last
+///   layer (`ref_layers`)
+/// - crossingMinimization: barycenter sweeps from model order;
+///   forceNodeModelOrder=true keeps document order on ties
+/// - nodePlacement: INTERACTIVE — the in-layer barycenter order is placed
+///   top-down as stacked blocks, each layer vertically centered (ELK
+///   centers layers)
+/// - spacing: 120px between layers, 40px in-layer, 80px between
+///   disconnected components (packed left to right, each centered on the
+///   global center line)
+/// - mergeEdges: edge routing only — `EdgeRoute` already handles it
+pub fn auto_arrange(
+    boxes: &[TableBox],
+    schema: &Schema,
+) -> std::collections::HashMap<String, (i32, i32)> {
+    let n = schema.nodes.len();
+    let mut out = std::collections::HashMap::new();
+    if n == 0 {
+        return out;
+    }
+    let layer = ref_layers(schema);
+    let max_layer = layer.iter().copied().max().unwrap_or(0);
+
+    // Box sizes and titles by node index (one box per node).
+    let mut size = vec![(0i32, 0i32); n];
+    let mut title = vec![String::new(); n];
+    for b in boxes {
+        size[b.node] = (b.w, b.h);
+        title[b.node] = b.title.clone();
+    }
+
+    // Ref adjacency (referenced -> FK) both ways, for the barycenter
+    // sweeps' neighbors in adjacent layers.
+    let mut succ: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut pred: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for e in &schema.edges {
+        let (fk, rf) = fk_ref(e);
+        if fk != rf && !succ[rf].contains(&fk) {
+            succ[rf].push(fk);
+            pred[fk].push(rf);
+        }
+    }
+
+    // In-layer order: model (document) order, then barycenter sweeps —
+    // each node's key is the average of its neighbors' positions in the
+    // adjacent layers. Ties keep model order (forceNodeModelOrder).
+    let mut order_layers: Vec<Vec<usize>> = vec![Vec::new(); max_layer + 1];
+    for i in 0..n {
+        order_layers[layer[i]].push(i);
+    }
+    let mut pos = vec![0usize; n];
+    for l in &mut order_layers {
+        for (i, v) in l.iter().enumerate() {
+            pos[*v] = i;
+        }
+    }
+    for _ in 0..4 {
+        let mut changed = false;
+        for nodes in order_layers.iter_mut().take(max_layer + 1).skip(1) {
+            let mut keys: Vec<(f32, usize)> = nodes
+                .iter()
+                .map(|&v| {
+                    let (mut sum, mut cnt) = (0.0f32, 0usize);
+                    for &u in &pred[v] {
+                        if layer[u] + 1 == layer[v] {
+                            sum += pos[u] as f32;
+                            cnt += 1;
+                        }
+                    }
+                    for &w in &succ[v] {
+                        if layer[w] == layer[v] + 1 {
+                            sum += pos[w] as f32;
+                            cnt += 1;
+                        }
+                    }
+                    let bc = if cnt > 0 {
+                        sum / cnt as f32
+                    } else {
+                        pos[v] as f32
+                    };
+                    (bc, v)
+                })
+                .collect();
+            keys.sort_by(|a, b| {
+                a.0.partial_cmp(&b.0)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then(a.1.cmp(&b.1))
+            });
+            for (i, (_, v)) in keys.iter().enumerate() {
+                if pos[*v] != i {
+                    changed = true;
+                    pos[*v] = i;
+                }
+            }
+            *nodes = keys.into_iter().map(|(_, v)| v).collect();
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    // Connected components over ref edges (union-find); isolated nodes
+    // (enums, unrelated tables) are their own component.
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn find(parent: &mut [usize], i: usize) -> usize {
+        let mut i = i;
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    for e in &schema.edges {
+        let (fk, rf) = fk_ref(e);
+        if fk != rf {
+            let (a, b) = (find(&mut parent, fk), find(&mut parent, rf));
+            if a != b {
+                parent[a] = b;
+            }
+        }
+    }
+    // Components in model order of their first node.
+    let mut comps: Vec<Vec<usize>> = Vec::new();
+    let mut by_root: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    for i in 0..n {
+        let root = find(&mut parent, i);
+        let idx = *by_root.entry(root).or_insert_with(|| {
+            comps.push(Vec::new());
+            comps.len() - 1
+        });
+        comps[idx].push(i);
+    }
+
+    // Each component laid out on its own: layers left to right (layer x =
+    // previous x + previous max width + 12), each layer's nodes stacked
+    // top-down in barycenter order with 2-cell gaps, the block centered on
+    // the component's center line (local y 0).
+    let mut placed = vec![(0i32, 0i32); n];
+    let mut comp_x = 0i32;
+    for comp in &comps {
+        let mut x = comp_x;
+        let mut max_right = comp_x;
+        for layer_nodes in &order_layers {
+            let nodes: Vec<usize> = layer_nodes
+                .iter()
+                .copied()
+                .filter(|&v| comp.contains(&v))
+                .collect();
+            if nodes.is_empty() {
+                continue;
+            }
+            let layer_w = nodes.iter().map(|&v| size[v].0).max().unwrap_or(0);
+            let layer_h: i32 = nodes.iter().map(|&v| size[v].1).sum::<i32>()
+                + ARRANGE_LAYER_GAP_Y * (nodes.len() as i32 - 1);
+            let mut y = -(layer_h as f32 / 2.0).round() as i32;
+            for &v in &nodes {
+                placed[v] = (x, y);
+                y += size[v].1 + ARRANGE_LAYER_GAP_Y;
+            }
+            max_right = max_right.max(x + layer_w);
+            x += layer_w + ARRANGE_LAYER_GAP_X;
+        }
+        // Pack the next component to the right (componentComponent 80px).
+        comp_x = max_right + ARRANGE_COMPONENT_GAP;
+    }
+    // Normalize to non-negative cells: min corner at the origin (the
+    // center lines all sit half the tallest component down — the global
+    // center line).
+    let min_x = placed.iter().map(|p| p.0).min().unwrap_or(0);
+    let min_y = placed.iter().map(|p| p.1).min().unwrap_or(0);
+    for (i, p) in placed.iter_mut().enumerate() {
+        if title[i].is_empty() {
+            continue; // no box for this node (stale diagram): skip it
+        }
+        out.insert(title[i].clone(), (p.0 - min_x, p.1 - min_y));
+    }
+    out
+}
+
+/// Layout with user-dragged table positions (diagram coordinates, keyed by
+/// table/enum name). Overridden boxes keep their dragged position; column
+/// extents, content bounds, and edge routes are computed from the final
+/// positions. New/renamed tables fall back to the automatic placement.
+pub fn layout_with_overrides(
+    schema: &Schema,
+    overrides: &std::collections::HashMap<String, (i32, i32)>,
+) -> Layout {
+    let layer = ref_layers(schema);
 
     // Boxes, sized from their content.
     let boxes: Vec<TableBox> = schema
@@ -701,5 +906,195 @@ Table much_longer_name { id integer [pk] very_long_column integer }
         assert_eq!(many_ends(OneToMany), (true, false));
         assert_eq!(many_ends(OneToOne), (false, false));
         assert_eq!(many_ends(ManyToMany), (true, true));
+    }
+
+    // -------------------- auto_arrange (Left-right) --------------------
+
+    /// Layout boxes + schema for an auto-arrange test (auto_arrange takes
+    /// the laid-out boxes for sizes/titles and the schema for the edges).
+    fn arrange_parts(src: &str) -> (Layout, Schema) {
+        let out = parser::parse(src);
+        let schema = crate::model::build(&out.doc);
+        let l = layout(&schema);
+        (l, schema)
+    }
+
+    fn box_of<'a>(l: &'a Layout, title: &str) -> &'a TableBox {
+        l.boxes.iter().find(|b| b.title == title).unwrap()
+    }
+
+    #[test]
+    fn auto_arrange_layers_left_to_right_with_layer_gap() {
+        let (l, schema) = arrange_parts(
+            "Table a { id integer [pk] }
+Table b { a_id integer }
+Table c { b_id integer }
+Ref: b.a_id > a.id
+Ref: c.b_id > b.id
+",
+        );
+        let pos = auto_arrange(&l.boxes, &schema);
+        // referenced LEFT of FK, one 12-cell gap between layers
+        assert_eq!(pos["a"].0, 0, "first layer at the origin");
+        assert_eq!(
+            pos["b"].0,
+            pos["a"].0 + box_of(&l, "a").w + ARRANGE_LAYER_GAP_X
+        );
+        assert_eq!(
+            pos["c"].0,
+            pos["b"].0 + box_of(&l, "b").w + ARRANGE_LAYER_GAP_X
+        );
+    }
+
+    #[test]
+    fn auto_arrange_in_layer_gap_and_model_order() {
+        let (l, schema) = arrange_parts(
+            "Table a { id integer [pk] }
+Table b { a_id integer }
+Table c { a_id integer }
+Ref: b.a_id > a.id
+Ref: c.a_id > a.id
+",
+        );
+        let pos = auto_arrange(&l.boxes, &schema);
+        // same layer: same x, stacked top-down with the 2-cell gap; ties
+        // keep model order (b before c, so b above c)
+        assert_eq!(pos["b"].0, pos["c"].0);
+        assert_eq!(
+            pos["c"].1,
+            pos["b"].1 + box_of(&l, "b").h + ARRANGE_LAYER_GAP_Y
+        );
+        assert!(pos["b"].1 < pos["c"].1);
+    }
+
+    #[test]
+    fn auto_arrange_barycenter_untangles_crossing() {
+        // q1 -> r2 and q2 -> r1 cross if layer 2 keeps model order; the
+        // barycenter sweep must swap r2 above r1
+        let (l, schema) = arrange_parts(
+            "Table p { id integer [pk] }
+Table q1 { p_id integer }
+Table q2 { p_id integer }
+Table r1 { q2_id integer }
+Table r2 { q1_id integer }
+Ref: q1.p_id > p.id
+Ref: q2.p_id > p.id
+Ref: r2.q1_id > q1.id
+Ref: r1.q2_id > q2.id
+",
+        );
+        let pos = auto_arrange(&l.boxes, &schema);
+        // model order (q1,q2 / r1,r2) would cross both edges; the sweeps
+        // must leave the two layers ordered so no edge crosses (whether it
+        // swapped the q layer, the r layer, or both)
+        let q_order = pos["q1"].1 < pos["q2"].1;
+        let r_order = pos["r2"].1 < pos["r1"].1;
+        assert_eq!(q_order, r_order, "orders must agree (no crossing): {pos:?}");
+        assert!(
+            !(q_order && pos["r1"].1 < pos["r2"].1),
+            "the crossing model order must have been undone: {pos:?}"
+        );
+        // and each layer is a tight 2-cell stack
+        assert_eq!(
+            (pos["q2"].1 - pos["q1"].1).abs(),
+            box_of(&l, "q1").h + ARRANGE_LAYER_GAP_Y
+        );
+    }
+
+    #[test]
+    fn auto_arrange_centers_layers_on_one_line() {
+        // even heights (2 rows + 2) so centering is exact
+        let (l, schema) = arrange_parts(
+            "Table a { id integer [pk] name varchar }
+Table b { a_id integer x integer }
+Table c { a_id integer y integer }
+Ref: b.a_id > a.id
+Ref: c.a_id > a.id
+",
+        );
+        let pos = auto_arrange(&l.boxes, &schema);
+        let a = box_of(&l, "a");
+        let c = box_of(&l, "c");
+        let (pa, pb, pc) = (pos["a"], pos["b"], pos["c"]);
+        let center_a = pa.1 as f32 + a.h as f32 / 2.0;
+        let block_h = (pc.1 + c.h - pb.1) as f32;
+        let center_block = pb.1 as f32 + block_h / 2.0;
+        assert_eq!(center_a, center_block, "layer blocks share a center line");
+        // the single-table layer is the shorter one: centered INSIDE the
+        // two-table block's span
+        assert!(pa.1 > pb.1 && pa.1 + a.h < pc.1 + c.h);
+    }
+
+    #[test]
+    fn auto_arrange_packs_components_left_to_right() {
+        let (l, schema) = arrange_parts(
+            "Table a { id integer [pk] }
+Table b { a_id integer }
+Table c { id integer [pk] }
+Table d { c_id integer }
+Ref: b.a_id > a.id
+Ref: d.c_id > c.id
+",
+        );
+        let pos = auto_arrange(&l.boxes, &schema);
+        // the first component (model order) on the left; the second starts
+        // one 8-cell component gap after the first's right edge (b is the
+        // rightmost box of component 1)
+        let b = box_of(&l, "b");
+        assert_eq!(pos["c"].0 - (pos["b"].0 + b.w), ARRANGE_COMPONENT_GAP);
+        // both components vertically centered on the same line (equal
+        // shapes, so their boxes share y rows)
+        assert_eq!(pos["a"].1, pos["c"].1);
+        assert_eq!(pos["b"].1, pos["d"].1);
+    }
+
+    #[test]
+    fn auto_arrange_tolerates_cycles() {
+        let (l, schema) = arrange_parts(
+            "Table a { id integer [pk] rb integer }
+Table b { id integer [pk] ra integer }
+Ref: a.rb > b.id
+Ref: b.ra > a.id
+",
+        );
+        let pos = auto_arrange(&l.boxes, &schema);
+        // cycle members park in one layer: same x, stacked
+        assert_eq!(pos["a"].0, pos["b"].0);
+        assert_eq!(
+            pos["b"].1,
+            pos["a"].1 + box_of(&l, "a").h + ARRANGE_LAYER_GAP_Y
+        );
+    }
+
+    #[test]
+    fn auto_arrange_covers_every_table_and_is_deterministic() {
+        let (l, schema) = arrange_parts(
+            "Enum st { draft published }
+Table t { s st }
+Table u { id integer [pk] }
+Ref: u.id > t.id
+",
+        );
+        let pos1 = auto_arrange(&l.boxes, &schema);
+        let pos2 = auto_arrange(&l.boxes, &schema);
+        assert_eq!(pos1, pos2, "deterministic");
+        assert_eq!(pos1.len(), l.boxes.len(), "every table gets an override");
+        for b in &l.boxes {
+            assert!(pos1.contains_key(&b.title), "missing {}", b.title);
+        }
+        // the enum is an isolated component: packed right of the main one
+        // with the component gap
+        let u = box_of(&l, "u");
+        assert_eq!(
+            pos1["st"].0,
+            pos1["u"].0 + u.w + ARRANGE_COMPONENT_GAP,
+            "enum component follows the main one"
+        );
+        // and vertically centered on the same center line (rounding slack
+        // of half a cell for odd heights)
+        let t = box_of(&l, "t");
+        let center_t = pos1["t"].1 as f32 + t.h as f32 / 2.0;
+        let center_st = pos1["st"].1 as f32 + 4.0 / 2.0; // enum box h = 2 values + 2
+        assert!((center_t - center_st).abs() <= 1.0, "centered: {pos1:?}");
     }
 }

@@ -1,6 +1,6 @@
 //! Application state and the iced update loop.
 
-use crate::canvas::diagram::{hit_test, to_cell_f};
+use crate::canvas::diagram::{hit_test, to_cell_f, CELL_ASPECT, MARGIN_CELLS};
 use crate::editor::{self, Action, Editor, KeyCode, KeyEvent, KeyModifiers};
 use dbml_ui::layout::{self, Layout};
 use dbml_ui::{dbml, model};
@@ -93,6 +93,13 @@ pub enum Message {
     /// Follow a navigable record cell: open the target table's record
     /// view with the matching row highlighted (best-effort match).
     RecordsFollow(usize, usize),
+    /// The diagram pane's Auto-arrange button: ELK layered left-right
+    /// positions for every table (see `layout::auto_arrange`), written
+    /// into `table_pos` (the same map user drags fill) and re-laid out.
+    AutoArrange,
+    /// The diagram pane's Zoom to Fit button: scale + pan so the whole
+    /// diagram fits the visible diagram canvas.
+    ZoomToFit,
 }
 
 /// The open record-view overlay: the table node whose records are shown
@@ -144,6 +151,16 @@ fn scroll_duration_override() -> Option<f32> {
 /// neoscroll's canonical mapping durations.
 pub const HALF_PAGE_MS: f32 = 250.0;
 pub const FULL_PAGE_MS: f32 = 450.0;
+
+/// Zoom range (px per diagram cell height) the wheel allows; Zoom to Fit
+/// clamps to the same range so the two always agree.
+pub const ZOOM_MIN: f32 = 5.0;
+pub const ZOOM_MAX: f32 = 160.0;
+
+/// Uniform screen margin (px) Zoom to Fit keeps around the content
+/// (dbdiagram's focus margins RIGHT 20 / TOP 60 / BOTTOM 60, simplified
+/// to one value).
+const FIT_MARGIN_PX: f32 = 40.0;
 
 /// Vim's 'scrolloff': the cursor is kept at least this many screen lines
 /// away from the top and bottom of the window whenever the buffer has
@@ -990,7 +1007,7 @@ impl App {
     /// Zoom continuously, keeping the point under the cursor stationary.
     fn wheel(&mut self, notches: f32) {
         let old = self.cur().zoom;
-        let new = (old * (notches * 0.22f32).exp()).clamp(5.0, 160.0);
+        let new = (old * (notches * 0.22f32).exp()).clamp(ZOOM_MIN, ZOOM_MAX);
         if (new - old).abs() < f32::EPSILON {
             return;
         }
@@ -999,6 +1016,80 @@ impl App {
             self.cur_mut().pan = Vector::new(p.x - (p.x - self.cur().pan.x) * s, p.y - (p.y - self.cur().pan.y) * s);
         }
         self.cur_mut().zoom = new;
+    }
+
+    // ----------------------- diagram actions -----------------------
+
+    /// Auto-arrange (dbdiagram's Left-right): ELK-layered positions for
+    /// every table (see `layout::auto_arrange`), written into `table_pos`
+    /// — the same map user drags fill — and re-laid out via the usual
+    /// set_source re-parse. The routes move out from under the pointer,
+    /// so the hover highlight resets with them.
+    fn auto_arrange(&mut self) {
+        let src = self.source().to_string();
+        let schema = model::build(&dbml::parser::parse(&src).doc);
+        let pos = layout::auto_arrange(&self.cur().diagram.boxes, &schema);
+        self.cur_mut().table_pos = pos;
+        self.cur_mut().set_source(&src);
+        self.cur_mut().edge_anim = vec![0.0; self.cur().diagram.edges.len()];
+        self.cur_mut().hover_edges.clear();
+        self.message = Some("auto-arranged".to_string());
+    }
+
+    /// Zoom to fit: scale + pan so the whole diagram (every box plus a
+    /// uniform margin) sits inside the visible diagram canvas. The scale
+    /// clamps to the wheel's range; the pan puts the content's top-left
+    /// corner at the margin — the same composition `to_px` and the
+    /// wheel's cursor-anchored zoom use (screen = (cell + margin) * size
+    /// + pan).
+    fn zoom_to_fit(&mut self) {
+        let boxes = &self.cur().diagram.boxes;
+        let Some(first) = boxes.first() else {
+            return; // nothing to fit (start screen, empty schema)
+        };
+        let (mut min_x, mut min_y, mut max_r, mut max_b) =
+            (first.x, first.y, first.right(), first.bottom());
+        for b in boxes.iter().skip(1) {
+            min_x = min_x.min(b.x);
+            min_y = min_y.min(b.y);
+            max_r = max_r.max(b.right());
+            max_b = max_b.max(b.bottom());
+        }
+        let (cw, ch) = self.diagram_canvas_size();
+        let avail_w = (cw - 2.0 * FIT_MARGIN_PX).max(1.0);
+        let avail_h = (ch - 2.0 * FIT_MARGIN_PX).max(1.0);
+        // content size in px at zoom 1 (cell height 1px, width CELL_ASPECT)
+        let content_w = ((max_r - min_x) as f32 * CELL_ASPECT).max(1.0);
+        let content_h = ((max_b - min_y) as f32).max(1.0);
+        let scale = (avail_w / content_w)
+            .min(avail_h / content_h)
+            .clamp(ZOOM_MIN, ZOOM_MAX);
+        let pan = Vector::new(
+            FIT_MARGIN_PX - (min_x as f32 + MARGIN_CELLS) * CELL_ASPECT * scale,
+            FIT_MARGIN_PX - (min_y as f32 + MARGIN_CELLS) * scale,
+        );
+        self.cur_mut().zoom = scale;
+        self.cur_mut().pan = pan;
+    }
+
+    /// Diagram pane width in px: the window minus the editor (or start)
+    /// pane's share of the flush pane row, or the whole width when the
+    /// editor pane is collapsed. Mirrors `editor_pane_width`'s integer
+    /// FillPortion math.
+    fn diagram_pane_width(&self) -> f32 {
+        if self.editor_collapsed {
+            return self.window_size.0.max(60.0);
+        }
+        (self.window_size.0.max(60.0) - self.editor_pane_width()).max(60.0)
+    }
+
+    /// Visible diagram canvas size in px: the pane minus its 1px padding
+    /// on each side and the chrome above/below it (view::DIAGRAM_CHROME).
+    fn diagram_canvas_size(&self) -> (f32, f32) {
+        (
+            (self.diagram_pane_width() - 2.0).max(1.0),
+            (self.window_size.1 - crate::view::DIAGRAM_CHROME).max(1.0),
+        )
     }
 }
 
@@ -1264,6 +1355,8 @@ fn handle_message(app: &mut App, message: Message) {
             app.consume_pending_jump();
         }
         Message::Wheel(n) => app.wheel(n),
+        Message::AutoArrange => app.auto_arrange(),
+        Message::ZoomToFit => app.zoom_to_fit(),
         Message::KeyPressed(code, mods) => app.key_pressed(code, mods),
         Message::EditorScrolled { v, h } => {
             // instant (neoscroll default) and takes over any animation —
@@ -2552,6 +2645,113 @@ mod tests {
             "round trip zoom, got {}",
             app.cur().zoom
         );
+    }
+
+    #[test]
+    fn auto_arrange_fills_table_pos_relayouts_and_toasts() {
+        let mut app = app();
+        // a stale dragged position and stale highlight state get replaced
+        app.cur_mut().table_pos.insert("users".to_string(), (500, 500));
+        app.cur_mut().edge_anim = vec![0.5; app.diagram().edges.len()];
+        app.cur_mut().hover_edges.push(0);
+        let _ = update(&mut app, Message::AutoArrange);
+        assert_eq!(app.message.as_deref(), Some("auto-arranged"));
+        // every table gets an override, and the re-layout applied it
+        assert_eq!(app.cur().table_pos.len(), app.diagram().boxes.len());
+        for b in &app.diagram().boxes {
+            assert_eq!(
+                app.cur().table_pos.get(&b.title),
+                Some(&(b.x, b.y)),
+                "{}",
+                b.title
+            );
+        }
+        assert_ne!(
+            app.cur().table_pos.get("users"),
+            Some(&(500, 500)),
+            "the stale drag is replaced"
+        );
+        // left-to-right: users (referenced) one 12-cell gap left of posts
+        let users = app
+            .diagram()
+            .boxes
+            .iter()
+            .find(|b| b.title == "users")
+            .unwrap();
+        let posts = app
+            .diagram()
+            .boxes
+            .iter()
+            .find(|b| b.title == "posts")
+            .unwrap();
+        assert_eq!(posts.x, users.right() + layout::ARRANGE_LAYER_GAP_X);
+        // highlight state reset
+        assert!(app.cur().hover_edges.is_empty());
+        assert!(app.cur().edge_anim.iter().all(|&t| t == 0.0));
+    }
+
+    #[test]
+    fn zoom_to_fit_scales_and_pans_content_into_view() {
+        let mut app = app();
+        app.window_size = (1400.0, 900.0);
+        // a table dragged out past the origin: the fit must cover it
+        let src = app.source().to_string();
+        app.cur_mut()
+            .table_pos
+            .insert("users".to_string(), (-50, -30));
+        app.cur_mut().set_source(&src);
+        let (mut min_x, mut min_y, mut max_r, mut max_b) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+        for b in &app.diagram().boxes {
+            min_x = min_x.min(b.x);
+            min_y = min_y.min(b.y);
+            max_r = max_r.max(b.right());
+            max_b = max_b.max(b.bottom());
+        }
+        let _ = update(&mut app, Message::ZoomToFit);
+        let (zoom, pan) = (app.cur().zoom, app.cur().pan);
+        let (cw, ch) = app.diagram_canvas_size();
+        // expected scale: the content into (canvas - 2 * 40px margin),
+        // clamped to the wheel's range
+        let exp = (((cw - 2.0 * FIT_MARGIN_PX) / ((max_r - min_x) as f32 * CELL_ASPECT))
+            .min((ch - 2.0 * FIT_MARGIN_PX) / (max_b - min_y) as f32))
+        .clamp(ZOOM_MIN, ZOOM_MAX);
+        assert!((zoom - exp).abs() < 1e-4, "zoom {zoom} vs {exp}");
+        // the content's top-left corner sits at the margin
+        let tl = crate::canvas::diagram::to_px(min_x, min_y, zoom, pan);
+        assert!(
+            (tl.x - FIT_MARGIN_PX).abs() < 1e-3 && (tl.y - FIT_MARGIN_PX).abs() < 1e-3,
+            "top-left {tl:?}"
+        );
+        // and the whole content is inside the canvas
+        let s = crate::canvas::diagram::cell_size(zoom);
+        let right = tl.x + (max_r - min_x) as f32 * s.width;
+        let bottom = tl.y + (max_b - min_y) as f32 * s.height;
+        assert!(
+            right <= cw + 0.01 && bottom <= ch + 0.01,
+            "content {right}x{bottom} overflows canvas {cw}x{ch}"
+        );
+    }
+
+    #[test]
+    fn zoom_to_fit_clamps_to_the_wheel_range() {
+        let mut app = App::with_source("Table tiny { id integer [pk] }\n".into());
+        // the diagram pane takes the whole (huge) window: the fit scale
+        // would far exceed what the wheel allows
+        app.editor_collapsed = true;
+        app.window_size = (4000.0, 3000.0);
+        let _ = update(&mut app, Message::ZoomToFit);
+        assert_eq!(app.cur().zoom, ZOOM_MAX);
+    }
+
+    #[test]
+    fn zoom_to_fit_and_auto_arrange_tolerate_an_empty_diagram() {
+        let mut app = App::blank_start();
+        let before = (app.cur().zoom, app.cur().pan);
+        let _ = update(&mut app, Message::ZoomToFit);
+        assert_eq!((app.cur().zoom, app.cur().pan), before, "nothing to fit");
+        let _ = update(&mut app, Message::AutoArrange);
+        assert!(app.cur().table_pos.is_empty());
+        assert_eq!(app.message.as_deref(), Some("auto-arranged"));
     }
 
     #[test]
