@@ -68,7 +68,8 @@ pub fn hit_test(layout: &Layout, zoom: f32, pan: Vector, p: Point) -> Option<&Ta
 /// Monospace character advance for row text at `zoom` (mono glyphs are
 /// ~0.6 em wide), used to find where a column name ends.
 fn char_px(zoom: f32) -> f32 {
-    0.6 * 0.55 * zoom
+    // keep in sync with layout::Row::CHAR_CELL (0.58 cell of 10px)
+    0.58 * 0.5 * zoom
 }
 
 /// The embellishment icons of one column row, in dbdiagram's order:
@@ -89,36 +90,38 @@ fn row_name_end_px(b: &TableBox, row: usize, zoom: f32, pan: Vector) -> f32 {
     top_left.x + 1.0 * s.width + b.rows[row].name.width() as f32 * char_px(zoom)
 }
 
-fn row_icon_layout(
-    b: &TableBox,
-    row: usize,
-    zoom: f32,
-    pan: Vector,
-) -> Vec<(RowIcon, Point)> {
+/// The vertical center of a column row in frame px.
+fn y_of(b: &TableBox, row: usize, zoom: f32, pan: Vector) -> f32 {
+    let top_left = to_px(b.x, b.y, zoom, pan);
+    let s = cell_size(zoom);
+    top_left.y + (row as f32 + 1.0) * s.height + s.height * 0.5
+}
+
+fn row_icon_layout(b: &TableBox, row: usize, zoom: f32, pan: Vector) -> Vec<(RowIcon, f32)> {
     let rowd = &b.rows[row];
     let k = zoom / 20.0;
     let mut u = row_name_end_px(b, row, zoom, pan) + 8.0 * k;
-    let y = {
-        let top_left = to_px(b.x, b.y, zoom, pan);
-        let s = cell_size(zoom);
-        top_left.y + (row as f32 + 1.0) * s.height + s.height * 0.5
-    };
     let mut out = Vec::new();
-    let mut push = |icon: RowIcon, u: &mut f32| {
-        out.push((icon, Point::new(*u + 5.25 * k, y)));
-        *u += 14.5 * k;
+    let cell_w = 0.5 * zoom;
+    let push = |icon: RowIcon, u: &mut f32, out: &mut Vec<(RowIcon, f32)>| {
+        out.push((icon, *u));
+        *u += match icon {
+            // "Unique" is a text pill: its slot is the pill width + gap
+            RowIcon::Unique => Row::badge_cell("Unique") * cell_w + 4.0 * k,
+            _ => 14.5 * k,
+        };
     };
     if rowd.pk {
-        push(RowIcon::Pk, &mut u);
+        push(RowIcon::Pk, &mut u, &mut out);
     }
     if rowd.fk {
-        push(RowIcon::Fk, &mut u);
+        push(RowIcon::Fk, &mut u, &mut out);
     }
     if rowd.unique {
-        push(RowIcon::Unique, &mut u);
+        push(RowIcon::Unique, &mut u, &mut out);
     }
     if rowd.note.is_some() {
-        push(RowIcon::Note, &mut u);
+        push(RowIcon::Note, &mut u, &mut out);
     }
     out
 }
@@ -127,11 +130,13 @@ fn row_icon_layout(
 /// inside one of the row's pk/fk icon slots.
 pub fn marker_hit(layout: &Layout, zoom: f32, pan: Vector, p: Point) -> Option<(&TableBox, usize)> {
     let (b, row) = hovered_row_of(layout, zoom, pan, p)?;
-    for (icon, center) in row_icon_layout(b, row, zoom, pan) {
+    let k = zoom / 20.0;
+    for (icon, slot) in row_icon_layout(b, row, zoom, pan) {
         if !matches!(icon, RowIcon::Pk | RowIcon::Fk) {
             continue;
         }
-        let r = 5.25 * zoom / 20.0;
+        let center = Point::new(slot + 5.25 * k, y_of(b, row, zoom, pan));
+        let r = 5.25 * k;
         if (p.x - center.x).abs() <= r && (p.y - center.y).abs() <= r {
             return Some((b, row));
         }
@@ -142,11 +147,13 @@ pub fn marker_hit(layout: &Layout, zoom: f32, pan: Vector, p: Point) -> Option<(
 /// The note icon under a canvas point, if any.
 pub fn note_hit(layout: &Layout, zoom: f32, pan: Vector, p: Point) -> Option<(&TableBox, usize)> {
     let (b, row) = hovered_row_of(layout, zoom, pan, p)?;
-    for (icon, center) in row_icon_layout(b, row, zoom, pan) {
+    let k = zoom / 20.0;
+    for (icon, slot) in row_icon_layout(b, row, zoom, pan) {
         if icon != RowIcon::Note {
             continue;
         }
-        let r = 5.25 * zoom / 20.0;
+        let center = Point::new(slot + 5.25 * k, y_of(b, row, zoom, pan));
+        let r = 5.25 * k;
         if (p.x - center.x).abs() <= r && (p.y - center.y).abs() <= r {
             return Some((b, row));
         }
@@ -993,6 +1000,10 @@ fn paint_table(
     } else {
         (zoom / 20.0).clamp(1.0, 2.5)
     };
+    // header band first: solid near-black, full-width, with a hairline
+    // below it — the body border strokes LAST so the band never thins it
+    let band = Size::new(size.width, s.height);
+    frame.fill_rectangle(top_left, band, header_color(b));
     frame.stroke(
         &body,
         Stroke {
@@ -1006,10 +1017,6 @@ fn paint_table(
             ..Default::default()
         },
     );
-
-    // header band: solid near-black, full-width, with a hairline below it
-    let band = Size::new(size.width, s.height);
-    frame.fill_rectangle(top_left, band, header_color(b));
     frame.stroke(
         &Path::new(|bd| {
             bd.move_to(Point::new(top_left.x, top_left.y + s.height));
@@ -1091,11 +1098,11 @@ fn paint_table(
         // dbdiagram's left cluster: pk, fk, unique, note in order — the
         // first three 10.5px glyphs ("Unique" keeps its text pill in its
         // slot), each with a 4px gap, at 40% opacity
-        for (icon, center) in row_icon_layout(b, i, zoom, pan) {
+        for (icon, slot) in row_icon_layout(b, i, zoom, pan) {
             match icon {
                 RowIcon::Unique => {
                     // "Unique" keeps its text pill in its cluster slot
-                    badge_pill(frame, "Unique", center.x - 5.25 * zoom / 20.0, y, s);
+                    badge_pill(frame, "Unique", slot, y, s);
                 }
                 other => {
                     let path = match other {
@@ -1104,7 +1111,14 @@ fn paint_table(
                         RowIcon::Note => NOTE_ICON,
                         RowIcon::Unique => unreachable!(),
                     };
-                    svg_icon(frame, center, 10.5 * zoom / 20.0, 10.5, theme::MARKER, path);
+                    svg_icon(
+                        frame,
+                        Point::new(slot + 5.25 * zoom / 20.0, y),
+                        10.5 * zoom / 20.0,
+                        10.5,
+                        theme::MARKER,
+                        path,
+                    );
                 }
             }
         }
@@ -1242,12 +1256,12 @@ mod tests {
         let row_top = top_left.y + s.height;
         // the pk icon is the first slot of the cluster, right after the
         // name "id": its center must hit
-        let (icon, center) = row_icon_layout(b, 0, zoom, pan)
+        let (icon, slot) = row_icon_layout(b, 0, zoom, pan)
             .into_iter()
             .next()
             .expect("pk icon present");
         assert_eq!(icon, RowIcon::Pk);
-        let p = center;
+        let p = Point::new(slot + 5.25 * zoom / 20.0, y_of(b, 0, zoom, pan));
         let hit = marker_hit(&l, zoom, pan, p).expect("pk marker hit");
         assert_eq!(hit.0.title, "a");
         assert!(hit.0.rows[hit.1].pk);
@@ -1258,12 +1272,11 @@ mod tests {
         // left of the box padding misses too
         let left_p = Point::new(top_left.x + 0.3 * s.width, row_top + s.height * 0.5);
         assert!(marker_hit(&l, zoom, pan, left_p).is_none());
-        // and the cluster tracks the name width: "id" spans 1.0..~2.24
-        // cells (2 chars at 0.62), so the icon starts past that
+        // and the cluster tracks the name width: "id" spans 1.0..~2.16
+        // cells (2 chars at 0.58), so the icon starts past that
         assert!(
-            center.x > top_left.x + 2.24 * s.width,
-            "cluster after the name: {}",
-            center.x
+            slot > top_left.x + 2.16 * s.width,
+            "cluster after the name: {slot}"
         );
     }
 
@@ -1294,16 +1307,17 @@ mod tests {
         let s = cell_size(zoom);
         // row 0 has the note icon; it is the LAST slot of the cluster
         let icons = row_icon_layout(b, 0, zoom, pan);
-        let (icon, center) = icons.last().expect("note icon present");
+        let (icon, slot) = icons.last().expect("note icon present");
         assert_eq!(*icon, RowIcon::Note);
-        let hit = note_hit(&l, zoom, pan, *center).expect("note icon hit");
+        let p = Point::new(slot + 5.25 * zoom / 20.0, y_of(b, 0, zoom, pan));
+        let hit = note_hit(&l, zoom, pan, p).expect("note icon hit");
         assert_eq!(hit.0.title, "a");
         assert_eq!(hit.1, 0);
         // row 1 has no note: no cluster slot, no hit
         assert!(row_icon_layout(b, 1, zoom, pan)
             .iter()
             .all(|(ic, _)| *ic != RowIcon::Note));
-        let p2 = Point::new(center.x, top_left.y + s.height * 2.5);
+        let p2 = Point::new(*slot, top_left.y + s.height * 2.5);
         assert!(note_hit(&l, zoom, pan, p2).is_none());
         // the pk icon (first slot) does not collide with the note slot
         assert!(icons.len() >= 2, "pk + note on row 0");

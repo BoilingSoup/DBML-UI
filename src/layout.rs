@@ -20,8 +20,6 @@ pub struct Row {
     pub not_null: Option<bool>,
     pub unique: bool,
     pub note: Option<String>,
-    /// The type names an enum declared in the document (enum pill).
-    pub ty_enum: bool,
 }
 
 impl Row {
@@ -36,14 +34,14 @@ impl Row {
         0.8 + text.chars().count() as f32 * Self::BADGE_CELL
     }
     /// Estimated cells per character of sans text at the row font:
-    /// ~0.55em average advance with slack, mirroring the canvas painter's
+    /// ~0.5em average advance with slack, mirroring the canvas painter's
     /// `char_px` so boxes hug their content like dbdiagram's measureText.
-    pub const CHAR_CELL: f32 = 0.62;
+    pub const CHAR_CELL: f32 = 0.58;
 
     pub fn width(&self) -> i32 {
         // left: name inset, then dbdiagram's icon cluster (pk, fk, unique,
         // note — each 10.5px glyph + 4px gap)
-        let mut w = 1.0 + self.name.width() as f32 * Self::CHAR_CELL + 0.4;
+        let mut w = 1.0 + self.name.width() as f32 * Self::CHAR_CELL + 0.25;
         if self.pk {
             w += Self::ICON_CELL;
         }
@@ -189,12 +187,6 @@ pub fn layout_with_overrides(
         .map(|(idx, node)| {
             let title = node.name.clone();
             // enum type names, for the right-side enum pill flag
-            let enum_names: std::collections::HashSet<&str> = schema
-                .nodes
-                .iter()
-                .filter(|n| n.kind == NodeKind::Enum)
-                .map(|n| n.name.as_str())
-                .collect();
             let rows = node
                 .columns
                 .iter()
@@ -206,7 +198,6 @@ pub fn layout_with_overrides(
                     not_null: c.not_null,
                     unique: c.unique,
                     note: c.note.clone(),
-                    ty_enum: enum_names.contains(c.ty.replace('"', "").as_str()),
                 })
                 .collect::<Vec<_>>();
             let content = rows

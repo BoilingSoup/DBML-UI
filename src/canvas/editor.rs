@@ -187,9 +187,12 @@ impl canvas::Program<Message> for EditorView<'_> {
         let local = Point::new(p.x - bounds.x, p.y - bounds.y);
         match event {
             canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
+                // winit's y is positive when the content moves down (wheel
+                // up); EditorScrolled is app-space — positive scrolls the
+                // view down — so flip the device sign here
                 let notches = match delta {
-                    mouse::ScrollDelta::Lines { y, .. } => y,
-                    mouse::ScrollDelta::Pixels { y, .. } => y / 40.0,
+                    mouse::ScrollDelta::Lines { y, .. } => -y,
+                    mouse::ScrollDelta::Pixels { y, .. } => -y / 40.0,
                 };
                 (
                     canvas::event::Status::Captured,
@@ -988,7 +991,10 @@ fn token_color(kind: dbml_ui::dbml::highlight::Kind) -> Color {
         Kind::Type => theme::SYN_TYPE,
         Kind::String => theme::SYN_STRING,
         Kind::Number => theme::SYN_NUMBER,
-        Kind::Comment | Kind::Punct => theme::DIM,
+        Kind::Comment => theme::DIM,
+        // punctuation (brackets, braces, parens, commas...) reads as body
+        // text, not as a muted comment
+        Kind::Punct => theme::TEXT,
         Kind::Ident | Kind::Plain => theme::TEXT,
     }
 }
@@ -1053,6 +1059,40 @@ mod tests {
         );
         assert!(message.is_none(), "{message:?}");
     }
+
+    #[test]
+    fn wheel_sign_scrolls_the_view_the_right_way() {
+        // regression: the wheel sign was flipped, so plain wheel-down
+        // scrolled the view up. winit's y is positive when the content
+        // moves down (wheel up); the handler adds the payload to
+        // editor_scroll, and larger editor_scroll shows lines further down
+        let app = App::default();
+        let view = EditorView { app: &app };
+        let inside = Cursor::Available(Point::new(150.0, 100.0));
+        for (y, expected_down) in [(1.0, false), (-1.0, true)] {
+            let (status, message) = view.update(
+                &mut BlinkState::default(),
+                canvas::Event::Mouse(mouse::Event::WheelScrolled {
+                    delta: mouse::ScrollDelta::Lines { x: 0.0, y },
+                }),
+                BOUNDS,
+                inside,
+            );
+            assert_eq!(status, canvas::event::Status::Captured);
+            match message {
+                Some(Message::EditorScrolled(n)) => {
+                    assert_eq!(
+                        n > 0.0,
+                        expected_down,
+                        "y={y}: view should move {}",
+                        if expected_down { "down" } else { "up" }
+                    );
+                }
+                other => panic!("y={y}: expected EditorScrolled, got {other:?}"),
+            }
+        }
+    }
+
     #[test]
     fn cursor_shape_follows_mode() {
         use iced::mouse::Interaction;
