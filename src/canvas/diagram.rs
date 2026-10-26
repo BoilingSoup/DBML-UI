@@ -422,7 +422,7 @@ fn paint_edge(
         // shifts the pattern toward the path start; pts[0] is the fk end,
         // so the flow reads referenced key → foreign key.
         let phase = hs_clock(clock) * zoom / 20.0;
-        paint_flow(frame, &pts, r, phase, t, (trim_fk, trim_ref));
+        paint_flow(frame, &pts, r, phase, t, (trim_fk, trim_ref), zoom);
     } else {
         frame.stroke(&path, core);
     }
@@ -448,7 +448,17 @@ fn hs_clock(clock: f32) -> f32 {
 /// three nested strokes fake the falloff of dbdiagram's shape shadow.
 fn paint_glow(frame: &mut canvas::Frame, path: &Path, zoom: f32, t: f32) {
     let k = zoom / 20.0;
-    for (w, a) in [(11.0, 0.05), (6.5, 0.09), (3.0, 0.15)] {
+    // approximate dbdiagram's gaussian shadow (blur 10, opacity .5) with
+    // nested rings; with MSAA the bands blend into a smooth falloff
+    for (w, a) in [
+        (2.0, 0.16),
+        (3.5, 0.13),
+        (5.0, 0.10),
+        (6.5, 0.075),
+        (8.5, 0.05),
+        (10.5, 0.03),
+        (12.5, 0.015),
+    ] {
         frame.stroke(
             path,
             Stroke {
@@ -471,15 +481,19 @@ fn paint_flow(
     phase: f32,
     t: f32,
     trims: (f32, f32),
+    zoom: f32,
 ) {
     let flat = flatten_pieces(&rounded_pieces(pts, radius));
     if flat.total <= 0.0 {
         return;
     }
-    let lo = trims.0;
+    // dash cycle/length/width are authored in 1:1 px like dbdiagram's
+    // setLineDash([3,40]) and scale with zoom (their stage transform)
+    let k = zoom / 20.0;
+    let lo = trims.0.min(flat.total);
     let hi = (flat.total - trims.1).max(lo);
-    for (a, b) in dash_windows(phase, 43.0, 3.0, lo, hi) {
-        stroke_arc_range(frame, &flat, a, b, 4.0, t);
+    for (a, b) in dash_windows(phase, 43.0 * k, 3.0 * k, lo, hi) {
+        stroke_arc_range(frame, &flat, a, b, 4.0 * k, t);
     }
 }
 
@@ -660,7 +674,7 @@ fn stroke_arc_range(frame: &mut canvas::Frame, flat: &Flat, a: f32, b: f32, widt
     frame.stroke(
         &path,
         Stroke {
-            style: with_alpha(brighten(theme::EDGE_HOVER, 1.2), 0.9 * t).into(),
+            style: with_alpha(brighten(theme::EDGE_HOVER, 1.2), t).into(),
             width,
             ..Default::default()
         },
@@ -722,7 +736,10 @@ fn many_marker(frame: &mut canvas::Frame, end: Point, inner: Point, zoom: f32, s
             b.line_to(tip);
             b.line_to(end + n * spread);
         }),
-        stroke,
+        canvas::Stroke {
+            line_join: iced::widget::canvas::LineJoin::Round,
+            ..stroke
+        },
     );
     frame.stroke(
         &Path::circle(end + d * (13.0 * k), 3.0 * k),

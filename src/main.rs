@@ -29,6 +29,9 @@ fn main() -> Result<(), iced::Error> {
     iced::application(|app: &app::App| app.window_title(), app::update, view::root)
         .theme(|_| theme::app())
         .subscription(app::subscription)
+        // canvas strokes (dash flow, markers, glow) are triangle meshes;
+        // without MSAA every moving stroke rasterizes hard-edged
+        .antialiasing(true)
         .window_size(iced::Size::new(1400.0, 900.0))
         .run_with(|| {
             // iced 0.13 never focuses the main window itself, so keyboard
