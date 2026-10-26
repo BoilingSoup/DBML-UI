@@ -19,7 +19,8 @@ pub enum Message {
     EditorScrolled(f32),
     /// Left-press in the editor pane (local px).
     EditorPressed(Point),
-    /// The divider between the panes was pressed; drag to resize.
+    /// The pane seam was pressed (on the invisible resize strip); drag to
+    /// resize the split.
     DividerPressed,
     /// Window-relative mouse move (drives divider drags).
     MouseMovedWindow(f32, f32),
@@ -33,7 +34,7 @@ pub enum Message {
     EditorHover(Option<Point>),
     /// Animation frame for the editor scroll.
     Tick,
-    /// Expand/collapse the editor pane (Space+e or the toolbar button).
+    /// Expand/collapse the editor pane (Space+e or the seam chevron).
     ToggleEditor,
     /// Start a new, unsaved diagram from the start screen.
     NewDiagram,
@@ -1331,7 +1332,7 @@ impl App {
         self.keep_cursor_visible();
     }
 
-    /// Collapse/expand the editor pane (Space+e or the toolbar button).
+    /// Collapse/expand the editor pane (Space+e or the seam chevron).
     /// No-op on the start screen, where the pane holds the Open/New buttons.
     pub fn toggle_editor(&mut self) {
         if !self.doc_open() {
@@ -2058,9 +2059,25 @@ impl App {
     }
 
     /// Editor pane width in px from the window size and split share: the
-    /// row is `window - 16 column padding - 6 divider - 8 spacing`.
+    /// pane row is `window - 16 column padding` and FillPortion counts
+    /// (split * 1000, truncated) share it — mirror that integer math so
+    /// the hover/cursor estimates land on the real layout.
     fn editor_pane_width(&self) -> f32 {
-        ((self.window_size.0 - 30.0).max(60.0) * self.split).max(60.0)
+        let e = (self.split * 1000.0) as u16;
+        let d = ((1.0 - self.split) * 1000.0) as u16;
+        ((self.window_size.0 - 16.0).max(60.0) * e as f32 / (e + d).max(1) as f32).max(60.0)
+    }
+
+    /// Window-x of the pane seam: the base column's left padding plus the
+    /// editor pane's width — the flush editor/diagram borders the edge
+    /// chevron and resize strip straddle. At the collapsed edge it is the
+    /// padding alone (the diagram's left border).
+    pub fn seam_x(&self) -> f32 {
+        if self.editor_collapsed {
+            8.0
+        } else {
+            8.0 + self.editor_pane_width()
+        }
     }
 
     /// Keep the cursor inside the pane horizontally when the line is

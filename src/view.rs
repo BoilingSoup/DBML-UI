@@ -1,6 +1,7 @@
-//! Window layout: tab strip on top, editor pane | divider | diagram pane
-//! below, status bar at the bottom; help overlay and the tab context menu
-//! stack above everything.
+//! Window layout: tab strip on top, then the editor and diagram panes
+//! flush against each other (their shared border is the pane seam, with
+//! the collapse chevron + resize strip stacked over it), status bar at
+//! the bottom; help overlay and the tab context menu stack above all.
 
 use crate::app::{App, Drag, Focus, Message, TabMenu, STRIP_LEFT, TAB_SLOT_W};
 use crate::canvas::diagram::{Diagram, DiagramOverlay};
@@ -57,7 +58,7 @@ pub fn root(app: &App) -> Element<'_, Message> {
         .padding(1.0)
         .width(Fill)
         .height(Fill)
-        .style(move |_t| panel_style(app.focus == Focus::Editor));
+        .style(move |_t| seam_panel_style(app.focus == Focus::Editor, Seam::Right));
 
     // the marker/note tooltip is its own canvas STACKED above: iced
     // flattens one canvas widget's geometries into a mesh pass + a text
@@ -99,7 +100,12 @@ pub fn root(app: &App) -> Element<'_, Message> {
     .padding(1.0)
     .width(Fill)
     .height(Fill)
-    .style(move |_t| panel_style(app.focus == Focus::Canvas));
+    .style(move |_t| {
+        // the seam only exists once a document is open (the start screen
+        // keeps its rounded gap to the diagram)
+        let seam = if app.doc_open() { Seam::Left } else { Seam::None };
+        seam_panel_style(app.focus == Focus::Canvas, seam)
+    });
 
     let editor = container(editor_pane)
         .width(Length::FillPortion((app.split * 1000.0) as u16))
@@ -109,31 +115,22 @@ pub fn root(app: &App) -> Element<'_, Message> {
         .height(Fill);
 
     let panes = if !app.doc_open() {
-        // start screen: the side pane is not collapsible, no divider
+        // start screen: the side pane is not collapsible, no seam
         let start = container(start_pane(app))
             .width(Length::FillPortion((app.split * 1000.0) as u16))
             .height(Fill);
         row![start, diagram].spacing(4).height(Fill)
     } else if app.editor_collapsed {
-        row![diagram].spacing(4).height(Fill)
+        row![diagram].height(Fill)
     } else {
-        row![editor, divider(), diagram].spacing(4).height(Fill)
+        // flush panes: the seam is the two pane borders back to back —
+        // one crisp vertical edge, no gap. The collapse chevron and the
+        // invisible resize strip are stacked over it below.
+        row![editor, diagram].height(Fill)
     };
 
-    // toolbar with the collapse toggle (only once a document is open)
+    // mode row + panes (only once a document is open)
     let body = if app.doc_open() {
-        let toggle = button(
-            text(if app.editor_collapsed {
-                "Show editor ▸"
-            } else {
-                "◂ Hide editor"
-            })
-            .size(12.0)
-            .color(theme::TEXT),
-        )
-        .padding([4, 8])
-        .style(move |_t, _s| tool_button_style())
-        .on_press(Message::ToggleEditor);
         let mode_btn = button(
             text(if app.config.vim {
                 "Mode: Vim"
@@ -146,12 +143,9 @@ pub fn root(app: &App) -> Element<'_, Message> {
         .padding([4, 8])
         .style(move |_t, _s| tool_button_style())
         .on_press(Message::ToggleVim);
-        column![
-            row![mode_btn, horizontal_space(), toggle].padding([0, 4]),
-            panes
-        ]
-        .spacing(4)
-        .height(Fill)
+        column![row![mode_btn].padding([0, 4]), panes]
+            .spacing(4)
+            .height(Fill)
     } else {
         column![panes].spacing(4).height(Fill)
     };
@@ -166,10 +160,17 @@ pub fn root(app: &App) -> Element<'_, Message> {
     ]
     .spacing(4);
 
+    // the pane seam's edge handle (collapse chevron + resize strip), only
+    // once a document is open
+    let base: Element<'_, Message> = if app.doc_open() {
+        stack![base, edge_overlay(app)].into()
+    } else {
+        base.into()
+    };
     let base: Element<'_, Message> = if let Some(menu) = &app.tab_menu {
         stack![base, tab_menu_overlay(app, menu)].into()
     } else {
-        base.into()
+        base
     };
     if app.show_help {
         stack![base, help_overlay()].into()
@@ -542,18 +543,72 @@ fn tool_button_style() -> iced::widget::button::Style {
     }
 }
 
-/// The draggable split handle; pressing it starts a resize drag tracked
-/// window-wide via the event subscription.
-fn divider() -> Element<'static, Message> {
-    canvas(DividerHandle)
-        .width(Length::Fixed(6.0))
-        .height(Fill)
-        .into()
+/// dbdiagram-style edge handle over the pane seam: a small chevron pill
+/// straddling the flush pane borders (click = collapse/expand the editor,
+/// pointing the way it will move), on an invisible full-height strip that
+/// starts the split-resize drag (tracked window-wide via the event
+/// subscription). One canvas draws and hit-tests both, so the pill sits
+/// exactly on the seam however the panes are split.
+fn edge_overlay(app: &App) -> Element<'_, Message> {
+    // below the tab strip: strip 30 + strip spacing 4 + base padding 8
+    const PANES_TOP: f32 = 42.0;
+    container(
+        canvas(EdgeHandle {
+            collapsed: app.editor_collapsed,
+        })
+        .width(Length::Fixed(EDGE_STRIP_W))
+        .height(Fill),
+    )
+    .width(Fill)
+    .height(Fill)
+    .padding(iced::Padding {
+        top: PANES_TOP,
+        right: 0.0,
+        bottom: 0.0,
+        left: (app.seam_x() - EDGE_STRIP_W / 2.0).max(0.0),
+    })
+    .into()
 }
 
-struct DividerHandle;
+/// Width of the invisible resize strip hugging the seam (a few px into
+/// each pane: the visible edge stays the panes' 1px borders).
+const EDGE_STRIP_W: f32 = 15.0;
+/// The collapse chevron pill, straddling the seam.
+const PILL_W: f32 = 14.0;
+const PILL_H: f32 = 30.0;
+/// Pill center, strip-local from the top — the strip starts 42px down, so
+/// the pill rides the seam in the panes' upper area, like dbdiagram's.
+const PILL_CY: f32 = 54.0;
 
-impl canvas::Program<Message> for DividerHandle {
+struct EdgeHandle {
+    /// Editor pane is collapsed: the chevron points the other way.
+    collapsed: bool,
+}
+
+impl EdgeHandle {
+    /// The chevron pill in window coordinates (cursor positions from
+    /// `position_over` are window-relative).
+    fn pill(&self, bounds: iced::Rectangle) -> iced::Rectangle {
+        iced::Rectangle::new(
+            iced::Point::new(
+                bounds.x + (bounds.width - PILL_W) / 2.0,
+                bounds.y + PILL_CY - PILL_H / 2.0,
+            ),
+            iced::Size::new(PILL_W, PILL_H),
+        )
+    }
+
+    /// The chevron: ‹ collapses (the pane will slide left), › expands.
+    fn glyph(&self) -> &'static str {
+        if self.collapsed {
+            "\u{203a}"
+        } else {
+            "\u{2039}"
+        }
+    }
+}
+
+impl canvas::Program<Message> for EdgeHandle {
     type State = ();
 
     fn update(
@@ -563,21 +618,26 @@ impl canvas::Program<Message> for DividerHandle {
         bounds: iced::Rectangle,
         cursor: iced::mouse::Cursor,
     ) -> (canvas::event::Status, Option<Message>) {
-        // The canvas widget forwards every window event; only start a
-        // divider drag when the press actually lands on the handle.
-        // (Ungated, any click in the editor also began a resize, so a
-        // click near the window's left edge snapped the split to its
-        // minimum.)
-        if cursor.position_over(bounds).is_none() {
+        // The canvas widget forwards every window event; only presses
+        // that land on the strip act. (Ungated, any click in the editor
+        // also began a resize, so a click near the window's left edge
+        // snapped the split to its minimum.)
+        let over = cursor.position_over(bounds);
+        if over.is_none() {
             return (canvas::event::Status::Ignored, None);
         }
-        match event {
-            canvas::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => (
-                canvas::event::Status::Captured,
-                Some(Message::DividerPressed),
-            ),
-            _ => (canvas::event::Status::Ignored, None),
+        if let canvas::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) =
+            event
+        {
+            let p = over.unwrap_or_default();
+            let msg = if self.pill(bounds).contains(p) {
+                Message::ToggleEditor
+            } else {
+                Message::DividerPressed
+            };
+            return (canvas::event::Status::Captured, Some(msg));
         }
+        (canvas::event::Status::Ignored, None)
     }
 
     fn draw(
@@ -586,14 +646,41 @@ impl canvas::Program<Message> for DividerHandle {
         renderer: &iced::Renderer,
         _theme: &iced::Theme,
         bounds: iced::Rectangle,
-        _cursor: iced::mouse::Cursor,
+        cursor: iced::mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
         let mut frame = canvas::Frame::new(renderer, bounds.size());
-        frame.fill_rectangle(
-            iced::Point::new(2.0, 0.0),
-            iced::Size::new(2.0, bounds.height),
-            theme::BORDER,
+        // the pill, centered on the seam (strip-local coords)
+        let pill = iced::Rectangle::new(
+            iced::Point::new((bounds.width - PILL_W) / 2.0, PILL_CY - PILL_H / 2.0),
+            iced::Size::new(PILL_W, PILL_H),
         );
+        let hovered = cursor
+            .position()
+            .map(|p| pill.contains(iced::Point::new(p.x - bounds.x, p.y - bounds.y)))
+            .unwrap_or(false);
+        let path = canvas::Path::rounded_rectangle(
+            pill.position(),
+            pill.size(),
+            iced::border::Radius::from(PILL_W / 2.0),
+        );
+        frame.fill(&path, if hovered { theme::TOOLTIP } else { theme::PANEL });
+        frame.stroke(
+            &path,
+            canvas::Stroke {
+                style: theme::BORDER.into(),
+                width: 1.0,
+                ..Default::default()
+            },
+        );
+        frame.fill_text(canvas::Text {
+            content: self.glyph().to_string(),
+            position: iced::Point::new(pill.center_x(), pill.center_y()),
+            color: theme::TEXT,
+            size: 13.0.into(),
+            horizontal_alignment: iced::alignment::Horizontal::Center,
+            vertical_alignment: iced::alignment::Vertical::Center,
+            ..Default::default()
+        });
         vec![frame.into_geometry()]
     }
 
@@ -603,12 +690,16 @@ impl canvas::Program<Message> for DividerHandle {
         bounds: iced::Rectangle,
         cursor: iced::mouse::Cursor,
     ) -> iced::mouse::Interaction {
+        use iced::mouse::Interaction;
         // canvas mouse_interaction is not bounds-gated by iced — without
         // this check the resize cursor leaked over the whole window
-        if cursor.position_over(bounds).is_some() {
-            iced::mouse::Interaction::ResizingHorizontally
+        let Some(p) = cursor.position_over(bounds) else {
+            return Interaction::default();
+        };
+        if self.pill(bounds).contains(p) {
+            Interaction::Pointer
         } else {
-            iced::mouse::Interaction::default()
+            Interaction::ResizingHorizontally
         }
     }
 }
@@ -680,9 +771,41 @@ fn help_overlay() -> Element<'static, Message> {
 }
 
 fn panel_style(focused: bool) -> container::Style {
+    seam_panel_style(focused, Seam::None)
+}
+
+/// Which side of a pane is the seam against the other pane: those corners
+/// are squared so two flush panes read as one straight vertical edge (the
+/// dbdiagram look) instead of rounded corners facing each other.
+#[derive(Clone, Copy)]
+enum Seam {
+    None,
+    /// The editor pane's right edge.
+    Right,
+    /// The diagram pane's left edge.
+    Left,
+}
+
+fn seam_panel_style(focused: bool, seam: Seam) -> container::Style {
+    let mut radius = iced::border::Radius::from(8.0);
+    match seam {
+        Seam::None => {}
+        Seam::Right => {
+            radius.top_right = 0.0;
+            radius.bottom_right = 0.0;
+        }
+        Seam::Left => {
+            radius.top_left = 0.0;
+            radius.bottom_left = 0.0;
+        }
+    }
     container::Style {
         background: Some(iced::Background::Color(theme::PANEL)),
-        border: iced::border::rounded(8).color(if focused { theme::FK } else { theme::BORDER }),
+        border: iced::border::Border {
+            color: if focused { theme::FK } else { theme::BORDER },
+            width: 1.0,
+            radius,
+        },
         ..Default::default()
     }
 }
@@ -797,60 +920,83 @@ fn status_bar(app: &App) -> Element<'_, Message> {
 }
 
 #[cfg(test)]
-mod divider_tests {
+mod edge_handle_tests {
     use super::*;
     use iced::mouse::{self, Cursor};
     use iced::widget::canvas::Program as _;
     use iced::{Point, Rectangle, Size};
 
-    const HANDLE: Rectangle = Rectangle::new(Point::new(200.0, 0.0), Size::new(6.0, 300.0));
+    /// The resize strip over a seam at x=400: 15px wide, from the panes'
+    /// top down the window.
+    const STRIP: Rectangle = Rectangle::new(Point::new(400.0, 42.0), Size::new(15.0, 858.0));
+
+    fn press(at: Point) -> (canvas::Event, Cursor) {
+        (
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+            Cursor::Available(at),
+        )
+    }
 
     #[test]
-    fn press_on_the_handle_starts_a_drag() {
-        let h = DividerHandle;
-        let inside = Point::new(203.0, 50.0); // window coords, on the handle
-        let (status, message) = h.update(
-            &mut (),
-            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
-            HANDLE,
-            Cursor::Available(inside),
-        );
+    fn press_on_the_chevron_toggles_the_editor() {
+        let h = EdgeHandle { collapsed: false };
+        let at = h.pill(STRIP).center();
+        let (event, cursor) = press(at);
+        let (status, message) = h.update(&mut (), event, STRIP, cursor);
+        assert!(matches!(message, Some(Message::ToggleEditor)));
+        assert_eq!(status, canvas::event::Status::Captured);
+    }
+
+    #[test]
+    fn press_on_the_strip_starts_a_resize_drag() {
+        let h = EdgeHandle { collapsed: false };
+        let at = Point::new(407.0, 300.0); // on the strip, below the pill
+        let (event, cursor) = press(at);
+        let (status, message) = h.update(&mut (), event, STRIP, cursor);
         assert!(matches!(message, Some(Message::DividerPressed)));
         assert_eq!(status, canvas::event::Status::Captured);
     }
 
     #[test]
     fn press_anywhere_else_is_ignored() {
-        // regression: an ungated divider turned every click in the editor
+        // regression: an ungated seam turned every click in the editor
         // into a pane resize (clicking near the left edge snapped the
         // split to its minimum)
-        let h = DividerHandle;
+        let h = EdgeHandle { collapsed: false };
         let editor_area = Point::new(60.0, 50.0); // 2nd char of a line
-        let (status, message) = h.update(
-            &mut (),
-            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
-            HANDLE,
-            Cursor::Available(editor_area),
-        );
+        let (event, cursor) = press(editor_area);
+        let (status, message) = h.update(&mut (), event, STRIP, cursor);
         assert!(message.is_none());
         assert_eq!(status, canvas::event::Status::Ignored);
     }
 
     #[test]
-    fn cursor_shape_only_on_the_handle() {
+    fn cursor_shape_pointer_on_the_pill_resize_on_the_strip() {
         // regression: iced does not bounds-gate canvas mouse_interaction,
         // so an unconditional ResizingHorizontally put resize arrows over
         // the whole window
-        let h = DividerHandle;
-        let inside = Cursor::Available(Point::new(203.0, 100.0));
+        let h = EdgeHandle { collapsed: false };
+        let pill = h.pill(STRIP);
         assert_eq!(
-            h.mouse_interaction(&(), HANDLE, inside),
+            h.mouse_interaction(&(), STRIP, Cursor::Available(pill.center())),
+            iced::mouse::Interaction::Pointer
+        );
+        assert_eq!(
+            h.mouse_interaction(&(), STRIP, Cursor::Available(Point::new(407.0, 300.0))),
             iced::mouse::Interaction::ResizingHorizontally
         );
-        let outside = Cursor::Available(Point::new(100.0, 100.0));
         assert_eq!(
-            h.mouse_interaction(&(), HANDLE, outside),
+            h.mouse_interaction(&(), STRIP, Cursor::Available(Point::new(100.0, 100.0))),
             iced::mouse::Interaction::default()
+        );
+    }
+
+    #[test]
+    fn the_chevron_flips_with_the_collapsed_state() {
+        assert_ne!(
+            EdgeHandle { collapsed: false }.glyph(),
+            EdgeHandle { collapsed: true }.glyph(),
+            "expanded points left (collapse), collapsed points right (expand)"
         );
     }
 }
