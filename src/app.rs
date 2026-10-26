@@ -111,6 +111,12 @@ fn scroll_duration_override() -> Option<f32> {
 pub const HALF_PAGE_MS: f32 = 250.0;
 pub const FULL_PAGE_MS: f32 = 450.0;
 
+/// Vim's 'scrolloff': the cursor is kept at least this many screen lines
+/// away from the top and bottom of the window whenever the buffer has
+/// room. j/k scroll the view to hold the margin; Ctrl-d/u first walk the
+/// cursor out to the margin before the view scrolls under it.
+const SCROLLOFF: f32 = 5.0;
+
 /// Distance-progress at time-fraction `y` under neoscroll's quadratic
 /// easing. neoscroll applies easing to the TIME between line steps
 /// (ef(x) = 1 - (1-x)^(1/2) maps distance to time); inverting gives the
@@ -1951,13 +1957,29 @@ impl App {
     /// when the window cannot scroll (fitting document, or at an edge);
     /// the window follows in lockstep until ITS clamp — stop_eof — freezes
     /// it, after which the cursor continues alone.
+    ///
+    /// 'scrolloff' couples the two: scrolling down from within SCROLLOFF
+    /// of the window top walks the cursor out to the margin while the
+    /// content scrolls (and symmetrically for up from the bottom), so the
+    /// cursor never gets scrolled off its edge of the window.
     fn scroll_by_lines(&mut self, lines: f32, duration_ms: f32) {
         self.completion = None;
         let pos = self.editor_mut().buf.pos();
         let rows = self.editor_mut().buf.line_count() as i32;
-        let cursor_to = ((pos.row as f32 + lines).round() as i32).clamp(0, rows - 1) as usize;
         let base = self.cur().scroll_target.unwrap_or(self.cur().editor_scroll.round());
         let to = (base + lines).clamp(0.0, self.max_scroll()).round();
+        // static scroll: the cursor keeps its screen line
+        let mut cursor_to = pos.row as f32 + lines;
+        // margin correction: from inside 'scrolloff', the cursor first
+        // travels to the far margin, then rides the view from there
+        let scroll = self.cur().editor_scroll;
+        let screen = pos.row as f32 - scroll;
+        if lines > 0.0 && screen < SCROLLOFF {
+            cursor_to = cursor_to.max(to + SCROLLOFF);
+        } else if lines < 0.0 && screen > self.page_lines() - 1.0 - SCROLLOFF {
+            cursor_to = cursor_to.min(to + self.page_lines() - 1.0 - SCROLLOFF);
+        }
+        let cursor_to = (cursor_to.round() as i32).clamp(0, rows - 1) as usize;
         self.focus = Focus::Editor;
         self.animate_scroll(to, duration_ms, Some((pos.row, cursor_to)));
     }
@@ -2006,18 +2028,21 @@ impl App {
         self.cur_mut().editor_hscroll = hs.clamp(0.0, max).round();
     }
 
-    /// Scroll the editor viewport so the cursor stays on screen. Vim
-    /// motions jump instantly — gg, G, search hits and click-to-jump land
-    /// in place; the only animated scrolls are the explicit neoscroll
-    /// ones (Ctrl-d / Ctrl-u / Ctrl-f / Ctrl-b and the page keys).
+    /// Scroll the editor viewport so the cursor obeys 'scrolloff': at
+    /// least SCROLLOFF screen lines from the top and bottom of the window
+    /// whenever the buffer has room (vim j/k behavior — the view scrolls
+    /// under a pinned cursor once it reaches the margin). Vim motions
+    /// jump instantly — gg, G, search hits and click-to-jump land in
+    /// place; the only animated scrolls are the explicit neoscroll ones
+    /// (Ctrl-d / Ctrl-u / Ctrl-f / Ctrl-b and the page keys).
     fn keep_cursor_visible(&mut self) {
         let row = self.editor_mut().buf.pos().row as f32;
         let page = self.page_lines();
-        let visible = page - 2.0;
-        let target = if row < self.cur().editor_scroll + 1.0 {
-            (row - 1.0).max(0.0)
-        } else if row > self.cur().editor_scroll + visible {
-            row - visible
+        let scroll = self.cur().editor_scroll;
+        let target = if row < scroll + SCROLLOFF {
+            row - SCROLLOFF
+        } else if row > scroll + page - 1.0 - SCROLLOFF {
+            row - (page - 1.0 - SCROLLOFF)
         } else {
             return;
         };
@@ -2916,14 +2941,17 @@ mod scroll_tests {
             (anim.scroll_to - page / 2.0).abs() < 1.0,
             "half page: {anim:?}"
         );
-        // neoscroll moves the cursor WITH the view, not ahead of it
+        // neoscroll moves the cursor WITH the view, not ahead of it...
         assert_eq!(app.editor_mut().buf.pos().row, 0, "cursor not jumped");
         force_finish(&mut app);
         assert!((app.cur().editor_scroll - page / 2.0).abs() < 1.0);
+        // ...but 'scrolloff' pulls a cursor inside the top margin out to
+        // the 5-line boundary while the content scrolls (vim ctrl-d from
+        // the top of the window)
         assert_eq!(
             app.editor_mut().buf.pos().row,
-            (page / 2.0).round() as usize,
-            "cursor arrives with the view"
+            (page / 2.0 + SCROLLOFF).round() as usize,
+            "cursor arrives at the scrolloff line of the new view"
         );
     }
 
@@ -3155,6 +3183,107 @@ mod scroll_tests {
         assert!(app.cur().scroll_anim.is_some());
         let _ = update(&mut app, Message::EditorScrolled(-2.0));
         assert!(app.cur().scroll_anim.is_none(), "wheel takes over");
+    }
+
+    #[test]
+    fn ctrl_u_from_the_bottom_margin_walks_the_cursor_to_the_margin_first() {
+        // vim 'scrolloff': scrolling up with the cursor within 5 lines of
+        // the window bottom first moves the cursor up to the 5-line
+        // boundary, THEN the view scrolls with the cursor pinned there
+        let mut app = tall_app(120);
+        app.window_size = (1400.0, 900.0);
+        let page = app.page_lines();
+        let max = app.max_scroll();
+        // cursor 3 lines above the lowest visible line (inside the margin)
+        let scroll = max - 2.0;
+        app.cur_mut().editor_scroll = scroll;
+        let cursor_at = (scroll + page - 4.0).round() as usize;
+        app.editor_mut()
+            .buf
+            .move_cursor(crate::editor::buffer::Move::Jump(cursor_at, 0));
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        );
+        let anim = app.cur().scroll_anim.as_ref().expect("animates");
+        // the view scrolls a half page up...
+        assert!(
+            (anim.scroll_to - (scroll - page / 2.0)).abs() < 1.0,
+            "view up half a page: {anim:?}"
+        );
+        // ...while the cursor lands 5 lines above the new view's bottom
+        let margin_row = anim.scroll_to + page - 1.0 - SCROLLOFF;
+        assert_eq!(
+            anim.cursor,
+            Some((cursor_at, margin_row.round() as usize)),
+            "cursor walked out to the scrolloff boundary"
+        );
+        force_finish(&mut app);
+        assert_eq!(app.editor_mut().buf.pos().row, margin_row.round() as usize);
+    }
+
+    #[test]
+    fn ctrl_u_outside_the_margin_keeps_the_cursor_screen_line() {
+        // from well above the bottom margin the scroll is static: the
+        // cursor keeps its screen position while the content moves
+        let mut app = tall_app(120);
+        app.window_size = (1400.0, 900.0);
+        let page = app.page_lines();
+        app.cur_mut().editor_scroll = 40.0;
+        let cursor_at = 44.0; // 6+ lines above the view's bottom edge
+        app.editor_mut()
+            .buf
+            .move_cursor(crate::editor::buffer::Move::Jump(cursor_at as usize, 0));
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        );
+        let anim = app.cur().scroll_anim.as_ref().expect("animates");
+        assert_eq!(
+            anim.cursor,
+            Some((cursor_at as usize, (cursor_at - page / 2.0).round() as usize)),
+            "static scroll: cursor moves exactly half a page"
+        );
+    }
+
+    #[test]
+    fn j_and_k_scroll_the_view_to_honor_scrolloff() {
+        // stepping into the bottom margin scrolls the view under the
+        // cursor instead of letting it inside the 5-line zone
+        let mut app = tall_app(120);
+        app.window_size = (1400.0, 900.0);
+        let page = app.page_lines();
+        // cursor at the last line that satisfies the bottom margin
+        let scroll = 10.0;
+        app.cur_mut().editor_scroll = scroll;
+        let cursor_at = (scroll + page - 6.0).round() as usize;
+        app.editor_mut()
+            .buf
+            .move_cursor(crate::editor::buffer::Move::Jump(cursor_at, 0));
+        // one more j must scroll the view by one, cursor pinned at the margin
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('j'), KeyModifiers::NONE),
+        );
+        assert_eq!(app.editor_mut().buf.pos().row, cursor_at + 1);
+        assert!(
+            (app.cur().editor_scroll - (scroll + 1.0)).abs() < 0.5,
+            "view followed by one line: {}",
+            app.cur().editor_scroll
+        );
+        // and k back up does NOT un-scroll: vim only follows the cursor
+        // out of a margin, never back into one — the view stays until k
+        // approaches the top margin
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('k'), KeyModifiers::NONE),
+        );
+        assert_eq!(app.editor_mut().buf.pos().row, cursor_at);
+        assert!(
+            (app.cur().editor_scroll - (scroll + 1.0)).abs() < 0.5,
+            "view stayed: {}",
+            app.cur().editor_scroll
+        );
     }
 
     #[test]
