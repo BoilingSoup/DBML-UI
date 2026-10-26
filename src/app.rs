@@ -15,8 +15,10 @@ pub enum Message {
     Wheel(f32),
     /// A keypress, mapped from iced's keyboard events.
     KeyPressed(KeyCode, KeyModifiers),
-    /// Wheel notches over the editor pane.
-    EditorScrolled(f32),
+    /// Wheel motion over the editor pane, both axes in notches (winit
+    /// lines, or pixels / 40) and app-space: positive `v` scrolls the view
+    /// down, positive `h` scrolls it right.
+    EditorScrolled { v: f32, h: f32 },
     /// Left-press in the editor pane (local px).
     EditorPressed(Point),
     /// The pane seam was pressed (on the invisible resize strip); drag to
@@ -1263,11 +1265,22 @@ fn handle_message(app: &mut App, message: Message) {
         }
         Message::Wheel(n) => app.wheel(n),
         Message::KeyPressed(code, mods) => app.key_pressed(code, mods),
-        Message::EditorScrolled(n) => {
-            // instant (neoscroll default) and takes over any animation
+        Message::EditorScrolled { v, h } => {
+            // instant (neoscroll default) and takes over any animation —
+            // either axis counts as a user scroll
             app.cur_mut().scroll_anim = None;
             app.cur_mut().scroll_target = None;
-            app.cur_mut().editor_scroll = (app.cur().editor_scroll + n).clamp(0.0, app.max_scroll());
+            if v != 0.0 {
+                app.cur_mut().editor_scroll =
+                    (app.cur().editor_scroll + v).clamp(0.0, app.max_scroll());
+            }
+            if h != 0.0 {
+                // h is in notches; the horizontal offset lives in px, one
+                // notch advancing one character cell
+                let h_px = h * crate::canvas::editor::char_width();
+                app.cur_mut().editor_hscroll =
+                    (app.cur().editor_hscroll + h_px).clamp(0.0, app.max_hscroll());
+            }
         }
         Message::DividerPressed => app.drag = Drag::Divider,
         Message::MouseMovedWindow(x, y) => {
@@ -2301,6 +2314,25 @@ impl App {
         (self.editor().buf.line_count() as f32 - self.page_lines()).max(0.0)
     }
 
+    /// Widest the editor view can scroll right, in px: the longest line's
+    /// width past the visible text area (pane width minus the gutter and a
+    /// small right margin), never negative. The wheel's horizontal axis and
+    /// `follow_cursor_horizontal` share this clamp.
+    fn max_hscroll(&self) -> f32 {
+        let max_cols = self
+            .editor()
+            .buf
+            .lines()
+            .iter()
+            .map(|l| l.chars().count())
+            .max()
+            .unwrap_or(0) as f32;
+        let text_w = self.editor_pane_width()
+            - crate::canvas::editor::GUTTER
+            - crate::canvas::editor::H_RIGHT_MARGIN;
+        (max_cols * crate::canvas::editor::char_width() - text_w).max(0.0)
+    }
+
     /// Start/re-target a line-stepped animated scroll. `duration_ms` is the
     /// neoscroll duration for the WHOLE remaining distance; repeated
     /// requests extend the accumulated target (neoscroll behavior) and the
@@ -2406,6 +2438,11 @@ impl App {
         let char_w = crate::canvas::editor::char_width();
         let text_w = self.editor_pane_width() - crate::canvas::editor::GUTTER;
         if text_w <= 4.0 * char_w {
+            // degenerate pane: the lookahead math would misbehave, but the
+            // buffer-wide clamp still applies (wheel scrolling shares this
+            // offset)
+            let hs = self.cur().editor_hscroll;
+            self.cur_mut().editor_hscroll = hs.clamp(0.0, self.max_hscroll());
             return;
         }
         let pos = self.editor_mut().buf.pos();
@@ -2420,8 +2457,9 @@ impl App {
         } else if cx < hs {
             hs = (cx - 4.0 * char_w).max(0.0);
         }
-        // never scroll past what the current line needs (plus one char)
-        let max = (line_end + char_w - text_w).max(0.0);
+        // never scroll past what the current line needs (plus one char),
+        // nor past the buffer-wide limit shared with wheel scrolling
+        let max = (line_end + char_w - text_w).max(0.0).min(self.max_hscroll());
         self.cur_mut().editor_hscroll = hs.clamp(0.0, max).round();
     }
 
@@ -3343,6 +3381,40 @@ mod completion_tests {
     }
 
     #[test]
+    fn horizontal_wheel_scrolls_and_clamps() {
+        // one long trailing comment line gives the pane horizontal overflow
+        let mut body = String::new();
+        for i in 0..60 {
+            body.push_str(&format!("  col{i} integer [not null]\n"));
+        }
+        let mut app =
+            App::with_source(format!("Table users {{\n{body}}}\n-- {}\n", "x".repeat(200)));
+        app.window_size = (500.0, 900.0); // narrow pane under a 203-col line
+        let max = app.max_hscroll();
+        assert!(max > 0.0, "fixture needs horizontal overflow");
+        let scroll_before = app.cur().editor_scroll;
+
+        // a big two-finger pan right (app-space h > 0) runs to the clamp
+        let _ = update(&mut app, Message::EditorScrolled { v: 0.0, h: 400.0 });
+        assert!(
+            (app.cur().editor_hscroll - max).abs() < 0.01,
+            "{} vs max {max}",
+            app.cur().editor_hscroll
+        );
+        // a pure-horizontal wheel never touches the vertical scroll
+        assert_eq!(app.cur().editor_scroll, scroll_before);
+
+        // and panning back left clamps at the line start
+        let _ = update(&mut app, Message::EditorScrolled { v: 0.0, h: -10_000.0 });
+        assert_eq!(app.cur().editor_hscroll, 0.0);
+
+        // pure-vertical wheel leaves the horizontal offset alone
+        let _ = update(&mut app, Message::EditorScrolled { v: 2.0, h: 0.0 });
+        assert_eq!(app.cur().editor_hscroll, 0.0, "vertical wheel is vertical-only");
+        assert_eq!(app.cur().editor_scroll, scroll_before + 2.0, "v still scrolls");
+    }
+
+    #[test]
     fn entering_insert_does_not_open_completions() {
         // regression: the i/a/o keys that enter insert are alphanumeric, so
         // the auto-trigger fired for the entering keypress itself — the
@@ -3866,7 +3938,7 @@ mod scroll_tests {
             Message::KeyPressed(KeyCode::Char('d'), KeyModifiers::CONTROL),
         );
         assert!(app.cur().scroll_anim.is_some());
-        let _ = update(&mut app, Message::EditorScrolled(-2.0));
+        let _ = update(&mut app, Message::EditorScrolled { v: -2.0, h: 0.0 });
         assert!(app.cur().scroll_anim.is_none(), "wheel takes over");
     }
 

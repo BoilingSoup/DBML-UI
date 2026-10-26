@@ -16,6 +16,10 @@ pub const CHAR_RATIO: f32 = 0.6;
 pub const FONT_SIZE: f32 = 14.0;
 pub const LINE_HEIGHT: f32 = 21.0;
 pub const GUTTER: f32 = 56.0;
+/// Right margin kept clear when the view is scrolled fully right: the
+/// longest line's last cell never touches the pane's right edge, leaving
+/// room for the horizontal scrollbar. Part of `App::max_hscroll`.
+pub const H_RIGHT_MARGIN: f32 = 16.0;
 
 pub fn char_width() -> f32 {
     FONT_SIZE * CHAR_RATIO
@@ -152,6 +156,22 @@ fn invertible_char(ch: char) -> bool {
     !(ch.is_control() || ch.is_whitespace() || ch.width() == Some(0))
 }
 
+/// One gutter line number at its row's vertical center. Shared by the main
+/// row loop and the gutter repaint that runs when the view is scrolled
+/// sideways (keeping the two verbatim in sync).
+fn gutter_number(frame: &mut canvas::Frame, row: usize, text_y: f32) {
+    frame.fill_text(Text {
+        content: format!("{:>4}", row + 1),
+        position: Point::new(GUTTER - 8.0, text_y),
+        color: theme::DIM,
+        size: (FONT_SIZE - 2.0).into(),
+        font: Font::MONOSPACE,
+        horizontal_alignment: iced::alignment::Horizontal::Right,
+        vertical_alignment: iced::alignment::Vertical::Center,
+        ..Default::default()
+    });
+}
+
 pub struct EditorView<'a> {
     pub app: &'a App,
 }
@@ -188,15 +208,16 @@ impl canvas::Program<Message> for EditorView<'_> {
         match event {
             canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
                 // winit's y is positive when the content moves down (wheel
-                // up); EditorScrolled is app-space — positive scrolls the
-                // view down — so flip the device sign here
-                let notches = match delta {
-                    mouse::ScrollDelta::Lines { y, .. } => -y,
-                    mouse::ScrollDelta::Pixels { y, .. } => -y / 40.0,
+                // up); EditorScrolled is app-space — positive v scrolls the
+                // view down, positive h the view right — so flip both
+                // device signs here (two-finger right pans the view right)
+                let (v, h) = match delta {
+                    mouse::ScrollDelta::Lines { x, y } => (-y, -x),
+                    mouse::ScrollDelta::Pixels { x, y } => (-y / 40.0, -x / 40.0),
                 };
                 (
                     canvas::event::Status::Captured,
-                    Some(Message::EditorScrolled(notches)),
+                    Some(Message::EditorScrolled { v, h }),
                 )
             }
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
@@ -316,16 +337,7 @@ impl canvas::Program<Message> for EditorView<'_> {
                     theme::ERR,
                 );
             }
-            frame.fill_text(Text {
-                content: format!("{:>4}", i + 1),
-                position: Point::new(GUTTER - 8.0, text_y),
-                color: theme::DIM,
-                size: (FONT_SIZE - 2.0).into(),
-                font: Font::MONOSPACE,
-                horizontal_alignment: iced::alignment::Horizontal::Right,
-                vertical_alignment: iced::alignment::Vertical::Center,
-                ..Default::default()
-            });
+            gutter_number(&mut frame, i, text_y);
             if !line.is_empty() {
                 let ls = line_starts[i];
                 let le = ls + line.len();
@@ -341,16 +353,28 @@ impl canvas::Program<Message> for EditorView<'_> {
                     let content = &src[s..e];
                     if content.chars().any(|c| !c.is_whitespace()) {
                         let col = src[ls..s].chars().count();
-                        frame.fill_text(Text {
-                            content: content.to_string(),
-                            position: Point::new(GUTTER + col as f32 * char_width() - hs, text_y),
-                            color: token_color(t.kind),
-                            size: FONT_SIZE.into(),
-                            font: Font::MONOSPACE,
-                            horizontal_alignment: iced::alignment::Horizontal::Left,
-                            vertical_alignment: iced::alignment::Vertical::Center,
-                            ..Default::default()
-                        });
+                        // hscroll clips at the gutter's right edge: cells
+                        // left of it are dropped here, because a fill drawn
+                        // later cannot cover text (iced paints a widget's
+                        // whole mesh pass before its text pass)
+                        let col_min = (hs / char_width()).ceil() as usize;
+                        let skip = col_min.saturating_sub(col);
+                        let content: String = content.chars().skip(skip).collect();
+                        if !content.is_empty() {
+                            frame.fill_text(Text {
+                                content,
+                                position: Point::new(
+                                    GUTTER + (col + skip) as f32 * char_width() - hs,
+                                    text_y,
+                                ),
+                                color: token_color(t.kind),
+                                size: FONT_SIZE.into(),
+                                font: Font::MONOSPACE,
+                                horizontal_alignment: iced::alignment::Horizontal::Left,
+                                vertical_alignment: iced::alignment::Vertical::Center,
+                                ..Default::default()
+                            });
+                        }
                     }
                 }
             }
@@ -386,18 +410,23 @@ impl canvas::Program<Message> for EditorView<'_> {
                         theme::TEXT,
                     );
                     if let Some(ch) = inverted_glyph(app, cursor) {
-                        // exactly the text pass's cell geometry, so the
-                        // inverted glyph sits pixel-perfect on the original
-                        frame.fill_text(Text {
-                            content: ch.to_string(),
-                            position: Point::new(p.x, p.y + LINE_HEIGHT * 0.5),
-                            color: theme::PANEL,
-                            size: FONT_SIZE.into(),
-                            font: Font::MONOSPACE,
-                            horizontal_alignment: iced::alignment::Horizontal::Left,
-                            vertical_alignment: iced::alignment::Vertical::Center,
-                            ..Default::default()
-                        });
+                        if p.x >= GUTTER {
+                            // exactly the text pass's cell geometry, so the
+                            // inverted glyph sits pixel-perfect on the
+                            // original; skipped when hscroll pushed the cell
+                            // under the gutter (the repaint below hides the
+                            // block — the glyph must not float there alone)
+                            frame.fill_text(Text {
+                                content: ch.to_string(),
+                                position: Point::new(p.x, p.y + LINE_HEIGHT * 0.5),
+                                color: theme::PANEL,
+                                size: FONT_SIZE.into(),
+                                font: Font::MONOSPACE,
+                                horizontal_alignment: iced::alignment::Horizontal::Left,
+                                vertical_alignment: iced::alignment::Vertical::Center,
+                                ..Default::default()
+                            });
+                        }
                     }
                 }
             } else {
@@ -434,6 +463,83 @@ impl canvas::Program<Message> for EditorView<'_> {
                     ..Default::default()
                 },
             );
+        }
+
+        // Sideways scroll bleeds the mesh layer (selection spans, the
+        // cursor block, squiggles) into the gutter: repaint the gutter band
+        // over it and re-draw its numbers and error dots on top. Token
+        // GLYPHS are text — a later fill cannot cover them — so the row
+        // loop already drops the cells left of the gutter edge.
+        if hs > 0.0 {
+            frame.fill_rectangle(Point::ORIGIN, Size::new(GUTTER, bounds.height), theme::PANEL);
+            let mut gy = -(sub * LINE_HEIGHT).round();
+            for (i, _) in lines.iter().enumerate().skip(first).take(visible.max(1)) {
+                let text_y = gy + LINE_HEIGHT * 0.5;
+                if marks.iter().any(|m| m.row == i) {
+                    frame.fill(
+                        &canvas::Path::circle(Point::new(10.0, text_y), 2.5),
+                        theme::ERR,
+                    );
+                }
+                gutter_number(&mut frame, i, text_y);
+                gy += LINE_HEIGHT;
+            }
+        }
+
+        // scrollbars: draw-only indicators, on top of everything. Both
+        // compare the buffer against what one page can show.
+        let total_rows = lines.len() as f32;
+        let page_rows = (bounds.height / LINE_HEIGHT).max(1.0);
+        let v_max = (total_rows - page_rows).max(0.0);
+        let max_cols = lines
+            .iter()
+            .map(|l| l.chars().count())
+            .max()
+            .unwrap_or(0) as f32;
+        let h_max = (max_cols * char_width() - (bounds.width - GUTTER - H_RIGHT_MARGIN)).max(0.0);
+        if v_max > 0.0 || h_max > 0.0 {
+            let track = Color {
+                a: 0.3,
+                ..theme::BORDER
+            };
+            let thumb = theme::DIM;
+            // vertical: 4px track on the right edge, thumb sized by the
+            // visible fraction and offset by the scroll fraction (24px
+            // floor so huge documents keep a grabbable-looking thumb)
+            if v_max > 0.0 {
+                let track_h = bounds.height - if h_max > 0.0 { 4.0 } else { 0.0 };
+                // max-then-min (not clamp): never panics on a tiny canvas
+                let thumb_h = (track_h * page_rows / total_rows).max(24.0).min(track_h);
+                let frac = (scroll / v_max).clamp(0.0, 1.0);
+                frame.fill_rectangle(
+                    Point::new(bounds.width - 4.0, 0.0),
+                    Size::new(4.0, track_h),
+                    track,
+                );
+                frame.fill_rectangle(
+                    Point::new(bounds.width - 4.0, (track_h - thumb_h) * frac),
+                    Size::new(4.0, thumb_h),
+                    thumb,
+                );
+            }
+            // horizontal: mirrored, along the bottom edge
+            if h_max > 0.0 {
+                let track_w = bounds.width - if v_max > 0.0 { 4.0 } else { 0.0 };
+                let thumb_w = (track_w * (bounds.width - GUTTER) / (max_cols * char_width()))
+                    .max(24.0)
+                    .min(track_w);
+                let frac = (hs / h_max).clamp(0.0, 1.0);
+                frame.fill_rectangle(
+                    Point::new(0.0, bounds.height - 4.0),
+                    Size::new(track_w, 4.0),
+                    track,
+                );
+                frame.fill_rectangle(
+                    Point::new((track_w - thumb_w) * frac, bounds.height - 4.0),
+                    Size::new(thumb_w, 4.0),
+                    thumb,
+                );
+            }
         }
 
         vec![frame.into_geometry()]
@@ -1124,15 +1230,46 @@ mod tests {
             );
             assert_eq!(status, canvas::event::Status::Captured);
             match message {
-                Some(Message::EditorScrolled(n)) => {
+                Some(Message::EditorScrolled { v, h }) => {
+                    assert_eq!(h, 0.0, "y-only wheel carries no x payload");
                     assert_eq!(
-                        n > 0.0,
+                        v > 0.0,
                         expected_down,
                         "y={y}: view should move {}",
                         if expected_down { "down" } else { "up" }
                     );
                 }
                 other => panic!("y={y}: expected EditorScrolled, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn horizontal_wheel_flips_the_sign_like_the_vertical() {
+        // two-finger right (winit x > 0) must move the view right, i.e. a
+        // NEGATIVE app-space payload — the same flip the vertical axis uses
+        let app = App::default();
+        let view = EditorView { app: &app };
+        let inside = Cursor::Available(Point::new(150.0, 100.0));
+        for (delta, expected_h) in [
+            (mouse::ScrollDelta::Lines { x: 2.0, y: 0.0 }, -2.0),
+            (mouse::ScrollDelta::Pixels { x: 80.0, y: 0.0 }, -2.0),
+        ] {
+            let (_, message) = view.update(
+                &mut BlinkState::default(),
+                canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }),
+                BOUNDS,
+                inside,
+            );
+            match message {
+                Some(Message::EditorScrolled { v, h }) => {
+                    assert_eq!(v, 0.0, "x-only wheel carries no y payload");
+                    assert!(
+                        (h - expected_h).abs() < 1e-4,
+                        "expected h={expected_h}, got {h}"
+                    );
+                }
+                other => panic!("expected EditorScrolled, got {other:?}"),
             }
         }
     }
