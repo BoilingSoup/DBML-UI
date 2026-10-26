@@ -795,12 +795,14 @@ pub fn subscription(_app: &App) -> iced::Subscription<Message> {
     });
     // Ticks drive the scroll animation and the edge-highlight easing +
     // breathing glow: hot while scrolling, while something is hovered
-    // (the glow keeps breathing), and until every fade-out has finished.
+    // (the glow keeps breathing), until every fade-out has finished, and
+    // while the vim block cursor is blinking (canvas::editor::BlinkState).
     let tick = if _app.cur().scroll_anim.is_some()
         || !_app.cur().hover_edges.is_empty()
         || _app.cur().edge_anim.iter().any(|&t| t > 0.0)
         || _app.tab_drag.is_some()
         || _app.tab_anim.iter().any(|o| o.abs() > 0.5)
+        || crate::canvas::editor::block_cursor_blinking(_app)
     {
         iced::time::every(std::time::Duration::from_millis(16)).map(|_| Message::Tick)
     } else {

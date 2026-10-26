@@ -2,10 +2,12 @@
 //! fake cursor, and visual-mode selection spans. Scrolling is a float row
 //! offset kept in `App`; the canvas just draws the visible window.
 
-use crate::app::{App, Message};
+use crate::app::{App, Focus, Message};
 use crate::editor::buffer::Pos;
 use crate::editor::Mode;
 use crate::theme;
+use std::cell::Cell;
+use std::time::Instant;
 use iced::widget::canvas::{self, Text};
 use iced::{Color, Font, Point, Rectangle, Size};
 
@@ -45,12 +47,117 @@ pub fn px_to_pos(app: &App, p: Point) -> Pos {
     Pos { row, col }
 }
 
+// ---- block cursor (vim normal/visual) ----
+//
+// Neovim renders its normal-mode cursor as a solid block that INVERTS the
+// character under it, and blinks it (painted ~600ms, hidden ~350ms,
+// restarting on every cursor movement). Here that is an opaque cell in the
+// caret color with the glyph redrawn on top in the pane background color,
+// so the character stays readable instead of washing out behind a
+// translucent fill.
+
+/// How long the block cursor stays painted per blink cycle.
+pub const BLINK_ON_MS: u64 = 600;
+/// How long the block cursor stays hidden per blink cycle.
+pub const BLINK_OFF_MS: u64 = 350;
+
+/// Blink state of the normal-mode block cursor, stored as the editor
+/// canvas's per-widget `Program::State` (`type State = BlinkState`) so no
+/// App state is involved. iced keeps a widget's state across frames; the
+/// draw pass advances it through `Cell` (draw only gets `&State`).
+///
+/// Draw is the blink's chokepoint on purpose: it sees every cursor
+/// position the app can reach — motions, edits, clicks, the scroll
+/// animation — so a changed position restarts the cycle without hunting
+/// down each cursor-move call site.
+#[derive(Debug)]
+pub struct BlinkState {
+    /// What the cursor looked like on the previous draw: buffer position,
+    /// vim mode, and whether the blink was live (pane focused and on
+    /// screen). Any difference restarts the cycle in the visible phase,
+    /// like neovim restarting its blink on cursor movement.
+    last: Cell<Option<(Pos, Mode, bool)>>,
+    /// When the current blink cycle began.
+    cycle_start: Cell<Instant>,
+}
+
+impl Default for BlinkState {
+    fn default() -> Self {
+        Self {
+            last: Cell::default(),
+            // placeholder: `last` starts unset, so the first block_visible
+            // call always resets this before it is ever subtracted from
+            cycle_start: Cell::new(Instant::now()),
+        }
+    }
+}
+
+impl BlinkState {
+    /// Whether the block cursor paints on this draw: visible for
+    /// `BLINK_ON_MS`, hidden for `BLINK_OFF_MS`, repeating. With `active`
+    /// false (pane unfocused) it stays solid — redraws stop then, so a
+    /// running cycle could otherwise freeze in the hidden phase.
+    fn block_visible(&self, pos: Pos, mode: Mode, active: bool, now: Instant) -> bool {
+        if self.last.get() != Some((pos, mode, active)) {
+            self.last.set(Some((pos, mode, active)));
+            self.cycle_start.set(now);
+        }
+        if !active {
+            return true;
+        }
+        let cycle = (BLINK_ON_MS + BLINK_OFF_MS) as u128;
+        now.duration_since(self.cycle_start.get()).as_millis() % cycle < BLINK_ON_MS as u128
+    }
+}
+
+/// Whether the current mode paints the vim block cursor rather than the
+/// thin caret: normal/visual in vim mode (regular mode always gets the
+/// caret, insert mode too).
+fn is_block_cursor(app: &App) -> bool {
+    !app.regular_mode() && matches!(app.editor().mode, Mode::Normal | Mode::Visual)
+}
+
+/// Whether the block cursor is blinking right now. The app's tick
+/// subscription stays hot while this is true (see `subscription` in
+/// app.rs) so successive redraws can toggle the block. Only while the
+/// editor pane is actually on screen: collapsing the pane removes the
+/// canvas from the widget tree, and the start screen has no editor pane.
+pub fn block_cursor_blinking(app: &App) -> bool {
+    is_block_cursor(app)
+        && app.focus == Focus::Editor
+        && !app.editor_collapsed
+        && app.doc_open()
+}
+
+/// The glyph to repaint inverted under the block cursor: the character at
+/// the cursor cell when it actually draws ink. Whitespace (the text pass
+/// never paints it), control and zero-width characters get the bare
+/// block, and past end-of-line (an empty row included) there is no glyph
+/// at all — neovim shows a plain cell there as well. Wide characters keep
+/// their inverted glyph; the block itself stays one cell.
+fn inverted_glyph(app: &App, pos: Pos) -> Option<char> {
+    let ch = app.editor().buf.line(pos.row).chars().nth(pos.col)?;
+    if !invertible_char(ch) {
+        return None;
+    }
+    Some(ch)
+}
+
+/// Whether a character paints ink of its own in a cell: whitespace is
+/// never painted by the text pass, and control and zero-width characters
+/// (combining marks) have no cell of their own. Wide characters do, so
+/// they keep their inverted glyph.
+fn invertible_char(ch: char) -> bool {
+    use unicode_width::UnicodeWidthChar;
+    !(ch.is_control() || ch.is_whitespace() || ch.width() == Some(0))
+}
+
 pub struct EditorView<'a> {
     pub app: &'a App,
 }
 
 impl canvas::Program<Message> for EditorView<'_> {
-    type State = ();
+    type State = BlinkState;
 
     fn update(
         &self,
@@ -112,7 +219,7 @@ impl canvas::Program<Message> for EditorView<'_> {
 
     fn draw(
         &self,
-        _state: &Self::State,
+        state: &Self::State,
         renderer: &iced::Renderer,
         _theme: &iced::Theme,
         bounds: Rectangle,
@@ -245,31 +352,49 @@ impl canvas::Program<Message> for EditorView<'_> {
         // scroll animation runs: neoscroll hides only the terminal's
         // hardware caret (the text still visibly scrolls), but here the
         // gliding block IS the animation — hiding it made fitting-document
-        // scrolls look like an instant jump.
+        // scrolls look like an instant jump. (The blink restarts on every
+        // cursor move anyway, so a gliding block stays solid for free.)
         let cursor = app.editor().buf.pos();
         let p = pos_to_px(cursor, scroll, hs);
         if p.y > -LINE_HEIGHT && p.y < bounds.height + LINE_HEIGHT {
-            // Regular mode always shows the thin caret (no block cursor)
-            let (color, filled) = if app.regular_mode() {
-                (theme::TEXT, false)
-            } else {
-                match app.editor().mode {
-                    crate::editor::Mode::Insert => (theme::TEXT, false),
-                    _ => (theme::TEXT, true),
+            if is_block_cursor(app) {
+                // Neovim-style block: an OPAQUE cell in the caret color
+                // with the glyph under it redrawn on top in the pane
+                // background, so the character reads as inverted instead
+                // of showing through a translucent fill. Text renders
+                // after meshes within one geometry, so the inverted glyph
+                // lands over the block. In the blink's hidden phase
+                // nothing is drawn at all, like neovim.
+                if state.block_visible(
+                    cursor,
+                    app.editor().mode,
+                    block_cursor_blinking(app),
+                    Instant::now(),
+                ) {
+                    frame.fill_rectangle(
+                        p,
+                        Size::new(char_width(), LINE_HEIGHT * 0.9),
+                        theme::TEXT,
+                    );
+                    if let Some(ch) = inverted_glyph(app, cursor) {
+                        // exactly the text pass's cell geometry, so the
+                        // inverted glyph sits pixel-perfect on the original
+                        frame.fill_text(Text {
+                            content: ch.to_string(),
+                            position: Point::new(p.x, p.y + LINE_HEIGHT * 0.5),
+                            color: theme::PANEL,
+                            size: FONT_SIZE.into(),
+                            font: Font::MONOSPACE,
+                            horizontal_alignment: iced::alignment::Horizontal::Left,
+                            vertical_alignment: iced::alignment::Vertical::Center,
+                            ..Default::default()
+                        });
+                    }
                 }
-            };
-            let rect = if filled {
-                // block cursor
-                frame.fill_rectangle(
-                    p,
-                    Size::new(char_width(), LINE_HEIGHT * 0.9),
-                    Color::from_rgba(color.r, color.g, color.b, 0.45),
-                );
-                Size::new(2.0, LINE_HEIGHT * 0.9)
             } else {
-                Size::new(2.0, LINE_HEIGHT * 0.9)
-            };
-            frame.fill_rectangle(p, rect, color);
+                // insert mode and regular mode: the thin caret
+                frame.fill_rectangle(p, Size::new(2.0, LINE_HEIGHT * 0.9), theme::TEXT);
+            }
         }
 
         // squiggly underlines under error tokens
@@ -885,7 +1010,7 @@ mod tests {
         let view = EditorView { app: &app };
         let outside = Point::new(900.0, 100.0); // diagram-pane territory
         let (status, message) = view.update(
-            &mut (),
+            &mut BlinkState::default(),
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
             BOUNDS,
             Cursor::Available(outside),
@@ -899,7 +1024,7 @@ mod tests {
         let app = App::default();
         let view = EditorView { app: &app };
         let (_, message) = view.update(
-            &mut (),
+            &mut BlinkState::default(),
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
             BOUNDS,
             Cursor::Available(Point::new(100.0 + GUTTER + 30.0, 50.0 + 40.0)),
@@ -919,7 +1044,7 @@ mod tests {
         let app = App::default();
         let view = EditorView { app: &app };
         let (_, message) = view.update(
-            &mut (),
+            &mut BlinkState::default(),
             canvas::Event::Mouse(mouse::Event::WheelScrolled {
                 delta: mouse::ScrollDelta::Lines { x: 0.0, y: -3.0 },
             }),
@@ -942,7 +1067,7 @@ mod tests {
             app.editor_mut().mode = mode;
             let view = EditorView { app: &app };
             assert_eq!(
-                view.mouse_interaction(&(), BOUNDS, inside),
+                view.mouse_interaction(&BlinkState::default(), BOUNDS, inside),
                 expected,
                 "{mode:?}"
             );
@@ -951,9 +1076,157 @@ mod tests {
         app.editor_mut().mode = Mode::Insert;
         let view = EditorView { app: &app };
         assert_eq!(
-            view.mouse_interaction(&(), BOUNDS, Cursor::Available(Point::new(900.0, 100.0))),
+            view.mouse_interaction(
+                &BlinkState::default(),
+                BOUNDS,
+                Cursor::Available(Point::new(900.0, 100.0))
+            ),
             Interaction::default()
         );
+    }
+}
+
+#[cfg(test)]
+mod blink_tests {
+    use super::*;
+    use crate::app::App;
+    use crate::editor::buffer::Move;
+    use std::time::Duration;
+
+    /// A draw instant `ms` after the cycle began (monotonic: always after
+    /// every instant previously fed to the state).
+    fn at(base: Instant, ms: u64) -> Instant {
+        base + Duration::from_millis(ms)
+    }
+
+    #[test]
+    fn block_blinks_600ms_on_350ms_off() {
+        let s = BlinkState::default();
+        let t0 = Instant::now();
+        assert!(s.block_visible(Pos::default(), Mode::Normal, true, at(t0, 0)));
+        assert!(s.block_visible(Pos::default(), Mode::Normal, true, at(t0, 599)));
+        assert!(!s.block_visible(Pos::default(), Mode::Normal, true, at(t0, 600)));
+        assert!(!s.block_visible(Pos::default(), Mode::Normal, true, at(t0, 949)));
+        // the cycle repeats
+        assert!(s.block_visible(Pos::default(), Mode::Normal, true, at(t0, 950)));
+        assert!(s.block_visible(Pos::default(), Mode::Normal, true, at(t0, 1549)));
+        assert!(!s.block_visible(Pos::default(), Mode::Normal, true, at(t0, 1550)));
+    }
+
+    #[test]
+    fn moving_the_cursor_restarts_the_blink_visible() {
+        let s = BlinkState::default();
+        let t0 = Instant::now();
+        // establish a cycle, then run into the hidden phase ...
+        assert!(s.block_visible(Pos::default(), Mode::Normal, true, at(t0, 0)));
+        assert!(!s.block_visible(Pos::default(), Mode::Normal, true, at(t0, 700)));
+        // ... a cursor move brings the block straight back
+        let moved = Pos { row: 2, col: 7 };
+        assert!(s.block_visible(moved, Mode::Normal, true, at(t0, 700)));
+        assert!(s.block_visible(moved, Mode::Normal, true, at(t0, 701)));
+    }
+
+    #[test]
+    fn mode_change_restarts_the_blink_visible() {
+        let s = BlinkState::default();
+        let t0 = Instant::now();
+        assert!(s.block_visible(Pos::default(), Mode::Normal, true, at(t0, 0)));
+        assert!(!s.block_visible(Pos::default(), Mode::Normal, true, at(t0, 700)));
+        // e.g. v entered while the block was hidden: fresh 600ms phase
+        assert!(s.block_visible(Pos::default(), Mode::Visual, true, at(t0, 1298)));
+        assert!(!s.block_visible(Pos::default(), Mode::Visual, true, at(t0, 1899)));
+    }
+
+    #[test]
+    fn unfocused_draws_stay_solid_and_restart_the_cycle() {
+        let s = BlinkState::default();
+        let t0 = Instant::now();
+        assert!(s.block_visible(Pos::default(), Mode::Normal, true, at(t0, 0)));
+        assert!(!s.block_visible(Pos::default(), Mode::Normal, true, at(t0, 700)));
+        // focus moved to the diagram: the block holds solid (redraws stop
+        // while unfocused, so a running cycle must not freeze it hidden)
+        assert!(s.block_visible(Pos::default(), Mode::Normal, false, at(t0, 701)));
+        assert!(s.block_visible(Pos::default(), Mode::Normal, false, at(t0, 10_000)));
+        // back in focus: a fresh visible phase
+        assert!(s.block_visible(Pos::default(), Mode::Normal, true, at(t0, 10_001)));
+        assert!(s.block_visible(Pos::default(), Mode::Normal, true, at(t0, 10_500)));
+    }
+
+    #[test]
+    fn block_cursor_tracks_mode_and_regular_mode() {
+        let mut app = App::default();
+        assert!(is_block_cursor(&app), "vim normal mode");
+        app.editor_mut().mode = Mode::Visual;
+        assert!(is_block_cursor(&app));
+        app.editor_mut().mode = Mode::Insert;
+        assert!(!is_block_cursor(&app));
+        // regular mode: thin caret in every vim mode
+        app.config.vim = false;
+        for mode in [Mode::Normal, Mode::Visual, Mode::Insert] {
+            app.editor_mut().mode = mode;
+            assert!(!is_block_cursor(&app), "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn blink_gate_tracks_focus_pane_and_document() {
+        let mut app = App::default();
+        assert!(block_cursor_blinking(&app), "vim normal, focused, open");
+
+        app.editor_mut().mode = Mode::Insert;
+        assert!(!block_cursor_blinking(&app));
+        app.editor_mut().mode = Mode::Normal;
+
+        app.focus = Focus::Canvas;
+        assert!(!block_cursor_blinking(&app));
+        app.focus = Focus::Editor;
+
+        app.editor_collapsed = true;
+        assert!(!block_cursor_blinking(&app), "pane is off screen");
+        app.editor_collapsed = false;
+
+        app.config.vim = false;
+        assert!(!block_cursor_blinking(&app), "regular mode caret is static");
+
+        // a start-screen tab has no editor pane in the widget tree
+        assert!(!block_cursor_blinking(&App::blank_start()));
+    }
+
+    #[test]
+    fn inverted_glyph_picks_the_char_under_the_cursor() {
+        let app = App::with_source("ab\n\n c".into());
+        assert_eq!(inverted_glyph(&app, Pos::default()), Some('a'));
+        assert_eq!(inverted_glyph(&app, Pos { row: 0, col: 1 }), Some('b'));
+        // past end of line: bare block
+        assert_eq!(inverted_glyph(&app, Pos { row: 0, col: 2 }), None);
+        // empty line: bare block
+        assert_eq!(inverted_glyph(&app, Pos { row: 1, col: 0 }), None);
+        // whitespace: bare block (the text pass never paints it)
+        assert_eq!(inverted_glyph(&app, Pos { row: 2, col: 0 }), None);
+        assert_eq!(inverted_glyph(&app, Pos { row: 2, col: 1 }), Some('c'));
+        // a row index past the buffer must not panic
+        assert_eq!(inverted_glyph(&app, Pos { row: 9, col: 0 }), None);
+    }
+
+    #[test]
+    fn zero_width_chars_get_a_bare_block_wide_chars_keep_their_glyph() {
+        // char-level rule (fed combining marks through the app's
+        // highlighter panics its byte slicing, so this stays pure):
+        assert!(invertible_char('e'));
+        assert!(invertible_char('世'), "wide char keeps its inverted glyph");
+        assert!(!invertible_char('\u{301}'), "combining mark: bare block");
+        assert!(!invertible_char('\u{7f}'), "control: bare block");
+        assert!(!invertible_char('\t'), "whitespace: bare block");
+    }
+
+    #[test]
+    fn jump_reaches_end_of_line_where_the_block_is_bare() {
+        // cursor positions the draw pass actually sees: Jump clamps to
+        // line length (the insert column), one past the last char
+        let mut app = App::with_source("ab".into());
+        app.editor_mut().buf.move_cursor(Move::Jump(0, 2));
+        assert_eq!(app.editor().buf.pos(), Pos { row: 0, col: 2 });
+        assert_eq!(inverted_glyph(&app, app.editor().buf.pos()), None);
     }
 }
 
