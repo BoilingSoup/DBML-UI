@@ -1167,6 +1167,16 @@ impl Buffer {
 
     // ---- undo/redo ----
 
+    /// An undo step is available (gates the toolbar Undo button).
+    pub fn can_undo(&self) -> bool {
+        !self.undo.is_empty()
+    }
+
+    /// A redo step is available (gates the toolbar Redo button).
+    pub fn can_redo(&self) -> bool {
+        !self.redo.is_empty()
+    }
+
     fn push_history(&mut self) {
         let snap = Snapshot {
             lines: self.lines.clone(),

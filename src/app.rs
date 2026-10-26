@@ -100,6 +100,13 @@ pub enum Message {
     /// The diagram pane's Zoom to Fit button: scale + pan so the whole
     /// diagram fits the visible diagram canvas.
     ZoomToFit,
+    /// The toolbar Undo button: ONE undo step on the active buffer — the
+    /// same history stack vim's `u` walks (single step; `[count]u` stays
+    /// vim-only).
+    Undo,
+    /// The toolbar Redo button: ONE redo step on the active buffer (the
+    /// Ctrl+r stack).
+    Redo,
 }
 
 /// The open record-view overlay: the table node whose records are shown
@@ -829,6 +836,37 @@ impl App {
         }
     }
 
+    /// Toolbar Undo / Ctrl+Z: ONE undo step on the active buffer — the
+    /// same history stack vim's `u` walks, so buttons and shortcuts agree
+    /// in every mode (single step; `[count]u` stays a vim normal-mode
+    /// feature). Works from any focus: the button path skips key dispatch.
+    fn undo_step(&mut self) {
+        self.undo_redo_common();
+        if self.editor_mut().buf.undo() {
+            self.after_edit(editor::Action::Changed);
+            self.follow_cursor_horizontal();
+            self.keep_cursor_visible();
+        }
+    }
+
+    /// Toolbar Redo / Ctrl+Y / Ctrl+Shift+Z: the redo twin of `undo_step`.
+    fn redo_step(&mut self) {
+        self.undo_redo_common();
+        if self.editor_mut().buf.redo() {
+            self.after_edit(editor::Action::Changed);
+            self.follow_cursor_horizontal();
+            self.keep_cursor_visible();
+        }
+    }
+
+    /// Bookkeeping every undo/redo entry does before stepping: the popup
+    /// and hover tooltip dismiss like on any other edit (an undo leaves
+    /// the popup's prefix stale; the tooltip may sit on erased text).
+    fn undo_redo_common(&mut self) {
+        self.completion = None;
+        self.editor_hover = None;
+    }
+
     /// Right-press in the editor pane: open its context menu anchored at
     /// the pointer, snapshotting item availability (a failed clipboard
     /// read disables Paste — never a panic).
@@ -1471,6 +1509,8 @@ fn handle_message(app: &mut App, message: Message) {
             app.format_now();
         }
         Message::DismissEditorMenu => app.editor_menu = None,
+        Message::Undo => app.undo_step(),
+        Message::Redo => app.redo_step(),
         Message::OpenRecords(node) => app.open_records(node),
         Message::CloseRecords => app.record_view = None,
         Message::RecordsFollow(node, row) => {
@@ -1618,6 +1658,17 @@ impl App {
             }
         };
         match key.code {
+            // Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z: undo/redo on the same stack
+            // the toolbar buttons drive (before the typing arm, which only
+            // takes unmodified chars, so bare z/y still type)
+            KeyCode::Char('z') if m.contains(KeyModifiers::CONTROL) => {
+                if m.contains(KeyModifiers::SHIFT) {
+                    self.redo_step();
+                } else {
+                    self.undo_step();
+                }
+            }
+            KeyCode::Char('y') if m.contains(KeyModifiers::CONTROL) => self.redo_step(),
             KeyCode::Char(c)
                 if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
             {
@@ -2117,6 +2168,23 @@ impl App {
             && self.editor_mut().mode == editor::Mode::Insert
         {
             self.paste_from_system();
+            return;
+        }
+        // Ctrl+Z / Ctrl+Y (and Ctrl+Shift+Z) undo/redo in insert mode, on
+        // the same history stack vim's u / Ctrl+r walk (regular mode
+        // handles the chords in regular_key; vim normal mode keeps u /
+        // Ctrl+r, so Ctrl+Z is deliberately not mapped there). Arms sit
+        // before the completion popup's typing interception so an undo
+        // lands even with the popup open (it is dismissed then).
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('z') | KeyCode::Char('y'))
+            && self.editor_mut().mode == editor::Mode::Insert
+        {
+            if key.code == KeyCode::Char('y') || key.modifiers.contains(KeyModifiers::SHIFT) {
+                self.redo_step();
+            } else {
+                self.undo_step();
+            }
             return;
         }
         // Ctrl+Space toggles the popup (VSCode muscle memory)
@@ -5051,5 +5119,203 @@ mod clipboard_menu_tests {
         );
         assert_eq!(app.editor().buf.pos(), Pos { row: 1, col: 0 });
         let _ = update(&mut app, Message::MouseReleased);
+    }
+}
+
+#[cfg(test)]
+mod undo_redo_tests {
+    use super::*;
+
+    fn key(mods: KeyModifiers, c: char) -> Message {
+        Message::KeyPressed(KeyCode::Char(c), mods)
+    }
+
+    fn type_in_insert(app: &mut App, text: &str) {
+        let _ = update(
+            app,
+            Message::KeyPressed(KeyCode::Char('i'), KeyModifiers::NONE),
+        );
+        for c in text.chars() {
+            let _ = update(
+                app,
+                Message::KeyPressed(KeyCode::Char(c), KeyModifiers::NONE),
+            );
+        }
+    }
+
+    fn vim_app(source: &str) -> App {
+        let mut app = App::default();
+        app.editor_mut().set_text(source);
+        app.cur_mut().set_source(source);
+        app
+    }
+
+    fn regular(source: &str) -> App {
+        let mut app = App {
+            config: crate::config::Config {
+                vim: false,
+                ..Default::default()
+            },
+            ..App::default()
+        };
+        app.editor_mut().set_text(source);
+        app.cur_mut().set_source(source);
+        app
+    }
+
+    #[test]
+    fn insert_mode_ctrl_z_ctrl_y_roundtrip() {
+        let mut app = vim_app("");
+        type_in_insert(&mut app, "abc");
+        assert_eq!(app.source(), "abc");
+        assert_eq!(app.editor().buf.cursor(), (0, 3));
+        assert!(app.editor().buf.can_undo());
+
+        // Ctrl+Z steps back one edit at a time, cursor on the edit point
+        let _ = update(&mut app, key(KeyModifiers::CONTROL, 'z'));
+        assert_eq!(app.source(), "ab");
+        assert_eq!(app.editor().buf.cursor(), (0, 2));
+        let _ = update(&mut app, key(KeyModifiers::CONTROL, 'z'));
+        assert_eq!(app.source(), "a");
+        // Ctrl+Y redoes, Ctrl+Shift+Z is the same redo alias
+        let _ = update(&mut app, key(KeyModifiers::CONTROL, 'y'));
+        assert_eq!(app.source(), "ab");
+        assert_eq!(app.editor().buf.cursor(), (0, 2));
+        let _ = update(
+            &mut app,
+            key(KeyModifiers::CONTROL.union(KeyModifiers::SHIFT), 'z'),
+        );
+        assert_eq!(app.source(), "abc");
+        // the session stayed in insert mode throughout
+        assert_eq!(app.editor().mode, editor::Mode::Insert);
+    }
+
+    #[test]
+    fn regular_mode_ctrl_z_ctrl_y_roundtrip() {
+        let mut app = regular("");
+        let k = |c: char| Message::KeyPressed(KeyCode::Char(c), KeyModifiers::NONE);
+        for c in "hello".chars() {
+            let _ = update(&mut app, k(c));
+        }
+        assert_eq!(app.source(), "hello");
+        // bare z/y still type (the chords are gated on CONTROL)
+        let _ = update(&mut app, k('z'));
+        let _ = update(&mut app, k('y'));
+        assert_eq!(app.source(), "hellozy");
+
+        let _ = update(&mut app, key(KeyModifiers::CONTROL, 'z'));
+        assert_eq!(app.source(), "helloz", "one undo step");
+        let _ = update(&mut app, key(KeyModifiers::CONTROL, 'z'));
+        assert_eq!(app.source(), "hello");
+        let _ = update(&mut app, key(KeyModifiers::CONTROL, 'y'));
+        assert_eq!(app.source(), "helloz");
+        let _ = update(
+            &mut app,
+            key(KeyModifiers::CONTROL.union(KeyModifiers::SHIFT), 'z'),
+        );
+        assert_eq!(app.source(), "hellozy");
+    }
+
+    #[test]
+    fn toolbar_messages_undo_and_redo_in_vim_normal_mode() {
+        let mut app = vim_app("");
+        type_in_insert(&mut app, "hello");
+        let esc = Message::KeyPressed(KeyCode::Esc, KeyModifiers::NONE);
+        let _ = update(&mut app, esc);
+        assert_eq!(app.editor().mode, editor::Mode::Normal);
+
+        // the button path (Message::Undo/Redo) shares the vim u / Ctrl+r
+        // stack and works in normal mode with no mode switch
+        let _ = update(&mut app, Message::Undo);
+        assert_eq!(app.source(), "hell");
+        assert_eq!(app.editor().mode, editor::Mode::Normal);
+        let _ = update(&mut app, Message::Redo);
+        assert_eq!(app.source(), "hello");
+        assert_eq!(
+            app.editor().buf.cursor(),
+            (0, 4),
+            "cursor on the edit point"
+        );
+
+        // vim's own keys still walk the same stack
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('u'), KeyModifiers::NONE),
+        );
+        assert_eq!(app.source(), "hell");
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('r'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(app.source(), "hello");
+    }
+
+    #[test]
+    fn ctrl_z_is_not_mapped_in_vim_normal_mode() {
+        // vim purists use u; Ctrl+Z stays inert there (only the toolbar
+        // buttons undo in normal mode)
+        let mut app = vim_app("");
+        type_in_insert(&mut app, "hi");
+        let esc = Message::KeyPressed(KeyCode::Esc, KeyModifiers::NONE);
+        let _ = update(&mut app, esc);
+        let _ = update(&mut app, key(KeyModifiers::CONTROL, 'z'));
+        assert_eq!(app.source(), "hi", "Ctrl+Z does nothing in vim normal");
+        assert!(app.editor().buf.can_undo(), "the stack was not touched");
+    }
+
+    #[test]
+    fn can_undo_and_can_redo_track_the_stacks() {
+        let mut app = vim_app("");
+        assert!(!app.editor().buf.can_undo());
+        assert!(!app.editor().buf.can_redo());
+
+        type_in_insert(&mut app, "ab");
+        assert!(app.editor().buf.can_undo());
+        assert!(!app.editor().buf.can_redo(), "a fresh edit clears redo");
+
+        let _ = update(&mut app, Message::Undo);
+        assert!(app.editor().buf.can_undo());
+        assert!(app.editor().buf.can_redo());
+
+        let _ = update(&mut app, Message::Redo);
+        assert!(app.editor().buf.can_undo());
+        assert!(!app.editor().buf.can_redo(), "redo stack drained");
+
+        // undoing all the way back empties the undo stack again
+        let _ = update(&mut app, Message::Undo);
+        let _ = update(&mut app, Message::Undo);
+        let _ = update(&mut app, Message::Undo); // beyond the history: no-op
+        assert!(!app.editor().buf.can_undo());
+        assert_eq!(app.source(), "", "over-undoing leaves the start text");
+    }
+
+    #[test]
+    fn undo_dismisses_the_completion_popup() {
+        let mut app = App::default(); // SAMPLE_DBML: completion has items
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('i'), KeyModifiers::NONE));
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Space, KeyModifiers::CONTROL),
+        );
+        assert!(app.completion.is_some(), "popup open");
+        // Ctrl+Z lands even with the popup up (the chord arm precedes the
+        // popup's typing interception) and closes it
+        let _ = update(&mut app, key(KeyModifiers::CONTROL, 'z'));
+        assert!(app.completion.is_none());
+    }
+
+    #[test]
+    fn ctrl_z_right_after_the_ctrl_d_chord_is_not_rollout() {
+        // the chord-rollout guard swallows a BARE d/u after ctrl+d/u; the
+        // ctrl-modified undo chord must pass through
+        let mut app = vim_app("");
+        app.window_size = (1400.0, 900.0);
+        type_in_insert(&mut app, "ab");
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        );
+        let _ = update(&mut app, key(KeyModifiers::CONTROL, 'z'));
+        assert_eq!(app.source(), "a", "Ctrl+Z survived the rollout window");
     }
 }

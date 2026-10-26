@@ -921,8 +921,8 @@ fn editor_menu_overlay(app: &App, menu: &EditorMenu) -> Element<'static, Message
     .into()
 }
 
-/// Small toolbar above the editor: Save, Save As, Format, fmt-on-save
-/// switch.
+/// Small toolbar above the editor: Undo, Redo, Save, Save As, Format,
+/// fmt-on-save switch.
 fn editor_toolbar(app: &App) -> Element<'static, Message> {
     use iced::widget::button;
     let btn = |label: &'static str, msg: Message, accent: bool| {
@@ -937,6 +937,19 @@ fn editor_toolbar(app: &App) -> Element<'static, Message> {
             });
         }
         b.on_press_maybe(Some(msg))
+    };
+    // Undo/Redo: gated on the buffer's history stacks — dimmed and inert
+    // when empty (the context menu's disabled-item pattern). They drive
+    // the same stack vim's u / Ctrl+r walk, so they work in every mode.
+    let step_btn = |label: &'static str, msg: Message, enabled: bool| {
+        button(
+            text(label)
+                .size(11.0)
+                .color(if enabled { theme::TEXT } else { theme::DIM }),
+        )
+        .padding([3, 8])
+        .style(move |_t, _s| tool_button_style())
+        .on_press_maybe(enabled.then_some(msg))
     };
     let fmt_switch = button(
         text(if app.config.fmt_on_save {
@@ -955,6 +968,8 @@ fn editor_toolbar(app: &App) -> Element<'static, Message> {
     .style(move |_t, _s| tool_button_style())
     .on_press(Message::ToggleFmtOnSave);
     row![
+        step_btn("Undo", Message::Undo, app.editor().buf.can_undo()),
+        step_btn("Redo", Message::Redo, app.editor().buf.can_redo()),
         btn(
             "Save",
             Message::KeyPressed(KeyCode::Char('s'), KeyModifiers::CONTROL),
