@@ -8,10 +8,9 @@ use crate::canvas::editor::{EditorOverlay, EditorView};
 use crate::editor::{KeyCode, KeyModifiers};
 use crate::theme;
 use iced::widget::{
-    button, canvas, column, container, horizontal_space, mouse_area, row, stack, text,
-    vertical_space,
+    button, canvas, column, container, horizontal_space, row, stack, text, vertical_space,
 };
-use iced::{Color, Element, Fill, Length};
+use iced::{Color, Element, Fill, Length, Point, Rectangle, Size};
 
 /// Zoom at which one diagram cell maps 1:1 to a text line (~20px).
 pub const BASE_ZOOM: f32 = 20.0;
@@ -160,7 +159,9 @@ pub fn root(app: &App) -> Element<'_, Message> {
     // the tab strip runs full-bleed across the top; the padded content
     // sits below it
     let base = column![
-        tab_strip(app),
+        canvas(TabStrip { app })
+            .height(Length::Fixed(STRIP_H))
+            .width(Fill),
         column![body, status_bar(app)].spacing(8).padding(8)
     ]
     .spacing(4);
@@ -177,62 +178,192 @@ pub fn root(app: &App) -> Element<'_, Message> {
     }
 }
 
-/// Chrome-like tab strip: one tab per open document (or start screen),
-/// each with a close X, then a + that opens a fresh start-screen tab.
-/// Click activates, click & drag reorders (the math lives in
-/// `App::tab_drag_moved`), right-click opens the context menu.
-fn tab_strip(app: &App) -> Element<'static, Message> {
-    let mut tabs = row![].spacing(8);
-    for i in 0..app.tabs.len() {
-        tabs = tabs.push(tab_button(app, i));
-    }
-    let plus = button(text("+").size(13.0).color(theme::DIM))
-        .padding([2, 8])
-        .style(move |_t, _s| tool_button_style())
-        .on_press(Message::NewTab);
-    container(tabs.push(plus))
-        .padding([0.0, STRIP_LEFT])
-        .width(Fill)
-        .style(|_t| container::Style {
-            background: Some(iced::Background::Color(theme::BG)),
-            ..Default::default()
-        })
-        .into()
+/// Chrome-like tab strip, canvas-drawn so drag/slide animation has full
+/// control of each tab's x (a widget row cannot offset or overlap tabs).
+/// One tab per open document with its close X, then a +; click activates,
+/// drag reorders (math in `App::tab_drag_moved`), right-click opens the
+/// context menu, middle-click closes.
+pub struct TabStrip<'a> {
+    pub app: &'a App,
 }
 
-/// One tab: title (with a • while it has unsaved changes) plus a close X,
-/// wrapped in a mouse_area for activate / right-click menu / middle-click
-/// close. The X is a real button inside it: it captures its own press, so
-/// closing never activates the tab (Chrome semantics). Width is
-/// `TAB_SLOT_W` minus the strip's 8px tab gap so drag-drop slots line up.
-fn tab_button(app: &App, i: usize) -> Element<'static, Message> {
-    let tab = &app.tabs[i];
-    let active = i == app.active;
-    let mut title = tab.title();
-    if tab.is_modified() {
-        title = format!("• {title}");
+/// Visual tab width and the strip height.
+const TAB_W: f32 = TAB_SLOT_W - 8.0;
+const STRIP_H: f32 = 30.0;
+
+impl TabStrip<'_> {
+    /// The tab under a strip-local point, if any (X-zone included).
+    fn tab_at(&self, x: f32, y: f32) -> Option<usize> {
+        if !(0.0..STRIP_H).contains(&y) {
+            return None;
+        }
+        let i = ((x - STRIP_LEFT) / TAB_SLOT_W).floor();
+        if !(0.0..self.app.tabs.len() as f32).contains(&i) {
+            return None;
+        }
+        let i = i as usize;
+        (0.0..TAB_W).contains(&(x - STRIP_LEFT - i as f32 * TAB_SLOT_W)).then_some(i)
     }
-    let label = text(truncate_title(&title, 22))
-        .size(12.0)
-        .color(if active { theme::TEXT } else { theme::DIM })
-        .width(Fill);
-    let close = button(text("×").size(10.0).color(theme::DIM))
-        .padding([1, 3])
-        .style(move |_t, _s| close_button_style())
-        .on_press(Message::CloseTab(i));
-    let content = row![label, close]
-        .spacing(4)
-        .align_y(iced::alignment::Vertical::Center);
-    mouse_area(
-        container(content)
-            .padding([4, 8])
-            .width(Length::Fixed(TAB_SLOT_W - 8.0))
-            .style(move |_t| tab_style(active)),
-    )
-    .on_press(Message::TabPressed(i))
-    .on_right_press(Message::TabMenu(i))
-    .on_middle_press(Message::CloseTab(i))
-    .into()
+
+    fn plus_at(&self, x: f32, y: f32) -> bool {
+        let px = STRIP_LEFT + self.app.tabs.len() as f32 * TAB_SLOT_W;
+        (0.0..STRIP_H).contains(&y) && (px..px + 30.0).contains(&x)
+    }
+}
+
+impl canvas::Program<Message> for TabStrip<'_> {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &iced::Renderer,
+        _theme: &iced::Theme,
+        bounds: Rectangle,
+        cursor: iced::mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        frame.fill_rectangle(Point::ORIGIN, bounds.size(), theme::BG);
+        let hover_i = cursor
+            .position()
+            .map(|c| {
+                let l = Point::new(c.x - bounds.x, c.y - bounds.y);
+                self.tab_at(l.x, l.y)
+            })
+            .unwrap_or(None);
+        for i in 0..self.app.tabs.len() {
+            let tab = &self.app.tabs[i];
+            let off = self.app.tab_anim.get(i).copied().unwrap_or(0.0);
+            let active = i == self.app.active;
+            let x = STRIP_LEFT + i as f32 * TAB_SLOT_W + off;
+            let rect = Rectangle::new(Point::new(x, 2.0), Size::new(TAB_W, STRIP_H - 4.0));
+            let hovered = hover_i == Some(i) && self.app.tab_drag.is_none();
+            frame.fill(
+                &canvas::Path::rounded_rectangle(
+                    rect.position(),
+                    rect.size(),
+                    iced::border::Radius::from(6.0),
+                ),
+                if active {
+                    theme::PANEL
+                } else if hovered {
+                    Color::from_rgba(0.11, 0.129, 0.157, 0.5)
+                } else {
+                    Color::TRANSPARENT
+                },
+            );
+            if active {
+                frame.stroke(
+                    &canvas::Path::rounded_rectangle(
+                        rect.position(),
+                        rect.size(),
+                        iced::border::Radius::from(6.0),
+                    ),
+                    canvas::Stroke {
+                        style: theme::BORDER.into(),
+                        width: 1.0,
+                        ..Default::default()
+                    },
+                );
+            }
+            let mut title = tab.title();
+            if tab.is_modified() {
+                title = format!("\u{2022} {title}");
+            }
+            frame.fill_text(canvas::Text {
+                content: truncate_title(&title, 22),
+                position: Point::new(x + 10.0, rect.center_y()),
+                color: if active { theme::TEXT } else { theme::DIM },
+                size: 12.0.into(),
+                vertical_alignment: iced::alignment::Vertical::Center,
+                ..Default::default()
+            });
+            frame.fill_text(canvas::Text {
+                content: "\u{00d7}".to_string(),
+                position: Point::new(x + TAB_W - 16.0, rect.center_y()),
+                color: theme::DIM,
+                size: 11.0.into(),
+                vertical_alignment: iced::alignment::Vertical::Center,
+                ..Default::default()
+            });
+        }
+        // the + button
+        let px = STRIP_LEFT + self.app.tabs.len() as f32 * TAB_SLOT_W + 4.0;
+        frame.fill_text(canvas::Text {
+            content: "+".to_string(),
+            position: Point::new(px + 10.0, STRIP_H * 0.5),
+            color: theme::DIM,
+            size: 13.0.into(),
+            vertical_alignment: iced::alignment::Vertical::Center,
+            ..Default::default()
+        });
+        vec![frame.into_geometry()]
+    }
+
+    fn update(
+        &self,
+        _state: &mut Self::State,
+        event: canvas::Event,
+        bounds: Rectangle,
+        cursor: iced::mouse::Cursor,
+    ) -> (canvas::event::Status, Option<Message>) {
+        use iced::mouse::Button;
+        let over = cursor
+            .position_over(bounds)
+            .map(|p| Point::new(p.x - bounds.x, p.y - bounds.y));
+        if let canvas::Event::Mouse(iced::mouse::Event::ButtonPressed(button)) = event {
+            let Some(p) = over else {
+                return (canvas::event::Status::Ignored, None);
+            };
+            match button {
+                Button::Left => {
+                    if self.plus_at(p.x, p.y) {
+                        return (canvas::event::Status::Captured, Some(Message::NewTab));
+                    }
+                    if let Some(i) = self.tab_at(p.x, p.y) {
+                        let x_zone = STRIP_LEFT + i as f32 * TAB_SLOT_W + TAB_W - 18.0;
+                        let msg = if p.x >= x_zone {
+                            Message::CloseTab(i)
+                        } else {
+                            Message::TabPressed(i)
+                        };
+                        return (canvas::event::Status::Captured, Some(msg));
+                    }
+                }
+                Button::Middle => {
+                    if let Some(i) = self.tab_at(p.x, p.y) {
+                        return (canvas::event::Status::Captured, Some(Message::CloseTab(i)));
+                    }
+                }
+                Button::Right => {
+                    if let Some(i) = self.tab_at(p.x, p.y) {
+                        return (canvas::event::Status::Captured, Some(Message::TabMenu(i)));
+                    }
+                }
+                _ => {}
+            }
+        }
+        (canvas::event::Status::Ignored, None)
+    }
+
+    fn mouse_interaction(
+        &self,
+        _state: &Self::State,
+        bounds: Rectangle,
+        cursor: iced::mouse::Cursor,
+    ) -> iced::mouse::Interaction {
+        use iced::mouse::Interaction;
+        if self.app.tab_drag.is_some() {
+            return Interaction::Grabbing;
+        }
+        if let Some(p) = cursor.position_over(bounds) {
+            let p = Point::new(p.x - bounds.x, p.y - bounds.y);
+            if self.tab_at(p.x, p.y).is_some() || self.plus_at(p.x, p.y) {
+                return Interaction::Pointer;
+            }
+        }
+        Interaction::default()
+    }
 }
 
 /// Clip a tab title to `max` chars, ellipsis at the end.
@@ -242,42 +373,9 @@ fn truncate_title(title: &str, max: usize) -> String {
         return title.to_string();
     }
     format!(
-        "{}…",
+        "{}\u{2026}",
         title.chars().take(max.saturating_sub(1)).collect::<String>()
     )
-}
-
-/// Chrome-like tab shape: the active tab is a PANEL card with rounded top
-/// corners sitting on the strip; inactive tabs melt into it.
-fn tab_style(active: bool) -> container::Style {
-    container::Style {
-        background: active.then_some(iced::Background::Color(theme::PANEL)),
-        border: iced::border::Border {
-            radius: iced::border::Radius {
-                top_left: 6.0,
-                top_right: 6.0,
-                bottom_right: 0.0,
-                bottom_left: 0.0,
-            },
-            color: if active {
-                theme::BORDER
-            } else {
-                Color::TRANSPARENT
-            },
-            width: 1.0,
-        },
-        ..Default::default()
-    }
-}
-
-/// Quiet close X: no background of its own.
-fn close_button_style() -> iced::widget::button::Style {
-    iced::widget::button::Style {
-        background: None,
-        text_color: theme::DIM,
-        border: iced::border::rounded(4),
-        ..Default::default()
-    }
 }
 
 /// The tab context menu (Close / Close all), anchored at the pointer and

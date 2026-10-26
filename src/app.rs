@@ -189,10 +189,12 @@ const TAB_DRAG_THRESHOLD: f32 = 6.0;
 /// Click & drag tab reorder in flight: the dragged tab's index, where the
 /// press happened (strip-relative px), and whether the threshold is crossed.
 #[derive(Debug, Clone)]
-struct TabDrag {
-    from: usize,
-    press_x: f32,
-    moved: bool,
+pub(crate) struct TabDrag {
+    pub(crate) from: usize,
+    pub(crate) press_x: f32,
+    pub(crate) moved: bool,
+    /// Current pointer x, strip-relative (drives the dragged tab's pose).
+    pub(crate) x: f32,
 }
 
 /// Right-click context menu over a tab, anchored at the pointer.
@@ -207,14 +209,6 @@ pub struct TabMenu {
 /// Chrome-style drop slot for strip-relative pointer `x` over `tabs`
 /// fixed-width slots: the slot under the pointer, clamped into the strip
 /// (dragging past either end pins to the first/last slot).
-fn drop_slot(strip_x: f32, tabs: usize, slot_w: f32) -> usize {
-    if tabs == 0 {
-        return 0;
-    }
-    let slot = (strip_x / slot_w.max(1.0)).floor().max(0.0) as usize;
-    slot.min(tabs - 1)
-}
-
 /// Remove the element at `from` and re-insert it at `to` — the live
 /// reorder behind tab dragging.
 fn move_element<T>(v: &mut Vec<T>, from: usize, to: usize) {
@@ -345,8 +339,13 @@ pub struct App {
     pub tabs: Vec<Tab>,
     /// Index of the active (rendered) tab.
     pub active: usize,
+    /// Per-tab visual x-offset in px (Chrome-style drag/slide animation):
+    /// drawn at `slot_x + offset`, eased to 0 by the tick. The dragged tab
+    /// is pointer-driven instead; a displaced neighbor starts at ±slot so
+    /// it slides to the vacated position.
+    pub tab_anim: Vec<f32>,
     /// Tab click & drag reorder in flight, if any.
-    tab_drag: Option<TabDrag>,
+    pub(crate) tab_drag: Option<TabDrag>,
     /// Open tab context menu, if any.
     pub tab_menu: Option<TabMenu>,
     /// Last known window-relative pointer position (drives the tab menu
@@ -404,6 +403,7 @@ impl App {
             tabs,
             active: 0,
             tab_drag: None,
+            tab_anim: Vec::new(),
             tab_menu: None,
             window_cursor: None,
             focus: Focus::Editor,
@@ -557,27 +557,64 @@ impl App {
             from: idx,
             press_x,
             moved: false,
+            x: press_x,
         });
     }
 
-    /// The pointer moved while a tab drag is in flight: past the threshold
-    /// the dragged tab follows the pointer slot by slot (live reorder,
-    /// Chrome-style). `x` is strip-relative.
+    /// The pointer moved while a tab drag is in flight. Past the threshold
+    /// the dragged tab follows the pointer (drawn via its `tab_anim`
+    /// offset); when its edge crosses a neighboring slot's midpoint the
+    /// two swap, and the displaced neighbor starts a slot away so it
+    /// slides animatedly to the vacated position. `x` is strip-relative.
     fn tab_drag_moved(&mut self, x: f32) {
         let Some(drag) = self.tab_drag.as_mut() else {
             return;
         };
+        drag.x = x;
         if !drag.moved {
             if (x - drag.press_x).abs() < TAB_DRAG_THRESHOLD {
                 return;
             }
             drag.moved = true;
         }
-        let slot = drop_slot(x, self.tabs.len(), TAB_SLOT_W);
-        if slot != drag.from {
-            move_element(&mut self.tabs, drag.from, slot);
-            self.active = slot; // the dragged tab (was active) follows
-            drag.from = slot;
+        if self.tab_anim.len() < self.tabs.len() {
+            self.tab_anim.resize(self.tabs.len(), 0.0);
+        }
+        let n = self.tabs.len();
+        // the dragged tab follows the pointer, clamped to the strip
+        let vx = ((drag.from as f32 * TAB_SLOT_W) + (x - drag.press_x))
+            .clamp(0.0, (n - 1) as f32 * TAB_SLOT_W);
+        // Chrome's swap rule: the dragged tab's leading/trailing edge
+        // crossing the neighbor slot's midpoint switches the two
+        if drag.from + 1 < n && vx > (drag.from as f32 + 0.5) * TAB_SLOT_W {
+            let j = drag.from + 1;
+            move_element(&mut self.tabs, drag.from, j);
+            self.active = j; // the dragged tab (was active) follows
+            self.tab_anim[j] = 0.0;
+            self.tab_anim[drag.from] = TAB_SLOT_W; // displaced: slides left
+            drag.from = j;
+        } else if drag.from > 0 && vx < (drag.from as f32 - 0.5) * TAB_SLOT_W {
+            let j = drag.from - 1;
+            move_element(&mut self.tabs, drag.from, j);
+            self.active = j;
+            self.tab_anim[j] = 0.0;
+            self.tab_anim[drag.from] = -TAB_SLOT_W; // displaced: slides right
+            drag.from = j;
+        }
+        self.tab_anim[drag.from] = vx - drag.from as f32 * TAB_SLOT_W;
+    }
+
+    /// Ease every non-dragged tab's visual offset back to its slot.
+    fn tick_tab_anim(&mut self) {
+        let dragging = self.tab_drag.as_ref().map(|d| d.from);
+        for (i, off) in self.tab_anim.iter_mut().enumerate() {
+            if Some(i) == dragging {
+                continue; // the dragged tab is pointer-driven
+            }
+            *off *= 0.72;
+            if off.abs() < 0.5 {
+                *off = 0.0;
+            }
         }
     }
 
@@ -983,9 +1020,16 @@ fn handle_message(app: &mut App, message: Message) {
             if app.drag == Drag::Divider {
                 app.drag = Drag::None;
             }
-            // drop the dragged tab wherever the pointer is: the reorder
-            // already happened live under it
-            app.tab_drag = None;
+            // drop: the dragged tab glides from its released pose to its
+            // slot via the same easing as the displaced neighbors
+            if let Some(drag) = app.tab_drag.take() {
+                if app.tab_anim.len() < app.tabs.len() {
+                    app.tab_anim.resize(app.tabs.len(), 0.0);
+                }
+                let vx = ((drag.from as f32 * TAB_SLOT_W) + (drag.x - drag.press_x))
+                    .clamp(0.0, (app.tabs.len() - 1) as f32 * TAB_SLOT_W);
+                app.tab_anim[drag.from] = vx - drag.from as f32 * TAB_SLOT_W;
+            }
         }
         Message::WindowResized(w, h) => app.window_size = (w, h),
         Message::CompletionPicked(idx) => app.completion_accept(idx),
@@ -1029,6 +1073,7 @@ fn handle_message(app: &mut App, message: Message) {
                 .map_or(0.016, |t| (now - t).as_secs_f32().min(0.1));
             app.last_tick = Some(now);
             app.anim_clock += dt;
+            app.tick_tab_anim();
             let hovered: Vec<usize> = app.cur().hover_edges.clone();
             for (i, t) in app.cur_mut().edge_anim.iter_mut().enumerate() {
                 let target = if hovered.contains(&i) { 1.0 } else { 0.0 };
@@ -3576,6 +3621,44 @@ mod tab_tests {
         Message::KeyPressed(KeyCode::Char(c), mods)
     }
 
+    #[test]
+    fn tab_drag_midpoint_swaps_and_slides_the_neighbor() {
+        // Chrome rule: the dragged tab's edge crossing a neighbor slot's
+        // midpoint swaps the two; the displaced neighbor starts a slot
+        // away and eases home (its slide), the dragged tab is
+        // pointer-driven
+        let mut app = two_tab_app();
+        app.window_cursor = Some(Point::new(STRIP_LEFT, 12.0));
+        let _ = update(&mut app, Message::TabPressed(0));
+        let _ = update(&mut app, Message::MouseMovedWindow(STRIP_LEFT + 90.0, 12.0));
+        assert_eq!(app.active, 1, "90px > the 82px midpoint: swapped");
+        assert_eq!(app.tab_anim[0], TAB_SLOT_W, "displaced neighbor at the old slot");
+        assert!(
+            (app.tab_anim[1] - (90.0 - TAB_SLOT_W)).abs() < 0.5,
+            "dragged tab follows the pointer: {:?}",
+            app.tab_anim[1]
+        );
+        // the tick eases the displaced neighbor home
+        let before = app.tab_anim[0];
+        let _ = update(&mut app, Message::Tick);
+        assert!(app.tab_anim[0] < before && app.tab_anim[0] > 0.0);
+        // and on release the dragged tab glides home from its pose
+        let _ = update(&mut app, Message::MouseReleased);
+        assert!(
+            (app.tab_anim[1] - (90.0 - TAB_SLOT_W)).abs() > 1.0,
+            "release leaves the drag pose to ease"
+        );
+        let _ = update(&mut app, Message::Tick);
+        for _ in 0..30 {
+            let _ = update(&mut app, Message::Tick);
+        }
+        assert!(
+            app.tab_anim.iter().all(|o| o.abs() < 0.5),
+            "all offsets settle: {:?}",
+            app.tab_anim
+        );
+    }
+
     fn two_tab_app() -> App {
         // tab 0: the sample; tab 1: another document
         let mut app = App::with_source(SAMPLE_DBML.to_string());
@@ -3648,20 +3731,6 @@ mod tab_tests {
         let _ = update(&mut app, key(KeyModifiers::NONE, 'u'));
         assert_eq!(app.source(), "Table other { id integer }");
         assert!(!app.is_modified());
-    }
-
-    #[test]
-    fn drop_slot_follows_the_pointer_and_clamps_to_the_strip() {
-        let n = 4;
-        let w = TAB_SLOT_W;
-        assert_eq!(drop_slot(0.0, n, w), 0);
-        assert_eq!(drop_slot(w - 1.0, n, w), 0);
-        assert_eq!(drop_slot(w, n, w), 1);
-        assert_eq!(drop_slot(2.5 * w, n, w), 2);
-        // past either end pins to the first/last slot
-        assert_eq!(drop_slot(-50.0, n, w), 0);
-        assert_eq!(drop_slot(100.0 * w, n, w), n - 1);
-        assert_eq!(drop_slot(0.0, 0, w), 0, "empty strip is safe");
     }
 
     #[test]
