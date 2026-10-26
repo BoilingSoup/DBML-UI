@@ -302,167 +302,7 @@ impl canvas::Program<Message> for EditorView<'_> {
             );
         }
 
-        // overlays (error tooltip, hover docs, completion popup) render in
-        // a SECOND geometry: within one geometry iced draws all meshes
-        // before all text, so a popup in the main geometry left the code
-        // text beneath it showing through its background — it read as a
-        // transparent popup
-        let mut overlay = canvas::Frame::new(renderer, bounds.size());
-        // tooltips on hover: errors win, then definition docs; suppressed
-        // while the completion popup is open
-        if let Some(hover) = app.editor_hover {
-            if app.completion.is_none() {
-                let pos = px_to_pos(app, hover);
-                if let Some(m) = marks
-                    .iter()
-                    .find(|m| m.row == pos.row && pos.col >= m.start && pos.col <= m.end)
-                {
-                    let (rect, lines) = tooltip_layout(hover, &m.message, bounds);
-                    overlay.fill(
-                        &canvas::Path::rounded_rectangle(
-                            rect.position(),
-                            rect.size(),
-                            iced::border::Radius::from(6.0),
-                        ),
-                        theme::TOOLTIP,
-                    );
-                    frame.stroke(
-                        &canvas::Path::rounded_rectangle(
-                            rect.position(),
-                            rect.size(),
-                            iced::border::Radius::from(6.0),
-                        ),
-                        canvas::Stroke {
-                            style: theme::ERR.into(),
-                            width: 1.0,
-                            ..Default::default()
-                        },
-                    );
-                    for (i, line) in lines.iter().enumerate() {
-                        overlay.fill_text(Text {
-                            content: line.clone(),
-                            position: Point::new(rect.x + 12.0, rect.y + 12.0 + i as f32 * 18.0),
-                            color: theme::TEXT,
-                            size: (FONT_SIZE - 1.0).into(),
-                            font: Font::MONOSPACE,
-                            horizontal_alignment: iced::alignment::Horizontal::Left,
-                            vertical_alignment: iced::alignment::Vertical::Top,
-                            ..Default::default()
-                        });
-                    }
-                } else if let Some(doc) = doc_hover_at(app, hover) {
-                    let rect = doc_rect(hover, &doc, bounds);
-                    overlay.fill(
-                        &canvas::Path::rounded_rectangle(
-                            rect.position(),
-                            rect.size(),
-                            iced::border::Radius::from(6.0),
-                        ),
-                        theme::TOOLTIP,
-                    );
-                    frame.stroke(
-                        &canvas::Path::rounded_rectangle(
-                            rect.position(),
-                            rect.size(),
-                            iced::border::Radius::from(6.0),
-                        ),
-                        canvas::Stroke {
-                            style: theme::SYN_NAME.into(),
-                            width: 1.0,
-                            ..Default::default()
-                        },
-                    );
-                    overlay.fill_text(Text {
-                        content: doc.title.clone(),
-                        position: Point::new(rect.x + 12.0, rect.y + 10.0),
-                        color: theme::SYN_NAME,
-                        size: (FONT_SIZE - 1.0).into(),
-                        font: Font {
-                            weight: iced::font::Weight::Bold,
-                            ..Font::MONOSPACE
-                        },
-                        horizontal_alignment: iced::alignment::Horizontal::Left,
-                        vertical_alignment: iced::alignment::Vertical::Top,
-                        ..Default::default()
-                    });
-                    for (i, (marker, text)) in doc.rows.iter().enumerate() {
-                        let ry = rect.y + 28.0 + i as f32 * 16.0;
-                        overlay.fill_text(Text {
-                            content: marker.clone(),
-                            position: Point::new(rect.x + 12.0, ry),
-                            color: if marker == "\u{25c6}" {
-                                theme::PK
-                            } else if marker == "\u{25c7}" {
-                                theme::FK
-                            } else {
-                                theme::TEXT
-                            },
-                            size: (FONT_SIZE - 1.0).into(),
-                            font: Font::MONOSPACE,
-                            horizontal_alignment: iced::alignment::Horizontal::Left,
-                            vertical_alignment: iced::alignment::Vertical::Top,
-                            ..Default::default()
-                        });
-                        overlay.fill_text(Text {
-                            content: text.clone(),
-                            position: Point::new(rect.x + 12.0 + 2.0 * char_width(), ry),
-                            color: theme::TEXT,
-                            size: (FONT_SIZE - 1.0).into(),
-                            font: Font::MONOSPACE,
-                            horizontal_alignment: iced::alignment::Horizontal::Left,
-                            vertical_alignment: iced::alignment::Vertical::Top,
-                            ..Default::default()
-                        });
-                    }
-                }
-            }
-        }
-
-        if let Some((prect, first_row, visible)) = popup_layout(app, bounds) {
-            let c = app.completion.as_ref().unwrap();
-            overlay.fill(
-                &canvas::Path::rounded_rectangle(
-                    prect.position(),
-                    prect.size(),
-                    iced::border::Radius::from(6.0),
-                ),
-                theme::TOOLTIP,
-            );
-            frame.stroke(
-                &canvas::Path::rounded_rectangle(
-                    prect.position(),
-                    prect.size(),
-                    iced::border::Radius::from(6.0),
-                ),
-                canvas::Stroke {
-                    style: theme::BORDER.into(),
-                    width: 1.0,
-                    ..Default::default()
-                },
-            );
-            for (i, item) in c.items[first_row..first_row + visible].iter().enumerate() {
-                let sel = first_row + i == c.selected;
-                let ry = prect.y + i as f32 * ROW_H;
-                if sel {
-                    frame.fill_rectangle(
-                        Point::new(prect.x + 2.0, ry),
-                        Size::new(prect.width - 4.0, ROW_H),
-                        Color::from_rgba(0.267, 0.576, 0.973, 0.25),
-                    );
-                }
-                overlay.fill_text(Text {
-                    content: item.label.clone(),
-                    position: Point::new(prect.x + 10.0, ry + ROW_H * 0.5),
-                    color: item_kind_color(item.kind),
-                    size: (FONT_SIZE - 1.0).into(),
-                    font: Font::MONOSPACE,
-                    horizontal_alignment: iced::alignment::Horizontal::Left,
-                    vertical_alignment: iced::alignment::Vertical::Center,
-                    ..Default::default()
-                });
-            }
-        }
-        vec![frame.into_geometry(), overlay.into_geometry()]
+        vec![frame.into_geometry()]
     }
 
     fn mouse_interaction(
@@ -1114,5 +954,188 @@ mod tests {
             view.mouse_interaction(&(), BOUNDS, Cursor::Available(Point::new(900.0, 100.0))),
             Interaction::default()
         );
+    }
+}
+
+/// The editor's floating overlays (error tooltip, hover docs, completion
+/// popup) as their own canvas widget, STACKED above the editor canvas:
+/// iced flattens one widget's geometries into a single mesh pass followed
+/// by a single text pass, so a tooltip background drawn in a second
+/// geometry landed behind the editor text (geometry 1's text pass) and
+/// the tooltip read as transparent. Separate widgets composite fully in
+/// order, which restores bg-under-text within the overlay.
+pub struct EditorOverlay<'a> {
+    pub app: &'a App,
+}
+
+impl canvas::Program<Message> for EditorOverlay<'_> {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &iced::Renderer,
+        _theme: &iced::Theme,
+        bounds: Rectangle,
+        _cursor: iced::mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        let app = self.app;
+        let marks = error_marks(app);
+        // tooltips on hover: errors win, then definition docs; suppressed
+        // while the completion popup is open
+        if let Some(hover) = app.editor_hover {
+            if app.completion.is_none() {
+                let pos = px_to_pos(app, hover);
+                if let Some(m) = marks
+                    .iter()
+                    .find(|m| m.row == pos.row && pos.col >= m.start && pos.col <= m.end)
+                {
+                    let (rect, lines) = tooltip_layout(hover, &m.message, bounds);
+                    frame.fill(
+                        &canvas::Path::rounded_rectangle(
+                            rect.position(),
+                            rect.size(),
+                            iced::border::Radius::from(6.0),
+                        ),
+                        theme::TOOLTIP,
+                    );
+                    frame.stroke(
+                        &canvas::Path::rounded_rectangle(
+                            rect.position(),
+                            rect.size(),
+                            iced::border::Radius::from(6.0),
+                        ),
+                        canvas::Stroke {
+                            style: theme::ERR.into(),
+                            width: 1.0,
+                            ..Default::default()
+                        },
+                    );
+                    for (i, line) in lines.iter().enumerate() {
+                        frame.fill_text(Text {
+                            content: line.clone(),
+                            position: Point::new(rect.x + 12.0, rect.y + 12.0 + i as f32 * 18.0),
+                            color: theme::TEXT,
+                            size: (FONT_SIZE - 1.0).into(),
+                            font: Font::MONOSPACE,
+                            horizontal_alignment: iced::alignment::Horizontal::Left,
+                            vertical_alignment: iced::alignment::Vertical::Top,
+                            ..Default::default()
+                        });
+                    }
+                } else if let Some(doc) = doc_hover_at(app, hover) {
+                    let rect = doc_rect(hover, &doc, bounds);
+                    frame.fill(
+                        &canvas::Path::rounded_rectangle(
+                            rect.position(),
+                            rect.size(),
+                            iced::border::Radius::from(6.0),
+                        ),
+                        theme::TOOLTIP,
+                    );
+                    frame.stroke(
+                        &canvas::Path::rounded_rectangle(
+                            rect.position(),
+                            rect.size(),
+                            iced::border::Radius::from(6.0),
+                        ),
+                        canvas::Stroke {
+                            style: theme::SYN_NAME.into(),
+                            width: 1.0,
+                            ..Default::default()
+                        },
+                    );
+                    frame.fill_text(Text {
+                        content: doc.title.clone(),
+                        position: Point::new(rect.x + 12.0, rect.y + 10.0),
+                        color: theme::SYN_NAME,
+                        size: (FONT_SIZE - 1.0).into(),
+                        font: Font {
+                            weight: iced::font::Weight::Bold,
+                            ..Font::MONOSPACE
+                        },
+                        horizontal_alignment: iced::alignment::Horizontal::Left,
+                        vertical_alignment: iced::alignment::Vertical::Top,
+                        ..Default::default()
+                    });
+                    for (i, (marker, text)) in doc.rows.iter().enumerate() {
+                        let ry = rect.y + 28.0 + i as f32 * 16.0;
+                        frame.fill_text(Text {
+                            content: marker.clone(),
+                            position: Point::new(rect.x + 12.0, ry),
+                            color: if marker == "\u{25c6}" {
+                                theme::PK
+                            } else if marker == "\u{25c7}" {
+                                theme::FK
+                            } else {
+                                theme::TEXT
+                            },
+                            size: (FONT_SIZE - 1.0).into(),
+                            font: Font::MONOSPACE,
+                            horizontal_alignment: iced::alignment::Horizontal::Left,
+                            vertical_alignment: iced::alignment::Vertical::Top,
+                            ..Default::default()
+                        });
+                        frame.fill_text(Text {
+                            content: text.clone(),
+                            position: Point::new(rect.x + 12.0 + 2.0 * char_width(), ry),
+                            color: theme::TEXT,
+                            size: (FONT_SIZE - 1.0).into(),
+                            font: Font::MONOSPACE,
+                            horizontal_alignment: iced::alignment::Horizontal::Left,
+                            vertical_alignment: iced::alignment::Vertical::Top,
+                            ..Default::default()
+                        });
+                    }
+                }
+            }
+        }
+
+        if let Some((prect, first_row, visible)) = popup_layout(app, bounds) {
+            let c = app.completion.as_ref().unwrap();
+            frame.fill(
+                &canvas::Path::rounded_rectangle(
+                    prect.position(),
+                    prect.size(),
+                    iced::border::Radius::from(6.0),
+                ),
+                theme::TOOLTIP,
+            );
+            frame.stroke(
+                &canvas::Path::rounded_rectangle(
+                    prect.position(),
+                    prect.size(),
+                    iced::border::Radius::from(6.0),
+                ),
+                canvas::Stroke {
+                    style: theme::BORDER.into(),
+                    width: 1.0,
+                    ..Default::default()
+                },
+            );
+            for (i, item) in c.items[first_row..first_row + visible].iter().enumerate() {
+                let sel = first_row + i == c.selected;
+                let ry = prect.y + i as f32 * ROW_H;
+                if sel {
+                    frame.fill_rectangle(
+                        Point::new(prect.x + 2.0, ry),
+                        Size::new(prect.width - 4.0, ROW_H),
+                        Color::from_rgba(0.267, 0.576, 0.973, 0.25),
+                    );
+                }
+                frame.fill_text(Text {
+                    content: item.label.clone(),
+                    position: Point::new(prect.x + 10.0, ry + ROW_H * 0.5),
+                    color: item_kind_color(item.kind),
+                    size: (FONT_SIZE - 1.0).into(),
+                    font: Font::MONOSPACE,
+                    horizontal_alignment: iced::alignment::Horizontal::Left,
+                    vertical_alignment: iced::alignment::Vertical::Center,
+                    ..Default::default()
+                });
+            }
+        }
+        vec![frame.into_geometry()]
     }
 }

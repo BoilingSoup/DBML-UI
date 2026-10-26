@@ -4,7 +4,7 @@
 
 use crate::app::{App, Drag, Focus, Message, TabMenu, STRIP_LEFT, TAB_SLOT_W};
 use crate::canvas::diagram::Diagram;
-use crate::canvas::editor::EditorView;
+use crate::canvas::editor::{EditorOverlay, EditorView};
 use crate::editor::{KeyCode, KeyModifiers};
 use crate::theme;
 use iced::widget::{
@@ -37,7 +37,16 @@ pub fn root(app: &App) -> Element<'_, Message> {
     let editor_body: Element<'_, Message> = if app.doc_open() {
         column![
             editor_toolbar(app),
-            canvas(EditorView { app }).width(Fill).height(Fill)
+            // the overlay (tooltips, completion) is a separate canvas
+            // STACKED above: iced flattens one canvas widget's geometries
+            // into a mesh pass + a text pass, so a second-geometry tooltip
+            // background painted behind the editor text (transparent look)
+            stack![
+                canvas(EditorView { app }).width(Fill).height(Fill),
+                canvas(EditorOverlay { app }).width(Fill).height(Fill)
+            ]
+            .width(Fill)
+            .height(Fill)
         ]
         .spacing(4)
         .height(Fill)
