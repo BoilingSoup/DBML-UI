@@ -1359,6 +1359,7 @@ impl Editor {
     }
 
     fn delete_object(&mut self, obj: TextObj) {
+        eprintln!("DBG delete_object start={:?} end={:?} linewise={}", obj.start, obj.end, obj.linewise);
         self.buf.cancel_selection();
         if obj.linewise {
             let n = obj.end.row - obj.start.row + 1;
@@ -2278,6 +2279,79 @@ mod space_tests {
         let _ = e.handle_key(KeyEvent::new(KeyCode::Space, KeyModifiers::NONE));
         let _ = e.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
         assert_eq!(e.buf.line(0), "x e");
+    }
+}
+
+#[cfg(test)]
+mod bracket_inner_tests {
+    use super::*;
+    use super::tests::{editor, key};
+
+    #[test]
+    fn ci_brace_multiline_leaves_an_empty_line_and_inserts() {
+        // nvim: ci{ on a multi-line block clears the lines between the
+        // braces but keeps an empty line, cursor on it, insert mode
+        let mut e = editor("Table users {\n  id integer\n  name varchar\n}\n");
+        e.buf
+            .move_cursor(CursorMove::Jump(1, 2)); // inside the block
+        let _ = e.handle_key(key('c'));
+        eprintln!("after c: {:?}", e.buf.lines());
+        let _ = e.handle_key(key('i'));
+        eprintln!("after i: {:?} pending={:?}", e.buf.lines(), e.showcmd());
+        let _ = e.handle_key(key('{'));
+        eprintln!("after {{: {:?} mode={:?} pos={:?}", e.buf.lines(), e.mode, e.buf.pos());
+        assert_eq!(
+            e.buf.lines(),
+            vec![
+                "Table users {".to_string(),
+                String::new(),
+                "}".to_string()
+            ]
+        );
+        assert_eq!(e.mode, Mode::Insert);
+        assert_eq!(e.buf.pos(), Pos { row: 1, col: 0 });
+    }
+
+    #[test]
+    fn di_brace_multiline_matches_ci_deletion() {
+        let mut e = editor("Table users {\n  id integer\n}\n");
+        e.buf.move_cursor(CursorMove::Jump(1, 2));
+        let _ = e.handle_key(key('d'));
+        let _ = e.handle_key(key('i'));
+        let _ = e.handle_key(key('{'));
+        assert_eq!(
+            e.buf.lines(),
+            vec![
+                "Table users {".to_string(),
+                String::new(),
+                "}".to_string()
+            ]
+        );
+        assert_eq!(e.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn ci_paren_single_line_keeps_the_pair_glyphs() {
+        let mut e = editor("f ( foo ) g");
+        e.buf.move_cursor(CursorMove::Jump(0, 4));
+        let _ = e.handle_key(key('c'));
+        let _ = e.handle_key(key('i'));
+        let _ = e.handle_key(key('('));
+        assert_eq!(e.buf.line(0), "f () g");
+        assert_eq!(e.mode, Mode::Insert);
+    }
+
+    #[test]
+    fn ci_brace_on_adjacent_braces_is_a_noop() {
+        let mut e = editor("Table users {\n}\n");
+        e.buf.move_cursor(CursorMove::Jump(0, 5));
+        let _ = e.handle_key(key('c'));
+        let _ = e.handle_key(key('i'));
+        let _ = e.handle_key(key('{'));
+        assert_eq!(
+            e.buf.lines(),
+            vec!["Table users {".to_string(), "}".to_string()]
+        );
     }
 }
 

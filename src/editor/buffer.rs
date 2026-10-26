@@ -417,6 +417,24 @@ impl Buffer {
         let op = open_pos?;
         let (s, e) = if around {
             (op, cp)
+        } else if cp.row > op.row {
+            // multi-line block (nvim): the content lines between the braces
+            // go — indentation included — but BOTH surrounding newlines
+            // stay, so an empty line remains between the braces. TextObj
+            // end is inclusive: the last content char of the line above.
+            let last = cp.row - 1;
+            if self.lines[last].is_empty() {
+                return None; // nothing between the braces
+            }
+            let start = Pos {
+                row: op.row + 1,
+                col: 0,
+            };
+            let end = Pos {
+                row: last,
+                col: self.lines[last].chars().count() - 1,
+            };
+            (start, end)
         } else {
             let s = self.next_pos(op)?;
             let e = self.prev_pos(cp)?;
@@ -894,7 +912,7 @@ impl Buffer {
         // first line
         let line_len = self.line_len(r);
         if start.col + remaining <= line_len {
-            self.delete_range(
+            self.delete_span(
                 start,
                 Pos {
                     row: r,
@@ -909,7 +927,7 @@ impl Buffer {
         while r < self.lines.len() {
             let len = self.line_len(r);
             if remaining <= len {
-                self.delete_range(
+                self.delete_span(
                     start,
                     Pos {
                         row: r,
@@ -922,7 +940,7 @@ impl Buffer {
             r += 1;
         }
         // ran off the end: delete to end of buffer
-        self.delete_range(
+        self.delete_span(
             start,
             Pos {
                 row: self.lines.len() - 1,
@@ -1101,8 +1119,10 @@ impl Buffer {
 
     pub fn delete_range(&mut self, start: Pos, end: Pos) {
         // an exclusive `end` at or past a row's end with the span starting
-        // at a row start covers whole rows: drop them (vim joins full-line
-        // spans instead of leaving empty shells)
+        // at a row start covers whole rows: drop them (vim-surround's ds/cs
+        // join full-line spans instead of leaving empty shells). Span-based
+        // deletions that must keep the trailing newline call `delete_span`
+        // directly — see delete_str_raw's walk.
         if start.row < end.row
             && start.col == 0
             // an exclusive end at col 0 starts a row, it never covers one
@@ -1122,6 +1142,12 @@ impl Buffer {
             };
             return;
         }
+        self.delete_span(start, end);
+    }
+
+    /// Plain exclusive-range deletion: never joins whole rows — an end at
+    /// a row's newline slot keeps that newline (an empty row remains).
+    fn delete_span(&mut self, start: Pos, end: Pos) {
         self.cursor = start;
         if start.row == end.row {
             let line = &mut self.lines[start.row];

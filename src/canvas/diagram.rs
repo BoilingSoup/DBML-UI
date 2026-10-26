@@ -1085,12 +1085,21 @@ fn paint_table(
             );
         }
         let baseline = |x: f32| Point::new(x, y);
+        // dbdiagram renders pk column names bold
+        let name_font = if row.pk {
+            Font {
+                weight: font::Weight::Bold,
+                ..Font::DEFAULT
+            }
+        } else {
+            Font::DEFAULT
+        };
         frame.fill_text(Text {
             content: row.name.clone(),
             position: baseline(top_left.x + 1.0 * s.width),
             color: theme::ROW_TEXT,
             size: row_size.into(),
-            font: Font::DEFAULT,
+            font: name_font,
             horizontal_alignment: iced::alignment::Horizontal::Left,
             vertical_alignment: iced::alignment::Vertical::Center,
             ..Default::default()
