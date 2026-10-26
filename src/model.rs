@@ -187,9 +187,8 @@ pub fn build(doc: &Document) -> Schema {
         if let Some(c) = schema.nodes[from].columns.get_mut(from_col) {
             c.fk = true;
         }
-        if let Some(c) = schema.nodes[to].columns.get_mut(to_col) {
-            c.fk = true;
-        }
+        // the referenced side keeps its pk/unique identity: dbdiagram never
+        // draws the link icon on the column being pointed at
         schema.edges.push(Edge {
             from,
             from_col,

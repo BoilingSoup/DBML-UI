@@ -418,18 +418,22 @@ impl Buffer {
         let (s, e) = if around {
             (op, cp)
         } else if cp.row > op.row {
-            // multi-line block (nvim): the content lines between the braces
-            // go — indentation included — but BOTH surrounding newlines
-            // stay, so an empty line remains between the braces. TextObj
-            // end is inclusive: the last content char of the line above.
+            // multi-line block (nvim): the content between the braces goes
+            // (indentation included), but the first line's leading
+            // indentation stays — the blank line that remains is indented
+            // like the formatter would leave it. TextObj end is inclusive:
+            // the last content char of the line above the closer.
+            let first = op.row + 1;
+            let indent = self.lines[first].chars().count()
+                - self.lines[first].trim_start().chars().count();
+            let start = Pos {
+                row: first,
+                col: indent,
+            };
             let last = cp.row - 1;
-            if self.lines[last].is_empty() {
+            if self.lines[last].is_empty() || self.lines[first].trim().is_empty() {
                 return None; // nothing between the braces
             }
-            let start = Pos {
-                row: op.row + 1,
-                col: 0,
-            };
             let end = Pos {
                 row: last,
                 col: self.lines[last].chars().count() - 1,

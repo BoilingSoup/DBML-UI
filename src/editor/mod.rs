@@ -2465,21 +2465,18 @@ mod bracket_inner_tests {
         e.buf
             .move_cursor(CursorMove::Jump(1, 2)); // inside the block
         let _ = e.handle_key(key('c'));
-        eprintln!("after c: {:?}", e.buf.lines());
         let _ = e.handle_key(key('i'));
-        eprintln!("after i: {:?} pending={:?}", e.buf.lines(), e.showcmd());
         let _ = e.handle_key(key('{'));
-        eprintln!("after {{: {:?} mode={:?} pos={:?}", e.buf.lines(), e.mode, e.buf.pos());
         assert_eq!(
             e.buf.lines(),
             vec![
                 "Table users {".to_string(),
-                String::new(),
+                "  ".to_string(),
                 "}".to_string()
             ]
         );
         assert_eq!(e.mode, Mode::Insert);
-        assert_eq!(e.buf.pos(), Pos { row: 1, col: 0 });
+        assert_eq!(e.buf.pos(), Pos { row: 1, col: 2 }, "cursor after the indent");
     }
 
     #[test]
@@ -2493,7 +2490,7 @@ mod bracket_inner_tests {
             e.buf.lines(),
             vec![
                 "Table users {".to_string(),
-                String::new(),
+                "  ".to_string(),
                 "}".to_string()
             ]
         );
@@ -2809,7 +2806,7 @@ mod polish_tests {
         for c in "jvi(d".chars() {
             e.handle_key(key(c));
         }
-        assert_eq!(e.text(), "f(\n)g\n", "inner rows drop, brackets stay");
+        assert_eq!(e.text(), "f(\n  \n)g\n", "inner rows drop, the blank stays indented");
     }
 
     #[test]
