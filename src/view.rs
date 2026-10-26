@@ -3,7 +3,7 @@
 //! stack above everything.
 
 use crate::app::{App, Drag, Focus, Message, TabMenu, STRIP_LEFT, TAB_SLOT_W};
-use crate::canvas::diagram::Diagram;
+use crate::canvas::diagram::{Diagram, DiagramOverlay};
 use crate::canvas::editor::{EditorOverlay, EditorView};
 use crate::editor::{KeyCode, KeyModifiers};
 use crate::theme;
@@ -60,20 +60,40 @@ pub fn root(app: &App) -> Element<'_, Message> {
         .height(Fill)
         .style(move |_t| panel_style(app.focus == Focus::Editor));
 
+    // the marker/note tooltip is its own canvas STACKED above: iced
+    // flattens one canvas widget's geometries into a mesh pass + a text
+    // pass, so a second-geometry tooltip pill painted behind the box row
+    // text (see DiagramOverlay)
     let diagram_pane = container(
-        canvas(Diagram {
-            layout: app.diagram(),
-            zoom: app.cur().zoom,
-            pan: app.cur().pan,
-            hover: if app.drag == Drag::None {
-                app.canvas_cursor
-            } else {
-                None
-            },
-            dragging: app.drag != Drag::None,
-            edge_anim: &app.cur().edge_anim,
-            clock: app.anim_clock,
-        })
+        stack![
+            canvas(Diagram {
+                layout: app.diagram(),
+                zoom: app.cur().zoom,
+                pan: app.cur().pan,
+                hover: if app.drag == Drag::None {
+                    app.canvas_cursor
+                } else {
+                    None
+                },
+                dragging: app.drag != Drag::None,
+                edge_anim: &app.cur().edge_anim,
+                clock: app.anim_clock,
+            })
+            .width(Fill)
+            .height(Fill),
+            canvas(DiagramOverlay {
+                layout: app.diagram(),
+                zoom: app.cur().zoom,
+                pan: app.cur().pan,
+                hover: if app.drag == Drag::None {
+                    app.canvas_cursor
+                } else {
+                    None
+                },
+            })
+            .width(Fill)
+            .height(Fill),
+        ]
         .width(Fill)
         .height(Fill),
     )

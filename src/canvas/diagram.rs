@@ -261,94 +261,7 @@ impl canvas::Program<crate::app::Message> for Diagram<'_> {
             },
         );
 
-        // pk/fk marker tooltip (dbdiagram-style), as a SECOND geometry:
-        // within one geometry, text renders after meshes, so a tooltip
-        // mesh could never cover the row text beneath it
-        let mut tooltip_frame = None;
-        if let Some(p) = self.hover {
-            // note icons: hover shows the note text; then pk/fk markers
-            if let Some((b, row)) = note_hit(self.layout, self.zoom, self.pan, p) {
-                let top_left = to_px(b.x, b.y, self.zoom, self.pan);
-                let s = cell_size(self.zoom);
-                let local = Rectangle::new(Point::ORIGIN, bounds.size());
-                let (nx0, nx1) = note_band(b, row, self.zoom, self.pan).unwrap();
-                // 60-char cap keeps the pill readable
-                let mut text: String = b.rows[row].note.clone().unwrap_or_default();
-                if text.chars().count() > 60 {
-                    text = text.chars().take(60).collect::<String>() + "…";
-                }
-                let rect = marker_tooltip_rect(
-                    (nx0 + nx1) / 2.0,
-                    top_left.y,
-                    top_left.y + b.h as f32 * s.height,
-                    &text,
-                    self.zoom,
-                    local,
-                );
-                let mut tframe = canvas::Frame::new(renderer, bounds.size());
-                tframe.fill(
-                    &Path::rounded_rectangle(
-                        rect.position(),
-                        rect.size(),
-                        iced::border::Radius::from(4.0),
-                    ),
-                    theme::TIP_BG,
-                );
-                tframe.fill_text(Text {
-                    content: text,
-                    position: Point::new(rect.x + 8.0, rect.y + rect.height * 0.5),
-                    color: theme::TIP_TEXT,
-                    size: (0.42 * self.zoom).into(),
-                    font: Font::MONOSPACE,
-                    horizontal_alignment: iced::alignment::Horizontal::Left,
-                    vertical_alignment: iced::alignment::Vertical::Center,
-                    ..Default::default()
-                });
-                tooltip_frame = Some(tframe);
-            } else if let Some((b, row)) = marker_hit(self.layout, self.zoom, self.pan, p) {
-                let rowd = &b.rows[row];
-                let label = marker_label(rowd.pk);
-                let top_left = to_px(b.x, b.y, self.zoom, self.pan);
-                let s = cell_size(self.zoom);
-                // the tooltip rect is frame-local: clamp against the pane
-                // size, not the window-space widget bounds
-                let local = Rectangle::new(Point::ORIGIN, bounds.size());
-                let (band_x0, band_x1) = marker_band(b, row, self.zoom, self.pan);
-                let rect = marker_tooltip_rect(
-                    (band_x0 + band_x1) / 2.0,
-                    top_left.y,
-                    top_left.y + b.h as f32 * s.height,
-                    label,
-                    self.zoom,
-                    local,
-                );
-                // dbdiagram's tooltip: a light pill with dark text
-                let mut tframe = canvas::Frame::new(renderer, bounds.size());
-                tframe.fill(
-                    &Path::rounded_rectangle(
-                        rect.position(),
-                        rect.size(),
-                        iced::border::Radius::from(4.0),
-                    ),
-                    theme::TIP_BG,
-                );
-                tframe.fill_text(Text {
-                    content: label.to_string(),
-                    position: Point::new(rect.x + 8.0, rect.y + rect.height * 0.5),
-                    color: theme::TIP_TEXT,
-                    size: (0.5 * self.zoom).into(),
-                    font: Font::MONOSPACE,
-                    horizontal_alignment: iced::alignment::Horizontal::Left,
-                    vertical_alignment: iced::alignment::Vertical::Center,
-                    ..Default::default()
-                });
-                tooltip_frame = Some(tframe);
-            }
-        }
-        match tooltip_frame {
-            Some(t) => vec![frame.into_geometry(), t.into_geometry()],
-            None => vec![frame.into_geometry()],
-        }
+        vec![frame.into_geometry()]
     }
 
     fn mouse_interaction(
@@ -1441,5 +1354,110 @@ mod interaction_tests {
         let b = &layout.boxes[0];
         let tl = to_px(b.x, b.y, 20.0, Vector::default());
         (tl.x + 5.0, tl.y + 5.0)
+    }
+}
+
+/// The diagram's marker/note tooltip as its own canvas widget, STACKED
+/// above the diagram canvas: iced flattens one widget's geometries into a
+/// mesh pass + a text pass, so a second-geometry tooltip pill painted
+/// behind the box row text. Separate widgets composite fully in order.
+pub struct DiagramOverlay<'a> {
+    pub layout: &'a Layout,
+    pub zoom: f32,
+    pub pan: Vector,
+    /// Cursor position over the canvas (local px), as `Diagram::hover`.
+    pub hover: Option<Point>,
+}
+
+impl canvas::Program<crate::app::Message> for DiagramOverlay<'_> {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &iced::Renderer,
+        _theme: &iced::Theme,
+        bounds: Rectangle,
+        _cursor: iced::mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        let Some(p) = self.hover else {
+            return vec![frame.into_geometry()];
+        };
+        // note icons: hover shows the note text; then pk/fk markers
+            if let Some((b, row)) = note_hit(self.layout, self.zoom, self.pan, p) {
+                let top_left = to_px(b.x, b.y, self.zoom, self.pan);
+                let s = cell_size(self.zoom);
+                let local = Rectangle::new(Point::ORIGIN, bounds.size());
+                let (nx0, nx1) = note_band(b, row, self.zoom, self.pan).unwrap();
+                // 60-char cap keeps the pill readable
+                let mut text: String = b.rows[row].note.clone().unwrap_or_default();
+                if text.chars().count() > 60 {
+                    text = text.chars().take(60).collect::<String>() + "…";
+                }
+                let rect = marker_tooltip_rect(
+                    (nx0 + nx1) / 2.0,
+                    top_left.y,
+                    top_left.y + b.h as f32 * s.height,
+                    &text,
+                    self.zoom,
+                    local,
+                );
+                            frame.fill(
+                &Path::rounded_rectangle(
+                    rect.position(),
+                    rect.size(),
+                    iced::border::Radius::from(4.0),
+                ),
+                theme::TIP_BG,
+            );
+            frame.fill_text(Text {
+                content: text,
+                position: Point::new(rect.x + 8.0, rect.y + rect.height * 0.5),
+                color: theme::TIP_TEXT,
+                size: (0.42 * self.zoom).into(),
+                font: Font::MONOSPACE,
+                horizontal_alignment: iced::alignment::Horizontal::Left,
+                vertical_alignment: iced::alignment::Vertical::Center,
+                ..Default::default()
+            });
+        } else if let Some((b, row)) = marker_hit(self.layout, self.zoom, self.pan, p) {
+                let rowd = &b.rows[row];
+                let label = marker_label(rowd.pk);
+                let top_left = to_px(b.x, b.y, self.zoom, self.pan);
+                let s = cell_size(self.zoom);
+                // the tooltip rect is frame-local: clamp against the pane
+                // size, not the window-space widget bounds
+                let local = Rectangle::new(Point::ORIGIN, bounds.size());
+                let (band_x0, band_x1) = marker_band(b, row, self.zoom, self.pan);
+                let rect = marker_tooltip_rect(
+                    (band_x0 + band_x1) / 2.0,
+                    top_left.y,
+                    top_left.y + b.h as f32 * s.height,
+                    label,
+                    self.zoom,
+                    local,
+                );
+                // dbdiagram's tooltip: a light pill with dark text
+                            frame.fill(
+                &Path::rounded_rectangle(
+                    rect.position(),
+                    rect.size(),
+                    iced::border::Radius::from(4.0),
+                ),
+                theme::TIP_BG,
+            );
+            frame.fill_text(Text {
+                content: label.to_string(),
+                position: Point::new(rect.x + 8.0, rect.y + rect.height * 0.5),
+                color: theme::TIP_TEXT,
+                size: (0.5 * self.zoom).into(),
+                font: Font::MONOSPACE,
+                horizontal_alignment: iced::alignment::Horizontal::Left,
+                vertical_alignment: iced::alignment::Vertical::Center,
+                ..Default::default()
+            });
+        }
+        vec![frame.into_geometry()]
     }
 }
