@@ -494,7 +494,10 @@ fn paint_edge(
     }
     frame.stroke(&path, core);
     if t > 0.0 {
-        paint_flow(frame, &pts, zoom, hs.clock, t);
+        // dbdiagram's packets flow referenced key → foreign key; the
+        // route's first point is the fk end, so run them against it
+        let rev: Vec<Point> = pts.iter().rev().copied().collect();
+        paint_flow(frame, &rev, zoom, hs.clock, t);
     }
 
     // a brighter pool of glow right under the pointer (line hover only)
@@ -531,17 +534,18 @@ fn paint_edge(
         }
     }
 
-    // cardinality end markers (dbdiagram): a crow's foot on the "many"
-    // end, a perpendicular tick on the "one" end
+    // cardinality end markers (dbdiagram): the "many" end gets an open
+    // circle + arrowhead into the table, the "one" end a perpendicular
+    // tick — and the hover packets flow from the tick into the circle
     let (many_fk, many_ref) = many_ends(edge.card);
     let n = pts.len();
     if many_fk {
-        crow_foot(frame, pts[0], pts[1], zoom, core);
+        many_marker(frame, pts[0], pts[1], zoom, core);
     } else {
         one_tick(frame, pts[0], pts[1], zoom, core);
     }
     if many_ref {
-        crow_foot(frame, pts[n - 1], pts[n - 2], zoom, core);
+        many_marker(frame, pts[n - 1], pts[n - 2], zoom, core);
     } else {
         one_tick(frame, pts[n - 1], pts[n - 2], zoom, core);
     }
@@ -581,11 +585,12 @@ fn paint_glow(frame: &mut canvas::Frame, path: &Path, zoom: f32, t: f32, clock: 
 }
 
 /// Flowing packets along a highlighted route (dbdiagram's dark-theme
-/// hover): short round-capped beads advancing with the clock, evenly
-/// spaced. Two details make this fluid where a naive version strobes:
-/// packets fade in/out near the path ends (nothing pops in or out of
-/// existence) and a packet straddling the path's end→start wrap is drawn
-/// as two chords, never one straight line across the canvas.
+/// hover): short round-capped beads advancing with the clock from the
+/// referenced end toward the foreign key's circle, evenly spaced. Two
+/// details make this fluid where a naive version strobes: packets fade
+/// in/out near the path ends (nothing pops in or out of existence) and a
+/// packet straddling the path's end→start wrap is drawn as two chords,
+/// never one straight line across the canvas.
 fn paint_flow(frame: &mut canvas::Frame, pts: &[Point], zoom: f32, clock: f32, t: f32) {
     use iced::widget::canvas::LineCap;
     let mut segs: Vec<(Point, Point, f32)> = Vec::new();
@@ -764,24 +769,24 @@ fn one_tick(frame: &mut canvas::Frame, end: Point, inner: Point, zoom: f32, stro
     );
 }
 
-/// The "many" end: three prongs fanning from the table edge back along
-/// the line.
-fn crow_foot(frame: &mut canvas::Frame, end: Point, inner: Point, zoom: f32, stroke: Stroke) {
+/// The "many" end (dbdiagram): an open circle sitting on the line a short
+/// way before the table edge and an arrowhead pointing into the table —
+/// the hover packets flow along the line and into this circle.
+fn many_marker(frame: &mut canvas::Frame, end: Point, inner: Point, zoom: f32, stroke: Stroke) {
     let (d, n) = dir_and_normal(end, inner);
-    let back = 0.55 * zoom;
-    let spread = 0.30 * zoom;
-    let heel = end + d * back;
+    let back = 0.32 * zoom;
+    let spread = 0.20 * zoom;
+    let wing = end - d * back;
     frame.stroke(
         &Path::new(|b| {
-            b.move_to(end);
-            b.line_to(heel);
-            b.move_to(end);
-            b.line_to(heel + n * spread);
-            b.move_to(end);
-            b.line_to(heel - n * spread);
+            b.move_to(wing + n * spread);
+            b.line_to(end);
+            b.line_to(wing - n * spread);
         }),
         stroke,
     );
+    let circle_center = end - d * (0.60 * zoom);
+    frame.stroke(&Path::circle(circle_center, 0.14 * zoom), stroke);
 }
 
 /// Edge stroke thickness at `zoom`: proportional above 1:1, but never

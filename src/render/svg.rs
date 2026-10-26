@@ -109,23 +109,27 @@ fn one_tick_path(end: (f32, f32), inner: (f32, f32)) -> String {
     )
 }
 
-/// The "many" end: three prongs fanning from the table edge back along
-/// the line (dbdiagram's crow's foot).
-fn crow_foot_path(end: (f32, f32), inner: (f32, f32)) -> String {
+/// The "many" end (dbdiagram): an open circle on the line just before the
+/// table edge and an arrowhead pointing into the table.
+fn many_marker_path(end: (f32, f32), inner: (f32, f32)) -> String {
     let (d, n) = dir_normal(end, inner);
-    let back = 0.55 * CELL_H;
-    let spread = 0.30 * CELL_H;
-    let heel = (end.0 + d.0 * back, end.1 + d.1 * back);
+    let back = 0.32 * CELL_H;
+    let spread = 0.20 * CELL_H;
+    let wx = end.0 - d.0 * back;
+    let wy = end.1 - d.1 * back;
+    let (cx, cy) = (end.0 - d.0 * 0.60 * CELL_H, end.1 - d.1 * 0.60 * CELL_H);
+    let r = 0.14 * CELL_H;
     format!(
-        r##"<path d="M {ex:.1} {ey:.1} L {hx:.1} {hy:.1} M {ex:.1} {ey:.1} L {ax:.1} {ay:.1} M {ex:.1} {ey:.1} L {bx:.1} {by:.1}" fill="none" stroke="#7f838d" stroke-width="1.5"/>"##,
+        r##"<path d="M {ax:.1} {ay:.1} L {ex:.1} {ey:.1} L {bx:.1} {by:.1}" fill="none" stroke="#7f838d" stroke-width="1.5"/><circle cx="{cx:.1}" cy="{cy:.1}" r="{r:.1}" fill="none" stroke="#7f838d" stroke-width="1.5"/>"##,
         ex = end.0,
         ey = end.1,
-        hx = heel.0,
-        hy = heel.1,
-        ax = heel.0 + n.0 * spread,
-        ay = heel.1 + n.1 * spread,
-        bx = heel.0 - n.0 * spread,
-        by = heel.1 - n.1 * spread,
+        ax = wx + n.0 * spread,
+        ay = wy + n.1 * spread,
+        bx = wx - n.0 * spread,
+        by = wy - n.1 * spread,
+        cx = cx,
+        cy = cy,
+        r = r,
     )
 }
 
@@ -173,12 +177,12 @@ fn push_edge(s: &mut String, r: &EdgeRoute) {
     let penult = units[units.len() - 2];
     let (many_fk, many_ref) = many_ends(r.card);
     if many_fk {
-        s.push_str(&crow_foot_path(first, second));
+        s.push_str(&many_marker_path(first, second));
     } else {
         s.push_str(&one_tick_path(first, second));
     }
     if many_ref {
-        s.push_str(&crow_foot_path(last, penult));
+        s.push_str(&many_marker_path(last, penult));
     } else {
         s.push_str(&one_tick_path(last, penult));
     }
@@ -408,8 +412,9 @@ mod tests {
         // gray markers after the name (not gold/blue before it)
         assert!(svg.contains("stroke=\"#8b909c\""));
         assert!(!svg.contains("#d29922") && !svg.contains("#4493f8"));
-        // line + both cardinality end markers share the line color
-        assert_eq!(svg.matches("stroke=\"#7f838d\"").count(), 3);
+        // line + cardinality end markers share the line color: the tick on
+        // the "one" end and the arrow + circle on the "many" end
+        assert_eq!(svg.matches("stroke=\"#7f838d\"").count(), 4);
     }
 
     #[test]
