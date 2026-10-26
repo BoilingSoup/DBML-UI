@@ -445,6 +445,7 @@ impl Editor {
         {
             return Action::None;
         }
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         match key.code {
             KeyCode::Esc => {
                 self.mode = Mode::Normal;
@@ -478,19 +479,19 @@ impl Editor {
                 Action::Changed
             }
             KeyCode::Left => {
-                self.buf.move_cursor(CursorMove::Back);
+                self.insert_arrow(CursorMove::Back, shift);
                 Action::None
             }
             KeyCode::Right => {
-                self.buf.move_cursor(CursorMove::Forward);
+                self.insert_arrow(CursorMove::Forward, shift);
                 Action::None
             }
             KeyCode::Up => {
-                self.buf.move_cursor(CursorMove::Up);
+                self.insert_arrow(CursorMove::Up, shift);
                 Action::None
             }
             KeyCode::Down => {
-                self.buf.move_cursor(CursorMove::Down);
+                self.insert_arrow(CursorMove::Down, shift);
                 Action::None
             }
             KeyCode::Home => {
@@ -506,6 +507,20 @@ impl Editor {
             KeyCode::Tab => Action::None, // focus switching handled by app
             _ => Action::None,
         }
+    }
+
+    /// An arrow in insert mode: Shift+arrow starts a selection at the
+    /// caret (if none) and extends it, like regular mode's notepad
+    /// behavior; a plain arrow collapses an active selection and moves.
+    fn insert_arrow(&mut self, m: CursorMove, shift: bool) {
+        if shift {
+            if self.buf.selection_anchor().is_none() {
+                self.buf.start_selection();
+            }
+        } else {
+            self.buf.cancel_selection();
+        }
+        self.buf.move_cursor(m);
     }
 
     fn handle_normal_key(&mut self, key: KeyEvent) -> Action {
@@ -537,6 +552,26 @@ impl Editor {
         }
 
         let m = key.modifiers;
+        // Shift+arrows extend a selection from the cursor (the notepad
+        // behavior, vim too): start one if none, then repeat the arrow's
+        // motion by the pending count like the plain arrow. A plain arrow
+        // collapses an active selection and moves (regular mode's
+        // collapse-on-unshifted-move); visual mode handled its own keys
+        // above and keeps extending.
+        if m.contains(KeyModifiers::SHIFT) {
+            if let Some(motion) = Self::arrow_motion(key.code) {
+                if self.buf.selection_anchor().is_none() {
+                    self.buf.start_selection();
+                }
+                let n = self.count.take().unwrap_or(1).max(1) as usize;
+                self.repeat(motion, n);
+                return Action::None;
+            }
+        } else if Self::arrow_motion(key.code).is_some()
+            && self.buf.selection_anchor().is_some()
+        {
+            self.buf.cancel_selection();
+        }
         if let Some(action) = self.apply_motion(key.code) {
             self.count = None;
             return action;
@@ -982,6 +1017,17 @@ impl Editor {
     fn repeat(&mut self, m: CursorMove, n: usize) {
         for _ in 0..n {
             self.buf.move_cursor(m);
+        }
+    }
+
+    /// The motion an arrow key stands for (vim's h/j/k/l aliases).
+    fn arrow_motion(code: KeyCode) -> Option<CursorMove> {
+        match code {
+            KeyCode::Left => Some(CursorMove::Back),
+            KeyCode::Right => Some(CursorMove::Forward),
+            KeyCode::Up => Some(CursorMove::Up),
+            KeyCode::Down => Some(CursorMove::Down),
+            _ => None,
         }
     }
 
@@ -1980,6 +2026,96 @@ mod tests {
         // x deletes the char under the cursor (col 1 after the motion)
         e.handle_key(key('x'));
         assert_eq!(e.text(), "acdef");
+    }
+
+    // ---- Shift+arrows extend a selection (regular-mode behavior) ----
+
+    fn shift(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::SHIFT)
+    }
+
+    #[test]
+    fn shift_arrows_select_in_normal_mode() {
+        let mut e = editor("one two\nsecond");
+        e.handle_key(shift(KeyCode::Right));
+        e.handle_key(shift(KeyCode::Right));
+        assert_eq!(e.cursor(), (0, 2), "cursor is the moving end");
+        assert_eq!(e.buf.selection_anchor(), Some(Pos { row: 0, col: 0 }));
+        let (s, x) = e.buf.selection_range().unwrap();
+        assert_eq!((s.row, s.col), (0, 0));
+        assert_eq!((x.row, x.col), (0, 3), "cursor side is exclusive");
+
+        // extending the other way crosses the anchor; back to the row head
+        // (row 0: Back has nowhere to wrap) leaves one walked-over cell
+        e.handle_key(shift(KeyCode::Left));
+        e.handle_key(shift(KeyCode::Left));
+        e.handle_key(shift(KeyCode::Left));
+        assert_eq!(e.cursor(), (0, 0), "capped at the line head");
+        let (s, x) = e.buf.selection_range().unwrap();
+        assert_eq!((s.row, s.col), (0, 0));
+        assert_eq!((x.row, x.col), (0, 1), "the walked-over cell");
+    }
+
+    #[test]
+    fn plain_arrow_collapses_a_selection_in_normal_mode() {
+        let mut e = editor("one two");
+        e.handle_key(shift(KeyCode::Right));
+        e.handle_key(shift(KeyCode::Right));
+        e.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(e.buf.selection_anchor(), None, "collapsed");
+        assert_eq!(e.cursor(), (0, 3), "and moved");
+        // motions from here extend nothing
+        e.handle_key(key('l'));
+        assert_eq!(e.buf.selection_anchor(), None);
+        assert_eq!(e.cursor(), (0, 4));
+    }
+
+    #[test]
+    fn count_applies_to_shift_arrows_in_normal_mode() {
+        let mut e = editor("abcdef");
+        e.handle_key(key('3'));
+        e.handle_key(shift(KeyCode::Right));
+        assert_eq!(e.cursor(), (0, 3), "3<Shift+Right> moves 3");
+        let (s, x) = e.buf.selection_range().unwrap();
+        assert_eq!((s.row, s.col), (0, 0));
+        assert_eq!((x.row, x.col), (0, 4), "cursor side is exclusive");
+        assert_eq!(e.count, None, "the count is consumed");
+    }
+
+    #[test]
+    fn shift_arrows_select_in_insert_mode() {
+        let mut e = editor("one\ntwo");
+        e.handle_key(key('i'));
+        e.handle_key(shift(KeyCode::Down));
+        e.handle_key(shift(KeyCode::Right));
+        assert_eq!(e.mode, Mode::Insert);
+        assert_eq!(e.cursor(), (1, 1), "cursor is the moving end");
+        assert_eq!(e.buf.selection_anchor(), Some(Pos { row: 0, col: 0 }));
+        let (s, x) = e.buf.selection_range().unwrap();
+        assert_eq!((s.row, s.col), (0, 0));
+        assert_eq!((x.row, x.col), (1, 2), "cursor side is exclusive");
+
+        // a plain arrow collapses and keeps moving; typing then inserts
+        e.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(e.buf.selection_anchor(), None);
+        assert_eq!(e.cursor(), (1, 2));
+        e.handle_key(key('!'));
+        assert_eq!(e.text(), "one\ntw!o");
+    }
+
+    #[test]
+    fn visual_mode_arrows_still_extend() {
+        let mut e = editor("one two three");
+        e.handle_key(key('v'));
+        e.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        e.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(e.mode, Mode::Visual);
+        assert_eq!(e.buf.selection_anchor(), Some(Pos { row: 0, col: 0 }));
+        assert_eq!(e.cursor(), (0, 2));
+        e.handle_key(key('y'));
+        assert_eq!(e.mode, Mode::Normal);
+        assert!(e.buf.selection_range().is_none());
+        assert_eq!(e.register, vec!["one".to_string()]);
     }
 
     fn typed(text: &str, keys: &str) -> (Editor, String) {
