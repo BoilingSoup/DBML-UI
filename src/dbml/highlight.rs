@@ -41,7 +41,7 @@ pub struct Token {
 
 /// Keyword vocabulary — keep in sync with `parser.rs`.
 const TOP_KWS: [&str; 5] = ["Project", "Table", "Ref", "Enum", "TableGroup"];
-const BLOCK_KWS: [&str; 1] = ["indexes"];
+const BLOCK_KWS: [&str; 2] = ["indexes", "records"];
 const SETTING_KWS: [&str; 13] = [
     "pk",
     "primary",
@@ -512,6 +512,18 @@ mod tests {
         assert!(ks.contains(&("unique".into(), Kind::Keyword)));
         // `a` inside indexes is not a column name starting a type run
         assert!(!ks.contains(&("a".into(), Kind::Type)), "{ks:?}");
+    }
+
+    #[test]
+    fn records_is_a_block_keyword() {
+        let ks = kinds("Table t {\n  records (id) {\n    1, 'x'\n  }\n}\nrecords u(id) { 1 }");
+        assert!(ks.contains(&("records".into(), Kind::Keyword)), "{ks:?}");
+        // rows keep their own colors (values are not column types)
+        assert!(
+            ks.iter()
+                .any(|(s, k)| s == "1" && *k == Kind::Number),
+            "{ks:?}"
+        );
     }
 
     #[test]

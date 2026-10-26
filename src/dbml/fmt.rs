@@ -137,6 +137,9 @@ struct ScanState {
     stack: Vec<(String, char, usize)>,
     in_block: bool,
     bracket_open: bool,
+    /// Inside a table's `records { ... }` block: its rows and closing
+    /// brace must not count as columns or close the table's stack frame.
+    in_records: bool,
 }
 
 impl ScanState {
@@ -179,6 +182,30 @@ impl ScanState {
         if code_trim.is_empty() {
             if let Some(c) = comment {
                 self.pending.push(c);
+            }
+            return;
+        }
+        // records rows and their closing brace: comments ride the records
+        // item; the brace closes the records block, not the table
+        if self.in_records {
+            if code_trim.starts_with('}') {
+                self.in_records = false;
+                if let Some(c) = &comment {
+                    if let Some((key, ..)) = self.stack.last() {
+                        self.cm.atta(key).item_trailing.insert("r0".into(), c.clone());
+                    }
+                }
+                return;
+            }
+            if let Some(c) = &comment {
+                if let Some((key, _, _)) = self.stack.last() {
+                    let at = self.cm.atta(key);
+                    let entry = at.item_trailing.entry("r0".into()).or_default();
+                    if !entry.is_empty() {
+                        entry.push(' ');
+                    }
+                    entry.push_str(c);
+                }
             }
             return;
         }
@@ -281,6 +308,19 @@ impl ScanState {
                 a.item_leading.entry("n0".into()).or_default().append(&mut self.pending);
                 if let Some(c) = &comment {
                     a.item_trailing.insert("n0".into(), c.clone());
+                }
+            }
+            ('T', "records") => {
+                let a = self.cm.atta(&ckey);
+                a.item_leading.entry("r0".into()).or_default().append(&mut self.pending);
+                if let Some(c) = &comment {
+                    a.item_trailing.insert("r0".into(), c.clone());
+                }
+                // a multi-line block: its rows and closer are handled by
+                // the in_records fast path (a one-line `records { ... }`
+                // needs no special treatment)
+                if code_trim.ends_with('{') {
+                    self.in_records = true;
                 }
             }
             ('T', _) => {
@@ -500,6 +540,24 @@ fn render(doc: &Document, cm: &CommentMap) -> String {
             }
             e.out.push_str("  }\n");
         }
+        if let Some(rec) = &t.records {
+            let mut blob = String::from("records");
+            if !rec.columns.is_empty() {
+                blob.push_str(&format!(" ({})", rec.columns.join(", ")));
+            }
+            if rec.example {
+                blob.push_str(" [example]");
+            }
+            blob.push_str(" {");
+            for row in &rec.rows {
+                blob.push_str("\n    ");
+                blob.push_str(
+                    &row.iter().map(record_value_src).collect::<Vec<_>>().join(", "),
+                );
+            }
+            blob.push_str("\n  }");
+            e.line("  ", &key, "r0", &blob);
+        }
         if let Some(c) = &t.checks {
             e.leading(&key, Some("k0"), "  ");
             e.line("  ", &key, "k0", &format!("Checks {{\n{c}\n  }}"));
@@ -563,6 +621,27 @@ fn card_str(c: Cardinality) -> &'static str {
         Cardinality::ManyToOne => ">",
         Cardinality::OneToOne => "-",
         Cardinality::ManyToMany => "<>",
+    }
+}
+
+/// Records value as source text. Strings re-quote with the record
+/// string's own `''` convention (the note style's triple quotes would not
+/// re-parse through the records lexer); backtick expressions go back
+/// verbatim.
+fn record_value_src(v: &super::ast::RecordValue) -> String {
+    match v {
+        super::ast::RecordValue::Null => "null".to_string(),
+        super::ast::RecordValue::Text(s) => format!("'{}'", s.replace('\'', "''")),
+        super::ast::RecordValue::Number(n) => n.clone(),
+        super::ast::RecordValue::Bool(b) => {
+            if *b {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }
+        }
+        super::ast::RecordValue::Ident(s) => s.clone(),
+        super::ast::RecordValue::Expr(s) => format!("`{s}`"),
     }
 }
 
@@ -674,5 +753,47 @@ mod tests {
         let f = format_source(src).expect("parses");
         assert!(f.contains("// db kind\n  database_type"), "{}", f);
         assert!(f.contains("// first\n  a"), "{}", f);
+    }
+
+    #[test]
+    fn records_blocks_render_and_round_trip() {
+        let src = "Table t {\n  id integer [pk]\n  name varchar\n  records (id, name) {\n    1, 'Alice'\n    2, 'Bob''s'\n    3, null\n    4, `now()`\n  }\n}\n";
+        let f = format_source(src).expect("parses");
+        assert!(f.contains("  records (id, name) {"), "{f}");
+        assert!(f.contains("    1, 'Alice'\n"), "{f}");
+        assert!(f.contains("'Bob''s'"), "{f}");
+        assert!(f.contains("3, null"), "{f}");
+        assert!(f.contains("4, `now()`"), "{f}");
+        let again = format_source(&f).expect("re-parse");
+        assert_eq!(again, f, "records formatting is idempotent");
+    }
+
+    #[test]
+    fn records_implicit_and_example_render() {
+        let src = "records u(id, name) [example] {\n  1, 'A'\n}\nTable u {\n  id integer [pk]\n  name varchar\n  indexes {\n    (name) [unique]\n  }\n}\nTable bare {\n  x integer\n  records {\n    9\n  }\n}\n";
+        let f = format_source(src).expect("parses");
+        // top-level records attach to their table and render after the
+        // indexes block, with the header list and [example] kept
+        let ipos = f.find("indexes {").expect("indexes");
+        let rpos = f.find("records (id, name) [example] {").expect("records rendered");
+        assert!(ipos < rpos);
+        assert!(f.contains("    1, 'A'"), "{f}");
+        // the implicit form stays implicit (the model resolves the order)
+        assert!(f.contains("  records {\n    9\n  }"), "{f}");
+        let again = format_source(&f).expect("re-parse");
+        assert_eq!(again, f);
+    }
+
+    #[test]
+    fn records_render_with_comments_present() {
+        let src = "// header\nTable t {\n  // a column\n  id integer [pk]\n  // about records\n  records (id) {\n    1\n  }\n  name varchar // trailing\n}\n";
+        let f = format_source(src).expect("parses");
+        assert!(f.contains("// header"), "{f}");
+        assert!(f.contains("// a column\n  id"), "{f}");
+        assert!(f.contains("// about records\n  records (id) {"), "{f}");
+        assert!(f.contains("1\n  }\n"), "{f}");
+        assert!(f.contains("name varchar  // trailing"), "{f}");
+        let again = format_source(&f).expect("re-parse");
+        assert_eq!(again, f, "idempotent with comments around records");
     }
 }

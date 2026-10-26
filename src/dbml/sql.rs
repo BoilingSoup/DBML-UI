@@ -1190,6 +1190,31 @@ impl<'a> Exporter<'a> {
 mod fixtures {
     use super::*;
 
+    /// The importer fixtures verify schema translation; `records` sample
+    /// rows are data, not DDL — upstream's goldens carry them (converted
+    /// from INSERT statements, which our importer does not synthesize),
+    /// so they are stripped from both sides of the comparison.
+    fn strip_records_blocks(src: String) -> String {
+        let mut out = String::with_capacity(src.len());
+        let mut in_records = false;
+        for line in src.lines() {
+            let t = line.trim_start();
+            if in_records {
+                if t.starts_with('}') {
+                    in_records = false;
+                }
+                continue;
+            }
+            if t.starts_with("records") && t.contains('{') {
+                in_records = t.ends_with('{');
+                continue;
+            }
+            out.push_str(line);
+            out.push('\n');
+        }
+        out
+    }
+
     /// Cases knowingly not reproduced yet, with reasons.
     // Cases intentionally not reproduced (upstream @dbml-core artifacts):
     // - insert_records: needs the Records/data-sample feature (round 2)
@@ -1279,20 +1304,22 @@ mod fixtures {
                 .replace("-? ", "- ")
                 .replace("<?", "<");
             let got_res = if direction == "exporter" {
-                export(&src, dialect).map_err(|e| format!("ERR {e}"))
+                export(&src, dialect).map(strip_records_blocks).map_err(|e| format!("ERR {e}"))
             } else {
                 // semantic comparison: canonicalize both sides through our
                 // DBML formatter so golden style quirks don't matter
                 super::super::sqldump::import(&src, dialect).and_then(|g| {
                     crate::dbml::fmt::format_source(&g)
+                        .map(strip_records_blocks)
                         .ok_or_else(|| "our output does not re-parse".into())
                 })
             };
             let expected = if direction == "importer" {
                 crate::dbml::fmt::format_source(&expected)
+                    .map(strip_records_blocks)
                     .ok_or_else(|| "ERR golden does not re-parse".to_string())
             } else {
-                Ok(expected)
+                Ok(strip_records_blocks(expected))
             };
             // upstream check-expression whitespace (multi-line CASE
             // blocks, operator spacing) is not reproducible exactly —

@@ -214,42 +214,6 @@ fn note_value(input: &mut &str, base: usize) -> R<String> {
     }
 }
 
-/// Skip a balanced (...) group: returns the BYTE length of the content
-/// between the parens (the caller has already consumed '(').
-fn skip_parens_len(input: &str) -> usize {
-    let bytes = input.as_bytes();
-    let mut depth = 1i32;
-    for (k, &bch) in bytes.iter().enumerate() {
-        if bch == b'(' {
-            depth += 1;
-        } else if bch == b')' {
-            depth -= 1;
-            if depth == 0 {
-                return k;
-            }
-        }
-    }
-    bytes.len()
-}
-
-/// Skip a balanced {...} group: returns the BYTE length of the content
-/// between the braces (the caller has already consumed '{').
-fn skip_group_len(input: &str) -> usize {
-    let bytes = input.as_bytes();
-    let mut depth = 1i32;
-    for (k, &bch) in bytes.iter().enumerate() {
-        if bch == b'{' {
-            depth += 1;
-        } else if bch == b'}' {
-            depth -= 1;
-            if depth == 0 {
-                return k;
-            }
-        }
-    }
-    bytes.len()
-}
-
 fn is_type_char(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '_' | '(' | ')' | ',' | '.' | ' ' | '\t')
 }
@@ -746,6 +710,268 @@ fn index(input: &mut &str, base: usize) -> R<Index> {
     Ok(idx)
 }
 
+// --- records ---------------------------------------------------------------
+
+/// Single-quoted record string: `''` and `\'` both escape a quote.
+fn record_string(input: &mut &str, base: usize) -> R<String> {
+    if !eat(input, "'") {
+        return fail(offset(input, base), "expected 'string'");
+    }
+    let mut out = String::new();
+    loop {
+        if input.is_empty() || input.starts_with('\n') || input.starts_with('\r') {
+            return fail(offset(input, base), "unterminated string");
+        }
+        if input.starts_with("''") {
+            out.push('\'');
+            *input = &input[2..];
+            continue;
+        }
+        if input.starts_with("\\'") {
+            out.push('\'');
+            *input = &input[2..];
+            continue;
+        }
+        if input.starts_with('\'') {
+            *input = &input[1..];
+            return Ok(out);
+        }
+        let c = input.chars().next().unwrap();
+        out.push(c);
+        *input = &input[c.len_utf8()..];
+    }
+}
+
+/// Length of a numeric literal at the start of `input` (0 when there is
+/// none): optional sign, digits with one optional dot, optional exponent.
+fn number_len(input: &str) -> usize {
+    let b = input.as_bytes();
+    let mut i = 0usize;
+    if matches!(b.first(), Some(b'+' | b'-')) {
+        i += 1;
+    }
+    let digits = |i: &mut usize| {
+        let start = *i;
+        while *i < b.len() && b[*i].is_ascii_digit() {
+            *i += 1;
+        }
+        *i > start
+    };
+    if !digits(&mut i) {
+        // a leading-dot form (.5)
+        if b.get(i) == Some(&b'.') {
+            i += 1;
+            if !digits(&mut i) {
+                return 0;
+            }
+        } else {
+            return 0;
+        }
+    } else if b.get(i) == Some(&b'.') {
+        i += 1;
+        digits(&mut i);
+    }
+    if matches!(b.get(i), Some(b'e' | b'E')) {
+        let mut j = i + 1;
+        if matches!(b.get(j), Some(b'+' | b'-')) {
+            j += 1;
+        }
+        let start = j;
+        while j < b.len() && b[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j > start {
+            i = j;
+        }
+    }
+    i
+}
+
+/// One value in a records row. An empty field (nothing before the next
+/// comma / end of line) is a literal null.
+fn record_value(input: &mut &str, base: usize) -> R<RecordValue> {
+    sp(input);
+    if input.is_empty() || input.starts_with(['\n', '\r']) || peek_is(input, "//") {
+        return Ok(RecordValue::Null);
+    }
+    if input.starts_with('\'') {
+        return record_string(input, base).map(RecordValue::Text);
+    }
+    if input.starts_with('`') {
+        let end = input[1..]
+            .find('`')
+            .ok_or(Fail {
+                offset: offset(input, base),
+                message: "unterminated backtick expression",
+            })?
+            + 1;
+        let v = input[1..end].to_string();
+        *input = &input[end + 1..];
+        return Ok(RecordValue::Expr(v));
+    }
+    let n = number_len(input);
+    if n > 0 {
+        let v = input[..n].to_string();
+        *input = &input[n..];
+        return Ok(RecordValue::Number(v));
+    }
+    for (kw, v) in [
+        ("null", RecordValue::Null),
+        ("true", RecordValue::Bool(true)),
+        ("false", RecordValue::Bool(false)),
+    ] {
+        if peek_kw(input, kw) {
+            let _ = eat(input, kw);
+            return Ok(v);
+        }
+    }
+    ident(input, base).map(RecordValue::Ident)
+}
+
+/// Same-line whitespace plus a trailing `//` comment (a comment runs to
+/// the end of the line, so what follows is the next line).
+fn sp_comment(input: &mut &str) {
+    sp(input);
+    if input.starts_with("//") {
+        *input = match input.find('\n') {
+            Some(i) => &input[i..],
+            None => "",
+        };
+    }
+}
+
+/// One comma-separated records row (the caller has positioned us at its
+/// first value). Rows end at a newline, `}`, or EOF; when `ncols` is
+/// known the count must match — a mismatch fails the row, not the block.
+fn record_row(input: &mut &str, base: usize, ncols: Option<usize>) -> R<Vec<RecordValue>> {
+    let mut row = Vec::new();
+    loop {
+        let v = record_value(input, base)?;
+        row.push(v);
+        sp_comment(input);
+        if !eat(input, ",") {
+            break;
+        }
+        sp_comment(input);
+        if input.is_empty() || input.starts_with(['\n', '\r']) {
+            // trailing comma: an empty final field
+            row.push(RecordValue::Null);
+            break;
+        }
+    }
+    if let Some(n) = ncols {
+        if row.len() != n {
+            return fail(
+                offset(input, base),
+                "record row does not match the column list",
+            );
+        }
+    }
+    Ok(row)
+}
+
+/// Skip the rest of the damaged line — unless the block's closing brace
+/// starts the NEXT line, which must be left for the block loop (eating it
+/// would swallow the rest of the enclosing table).
+fn skip_damaged_line(input: &mut &str) {
+    let rest = match input.find('\n') {
+        Some(i) => &input[i + 1..],
+        None => "",
+    };
+    if rest.trim_start().starts_with('}') {
+        return;
+    }
+    skip_line(input);
+}
+
+/// `records [target][.schema][(col, ...)] [example] { rows }` — sample
+/// rows for a table. The caller has consumed the `records` keyword.
+/// Returns the optional target table name (top-level form; the last path
+/// segment) plus the block. The header (target, columns, `[example]`)
+/// binds on one line; row errors recover per line and only structural
+/// damage (header, missing `{`) fails the whole statement.
+fn records_block(
+    input: &mut &str,
+    base: usize,
+    errs: &mut Vec<ParseError>,
+) -> R<(Option<String>, TableRecords)> {
+    sp(input);
+    // The target binds on the SAME line only: a bare `records` mid-typing
+    // at end of line must fail here rather than swallow the next
+    // statement as its target.
+    let mut target = None;
+    if !input.is_empty() && !input.starts_with(['(', '[', '{', '\n', '\r']) {
+        let mut parts = vec![ident(input, base)?];
+        while eat(input, ".") {
+            parts.push(ident(input, base)?);
+        }
+        target = parts.pop();
+    }
+    sp(input);
+    let mut columns = Vec::new();
+    if eat(input, "(") {
+        loop {
+            sp(input);
+            if eat(input, ")") {
+                break;
+            }
+            columns.push(ident(input, base)?);
+            sp(input);
+            if !eat(input, ",") {
+                sp(input);
+                if !eat(input, ")") {
+                    return fail(
+                        offset(input, base),
+                        "expected ')' after records columns",
+                    );
+                }
+                break;
+            }
+        }
+        sp(input);
+    }
+    let mut example = false;
+    if peek_is(input, "[") {
+        for (key, val) in settings_list(input, base)? {
+            if key == "example" && val.is_none() {
+                example = true;
+            }
+        }
+        sp(input);
+    }
+    if !eat(input, "{") {
+        return fail(offset(input, base), "expected '{' after records header");
+    }
+    let mut rec = TableRecords {
+        columns,
+        rows: Vec::new(),
+        example,
+    };
+    loop {
+        ws(input);
+        if input.is_empty() {
+            errs.push(err_at(offset(input, base), "unterminated records block"));
+            break;
+        }
+        if eat(input, "}") {
+            break;
+        }
+        let ncols = if rec.columns.is_empty() {
+            None
+        } else {
+            Some(rec.columns.len())
+        };
+        match record_row(input, base, ncols) {
+            Ok(row) => rec.rows.push(row),
+            Err(e) => {
+                errs.push(err_at(e.offset, e.message));
+                skip_damaged_line(input);
+            }
+        }
+    }
+    Ok((target, rec))
+}
+
 // --- top-level constructs ------------------------------------------------
 
 enum Item {
@@ -796,6 +1022,7 @@ fn table(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Table> 
         columns: Vec::new(),
         indexes: Vec::new(),
         checks: None,
+        records: None,
     };
     if peek_kw(input, "as") {
         let _ = eat(input, "as");
@@ -843,26 +1070,18 @@ fn table(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Table> 
             continue;
         }
         if peek_kw(input, "Records") {
-            // Records name[.name](cols) { rows } — data samples; parsed
-            // and dropped (no diagram equivalent yet)
+            // records [target][(cols)] [example] { rows } — sample rows
+            // shown in the record view
             let _ = eat(input, "Records");
-            ws(input);
-            let _ = ident(input, base);
-            while eat(input, ".") {
-                let _ = ident(input, base);
-            }
-            ws(input);
-            if peek_is(input, "(") {
-                let end = skip_group_len(input);
-                *input = &input[end - 1..];
-                let _ = eat(input, ")");
-            }
-            ws(input);
-            if peek_is(input, "{") {
-                let _ = eat(input, "{");
-                let end = skip_group_len(input);
-                *input = &input[end..];
-                let _ = eat(input, "}");
+            match records_block(input, base, errs) {
+                Ok((_, rec)) => t.records = Some(rec),
+                Err(e) => {
+                    errs.push(err_at(e.offset, e.message));
+                    // a bare `records` fails right at the table's closing
+                    // brace — leave it for the block loop instead of
+                    // swallowing the rest of the table
+                    skip_damaged_line(input);
+                }
             }
             continue;
         }
@@ -1188,35 +1407,30 @@ pub fn parse(src: &str) -> ParseOutput {
     let base = src.as_ptr() as usize;
     let mut rest = src;
     let mut out = ParseOutput::default();
+    let mut top_records: Vec<(Option<String>, TableRecords)> = Vec::new();
     loop {
         ws(&mut rest);
         if rest.is_empty() {
             break;
         }
-        // Records name(cols) { rows } — data samples; skipped (no model
-        // equivalent yet)
+        // records [target][(cols)] [example] { rows } — sample rows for a
+        // table, possibly defined later in the file
         if peek_kw(rest, "Records") {
-            let mut r = rest;
-            let _ = eat(&mut r, "Records");
-            ws(&mut r);
-            let _ = ident(&mut r, base);
-            while eat(&mut r, ".") {
-                let _ = ident(&mut r, base);
+            let mut attempt = rest;
+            let _ = eat(&mut attempt, "Records");
+            match records_block(&mut attempt, base, &mut out.errors) {
+                Ok((target, rec)) => {
+                    rest = attempt;
+                    top_records.push((target, rec));
+                }
+                Err(e) => {
+                    out.errors.push(ParseError {
+                        offset: e.offset,
+                        message: e.message.to_string(),
+                    });
+                    rest = recover(attempt);
+                }
             }
-            ws(&mut r);
-            if peek_is(&r[..1.min(r.len())], "(") {
-                let _ = eat(&mut r, "(");
-                let end = skip_parens_len(r);
-                r = &r[end + 1..];
-            }
-            ws(&mut r);
-            if r.starts_with('{') {
-                r = &r[1..];
-                let end = skip_group_len(r);
-                r = &r[end..];
-                let _ = eat(&mut r, "}");
-            }
-            rest = r;
             continue;
         }
         let mut attempt = rest;
@@ -1238,6 +1452,19 @@ pub fn parse(src: &str) -> ParseOutput {
                 });
                 rest = recover(attempt);
             }
+        }
+    }
+    // Top-level records blocks attach to their table, which may be defined
+    // later in the file (the target matches by name or alias; unmatched
+    // targets are dropped — the diagram simply has nothing to show).
+    for (target, rec) in top_records {
+        let Some(name) = target else {
+            continue;
+        };
+        if let Some(t) = out.doc.tables.iter_mut().find(|t| {
+            t.name == name || t.alias.as_deref() == Some(name.as_str())
+        }) {
+            t.records = Some(rec);
         }
     }
     out
@@ -1474,6 +1701,177 @@ Table good2 {
         assert_eq!(line_col_at(src, 6), (1, 2));
         assert_eq!(line_col_at(src, 8), (2, 0));
         assert_eq!(line_col_at(src, 999), (2, 2));
+    }
+
+    #[test]
+    fn records_explicit_columns_and_values() {
+        let src = r#"
+Table posts {
+  id int [pk]
+  title varchar
+  published boolean
+  views decimal
+  score real
+  status post_status
+  created_at timestamp
+  records (id, title, published, views, score, status, created_at) [example] {
+    1, 'First Post', true, 2.50, 1e3, draft, `now()`
+    2, 'It''s fine', false, -3, .5, NULL,
+  }
+}
+"#;
+        let out = parse(src);
+        assert!(out.errors.is_empty(), "{:?}", out.errors);
+        let rec = tables(&out)[0].records.as_ref().expect("records");
+        assert!(rec.example);
+        assert_eq!(
+            rec.columns,
+            [
+                "id", "title", "published", "views", "score", "status", "created_at"
+            ]
+        );
+        assert_eq!(rec.rows.len(), 2);
+        use RecordValue::*;
+        assert_eq!(
+            rec.rows[0],
+            vec![
+                Number("1".into()),
+                Text("First Post".into()),
+                Bool(true),
+                Number("2.50".into()),
+                Number("1e3".into()),
+                Ident("draft".into()),
+                Expr("now()".into()),
+            ]
+        );
+        // '' escape, negative and leading-dot numbers, case-insensitive
+        // null, and a trailing comma (an empty final field is a null)
+        assert_eq!(
+            rec.rows[1],
+            vec![
+                Number("2".into()),
+                Text("It's fine".into()),
+                Bool(false),
+                Number("-3".into()),
+                Number(".5".into()),
+                Null,
+                Null,
+            ]
+        );
+    }
+
+    #[test]
+    fn records_implicit_columns_and_top_level_form() {
+        let src = r#"
+records users(id, name) [example] {
+  1, 'Alice'
+  2, null
+}
+
+Table users {
+  id int [pk]
+  name varchar
+}
+
+Table posts {
+  id int [pk]
+  records {
+    7, 'x'
+  }
+}
+"#;
+        let out = parse(src);
+        assert!(out.errors.is_empty(), "{:?}", out.errors);
+        let users = tables(&out).iter().find(|t| t.name == "users").unwrap();
+        let rec = users.records.as_ref().expect("attached");
+        assert!(rec.example);
+        assert_eq!(rec.columns, ["id", "name"]);
+        assert_eq!(
+            rec.rows,
+            vec![
+                vec![RecordValue::Number("1".into()), RecordValue::Text("Alice".into())],
+                vec![RecordValue::Number("2".into()), RecordValue::Null],
+            ]
+        );
+        // bare records { } inside a table: implicit all-columns order
+        let posts = tables(&out).iter().find(|t| t.name == "posts").unwrap();
+        let prec = posts.records.as_ref().expect("implicit records");
+        assert!(prec.columns.is_empty(), "implicit: resolved by the model");
+        assert_eq!(prec.rows.len(), 1);
+        assert_eq!(prec.rows[0].len(), 2);
+        assert!(!prec.example);
+    }
+
+    #[test]
+    fn records_target_may_be_schema_qualified_or_an_alias() {
+        let src = r#"
+records public.users(U) {
+  1
+}
+Table users as U {
+  id int [pk]
+}
+"#;
+        let out = parse(src);
+        assert!(out.errors.is_empty(), "{:?}", out.errors);
+        assert!(tables(&out)[0].records.is_some(), "attached to users");
+    }
+
+    #[test]
+    fn records_row_count_mismatch_recovered_per_line() {
+        let src = r#"
+Table t {
+  id int [pk]
+  name varchar
+  records (id, name) {
+    1, 'ok'
+    2, 'too', 'many'
+    3, 'fine'
+  }
+}
+"#;
+        let out = parse(src);
+        assert_eq!(out.errors.len(), 1, "{:?}", out.errors);
+        let rec = tables(&out)[0].records.as_ref().unwrap();
+        assert_eq!(
+            rec.rows,
+            vec![
+                vec![RecordValue::Number("1".into()), RecordValue::Text("ok".into())],
+                vec![RecordValue::Number("3".into()), RecordValue::Text("fine".into())],
+            ]
+        );
+    }
+
+    #[test]
+    fn records_partial_input_is_tolerated() {
+        // mid-typing: bare keyword, unterminated header, no braces yet —
+        // the document must keep parsing (the diagram re-parses on every
+        // keystroke) and later tables survive
+        for src in [
+            "Table t {\n  id int [pk]\n  records\n}\nTable u { x int }",
+            "Table t {\n  id int [pk]\n  records (a, b\n}\nTable u { x int }",
+            "records\nTable u { x int }",
+            "records users(\nTable u { x int }",
+        ] {
+            let out = parse(src);
+            assert!(!out.errors.is_empty(), "reports the damage: {src:?}");
+            let names: Vec<&str> = tables(&out).iter().map(|t| t.name.as_str()).collect();
+            assert!(names.contains(&"u"), "later table survives {src:?}");
+        }
+    }
+
+    #[test]
+    fn records_keyword_is_case_insensitive_and_strings_escape() {
+        let out = parse("TABLE t { id int [pk]\n  RECORDS (id) { 1 }\n}");
+        assert!(out.errors.is_empty(), "{:?}", out.errors);
+        assert!(tables(&out)[0].records.is_some());
+        // \' escapes like '' inside record strings
+        let out = parse("Table t { id int [pk]\n  records (a) { 'it\\'s' }\n}");
+        assert!(out.errors.is_empty(), "{:?}", out.errors);
+        assert_eq!(
+            tables(&out)[0].records.as_ref().unwrap().rows[0],
+            vec![RecordValue::Text("it's".into())]
+        );
     }
 }
 

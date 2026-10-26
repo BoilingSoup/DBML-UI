@@ -65,6 +65,9 @@ pub struct TableBox {
     pub alias: Option<String>,
     pub header_color: Option<String>,
     pub rows: Vec<Row>,
+    /// `records` sample rows (resolved model form), for the record view
+    /// and the canvas affordance; None for tables without them.
+    pub records: Option<crate::model::NodeRecords>,
     /// Span of the table/enum name in the source (click-to-jump target).
     pub name_span: Option<Span>,
 }
@@ -200,6 +203,7 @@ pub fn layout_with_overrides(
                 alias: node.alias.clone(),
                 header_color: node.header_color.clone(),
                 rows,
+                records: node.records.clone(),
                 name_span: node.name_span.clone(),
             }
         })

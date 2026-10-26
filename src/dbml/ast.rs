@@ -39,6 +39,36 @@ pub struct Table {
     pub indexes: Vec<Index>,
     /// `Checks { ... }` block content, verbatim (their importer emits it).
     pub checks: Option<String>,
+    /// `records { ... }` sample rows (in-table or top-level, attached to
+    /// the named table).
+    pub records: Option<TableRecords>,
+}
+
+/// One `records` block: sample rows laid out against `columns` (a table's
+/// columns, in definition order when the header list is omitted).
+#[derive(Debug, Clone)]
+pub struct TableRecords {
+    /// Header column list; empty for the implicit all-columns form (the
+    /// model resolves it against the table).
+    pub columns: Vec<String>,
+    /// One entry per row, each parallel to `columns` as written.
+    pub rows: Vec<Vec<RecordValue>>,
+    /// `[example]` marker: dbdiagram keeps examples in DBML but excludes
+    /// them from SQL dumps.
+    pub example: bool,
+}
+
+/// A value in a records row. `Number` keeps its source spelling
+/// (`2.50`, `1e3`); `Ident` is a bare word (enum member); `Expr` is a
+/// backticked SQL expression stored without the backticks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecordValue {
+    Null,
+    Text(String),
+    Number(String),
+    Bool(bool),
+    Ident(String),
+    Expr(String),
 }
 
 impl Table {

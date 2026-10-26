@@ -1,17 +1,19 @@
 //! Window layout: tab strip on top, then the editor and diagram panes
 //! flush against each other (their shared border is the pane seam, with
 //! the collapse chevron + resize strip stacked over it), status bar at
-//! the bottom; help overlay and the tab context menu stack above all.
+//! the bottom; help overlay, the record view and the tab context menu
+//! stack above all.
 
-use crate::app::{App, Drag, Focus, Message, TabMenu, STRIP_LEFT, TAB_SLOT_W};
+use crate::app::{App, Drag, Focus, Message, RecordView, TabMenu, STRIP_LEFT, TAB_SLOT_W};
 use crate::canvas::diagram::{Diagram, DiagramOverlay};
 use crate::canvas::editor::{EditorOverlay, EditorView};
+use dbml_ui::dbml::ast::RecordValue;
 use crate::editor::{KeyCode, KeyModifiers};
 use crate::theme;
 use iced::widget::{
-    button, canvas, column, container, horizontal_space, row, stack, text,
+    button, canvas, column, container, horizontal_space, row, scrollable, stack, text,
 };
-use iced::{Color, Element, Fill, Length, Point, Rectangle, Size};
+use iced::{Color, Element, Fill, Font, Length, Point, Rectangle, Size};
 
 /// Zoom at which one diagram cell maps 1:1 to a text line (~20px).
 pub const BASE_ZOOM: f32 = 20.0;
@@ -178,10 +180,381 @@ pub fn root(app: &App) -> Element<'_, Message> {
     } else {
         base
     };
+    // the record view is the topmost modal (help cannot be open beneath it:
+    // the record view swallows keys first)
+    let base: Element<'_, Message> = if let Some(rv) = &app.record_view {
+        stack![base, record_view_overlay(app, rv)].into()
+    } else {
+        base
+    };
     if app.show_help {
         stack![base, help_overlay()].into()
     } else {
         base
+    }
+}
+
+/// The record view: a centered modal over everything (topmost in `root`),
+/// showing a table's `records` sample rows as a scrollable grid. Escape,
+/// the × button, or a backdrop click closes it.
+fn record_view_overlay(app: &App, rv: &RecordView) -> Element<'static, Message> {
+    let w = (app.window_size.0 * 0.8).clamp(340.0, 800.0);
+    let h = (app.window_size.1 * 0.8).clamp(240.0, 520.0);
+    let body = match app.diagram().boxes.iter().find(|b| b.node == rv.node) {
+        Some(b) if b.records.is_some() => record_panel(b, &app.diagram().boxes, rv),
+        _ => container(
+            text("No records for this table".to_string())
+                .size(13.0)
+                .color(theme::DIM),
+        )
+        .padding(24)
+        .into(),
+    };
+    let panel = container(body)
+        .width(Length::Fixed(w))
+        .height(Length::Fixed(h))
+        .style(|_t| container::Style {
+            background: Some(iced::Background::Color(theme::PANEL)),
+            border: iced::border::rounded(10).color(theme::BORDER),
+            ..Default::default()
+        });
+    // click anywhere outside the panel dismisses it
+    let backdrop = button(text(""))
+        .width(Fill)
+        .height(Fill)
+        .style(|_t, _s| iced::widget::button::Style {
+            background: None,
+            ..Default::default()
+        })
+        .on_press(Message::CloseRecords);
+    // stack children land at (0,0): centering the panel is the full-size
+    // container's job (its content alignment)
+    stack![backdrop, container(panel).center(Fill)].into()
+}
+
+/// The record view's content: header row (pictogram, table name, close)
+/// over the scrollable grid of record rows.
+fn record_panel(
+    b: &dbml_ui::layout::TableBox,
+    boxes: &[dbml_ui::layout::TableBox],
+    rv: &RecordView,
+) -> Element<'static, Message> {
+    let rec = b.records.as_ref().expect("records for the panel");
+    let close = button(
+        text("\u{00d7}".to_string())
+            .size(16.0)
+            .color(theme::DIM),
+    )
+    .padding([2, 10])
+    .style(move |_t, _s| tool_button_style())
+    .on_press(Message::CloseRecords);
+    let mut title_row = row![
+        canvas(RecordGlyph).width(Length::Fixed(18.0)).height(Length::Fixed(18.0)),
+        text(b.title.clone())
+            .size(15.0)
+            .color(theme::TEXT)
+            .font(Font {
+                weight: iced::font::Weight::Bold,
+                ..Font::DEFAULT
+            }),
+    ]
+    .spacing(8)
+    .align_y(iced::alignment::Vertical::Center);
+    if rec.example {
+        title_row = title_row.push(
+            text("example".to_string())
+                .size(10.0)
+                .color(theme::DIM)
+                .width(Length::Shrink),
+        );
+    }
+    let header = row![title_row, horizontal_space(), close]
+        .align_y(iced::alignment::Vertical::Center)
+        .spacing(8);
+
+    // display order: the record's value columns with PK columns sorted
+    // first (see records_display_order)
+    let order = records_display_order(b, rec);
+
+    // one width per display position, fitting the header parts AND every
+    // value in that column, so the grid lines up
+    let widths: Vec<f32> = order
+        .iter()
+        .map(|&p| {
+            let rowi = rec.columns.get(p).and_then(|&ci| b.rows.get(ci));
+            let name = rowi.map_or_else(|| "?".to_string(), |r| r.name.clone());
+            let ty = rowi.map_or_else(String::new, |r| r.ty.clone());
+            let mut chips: Vec<&str> = Vec::new();
+            if rowi.is_some_and(|r| r.not_null == Some(true)) {
+                chips.push("Not Null");
+            }
+            if rowi.is_some_and(|r| r.unique) {
+                chips.push("Unique");
+            }
+            let chip_text = chips.join(" \u{00b7} ");
+            let mut parts: Vec<String> = vec![name, ty, chip_text];
+            for row_vals in &rec.rows {
+                let v = row_vals.get(p).unwrap_or(&RecordValue::Null);
+                parts.push(record_value_label(v));
+            }
+            let refs: Vec<&str> = parts.iter().map(String::as_str).collect();
+            cell_w(&refs)
+        })
+        .collect();
+
+    let mut grid = column![].spacing(0);
+    let mut header_row = row![].spacing(0);
+    header_row = header_row.push(
+        container(text("#".to_string()).size(11.0).color(theme::DIM))
+            .width(Length::Fixed(36.0))
+            .padding([4, 6]),
+    );
+    for (&p, &w) in order.iter().zip(&widths) {
+        let Some(&ci) = rec.columns.get(p) else {
+            continue;
+        };
+        let rowi = b.rows.get(ci);
+        let name = rowi.map_or_else(|| "?".to_string(), |r| r.name.clone());
+        let ty = rowi.map_or_else(String::new, |r| r.ty.clone());
+        let pk = rowi.is_some_and(|r| r.pk);
+        let mut chips: Vec<String> = Vec::new();
+        if rowi.is_some_and(|r| r.not_null == Some(true)) {
+            chips.push("Not Null".to_string());
+        }
+        if rowi.is_some_and(|r| r.unique) {
+            chips.push("Unique".to_string());
+        }
+        let mut name_line = row![].spacing(2);
+        if pk {
+            name_line = name_line.push(
+                text("\u{25c6}".to_string())
+                    .size(10.0)
+                    .color(theme::PK),
+            );
+        }
+        name_line = name_line.push(
+            text(name.clone())
+                .size(12.0)
+                .color(theme::TEXT)
+                .font(Font {
+                    weight: iced::font::Weight::Bold,
+                    ..Font::DEFAULT
+                }),
+        );
+        let mut head = column![
+            name_line,
+            text(ty.clone()).size(10.0).color(theme::TYPE_TEXT),
+        ]
+        .spacing(1);
+        if !chips.is_empty() {
+            head = head.push(
+                text(chips.join(" \u{00b7} "))
+                    .size(9.0)
+                    .color(theme::DIM),
+            );
+        }
+        header_row = header_row.push(container(head).width(Length::Fixed(w)).padding([4, 8]));
+    }
+    grid = grid.push(header_row);
+
+    for (ri, row_vals) in rec.rows.iter().enumerate() {
+        let followed = rv.follow == Some(ri);
+        let mut line = row![].spacing(0);
+        line = line.push(
+            container(
+                text(format!("{}", ri + 1))
+                    .size(11.0)
+                    .color(theme::DIM),
+            )
+            .width(Length::Fixed(36.0))
+            .padding([4, 6]),
+        );
+        for (&p, &w) in order.iter().zip(&widths) {
+            let v = row_vals.get(p).unwrap_or(&RecordValue::Null);
+            line = line.push(record_cell(boxes, b, rec, p, v, w));
+        }
+        let line = if followed {
+            container(line).style(|_t| container::Style {
+                background: Some(iced::Background::Color(theme::ROW_HOVER_BG)),
+                ..Default::default()
+            })
+        } else {
+            container(line)
+        };
+        grid = grid.push(line);
+    }
+    if rec.rows.is_empty() {
+        grid = grid.push(
+            container(text("no rows".to_string()).size(12.0).color(theme::DIM))
+                .padding([8, 42]),
+        );
+    }
+
+    column![
+        header,
+        // the scrollable must not Fill its horizontal axis when it can
+        // scroll horizontally (iced validates that); rows size to content
+        scrollable(grid)
+            .direction(scrollable::Direction::Both {
+                vertical: scrollable::Scrollbar::new(),
+                horizontal: scrollable::Scrollbar::new(),
+            })
+            .height(Fill)
+    ]
+    .spacing(10)
+    .padding(12)
+    .height(Fill)
+    .into()
+}
+
+/// Pixel width of a grid column that must fit the widest of `parts`.
+fn cell_w(parts: &[&str]) -> f32 {
+    let max = parts
+        .iter()
+        .map(|s| s.chars().count())
+        .max()
+        .unwrap_or(4)
+        .clamp(6, 34);
+    max as f32 * 7.2 + 16.0
+}
+
+/// Display order of the record's value columns: PK columns sorted first
+/// (the box's rows parallel the node's columns, so the row pk flag rides
+/// along), definition order within each group.
+fn records_display_order(b: &dbml_ui::layout::TableBox, rec: &dbml_ui::model::NodeRecords) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..rec.columns.len()).collect();
+    order.sort_by_key(|&p| {
+        let pk = rec
+            .columns
+            .get(p)
+            .and_then(|&ci| b.rows.get(ci))
+            .is_some_and(|r| r.pk);
+        (!pk, p)
+    });
+    order
+}
+
+/// One record cell: the value rendered by kind; a cell whose column refs
+/// a table that itself has records renders as a blue clickable that
+/// follows to that table's record view (best-effort row match). The
+/// column width `w` is precomputed for the whole grid.
+fn record_cell(
+    boxes: &[dbml_ui::layout::TableBox],
+    b: &dbml_ui::layout::TableBox,
+    rec: &dbml_ui::model::NodeRecords,
+    p: usize,
+    v: &RecordValue,
+    w: f32,
+) -> Element<'static, Message> {
+    let label = record_value_label(v);
+    let color = match v {
+        RecordValue::Null => theme::DIM,
+        RecordValue::Number(_) => theme::SYN_NUMBER,
+        RecordValue::Ident(_) => theme::SYN_NAME,
+        RecordValue::Expr(_) => theme::SYN_STRING,
+        _ => theme::TEXT,
+    };
+    let italic = matches!(v, RecordValue::Null);
+    let content = move |c: Color| {
+        text(label.clone())
+            .size(12.0)
+            .color(c)
+            .font(Font {
+                style: if italic {
+                    iced::font::Style::Italic
+                } else {
+                    iced::font::Style::Normal
+                },
+                ..Font::DEFAULT
+            })
+    };
+    let navigable = rec
+        .targets
+        .get(p)
+        .copied()
+        .flatten()
+        .is_some_and(|_| !matches!(v, RecordValue::Null));
+    if !navigable {
+        return container(content(color))
+            .width(Length::Fixed(w))
+            .padding([4, 8])
+            .into();
+    }
+    button(content(theme::FK))
+        .padding([4, 8])
+        .width(Length::Fixed(w))
+        .style(move |_t, _s| iced::widget::button::Style {
+            background: None,
+            ..Default::default()
+        })
+        .on_press(follow_message(boxes, b, rec, p, v))
+        .into()
+}
+
+/// The message for a navigable cell: open the target table's record view
+/// with the row whose value matches the cell highlighted, or just open
+/// the table when nothing matches (nulls never navigate).
+fn follow_message(
+    boxes: &[dbml_ui::layout::TableBox],
+    b: &dbml_ui::layout::TableBox,
+    rec: &dbml_ui::model::NodeRecords,
+    p: usize,
+    v: &RecordValue,
+) -> Message {
+    let Some(&(tnode, tcol)) = rec.targets.get(p).copied().flatten().as_ref() else {
+        return Message::OpenRecords(b.node);
+    };
+    let open = Message::OpenRecords(tnode);
+    let Some(tb) = boxes.iter().find(|x| x.node == tnode) else {
+        return open;
+    };
+    let Some(trec) = tb.records.as_ref() else {
+        return open;
+    };
+    let Some(q) = trec.columns.iter().position(|&c| c == tcol) else {
+        return open;
+    };
+    match trec.rows.iter().position(|r| r.get(q) == Some(v)) {
+        Some(ri) => Message::RecordsFollow(tnode, ri),
+        None => open,
+    }
+}
+
+/// Display text for a record value.
+fn record_value_label(v: &RecordValue) -> String {
+    match v {
+        RecordValue::Null => "(null)".to_string(),
+        RecordValue::Text(s) => s.clone(),
+        RecordValue::Number(n) => n.clone(),
+        RecordValue::Bool(b) => b.to_string(),
+        RecordValue::Ident(s) => s.clone(),
+        RecordValue::Expr(s) => format!("`{s}`"),
+    }
+}
+
+/// The table pictogram in the record view's header row.
+struct RecordGlyph;
+
+impl canvas::Program<Message> for RecordGlyph {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &iced::Renderer,
+        _theme: &iced::Theme,
+        bounds: Rectangle,
+        _cursor: iced::mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        let size = 14.0;
+        crate::canvas::diagram::draw_table_pictogram(
+            &mut frame,
+            Point::new(bounds.width / 2.0, bounds.height / 2.0),
+            size,
+            theme::TEXT,
+        );
+        vec![frame.into_geometry()]
     }
 }
 
@@ -1002,5 +1375,140 @@ mod edge_handle_tests {
             EdgeHandle { collapsed: true }.glyph(),
             "expanded points left (collapse), collapsed points right (expand)"
         );
+    }
+}
+
+#[cfg(test)]
+mod record_view_tests {
+    use super::*;
+    use dbml_ui::dbml::parser;
+
+    const SRC: &str = r#"Table users {
+  id integer [pk]
+  name varchar
+  records (id, name) {
+    1, 'Alice'
+    2, 'Bob'
+  }
+}
+
+Table posts {
+  id integer [pk]
+  user_id integer
+  records (id, user_id) {
+    10, 1
+    11, 9
+  }
+}
+
+Ref: posts.user_id > users.id
+"#;
+
+    fn app() -> App {
+        App::with_source(SRC.to_string())
+    }
+
+    fn box_of<'a>(app: &'a App, title: &str) -> &'a dbml_ui::layout::TableBox {
+        app.diagram().boxes.iter().find(|b| b.title == title).unwrap()
+    }
+
+    #[test]
+    fn follow_message_matches_the_referenced_row() {
+        let app = app();
+        let boxes = &app.diagram().boxes;
+        let posts = box_of(&app, "posts");
+        let rec = posts.records.as_ref().unwrap();
+        let uid_pos = rec.columns.iter().position(|&c| c == 1).expect("user_id position");
+        // value 1 exists in users' records row 0
+        let msg = follow_message(boxes, posts, rec, uid_pos, &RecordValue::Number("1".into()));
+        let users = box_of(&app, "users").node;
+        assert_eq!(msg, Message::RecordsFollow(users, 0));
+        // no matching row: just open the table
+        let msg = follow_message(boxes, posts, rec, uid_pos, &RecordValue::Number("77".into()));
+        assert_eq!(msg, Message::OpenRecords(users));
+        // nulls never navigate
+        let msg = follow_message(boxes, posts, rec, uid_pos, &RecordValue::Null);
+        assert_eq!(msg, Message::OpenRecords(users));
+        // text and number spellings do not match each other (best effort)
+        let msg = follow_message(boxes, posts, rec, uid_pos, &RecordValue::Text("1".into()));
+        assert_eq!(msg, Message::OpenRecords(users));
+    }
+
+    #[test]
+    fn display_order_puts_pk_columns_first() {
+        let app = app();
+        let posts = box_of(&app, "posts");
+        let rec = posts.records.as_ref().unwrap();
+        // posts: id (pk) then user_id — already pk-first; a reversed
+        // header keeps pk first
+        assert_eq!(records_display_order(posts, rec), vec![0, 1]);
+        let src = r#"Table t {
+  b integer
+  a integer [pk]
+  records (b, a) {
+    1, 2
+  }
+}
+"#;
+        let app = App::with_source(src.to_string());
+        let t = box_of(&app, "t");
+        let rec = t.records.as_ref().unwrap();
+        assert_eq!(records_display_order(t, rec), vec![1, 0], "a (pk) first");
+    }
+
+    #[test]
+    fn value_labels_by_kind() {
+        assert_eq!(record_value_label(&RecordValue::Null), "(null)");
+        assert_eq!(record_value_label(&RecordValue::Text("x".into())), "x");
+        assert_eq!(record_value_label(&RecordValue::Number("2.50".into())), "2.50");
+        assert_eq!(record_value_label(&RecordValue::Bool(true)), "true");
+        assert_eq!(record_value_label(&RecordValue::Ident("draft".into())), "draft");
+        assert_eq!(record_value_label(&RecordValue::Expr("now()".into())), "`now()`");
+        // and the records fixture parses with records attached
+        let out = parser::parse(SRC);
+        assert!(out.errors.is_empty(), "{:?}", out.errors);
+    }
+}
+
+#[cfg(test)]
+mod record_view_overlay_tests {
+    use super::*;
+
+    #[test]
+    fn the_overlay_builds_without_panicking() {
+        let app = App::with_source(
+            r#"Table users {
+  id integer [pk]
+  name varchar
+  records (id, name) {
+    1, 'Alice'
+    2, 'Bob'
+  }
+}
+
+Table empty {
+  x integer
+  records (x) {
+  }
+}
+
+Ref: users.id > empty.x
+"#
+            .to_string(),
+        );
+        let boxes = &app.diagram().boxes;
+        assert!(boxes.iter().all(|b| b.records.is_some()), "both carry records");
+        let users = boxes.iter().find(|b| b.title == "users").unwrap().node;
+        let empty = boxes.iter().find(|b| b.title == "empty").unwrap().node;
+        // users has an FK column (id -> empty.x) that has records: the
+        // cell renders as a clickable (the element builds either way)
+        let el = record_view_overlay(&app, &RecordView { node: users, follow: Some(1) });
+        let _ = el;
+        // the empty block: "no rows" path
+        let el = record_view_overlay(&app, &RecordView { node: empty, follow: None });
+        let _ = el;
+        // fallback for a stale node
+        let el = record_view_overlay(&app, &RecordView { node: 999, follow: None });
+        let _ = el;
     }
 }

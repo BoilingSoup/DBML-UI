@@ -6,7 +6,7 @@ use dbml_ui::layout::{self, Layout};
 use dbml_ui::{dbml, model};
 use iced::{Point, Vector};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Message {
     CanvasPressed(Point),
     CanvasMoved(Point),
@@ -70,6 +70,23 @@ pub enum Message {
     TabMenuCloseAll,
     /// A click anywhere outside the context menu dismisses it.
     DismissTabMenu,
+    /// Open the record view for the table node at this schema index.
+    OpenRecords(usize),
+    /// Close the record view overlay.
+    CloseRecords,
+    /// Follow a navigable record cell: open the target table's record
+    /// view with the matching row highlighted (best-effort match).
+    RecordsFollow(usize, usize),
+}
+
+/// The open record-view overlay: the table node whose records are shown
+/// and, when the user followed a FK cell, the row to highlight.
+#[derive(Debug, Clone)]
+pub struct RecordView {
+    /// Index into the schema's nodes (a table with records).
+    pub node: usize,
+    /// Followed row (a FK click landed on it), if any.
+    pub follow: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -391,6 +408,8 @@ pub struct App {
     pub editor_hover: Option<Point>,
     /// Help overlay visibility.
     pub show_help: bool,
+    /// Open record-view overlay (a centered modal above everything).
+    pub record_view: Option<RecordView>,
     /// Pane split fraction (editor share), driven by divider drags.
     pub split: f32,
     /// Window size for split math.
@@ -428,6 +447,7 @@ impl App {
             completion: None,
             editor_hover: None,
             show_help: false,
+            record_view: None,
             split: 0.4,
             window_size: (1400.0, 900.0),
         }
@@ -550,6 +570,8 @@ impl App {
         self.tab_menu = None;
         self.tab_drag = None;
         self.space_leader = false;
+        // the record view indexes the previous tab's schema nodes
+        self.record_view = None;
     }
 
     /// A tab was pressed: activate it and begin click & drag tracking.
@@ -644,7 +666,18 @@ impl App {
     }
 
     fn canvas_pressed(&mut self, p: Point) {
+        use crate::canvas::diagram as dia;
         self.canvas_cursor = Some(p);
+        // The records affordance wins over the generic table press: it
+        // opens the record view instead of starting a table drag (which
+        // would end in a jump-to-editor click on release).
+        if let Some(b) = dia::records_icon_hit(&self.cur().diagram, self.cur().zoom, self.cur().pan, p)
+        {
+            let node = b.node;
+            self.drag = Drag::None;
+            self.open_records(node);
+            return;
+        }
         match hit_test(&self.cur().diagram, self.cur().zoom, self.cur().pan, p) {
             Some(b) => {
                 let (cx, cy) = to_cell_f(p, self.cur().zoom, self.cur().pan);
@@ -656,6 +689,20 @@ impl App {
                 };
             }
             None => self.drag = Drag::Pan { anchor: p },
+        }
+    }
+
+    /// Open the record view for a table node, when that node is a table
+    /// with records (indices can arrive stale after an edit).
+    fn open_records(&mut self, node: usize) {
+        if self
+            .cur()
+            .diagram
+            .boxes
+            .iter()
+            .any(|b| b.node == node && b.records.is_some())
+        {
+            self.record_view = Some(RecordView { node, follow: None });
         }
     }
 
@@ -1084,6 +1131,14 @@ fn handle_message(app: &mut App, message: Message) {
         }
         Message::TabMenuCloseAll => app.close_all_tabs(),
         Message::DismissTabMenu => app.tab_menu = None,
+        Message::OpenRecords(node) => app.open_records(node),
+        Message::CloseRecords => app.record_view = None,
+        Message::RecordsFollow(node, row) => {
+            app.record_view = Some(RecordView {
+                node,
+                follow: Some(row),
+            });
+        }
         Message::Tick => {
             // ease every edge's highlight toward its hover target with the
             // real elapsed delta (fade-in ~0.22s, fade-out ~0.30s)
@@ -1568,6 +1623,14 @@ impl App {
         // the tab context menu is modal: any key just dismisses it
         if self.tab_menu.is_some() {
             self.tab_menu = None;
+            return;
+        }
+        // the record view is modal: Escape closes it, other keys are
+        // swallowed so editing shortcuts cannot act underneath
+        if self.record_view.is_some() {
+            if key.code == KeyCode::Esc {
+                self.record_view = None;
+            }
             return;
         }
         // global shortcuts
@@ -2313,6 +2376,124 @@ mod tests {
         assert_ne!(before, after, "cursor moved to the definition");
         let line = app.editor_mut().buf.line(after.0);
         assert!(line.contains("posts"), "on the posts line: {line:?}");
+    }
+}
+
+#[cfg(test)]
+mod record_view_tests {
+    use super::*;
+
+    fn records_app() -> App {
+        App::with_source(
+            r#"Table users {
+  id integer [pk]
+  name varchar
+  records (id, name) {
+    1, 'Alice'
+    2, 'Bob'
+  }
+}
+
+Table posts {
+  id integer [pk]
+  user_id integer
+  records (id, user_id) {
+    10, 1
+    11, 9
+  }
+}
+
+Ref: posts.user_id > users.id
+"#
+            .to_string(),
+        )
+    }
+
+    fn node_of(app: &App, title: &str) -> usize {
+        app.diagram()
+            .boxes
+            .iter()
+            .find(|b| b.title == title)
+            .expect("box")
+            .node
+    }
+
+    /// The records affordance point: the rows glyph at the right end of a
+    /// table's header band.
+    fn records_icon_point(app: &App, title: &str) -> Point {
+        let b = app.diagram().boxes.iter().find(|b| b.title == title).unwrap();
+        let s = crate::canvas::diagram::cell_size(app.cur().zoom);
+        let tl = crate::canvas::diagram::to_px(b.x, b.y, app.cur().zoom, app.cur().pan);
+        Point::new(
+            tl.x + b.w as f32 * s.width - 1.0 * s.width,
+            tl.y + s.height * 0.5,
+        )
+    }
+
+    #[test]
+    fn records_icon_press_opens_the_view_not_a_drag() {
+        let mut app = records_app();
+        let p = records_icon_point(&app, "users");
+        let _ = update(&mut app, Message::CanvasPressed(p));
+        let users = node_of(&app, "users");
+        assert_eq!(
+            app.record_view.as_ref().map(|rv| rv.node),
+            Some(users),
+            "the record view opened for users"
+        );
+        assert_eq!(app.drag, Drag::None, "no table drag from the affordance");
+        // releasing must not land the jump-to-editor click either
+        let _ = update(&mut app, Message::CanvasReleased(p));
+        assert_eq!(app.pending_jump, None);
+        // and the generic table press still drags as before
+        let b = app.diagram().boxes.iter().find(|b| b.title == "users").unwrap();
+        let s = crate::canvas::diagram::cell_size(app.cur().zoom);
+        let tl = crate::canvas::diagram::to_px(b.x, b.y, app.cur().zoom, app.cur().pan);
+        let q = Point::new(tl.x + 3.0 * s.width, tl.y + 3.0 * s.height);
+        let _ = update(&mut app, Message::CanvasPressed(q));
+        assert!(matches!(app.drag, Drag::Table { .. }));
+    }
+
+    #[test]
+    fn record_view_messages_open_close_follow() {
+        let mut app = records_app();
+        let users = node_of(&app, "users");
+        let posts = node_of(&app, "posts");
+        let _ = update(&mut app, Message::OpenRecords(users));
+        assert_eq!(app.record_view.as_ref().unwrap().node, users);
+        assert_eq!(app.record_view.as_ref().unwrap().follow, None);
+        let _ = update(&mut app, Message::RecordsFollow(posts, 0));
+        assert_eq!(app.record_view.as_ref().unwrap().node, posts);
+        assert_eq!(app.record_view.as_ref().unwrap().follow, Some(0));
+        let _ = update(&mut app, Message::CloseRecords);
+        assert!(app.record_view.is_none());
+        // a stale index (after an edit re-parses) opens nothing
+        let _ = update(&mut app, Message::OpenRecords(999));
+        assert!(app.record_view.is_none());
+        // a node without records opens nothing
+        let _ = update(&mut app, Message::OpenRecords(usize::MAX));
+        assert!(app.record_view.is_none());
+    }
+
+    #[test]
+    fn record_view_is_modal_and_escape_closes_it() {
+        let mut app = records_app();
+        let users = node_of(&app, "users");
+        let _ = update(&mut app, Message::OpenRecords(users));
+        // Escape closes
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.record_view.is_none());
+        // while open, other keys are swallowed ('?' must not open help)
+        let _ = update(&mut app, Message::OpenRecords(users));
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('?'), KeyModifiers::NONE),
+        );
+        assert!(app.record_view.is_some(), "still open");
+        assert!(!app.show_help, "help did not open underneath");
+        // switching tabs drops the overlay (it indexes the old schema)
+        app.new_tab();
+        assert!(app.record_view.is_none());
     }
 }
 

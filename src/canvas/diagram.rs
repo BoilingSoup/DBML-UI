@@ -117,6 +117,32 @@ pub fn note_hit(layout: &Layout, zoom: f32, pan: Vector, p: Point) -> Option<(&T
     (p.x >= x0 && p.x < x1).then_some((b, row))
 }
 
+/// X range (frame px) of the records affordance on a table that has
+/// records: the rows glyph at the right end of the header band (mirrors
+/// the note band, one row up).
+fn records_band(b: &TableBox, zoom: f32, pan: Vector) -> Option<(f32, f32)> {
+    b.records.as_ref()?;
+    let top_left = to_px(b.x, b.y, zoom, pan);
+    let s = cell_size(zoom);
+    let right = top_left.x + b.w as f32 * s.width;
+    Some((right - 1.5 * s.width, right - 0.5 * s.width))
+}
+
+/// The records affordance under a canvas point: the rows glyph at the
+/// right end of a records-bearing table's HEADER band. Pressing it opens
+/// the record view (it wins over the generic table press).
+pub fn records_icon_hit(layout: &Layout, zoom: f32, pan: Vector, p: Point) -> Option<&TableBox> {
+    let b = hit_test(layout, zoom, pan, p)?;
+    let top_left = to_px(b.x, b.y, zoom, pan);
+    let s = cell_size(zoom);
+    let y_cell = (p.y - top_left.y) / s.height;
+    if !(0.0..1.0).contains(&y_cell) {
+        return None; // the header band only
+    }
+    let (x0, x1) = records_band(b, zoom, pan)?;
+    (p.x >= x0 && p.x < x1).then_some(b)
+}
+
 /// The hover label for a pk/fk marker row.
 pub fn marker_label(pk: bool) -> &'static str {
     if pk {
@@ -277,6 +303,9 @@ impl canvas::Program<crate::app::Message> for Diagram<'_> {
         if let Some(p) = cursor.position_over(bounds) {
             let local = Point::new(p.x - bounds.x, p.y - bounds.y);
             if hit_test(self.layout, self.zoom, self.pan, local).is_some() {
+                if records_icon_hit(self.layout, self.zoom, self.pan, local).is_some() {
+                    return Interaction::Pointer; // opens the record view
+                }
                 if note_hit(self.layout, self.zoom, self.pan, local).is_some() {
                     return Interaction::Help;
                 }
@@ -768,10 +797,16 @@ fn edge_stroke_width(zoom: f32) -> f32 {
 const PK_ICON: &str = "M 6.5625 0.9844 C 8.1935 0.9844 9.5156 2.3065 9.5156 3.9375 C 9.5156 5.5685 8.1935 6.8906 6.5625 6.8906 C 6.1735 6.8906 5.8022 6.8153 5.462 6.6786 L 4.5938 7.5469 H 3.9375 V 8.5313 H 2.9531 V 9.5156 H 0.9844 V 7.5469 L 3.736 4.7952 C 3.6518 4.5171 3.6092 4.2281 3.6094 3.9375 C 3.6094 2.3065 4.9315 0.9844 6.5625 0.9844 Z M 6.5625 0 C 4.388 0 2.625 1.7627 2.625 3.9375 C 2.625 4.1186 2.6373 4.2989 2.6619 4.4772 L 0.1441 6.995 C 0.0519 7.0873 0 7.2125 0 7.343 L 0 10.0078 C 0 10.2797 0.2204 10.5 0.4922 10.5 H 3.4453 C 3.7171 10.5 3.9375 10.2797 3.9375 10.0078 V 9.5156 H 4.4297 C 4.7015 9.5156 4.9219 9.2953 4.9219 9.0234 V 8.6133 L 5.7432 7.7895 C 6.011 7.8464 6.2848 7.875 6.5625 7.875 C 8.737 7.875 10.5 6.1123 10.5 3.9375 C 10.5 1.763 8.7373 0 6.5625 0 Z M 6.5625 2.9531 C 6.5625 3.4968 7.0032 3.9375 7.5469 3.9375 C 8.0905 3.9375 8.5313 3.4968 8.5313 2.9531 C 8.5313 2.4095 8.0905 1.9688 7.5469 1.9688 C 7.0032 1.9688 6.5625 2.4095 6.5625 2.9531 Z";
 const FK_ICON: &str = "M 4.6244 6.6258 c -0.2002 0 -0.3885 -0.078 -0.5304 -0.2197 c -1.1204 -1.1205 -1.1204 -2.9437 0 -4.0641 l 1.5016 -1.5016 c 0.5419 -0.542 1.2635 -0.8405 2.032 -0.8405 s 1.4901 0.2985 2.032 0.8405 c 1.1204 1.1204 1.1204 2.9436 0 4.0641 l -1.001 1.001 c -0.1416 0.1417 -0.3299 0.2197 -0.5304 0.2198 c -0.2002 0 -0.3885 -0.078 -0.5304 -0.2197 c -0.1416 -0.1417 -0.2198 -0.3301 -0.2198 -0.5305 c 0 -0.2004 0.0781 -0.3888 0.2198 -0.5305 l 1.001 -1.001 c 0.5355 -0.5355 0.5355 -1.4068 0 -1.9423 c -0.2588 -0.2588 -0.6039 -0.4015 -0.9712 -0.4015 s -0.7123 0.1426 -0.9712 0.4015 l -1.5016 1.5016 c -0.5355 0.5355 -0.5355 1.4068 0 1.9422 c 0.2925 0.2925 0.2925 0.7684 0 1.0609 c -0.1419 0.1417 -0.3302 0.2197 -0.5304 0.2197 z M 2.8725 10.5 c -0.7685 0 -1.4901 -0.2985 -2.032 -0.8405 c -1.1204 -1.1204 -1.1204 -2.9436 0 -4.0641 l 0.7509 -0.7509 c 0.1416 -0.1416 0.3302 -0.2197 0.5304 -0.2197 c 0.2002 0 0.3888 0.0781 0.5304 0.2198 c 0.1416 0.1416 0.2198 0.33 0.2198 0.5304 c 0 0.2004 -0.0781 0.3888 -0.2198 0.5305 l -0.7509 0.7508 c -0.5355 0.5354 -0.5355 1.4067 0 1.9422 c 0.2588 0.2588 0.6039 0.4015 0.9712 0.4015 s 0.7123 -0.1425 0.9712 -0.4015 l 1.5016 -1.5016 c 0.5355 -0.5355 0.5355 -1.4068 0 -1.9422 c -0.1416 -0.1417 -0.2198 -0.3301 -0.2198 -0.5305 s 0.0781 -0.3888 0.2198 -0.5305 c 0.1416 -0.1417 0.3302 -0.2197 0.5304 -0.2197 s 0.3888 0.078 0.5304 0.2196 c 1.1204 1.1205 1.1204 2.9437 0 4.0641 l -1.5016 1.5016 c -0.5419 0.542 -1.2635 0.8405 -2.032 0.8405 z";
 const NOTE_ICON: &str = "M 9 1.125 C 9.2063 1.125 9.375 1.2938 9.375 1.5 V 6.75 H 7.5 C 7.0852 6.75 6.75 7.0852 6.75 7.5 V 9.375 H 1.5 C 1.2938 9.375 1.125 9.2063 1.125 9 V 1.5 C 1.125 1.2938 1.2938 1.125 1.5 1.125 H 9 Z M 1.5 10.5 H 6.75 H 6.8789 C 7.2773 10.5 7.6594 10.343 7.9406 10.0617 L 10.0617 7.9406 C 10.343 7.6594 10.5 7.2773 10.5 6.8789 V 6.75 V 1.5 C 10.5 0.6727 9.8273 0 9 0 H 1.5 C 0.6727 0 0 0.6727 0 1.5 V 9 C 0 9.8273 0.6727 10.5 1.5 10.5 Z M 3 7.6875 C 3 7.5383 2.9407 7.3952 2.8352 7.2897 C 2.7298 7.1843 2.5867 7.125 2.4375 7.125 C 2.2883 7.125 2.1452 7.1843 2.0398 7.2897 C 1.9343 7.3952 1.875 7.5383 1.875 7.6875 C 1.875 7.8367 1.9343 7.9798 2.0398 8.0853 C 2.1452 8.1907 2.2883 8.25 2.4375 8.25 C 2.5867 8.25 2.7298 8.1907 2.8352 8.0853 C 2.9407 7.9798 3 7.8367 3 7.6875 Z M 2.4375 2.25 C 2.2883 2.25 2.1452 2.3093 2.0398 2.4148 C 1.9343 2.5202 1.875 2.6633 1.875 2.8125 C 1.875 2.9617 1.9343 3.1048 2.0398 3.2102 C 2.1452 3.3157 2.2883 3.375 2.4375 3.375 C 2.5867 3.375 2.7298 3.3157 2.8352 3.2102 C 2.9407 3.1048 3 2.9617 3 2.8125 C 3 2.6633 2.9407 2.5202 2.8352 2.4148 C 2.7298 2.3093 2.5867 2.25 2.4375 2.25 Z M 3 5.25 C 3 5.1008 2.9407 4.9577 2.8352 4.8522 C 2.7298 4.7468 2.5867 4.6875 2.4375 4.6875 C 2.2883 4.6875 2.1452 4.7468 2.0398 4.8522 C 1.9343 4.9577 1.875 5.1008 1.875 5.25 C 1.875 5.3992 1.9343 5.5423 2.0398 5.6478 C 2.1452 5.7532 2.2883 5.8125 2.4375 5.8125 C 2.5867 5.8125 2.7298 5.7532 2.8352 5.6478 C 2.9407 5.5423 3 5.3992 3 5.25 Z";
-/// The table-with-records header glyph: a rounded-rect ring plus its row
-/// dashes, on an 18px grid.
+/// The records affordance glyph (a table with rows), used at the right
+/// end of the header of a records-bearing table on hover, on an 18px grid.
 const TABLE_RING_ICON: &str = "M18 2c0-1.103-.897-2-2-2H2c-1.103 0-2 .897-2 2v14c0 1.103.897 2 2 2h14c1.103 0 2-.897 2-2zM2 16V2h14l.002 14z";
 const TABLE_ROWS_ICON: &str = "M4 4h1.998v2H4zm4 0h6v2h-6zm-4 4h1.998v2H4zm4 0h6v2h-6zm-4 4h1.998v2H4zm4 0h6v2h-6z";
+/// dbdiagram's table pictogram, lifted from their renderer (Path2D
+/// strings): the rounded-rect ring and its header band, on an 11.25x10
+/// grid. The ring's two subpaths wind oppositely, so a plain fill punches
+/// the window; the band is filled on top.
+const TABLE_PICTO_RING: &str = "M9.93182 0.909091H2.31818C1.8161 0.909091 1.40909 1.3161 1.40909 1.81818V8.18182C1.40909 8.6839 1.8161 9.09091 2.31818 9.09091H9.93182C10.4339 9.09091 10.8409 8.6839 10.8409 8.18182V1.81818C10.8409 1.3161 10.4339 0.909091 9.93182 0.909091ZM2.31818 0C1.31403 0 0.5 0.814028 0.5 1.81818V8.18182C0.5 9.18597 1.31403 10 2.31818 10H9.93182C10.936 10 11.7 9.18597 11.7 8.18182V1.81818C11.7 0.814028 10.936 0 9.93182 0Z";
+const TABLE_PICTO_BAND: &str = "M0.5 1.81818C0.5 0.814028 1.31403 0 2.31818 0H9.93182C10.936 0 11.75 0.814028 11.75 1.81818V2.5H0.5V1.81818Z";
 
 /// Tokenize SVG path data into (command, params) pairs.
 fn svg_path_cmds(data: &str) -> Vec<(u8, Vec<f32>)> {
@@ -900,6 +935,14 @@ fn svg_icon(frame: &mut canvas::Frame, center: Point, size: f32, grid: f32, colo
     frame.fill(&path, color);
 }
 
+/// dbdiagram's table pictogram: the rounded-rect ring with its header
+/// band filled on top, scaled to `size` px and centered on `center`.
+/// Shared by the table header and the record view's title row.
+pub(crate) fn draw_table_pictogram(frame: &mut canvas::Frame, center: Point, size: f32, color: Color) {
+    svg_icon(frame, center, size, 11.25, color, TABLE_PICTO_RING);
+    svg_icon(frame, center, size, 11.25, color, TABLE_PICTO_BAND);
+}
+
 fn paint_table(
     frame: &mut canvas::Frame,
     b: &TableBox,
@@ -963,28 +1006,30 @@ fn paint_table(
         },
     );
 
-    // the table-with-records glyph before the title (dbdiagram's
-    // records icon: rounded-rect ring over row dashes)
+    // the table pictogram before the title (dbdiagram's own table icon:
+    // rounded-rect ring with its header band filled on top)
     let glyph = 0.55 * s.height;
     let gx = top_left.x + 0.9 * s.width;
     let gy = top_left.y + (s.height - glyph) / 2.0;
     let gcolor = Color::from_rgba(0.91, 0.92, 0.93, 0.55);
-    svg_icon(
+    draw_table_pictogram(
         frame,
         Point::new(gx + glyph / 2.0, gy + glyph / 2.0),
         glyph,
-        18.0,
         gcolor,
-        TABLE_RING_ICON,
     );
-    svg_icon(
-        frame,
-        Point::new(gx + glyph / 2.0, gy + glyph / 2.0),
-        glyph,
-        18.0,
-        gcolor,
-        TABLE_ROWS_ICON,
-    );
+
+    // records affordance: tables with sample rows grow a rows glyph at
+    // the right end of the header while hovered (press opens the record
+    // view)
+    if b.records.is_some() && hovered {
+        if let Some((rx0, rx1)) = records_band(b, zoom, pan) {
+            let center = Point::new((rx0 + rx1) / 2.0, top_left.y + s.height * 0.5);
+            let size = 0.55 * s.height;
+            svg_icon(frame, center, size, 18.0, theme::MARKER, TABLE_RING_ICON);
+            svg_icon(frame, center, size, 18.0, theme::MARKER, TABLE_ROWS_ICON);
+        }
+    }
 
     // title, bold white, after the glyph
     let title_size = 0.55 * s.height;
@@ -1221,6 +1266,39 @@ mod tests {
         // and the marker band on row 0 does not overlap the note band
         let (_, mx1) = marker_band(b, 0, zoom, pan);
         assert!(mx1 < x0, "marker {mx1} vs note {x0}");
+    }
+
+    #[test]
+    fn records_icon_hit_tests_the_header_band() {
+        let src = "Table a { id integer [pk] name varchar\n  records (id, name) {\n    1, 'x'\n  }\n}\nTable b { c integer }\n";
+        let l = dbml_ui::layout::layout(&dbml_ui::model::build(
+            &dbml_ui::dbml::parser::parse(src).doc,
+        ));
+        let zoom = 20.0;
+        let pan = Vector::new(40.0, 40.0);
+        let b = l.boxes.iter().find(|b| b.title == "a").unwrap();
+        assert!(b.records.is_some(), "fixture carries records");
+        let top_left = to_px(b.x, b.y, zoom, pan);
+        let s = cell_size(zoom);
+        let right = top_left.x + b.w as f32 * s.width;
+        // the rows glyph at the right end of the header band
+        let p = Point::new(right - 1.0 * s.width, top_left.y + s.height * 0.5);
+        let hit = records_icon_hit(&l, zoom, pan, p).expect("records affordance hit");
+        assert_eq!(hit.title, "a");
+        // body rows and the title area are not the affordance
+        let body = Point::new(right - 1.0 * s.width, top_left.y + s.height * 1.5);
+        assert!(records_icon_hit(&l, zoom, pan, body).is_none());
+        let title_area = Point::new(top_left.x + 3.0 * s.width, top_left.y + s.height * 0.5);
+        assert!(records_icon_hit(&l, zoom, pan, title_area).is_none());
+        // a table without records has no affordance anywhere
+        let b2 = l.boxes.iter().find(|b| b.title == "b").unwrap();
+        let t2 = to_px(b2.x, b2.y, zoom, pan);
+        let r2 = t2.x + b2.w as f32 * s.width;
+        let p2 = Point::new(r2 - 1.0 * s.width, t2.y + s.height * 0.5);
+        assert!(records_icon_hit(&l, zoom, pan, p2).is_none());
+        // and the affordance band does not swallow a row-0 note band (the
+        // note sits a row below the header)
+        assert!(note_hit(&l, zoom, pan, p).is_none());
     }
 
     #[test]
