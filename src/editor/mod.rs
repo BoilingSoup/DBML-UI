@@ -448,6 +448,14 @@ impl Editor {
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         match key.code {
             KeyCode::Esc => {
+                if self.buf.selection_anchor().is_some() {
+                    // a highlight made in insert mode becomes a visual
+                    // selection: escape lands in visual mode, a second
+                    // escape clears it
+                    self.mode = Mode::Visual;
+                    self.visual_linewise = false;
+                    return Action::None;
+                }
                 self.mode = Mode::Normal;
                 // vim: leaving insert backs up one column, but never off
                 // the line — at column 0 (e.g. the empty line cc leaves)
@@ -524,6 +532,15 @@ impl Editor {
     }
 
     fn handle_normal_key(&mut self, key: KeyEvent) -> Action {
+        // escape clears a mouse/shift-arrow highlight made in NORMAL mode
+        // (visual mode has its own escape, which lands in normal)
+        if self.mode == Mode::Normal
+            && key.code == KeyCode::Esc
+            && self.buf.selection_anchor().is_some()
+        {
+            self.buf.cancel_selection();
+            return Action::None;
+        }
         // ctrl/alt-modified keys are never vim keys here — the app scrolls
         // on ctrl+d/u itself, and an operator armed from a modified letter
         // turned `ctrl+d … gg` into `dgg` (delete to the top). The lone
@@ -560,9 +577,12 @@ impl Editor {
         // above and keeps extending.
         if m.contains(KeyModifiers::SHIFT) {
             if let Some(motion) = Self::arrow_motion(key.code) {
+                // gvim-style: shift+arrows highlight in visual mode
                 if self.buf.selection_anchor().is_none() {
                     self.buf.start_selection();
                 }
+                self.visual_linewise = false;
+                self.mode = Mode::Visual;
                 let n = self.count.take().unwrap_or(1).max(1) as usize;
                 self.repeat(motion, n);
                 return Action::None;
@@ -2057,13 +2077,19 @@ mod tests {
     }
 
     #[test]
-    fn plain_arrow_collapses_a_selection_in_normal_mode() {
+    fn plain_arrow_extends_in_visual_after_shift_arrows() {
+        // shift+arrows land in charwise visual mode, so a plain arrow
+        // extends the selection there (vim); escape clears the highlight
         let mut e = editor("one two");
         e.handle_key(shift(KeyCode::Right));
         e.handle_key(shift(KeyCode::Right));
+        assert_eq!(e.mode, Mode::Visual);
         e.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-        assert_eq!(e.buf.selection_anchor(), None, "collapsed");
+        assert!(e.buf.selection_anchor().is_some(), "visual arrows extend");
         assert_eq!(e.cursor(), (0, 3), "and moved");
+        e.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(e.mode, Mode::Normal, "escape clears the highlight");
+        assert!(e.buf.selection_anchor().is_none());
         // motions from here extend nothing
         e.handle_key(key('l'));
         assert_eq!(e.buf.selection_anchor(), None);
@@ -2449,6 +2475,70 @@ mod space_tests {
         let _ = e.handle_key(KeyEvent::new(KeyCode::Space, KeyModifiers::NONE));
         let _ = e.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
         assert_eq!(e.buf.line(0), "x e");
+    }
+}
+
+#[cfg(test)]
+mod highlight_escape_tests {
+    use super::*;
+    use super::tests::{editor, key};
+
+    #[test]
+    fn shift_arrows_enter_visual_mode_and_escape_clears() {
+        let mut e = editor("hello world\n");
+        e.handle_key(key('w'));
+        // shift+right in normal mode: visual selection starts
+        let _ = e.handle_key(KeyEvent::new(
+            KeyCode::Right,
+            KeyModifiers::SHIFT,
+        ));
+        assert_eq!(e.mode, Mode::Visual);
+        assert!(e.buf.selection_anchor().is_some());
+        // escape clears the highlight and lands in normal mode
+        let _ = e.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(e.mode, Mode::Normal);
+        assert!(e.buf.selection_anchor().is_none());
+    }
+
+    #[test]
+    fn insert_mode_highlight_escape_lands_in_visual() {
+        // highlight in insert mode, escape: visual keeps the selection
+        let mut e = editor("hello world\n");
+        e.handle_key(key('i'));
+        let _ = e.handle_key(KeyEvent::new(
+            KeyCode::Right,
+            KeyModifiers::SHIFT,
+        ));
+        assert!(e.buf.selection_anchor().is_some());
+        let _ = e.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(e.mode, Mode::Visual);
+        assert!(e.buf.selection_anchor().is_some());
+        // a second escape clears it
+        let _ = e.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(e.mode, Mode::Normal);
+        assert!(e.buf.selection_anchor().is_none());
+    }
+
+    #[test]
+    fn plain_arrows_collapse_the_normal_mode_highlight() {
+        let mut e = editor("hello world\n");
+        e.handle_key(key('w'));
+        let _ = e.handle_key(KeyEvent::new(
+            KeyCode::Right,
+            KeyModifiers::SHIFT,
+        ));
+        assert!(e.buf.selection_anchor().is_some());
+        let _ = e.handle_key(key('w')); // plain motion in visual: extends
+        let _ = e.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(e.buf.selection_anchor().is_none(), "escape clears");
+    }
+
+    #[test]
+    fn escape_without_a_highlight_is_a_noop() {
+        let mut e = editor("hello world\n");
+        let _ = e.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(e.mode, Mode::Normal);
+        assert!(e.buf.selection_anchor().is_none());
     }
 }
 
