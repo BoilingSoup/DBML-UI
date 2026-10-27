@@ -1389,12 +1389,7 @@ fn mode_chip(mode: &crate::editor::Mode, linewise: bool) -> (&'static str, Color
 }
 
 fn status_bar(app: &App) -> Element<'_, Message> {
-    let tables = app
-        .diagram()
-        .boxes
-        .iter()
-        .filter(|b| b.kind == dbml_ui::model::NodeKind::Table)
-        .count();
+    let tables = app.diagram().boxes.len();
     let zoom = format!("zoom {:.0}%", app.cur().zoom / BASE_ZOOM * 100.0);
     let errors = format!("errors {}", app.cur().parse_errors.len());
     let (crow, ccol) = app.editor().buf.cursor();

@@ -220,8 +220,8 @@ pub enum Drag {
 
 /// A click (no drag) on the diagram: the editor jump target, resolved at
 /// release time. A press on a column row carries that column's name span;
-/// any other press on a box (header band, padding) the table/enum name
-/// span, so the caret lands on the definition line either way.
+/// any other press on a box (header band, padding) the table's name span,
+/// so the caret lands on the definition line either way.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PendingJump {
     /// Span of the name token to land the caret on.
@@ -320,7 +320,7 @@ pub struct Tab {
     pub parse_errors: Vec<dbml::parser::ParseError>,
     /// Syntax-highlight tokens for `source` (byte spans), rebuilt with it.
     pub highlights: Vec<dbml_ui::dbml::highlight::Token>,
-    /// User-dragged table positions (diagram cells, by table/enum name);
+    /// User-dragged table positions (diagram cells, by table name);
     /// survive re-parses while editing.
     pub table_pos: std::collections::HashMap<String, (i32, i32)>,
     /// Editor viewport scroll, in lines.
@@ -2969,28 +2969,6 @@ mod tests {
         assert_eq!(after.1, line.find("username").unwrap());
     }
 
-    #[test]
-    fn click_on_an_enum_row_jumps_to_that_value() {
-        let mut app = app();
-        let row = app
-            .diagram()
-            .boxes
-            .iter()
-            .find(|b| b.title == "post_status")
-            .unwrap()
-            .rows
-            .iter()
-            .position(|r| r.name == "published")
-            .unwrap();
-        let s = crate::canvas::diagram::cell_size(app.cur().zoom);
-        let p = over_box(&app, "post_status", 4.0, (row as f32 + 1.5) * s.height);
-        let _ = update(&mut app, Message::CanvasPressed(p));
-        let _ = update(&mut app, Message::CanvasReleased(p));
-        let after = app.editor_mut().buf.cursor();
-        let line = app.editor_mut().buf.line(after.0);
-        assert!(line.contains("published"), "on the value line: {line:?}");
-        assert_eq!(after.1, line.find("published").unwrap());
-    }
 }
 
 #[cfg(test)]

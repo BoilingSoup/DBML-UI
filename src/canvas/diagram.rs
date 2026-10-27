@@ -27,6 +27,12 @@ pub const MARGIN_CELLS: f32 = 1.0;
 /// ratio 10x20); `zoom` is the cell height in pixels.
 pub const CELL_ASPECT: f32 = 0.5;
 
+/// One badge-font char, in cell widths (`Row::BADGE_CELL` is the same
+/// figure on the layout side).
+const BADGE_CHAR: f32 = 0.456;
+/// The badge pill's horizontal padding, in cell widths.
+const BADGE_PAD: f32 = 0.30;
+
 /// Cell size in pixels at `zoom` (pixels per cell height).
 pub fn cell_size(zoom: f32) -> Size {
     Size::new(zoom * CELL_ASPECT, zoom)
@@ -102,14 +108,10 @@ fn row_icon_layout(b: &TableBox, row: usize, zoom: f32, pan: Vector) -> Vec<(Row
     let k = zoom / 20.0;
     let mut u = row_name_end_px(b, row, zoom, pan) + 8.0 * k;
     let mut out = Vec::new();
-    let cell_w = 0.5 * zoom;
+    // every slot is a 10.5px glyph plus its 4px gap
     let push = |icon: RowIcon, u: &mut f32, out: &mut Vec<(RowIcon, f32)>| {
         out.push((icon, *u));
-        *u += match icon {
-            // "Unique" is a text pill: its slot is the pill width + gap
-            RowIcon::Unique => Row::badge_cell("Unique") * cell_w + 4.0 * k,
-            _ => 14.5 * k,
-        };
+        *u += 14.5 * k;
     };
     if rowd.pk {
         push(RowIcon::Pk, &mut u, &mut out);
@@ -159,6 +161,39 @@ pub fn note_hit(layout: &Layout, zoom: f32, pan: Vector, p: Point) -> Option<(&T
         }
     }
     None
+}
+
+/// X range (frame px) of an enum-typed row's "Enum" pill: the pill right
+/// of the type text, before the "Not Null" pill's slot — the same rect
+/// `badge_pill` draws for it (see `paint_table`).
+fn enum_pill_band(b: &TableBox, row: usize, zoom: f32, pan: Vector) -> Option<(f32, f32)> {
+    if !b.rows.get(row)?.ty_enum {
+        return None;
+    }
+    let s = cell_size(zoom);
+    let top_left = to_px(b.x, b.y, zoom, pan);
+    let nn_w = if b.rows[row].not_null == Some(true) {
+        Row::badge_cell("Not Null") * s.width
+    } else {
+        0.0
+    };
+    let en_w = Row::badge_cell("Enum") * s.width;
+    let type_right = top_left.x + b.w as f32 * s.width - 0.5 * s.width - nn_w - en_w;
+    let x0 = type_right + BADGE_PAD * s.width;
+    let w = "Enum".chars().count() as f32 * BADGE_CHAR * s.width + 2.0 * BADGE_PAD * s.width;
+    Some((x0, x0 + w))
+}
+
+/// The "Enum" pill under a canvas point, if any: (box, row) of the
+/// enum-typed column whose pill band contains the pointer. The overlay
+/// turns it into the enum's definition tooltip.
+pub fn enum_hit(layout: &Layout, zoom: f32, pan: Vector, p: Point) -> Option<(&TableBox, usize)> {
+    let (b, row) = hovered_row_of(layout, zoom, pan, p)?;
+    let (x0, x1) = enum_pill_band(b, row, zoom, pan)?;
+    let s = cell_size(zoom);
+    let cy = y_of(b, row, zoom, pan);
+    let half = 0.30 * s.height; // the pill's half-height, as badge_pill draws it
+    (p.x >= x0 && p.x < x1 && (p.y - cy).abs() <= half).then_some((b, row))
 }
 
 /// The (box, row) the pointer is over, if it is on a column row.
@@ -826,7 +861,23 @@ fn edge_stroke_width(zoom: f32) -> f32 {
 /// (Path2D strings), authored on a 10.5px grid.
 const PK_ICON: &str = "M 6.5625 0.9844 C 8.1935 0.9844 9.5156 2.3065 9.5156 3.9375 C 9.5156 5.5685 8.1935 6.8906 6.5625 6.8906 C 6.1735 6.8906 5.8022 6.8153 5.462 6.6786 L 4.5938 7.5469 H 3.9375 V 8.5313 H 2.9531 V 9.5156 H 0.9844 V 7.5469 L 3.736 4.7952 C 3.6518 4.5171 3.6092 4.2281 3.6094 3.9375 C 3.6094 2.3065 4.9315 0.9844 6.5625 0.9844 Z M 6.5625 0 C 4.388 0 2.625 1.7627 2.625 3.9375 C 2.625 4.1186 2.6373 4.2989 2.6619 4.4772 L 0.1441 6.995 C 0.0519 7.0873 0 7.2125 0 7.343 L 0 10.0078 C 0 10.2797 0.2204 10.5 0.4922 10.5 H 3.4453 C 3.7171 10.5 3.9375 10.2797 3.9375 10.0078 V 9.5156 H 4.4297 C 4.7015 9.5156 4.9219 9.2953 4.9219 9.0234 V 8.6133 L 5.7432 7.7895 C 6.011 7.8464 6.2848 7.875 6.5625 7.875 C 8.737 7.875 10.5 6.1123 10.5 3.9375 C 10.5 1.763 8.7373 0 6.5625 0 Z M 6.5625 2.9531 C 6.5625 3.4968 7.0032 3.9375 7.5469 3.9375 C 8.0905 3.9375 8.5313 3.4968 8.5313 2.9531 C 8.5313 2.4095 8.0905 1.9688 7.5469 1.9688 C 7.0032 1.9688 6.5625 2.4095 6.5625 2.9531 Z";
 const FK_ICON: &str = "M 4.6244 6.6258 c -0.2002 0 -0.3885 -0.078 -0.5304 -0.2197 c -1.1204 -1.1205 -1.1204 -2.9437 0 -4.0641 l 1.5016 -1.5016 c 0.5419 -0.542 1.2635 -0.8405 2.032 -0.8405 s 1.4901 0.2985 2.032 0.8405 c 1.1204 1.1204 1.1204 2.9436 0 4.0641 l -1.001 1.001 c -0.1416 0.1417 -0.3299 0.2197 -0.5304 0.2198 c -0.2002 0 -0.3885 -0.078 -0.5304 -0.2197 c -0.1416 -0.1417 -0.2198 -0.3301 -0.2198 -0.5305 c 0 -0.2004 0.0781 -0.3888 0.2198 -0.5305 l 1.001 -1.001 c 0.5355 -0.5355 0.5355 -1.4068 0 -1.9423 c -0.2588 -0.2588 -0.6039 -0.4015 -0.9712 -0.4015 s -0.7123 0.1426 -0.9712 0.4015 l -1.5016 1.5016 c -0.5355 0.5355 -0.5355 1.4068 0 1.9422 c 0.2925 0.2925 0.2925 0.7684 0 1.0609 c -0.1419 0.1417 -0.3302 0.2197 -0.5304 0.2197 z M 2.8725 10.5 c -0.7685 0 -1.4901 -0.2985 -2.032 -0.8405 c -1.1204 -1.1204 -1.1204 -2.9436 0 -4.0641 l 0.7509 -0.7509 c 0.1416 -0.1416 0.3302 -0.2197 0.5304 -0.2197 c 0.2002 0 0.3888 0.0781 0.5304 0.2198 c 0.1416 0.1416 0.2198 0.33 0.2198 0.5304 c 0 0.2004 -0.0781 0.3888 -0.2198 0.5305 l -0.7509 0.7508 c -0.5355 0.5354 -0.5355 1.4067 0 1.9422 c 0.2588 0.2588 0.6039 0.4015 0.9712 0.4015 s 0.7123 -0.1425 0.9712 -0.4015 l 1.5016 -1.5016 c 0.5355 -0.5355 0.5355 -1.4068 0 -1.9422 c -0.1416 -0.1417 -0.2198 -0.3301 -0.2198 -0.5305 s 0.0781 -0.3888 0.2198 -0.5305 c 0.1416 -0.1417 0.3302 -0.2197 0.5304 -0.2197 s 0.3888 0.078 0.5304 0.2196 c 1.1204 1.1205 1.1204 2.9437 0 4.0641 l -1.5016 1.5016 c -0.5419 0.542 -1.2635 0.8405 -2.032 0.8405 z";
-/// dbdiagram's unique fingerprint icon (their QTn).
+/// dbdiagram's unique fingerprint icon (their QTn), lifted verbatim
+/// from their bundle (minified: implicit command repetition).
+const UNIQUE_ICON: &str = "m6.179 10.5005c\
+    -.0797 0-.1606-.0181-.2367-.0562-.2613-.1309-.3669-.4489-.236-.7101.311-.6204.5644-1.2734.7533-1.9409.0796-.2812.3721-.4446.6532-.365.2812.0796.4446.372.365.6532-.207.7314-.4848 1.447-.8255 2.1268-.0928.1852-.2795.2922-.4734.2922z\
+    m-2.3451-.1445c\
+    -.0963 0-.1937-.0263-.2813-.0813-.2473-.1556-.3217-.4823-.1661-.7296.8998-1.4301 1.3753-3.0838 1.3753-4.7822 0-.2922.2369-.5291.5291-.5291s\
+    .5291.2369.5291.5291c0 1.8981-.5318 3.7467-1.5378 5.3457-.1005.1598-.2725.2474-.4483.2474zm\
+    -1.8201-1.0793c-.0927 0-.1865-.0244-.2718-.0755-.2506-.1504-.3318-.4754-.1814-.7259l.0286-.0476c\
+    .0019-.0032.0039-.0064.0059-.0096.6898-1.0958 1.053-2.3593 1.0504-3.6541-0-.7077.2752-1.372.7748-1.8717.4997-.4997 1.164-.7749 1.8706-.7749.7067 0 1.371.2752 1.8707.7749.4997.4996.7748 1.164.7748 1.8706 0 .5513-.0378 1.1093-.1122 1.6584-.0393.2896-.3059.4924-.5954.4532-.2896-.0393-.4925-.3058-.4532-.5954.0681-.5022.1026-1.0123.1026-1.5162 0-.424-.1651-.8226-.4649-1.1224-.2998-.2998-.6984-.4649-1.1224-.4649-.424 0-.8226.1651-1.1224.4649-.2998.2998-.4649.6984-.4649 1.1224.003 1.4923-.4154 2.9496-1.2099 4.2139l\
+    -.0259.0431c-.0992.1653-.2744.2569-.4542.2569zm6.9865-.2111c\
+    -.048 0-.0967-.0066-.1451-.0203-.281-.08-.444-.3727-.364-.6537.3342-1.174.5036-2.3949.5036-3.6287.0002-.6494-.1713-1.2899-.4959-1.8522-.3245-.5624-.7933-1.0312-1.3556-1.356-.5623-.3247-1.2027-.4964-1.852-.4964-.0001 0-.0002 0-.0003 0-.6492 0-1.2895.1716-1.8517.4962-.2531.1461-.5767.0594-.7228-.1937s\
+    -.0594-.5767.1937-.7228c.7229-.4174 1.5463-.638 2.381-.638h.0003c\
+    .8348 0 1.6582.2208 2.3812.6382.7229.4175 1.3257 1.0204 1.7429 1.7434.4173.7231.6378 1.5465.6376 2.3813 0 1.3317-.183 2.65-.544 3.9183-.0662.2326-.2781.3844-.5086.3844z\
+    m-8.4715-1.4646c\
+    -.0775 0-.1562-.0171-.2306-.0532-.2629-.1276-.3726-.4441-.245-.707.3159-.651.476-1.3501.476-2.078 0-.8363.2203-1.6596.6371-2.381.1462-.253.4698-.3397.7228-.1935.253.1462.3397.4698.1935.7228-.3239.5607-.4952 1.201-.4952 1.8517 0 .8893-.1959 1.7438-.5822 2.54-.0915.1885-.2801.2982-.4764.2982z";
+
+/// dbdiagram's note page icon (their Exn).
 const NOTE_ICON: &str = "M 9 1.125 C 9.2063 1.125 9.375 1.2938 9.375 1.5 V 6.75 H 7.5 C 7.0852 6.75 6.75 7.0852 6.75 7.5 V 9.375 H 1.5 C 1.2938 9.375 1.125 9.2063 1.125 9 V 1.5 C 1.125 1.2938 1.2938 1.125 1.5 1.125 H 9 Z M 1.5 10.5 H 6.75 H 6.8789 C 7.2773 10.5 7.6594 10.343 7.9406 10.0617 L 10.0617 7.9406 C 10.343 7.6594 10.5 7.2773 10.5 6.8789 V 6.75 V 1.5 C 10.5 0.6727 9.8273 0 9 0 H 1.5 C 0.6727 0 0 0.6727 0 1.5 V 9 C 0 9.8273 0.6727 10.5 1.5 10.5 Z M 3 7.6875 C 3 7.5383 2.9407 7.3952 2.8352 7.2897 C 2.7298 7.1843 2.5867 7.125 2.4375 7.125 C 2.2883 7.125 2.1452 7.1843 2.0398 7.2897 C 1.9343 7.3952 1.875 7.5383 1.875 7.6875 C 1.875 7.8367 1.9343 7.9798 2.0398 8.0853 C 2.1452 8.1907 2.2883 8.25 2.4375 8.25 C 2.5867 8.25 2.7298 8.1907 2.8352 8.0853 C 2.9407 7.9798 3 7.8367 3 7.6875 Z M 2.4375 2.25 C 2.2883 2.25 2.1452 2.3093 2.0398 2.4148 C 1.9343 2.5202 1.875 2.6633 1.875 2.8125 C 1.875 2.9617 1.9343 3.1048 2.0398 3.2102 C 2.1452 3.3157 2.2883 3.375 2.4375 3.375 C 2.5867 3.375 2.7298 3.3157 2.8352 3.2102 C 2.9407 3.1048 3 2.9617 3 2.8125 C 3 2.6633 2.9407 2.5202 2.8352 2.4148 C 2.7298 2.3093 2.5867 2.25 2.4375 2.25 Z M 3 5.25 C 3 5.1008 2.9407 4.9577 2.8352 4.8522 C 2.7298 4.7468 2.5867 4.6875 2.4375 4.6875 C 2.2883 4.6875 2.1452 4.7468 2.0398 4.8522 C 1.9343 4.9577 1.875 5.1008 1.875 5.25 C 1.875 5.3992 1.9343 5.5423 2.0398 5.6478 C 2.1452 5.7532 2.2883 5.8125 2.4375 5.8125 C 2.5867 5.8125 2.7298 5.7532 2.8352 5.6478 C 2.9407 5.5423 3 5.3992 3 5.25 Z";
 /// The records affordance glyph (a table with rows), used at the right
 /// end of the header of a records-bearing table on hover, on an 18px grid.
@@ -873,6 +924,18 @@ fn svg_path_cmds(data: &str) -> Vec<(u8, Vec<f32>)> {
     out
 }
 
+/// Parameter values per SVG command group (the implicit-repetition unit:
+/// a command's groups repeat until its data runs out). 0 = no params.
+fn svg_group(cmd: u8) -> usize {
+    match cmd.to_ascii_uppercase() {
+        b'M' | b'L' => 2,
+        b'H' | b'V' => 1,
+        b'C' => 6,
+        b'S' => 4,
+        _ => 0,
+    }
+}
+
 /// Fill an icon authored as SVG path data (dbdiagram's Path2D strings),
 /// scaled from its `grid` to `size` px and centered on `center`.
 fn svg_icon(frame: &mut canvas::Frame, center: Point, size: f32, grid: f32, color: Color, data: &str) {
@@ -884,73 +947,109 @@ fn svg_icon(frame: &mut canvas::Frame, center: Point, size: f32, grid: f32, colo
         // previous cubic's second control, for the S/s smooth shorthand
         let (mut qx, mut qy) = (0.0f32, 0.0f32);
         for &(cmd, ref v) in &cmds {
+            let upper = cmd.to_ascii_uppercase();
+            let rel = cmd.is_ascii_lowercase();
+            if svg_group(cmd) == 0 {
+                if matches!(cmd, b'Z' | b'z') {
+                    b.close();
+                    x = sx;
+                    y = sy;
+                    // for non-cubics the smooth-reflection anchor is the
+                    // point itself
+                    qx = x;
+                    qy = y;
+                }
+                continue;
+            }
+            let group = svg_group(cmd);
             let mut idx = 0usize;
-            loop {
+            // implicit repetition: the command's parameter groups repeat
+            // until its data runs out (dbdiagram's minified icons rely on
+            // it); an M/m's later groups are plain lines (SVG grammar)
+            while idx + group <= v.len() {
                 let take = |idx: &mut usize| -> f32 {
                     let val = v.get(*idx).copied().unwrap_or(0.0);
                     *idx += 1;
                     val
                 };
-                match cmd {
-                    b'M' => {
-                        x = take(&mut idx); y = take(&mut idx);
-                        sx = x; sy = y;
+                match upper {
+                    b'M' if idx == 0 => {
+                        if rel {
+                            x += take(&mut idx);
+                            y += take(&mut idx);
+                        } else {
+                            x = take(&mut idx);
+                            y = take(&mut idx);
+                        }
+                        sx = x;
+                        sy = y;
                         b.move_to(px(x, y));
                     }
-                    b'm' => {
-                        x += take(&mut idx); y += take(&mut idx);
-                        sx = x; sy = y;
-                        b.move_to(px(x, y));
+                    b'M' | b'L' => {
+                        if rel {
+                            x += take(&mut idx);
+                            y += take(&mut idx);
+                        } else {
+                            x = take(&mut idx);
+                            y = take(&mut idx);
+                        }
+                        b.line_to(px(x, y));
                     }
-                    b'L' => { x = take(&mut idx); y = take(&mut idx); b.line_to(px(x, y)); }
-                    b'l' => { x += take(&mut idx); y += take(&mut idx); b.line_to(px(x, y)); }
-                    b'H' => { x = take(&mut idx); b.line_to(px(x, y)); }
-                    b'h' => { x += take(&mut idx); b.line_to(px(x, y)); }
-                    b'V' => { y = take(&mut idx); b.line_to(px(x, y)); }
-                    b'v' => { y += take(&mut idx); b.line_to(px(x, y)); }
+                    b'H' => {
+                        let nx = take(&mut idx);
+                        x = if rel { x + nx } else { nx };
+                        b.line_to(px(x, y));
+                    }
+                    b'V' => {
+                        let ny = take(&mut idx);
+                        y = if rel { y + ny } else { ny };
+                        b.line_to(px(x, y));
+                    }
                     b'C' => {
-                        let (x1, y1) = (take(&mut idx), take(&mut idx));
-                        let (x2, y2) = (take(&mut idx), take(&mut idx));
-                        x = take(&mut idx); y = take(&mut idx);
+                        let (mut x1, mut y1) = (take(&mut idx), take(&mut idx));
+                        let (mut x2, mut y2) = (take(&mut idx), take(&mut idx));
+                        if rel {
+                            x1 += x;
+                            y1 += y;
+                            x2 += x;
+                            y2 += y;
+                        }
+                        if rel {
+                            x += take(&mut idx);
+                            y += take(&mut idx);
+                        } else {
+                            x = take(&mut idx);
+                            y = take(&mut idx);
+                        }
                         b.bezier_curve_to(px(x1, y1), px(x2, y2), px(x, y));
-                        qx = x2; qy = y2;
+                        qx = x2;
+                        qy = y2;
                     }
-                    b'c' => {
-                        let (x1, y1) = (x + take(&mut idx), y + take(&mut idx));
-                        let (x2, y2) = (x + take(&mut idx), y + take(&mut idx));
-                        x += take(&mut idx); y += take(&mut idx);
-                        b.bezier_curve_to(px(x1, y1), px(x2, y2), px(x, y));
-                        qx = x2; qy = y2;
-                    }
-                    b'S' | b's' => {
-                        let rel = cmd == b's';
+                    b'S' => {
                         let (mut x2, mut y2) = (take(&mut idx), take(&mut idx));
                         let (mut ex, mut ey) = (take(&mut idx), take(&mut idx));
-                        if rel { x2 += x; y2 += y; ex += x; ey += y; }
-                        b.bezier_curve_to(px(2.0 * x - qx, 2.0 * y - qy), px(x2, y2), px(x, y));
-                        x = ex; y = ey;
-                        qx = x2; qy = y2;
+                        if rel {
+                            x2 += x;
+                            y2 += y;
+                            ex += x;
+                            ey += y;
+                        }
+                        b.bezier_curve_to(
+                            px(2.0 * x - qx, 2.0 * y - qy),
+                            px(x2, y2),
+                            px(ex, ey),
+                        );
+                        x = ex;
+                        y = ey;
+                        qx = x2;
+                        qy = y2;
                     }
-                    b'Z' | b'z' => { b.close(); x = sx; y = sy; }
                     _ => {}
                 }
                 // for non-cubics the smooth-reflection anchor is the point itself
-                if !matches!(cmd, b'C' | b'c' | b'S' | b's') {
-                    qx = x; qy = y;
-                }
-                // implicit repetition: only these take repeated groups
-                let group = match cmd.to_ascii_uppercase() {
-                    b'M' | b'L' => 2,
-                    b'H' | b'V' => 1,
-                    _ => 0,
-                };
-                if group == 0 || idx >= v.len() {
-                    break;
-                }
-                if cmd == b'M' || cmd == b'm' {
-                    // subsequent pairs after moveto are lines
-                    let (letter, v) = if cmd == b'M' { (b'L', v.clone()) } else { (b'l', v.clone()) };
-                    let _ = (letter, v);
+                if !matches!(upper, b'C' | b'S') {
+                    qx = x;
+                    qy = y;
                 }
             }
         }
@@ -1104,42 +1203,40 @@ fn paint_table(
             vertical_alignment: iced::alignment::Vertical::Center,
             ..Default::default()
         });
-        // dbdiagram's left cluster: pk, fk, unique, note in order — the
-        // first three 10.5px glyphs ("Unique" keeps its text pill in its
-        // slot), each with a 4px gap, at 40% opacity
+        // dbdiagram's left cluster: pk, fk, unique, note in order — 10.5px
+        // glyphs (the unique one their QTn fingerprint), each with a 4px
+        // gap
         for (icon, slot) in row_icon_layout(b, i, zoom, pan) {
-            match icon {
-                RowIcon::Unique => {
-                    // "Unique" keeps its text pill in its cluster slot
-                    badge_pill(frame, "Unique", slot, y, s);
-                }
-                other => {
-                    let path = match other {
-                        RowIcon::Pk => PK_ICON,
-                        RowIcon::Fk => FK_ICON,
-                        RowIcon::Note => NOTE_ICON,
-                        RowIcon::Unique => unreachable!(),
-                    };
-                    svg_icon(
-                        frame,
-                        Point::new(slot + 5.25 * zoom / 20.0, y),
-                        10.5 * zoom / 20.0,
-                        10.5,
-                        theme::MARKER,
-                        path,
-                    );
-                }
-            }
+            let path = match icon {
+                RowIcon::Pk => PK_ICON,
+                RowIcon::Fk => FK_ICON,
+                RowIcon::Unique => UNIQUE_ICON,
+                RowIcon::Note => NOTE_ICON,
+            };
+            svg_icon(
+                frame,
+                Point::new(slot + 5.25 * zoom / 20.0, y),
+                10.5 * zoom / 20.0,
+                10.5,
+                theme::MARKER,
+                path,
+            );
         }
-        // right side: type text, then the "Not Null" pill flush right; the
-        // type's right edge shifts left of the pill (their renderType)
+        // right side: type text, then the "Enum" / "Not Null" pills flush
+        // right; the type's right edge shifts left of both pills (their
+        // renderType plus the enum pill)
         let nn_w = if row.not_null == Some(true) {
             Row::badge_cell("Not Null") * s.width
         } else {
             0.0
         };
+        let en_w = if row.ty_enum {
+            Row::badge_cell("Enum") * s.width
+        } else {
+            0.0
+        };
+        let right = top_left.x + size.width - 0.5 * s.width - nn_w - en_w;
         if !row.ty.is_empty() {
-            let right = top_left.x + size.width - 0.5 * s.width - nn_w;
             frame.fill_text(Text {
                 content: row.ty.clone(),
                 position: baseline(right),
@@ -1151,11 +1248,14 @@ fn paint_table(
                 ..Default::default()
             });
         }
+        if row.ty_enum {
+            badge_pill(frame, "Enum", right + 0.3 * s.width, y, s);
+        }
         if row.not_null == Some(true) {
             badge_pill(
                 frame,
                 "Not Null",
-                top_left.x + size.width - 0.5 * s.width - nn_w + 0.3 * s.width,
+                right + en_w + 0.3 * s.width,
                 y,
                 s,
             );
@@ -1163,11 +1263,11 @@ fn paint_table(
     }
 }
 
-/// A subtle text badge pill ("Unique" / "Not Null"), left edge at `x`,
+/// A subtle text badge pill ("Enum" / "Not Null"), left edge at `x`,
 /// vertically centered on the row line.
 fn badge_pill(frame: &mut canvas::Frame, label: &str, x: f32, y: f32, s: Size) {
-    let tw = label.chars().count() as f32 * 0.456 * s.width;
-    let pad = 0.30 * s.width;
+    let tw = label.chars().count() as f32 * BADGE_CHAR * s.width;
+    let pad = BADGE_PAD * s.width;
     let rect = Rectangle::new(
         Point::new(x, y - 0.30 * s.height),
         Size::new(tw + 2.0 * pad, 0.60 * s.height),
@@ -1287,6 +1387,106 @@ mod tests {
             slot > top_left.x + 2.16 * s.width,
             "cluster after the name: {slot}"
         );
+    }
+
+    #[test]
+    fn unique_rows_carry_the_fingerprint_in_the_cluster() {
+        // fixture: Table a { id integer [pk, unique] email varchar }
+        let src = "Table a { id integer [pk, unique] email varchar }\n";
+        let l = dbml_ui::layout::layout(&dbml_ui::model::build(
+            &dbml_ui::dbml::parser::parse(src).doc,
+        ));
+        let zoom = 20.0;
+        let pan = Vector::new(40.0, 40.0);
+        let b = &l.boxes[0];
+        let icons = row_icon_layout(b, 0, zoom, pan);
+        // pk first, then the unique fingerprint, each slot advancing by
+        // the standard glyph step (10.5px glyph + 4px gap) — no text-pill
+        // width in the cluster anymore
+        assert_eq!(icons.len(), 2, "pk + unique on row 0");
+        assert_eq!(icons[0].0, RowIcon::Pk);
+        assert_eq!(icons[1].0, RowIcon::Unique);
+        let step = (icons[1].1 - icons[0].1) / (zoom / 20.0);
+        assert!((step - 14.5).abs() < 0.01, "standard glyph advance: {step}");
+        // the fingerprint has no marker tooltip of its own (markers stay
+        // pk/fk), and row 1 carries no cluster at all
+        let p = Point::new(icons[1].1 + 5.25 * zoom / 20.0, y_of(b, 0, zoom, pan));
+        assert!(marker_hit(&l, zoom, pan, p).is_none());
+        assert!(row_icon_layout(b, 1, zoom, pan).is_empty());
+    }
+
+    #[test]
+    fn icon_paths_parse_into_whole_command_groups() {
+        // every icon's path data must divide into whole per-command
+        // parameter groups and use only supported commands — dbdiagram's
+        // minified unique fingerprint relies on implicit repetition, which
+        // the renderer expands
+        for (name, data) in [
+            ("pk", PK_ICON),
+            ("fk", FK_ICON),
+            ("unique", UNIQUE_ICON),
+            ("note", NOTE_ICON),
+            ("table ring", TABLE_RING_ICON),
+            ("table rows", TABLE_ROWS_ICON),
+        ] {
+            for (cmd, v) in svg_path_cmds(data) {
+                let group = svg_group(cmd);
+                if group == 0 {
+                    assert!(
+                        matches!(cmd, b'Z' | b'z') && v.is_empty(),
+                        "{name}: unsupported command {} with params {v:?}",
+                        cmd as char
+                    );
+                } else {
+                    assert_eq!(
+                        v.len() % group,
+                        0,
+                        "{name}: cmd {} params {v:?}",
+                        cmd as char
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn enum_pill_hit_tests_the_band_right_of_the_type() {
+        let src = "Enum st { draft published archived }\nTable t { s st [not null] n integer }\n";
+        let l = dbml_ui::layout::layout(&dbml_ui::model::build(
+            &dbml_ui::dbml::parser::parse(src).doc,
+        ));
+        let zoom = 20.0;
+        let pan = Vector::new(40.0, 40.0);
+        let b = &l.boxes[0];
+        assert!(b.rows[0].ty_enum, "the enum-typed row carries the flag");
+        assert!(!b.rows[1].ty_enum);
+        assert_eq!(b.rows[0].ty, "st");
+        let s = cell_size(zoom);
+        let y = y_of(b, 0, zoom, pan);
+        let (x0, x1) = enum_pill_band(b, 0, zoom, pan).expect("enum band");
+        let hit = enum_hit(&l, zoom, pan, Point::new((x0 + x1) / 2.0, y))
+            .expect("enum pill hit");
+        assert_eq!(hit.0.title, "t");
+        assert_eq!(hit.1, 0);
+        // the band hugs the pill's drawn height: above/below the row line
+        // misses
+        let half = 0.30 * s.height;
+        assert!(
+            enum_hit(&l, zoom, pan, Point::new((x0 + x1) / 2.0, y - half - 2.0)).is_none(),
+            "outside the pill's vertical band"
+        );
+        // left of the band (the type text) and right of it (the Not Null
+        // pill's slot) miss too
+        assert!(enum_hit(&l, zoom, pan, Point::new(x0 - 3.0, y)).is_none());
+        assert!(
+            enum_hit(&l, zoom, pan, Point::new(x1 + 3.0, y)).is_none(),
+            "past the band's right edge"
+        );
+        // a row without the flag has no band
+        assert!(enum_pill_band(b, 1, zoom, pan).is_none());
+        // and the pill shifts the type text left of both pills: the type's
+        // right edge is the enum band's left edge minus its padding
+        assert!(x0 > to_px(b.x, b.y, zoom, pan).x, "band inside the box");
     }
 
     #[test]
@@ -1596,9 +1796,9 @@ mod interaction_tests {
     }
 }
 
-/// The diagram's marker/note tooltip as its own canvas widget, STACKED
-/// above the diagram canvas: iced flattens one widget's geometries into a
-/// mesh pass + a text pass, so a second-geometry tooltip pill painted
+/// The diagram's marker/note/enum-pill tooltip as its own canvas widget,
+/// STACKED above the diagram canvas: iced flattens one widget's geometries
+/// into a mesh pass + a text pass, so a second-geometry tooltip pill painted
 /// behind the box row text. Separate widgets composite fully in order.
 pub struct DiagramOverlay<'a> {
     pub layout: &'a Layout,
@@ -1623,24 +1823,49 @@ impl canvas::Program<crate::app::Message> for DiagramOverlay<'_> {
         let Some(p) = self.hover else {
             return vec![frame.into_geometry()];
         };
-        // note icons: hover shows the note text; then pk/fk markers.
-        // dbdiagram's tooltip is pointer-anchored (pointer + 10,10, clamped)
-        // with a dark #222 pill — it follows the cursor.
-        let text = if let Some((b, row)) = note_hit(self.layout, self.zoom, self.pan, p) {
-            // 60-char cap keeps the pill readable
-            let mut text: String = b.rows[row].note.clone().unwrap_or_default();
-            if text.chars().count() > 60 {
-                text = text.chars().take(60).collect::<String>() + "\u{2026}";
-            }
-            Some(text)
-        } else {
-            marker_hit(self.layout, self.zoom, self.pan, p)
-                .map(|(b, row)| marker_label(b.rows[row].pk).to_string())
-        };
-        if let Some(text) = text {
+        // tooltip lines: the "Enum" pill shows the enum's definition (its
+        // name, then the values one per line); then pk/fk markers, then
+        // the note icon's note text. dbdiagram's tooltip is
+        // pointer-anchored (pointer + 10,10, clamped) with a dark #222
+        // pill — it follows the cursor.
+        let lines: Option<Vec<String>> =
+            if let Some((b, row)) = enum_hit(self.layout, self.zoom, self.pan, p) {
+                let ty = &b.rows[row].ty;
+                self.layout.enums.iter().find(|e| &e.name == ty).map(|e| {
+                    let mut lines = vec![e.name.clone()];
+                    let cap = 12; // keep the pill readable on huge enums
+                    lines.extend(e.values.iter().take(cap).cloned());
+                    if e.values.len() > cap {
+                        lines.push("\u{2026}".to_string());
+                    }
+                    lines
+                })
+            } else {
+                marker_hit(self.layout, self.zoom, self.pan, p)
+                    .map(|(b, row)| vec![marker_label(b.rows[row].pk).to_string()])
+                    .or_else(|| {
+                        note_hit(self.layout, self.zoom, self.pan, p).map(|(b, row)| {
+                            // 60-char cap keeps the pill readable
+                            let mut text: String =
+                                b.rows[row].note.clone().unwrap_or_default();
+                            if text.chars().count() > 60 {
+                                text = text.chars().take(60).collect::<String>() + "\u{2026}";
+                            }
+                            vec![text]
+                        })
+                    })
+            };
+        if let Some(lines) = lines {
             let k = self.zoom / 20.0;
-            let w = text.chars().count() as f32 * 6.2 * k + 16.0 * k;
-            let h = 20.0 * k;
+            let widest = lines
+                .iter()
+                .map(|l| l.chars().count())
+                .max()
+                .unwrap_or(0) as f32;
+            let w = widest * 6.2 * k + 16.0 * k;
+            // 16k per line + 4k padding: a single line is the 20k pill the
+            // marker/note tooltips have always drawn
+            let h = (lines.len() as f32 * 16.0 + 4.0) * k;
             let x = (p.x + 10.0 * k)
                 .clamp(2.0, (bounds.width - w - 2.0).max(2.0));
             let y = (p.y + 10.0 * k)
@@ -1653,16 +1878,27 @@ impl canvas::Program<crate::app::Message> for DiagramOverlay<'_> {
                 ),
                 theme::BG,
             );
-            frame.fill_text(Text {
-                content: text,
-                position: Point::new(x + 8.0 * k, y + h * 0.5),
-                color: theme::TEXT,
-                size: (0.5 * self.zoom).into(),
-                font: Font::DEFAULT,
-                horizontal_alignment: iced::alignment::Horizontal::Left,
-                vertical_alignment: iced::alignment::Vertical::Center,
-                ..Default::default()
-            });
+            for (i, line) in lines.iter().enumerate() {
+                // the enum's name line reads as the tooltip's title
+                let title = i == 0 && lines.len() > 1;
+                frame.fill_text(Text {
+                    content: line.clone(),
+                    position: Point::new(x + 8.0 * k, y + (2.0 + (i as f32 + 0.5) * 16.0) * k),
+                    color: theme::TEXT,
+                    size: (0.5 * self.zoom).into(),
+                    font: Font {
+                        weight: if title {
+                            font::Weight::Bold
+                        } else {
+                            font::Weight::Normal
+                        },
+                        ..Font::DEFAULT
+                    },
+                    horizontal_alignment: iced::alignment::Horizontal::Left,
+                    vertical_alignment: iced::alignment::Vertical::Center,
+                    ..Default::default()
+                });
+            }
         }
         vec![frame.into_geometry()]
     }

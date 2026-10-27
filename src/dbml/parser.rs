@@ -1972,7 +1972,10 @@ ENUM post_status {
 ";
         let canonical = crate::layout::layout(&crate::model::build(&parse(mixed).doc));
         assert!(parse(mixed).errors.is_empty(), "{:?}", parse(mixed).errors);
-        assert_eq!(canonical.boxes.len(), 3);
+        // enums are not boxes (an "Enum" pill rides their columns instead)
+        assert_eq!(canonical.boxes.len(), 2);
+        assert_eq!(canonical.enums.len(), 1);
+        assert_eq!(canonical.enums[0].name, "post_status");
         assert_eq!(canonical.edges.len(), 2, "inline + top-level Ref");
         let users = canonical.boxes.iter().find(|b| b.title == "users").unwrap();
         assert_eq!((users.x, users.y), (0, 0));

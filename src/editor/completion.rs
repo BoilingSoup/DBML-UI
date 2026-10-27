@@ -5,7 +5,6 @@
 //! in sync.
 
 use dbml_ui::layout::Layout;
-use dbml_ui::model::NodeKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ItemKind {
@@ -79,22 +78,30 @@ fn unbalanced_bracket(line: &str) -> bool {
     line.matches('[').count() > line.matches(']').count()
 }
 
-/// Columns of a table (or values of an enum) after `<name>.`.
+/// Columns of a table (or values of an enum) after `<name>.`. Enums are
+/// not diagram boxes, so their values come from the layout's enum list.
 fn member_items(layout: &Layout, owner: &str) -> Vec<Item> {
-    let Some(b) = layout.boxes.iter().find(|b| b.title == owner) else {
-        return Vec::new();
-    };
-    let kind = match b.kind {
-        NodeKind::Enum => ItemKind::EnumValue,
-        _ => ItemKind::Column,
-    };
-    b.rows
-        .iter()
-        .map(|r| Item {
-            label: r.name.clone(),
-            kind,
-        })
-        .collect()
+    if let Some(b) = layout.boxes.iter().find(|b| b.title == owner) {
+        return b
+            .rows
+            .iter()
+            .map(|r| Item {
+                label: r.name.clone(),
+                kind: ItemKind::Column,
+            })
+            .collect();
+    }
+    match layout.enums.iter().find(|e| e.name == owner) {
+        Some(e) => e
+            .values
+            .iter()
+            .map(|v| Item {
+                label: v.clone(),
+                kind: ItemKind::EnumValue,
+            })
+            .collect(),
+        None => Vec::new(),
+    }
 }
 
 /// Top-level keywords plus every table/enum name.
@@ -110,10 +117,13 @@ fn definition_items(layout: &Layout) -> Vec<Item> {
     for b in &layout.boxes {
         items.push(Item {
             label: b.title.clone(),
-            kind: match b.kind {
-                NodeKind::Enum => ItemKind::Enum,
-                _ => ItemKind::Table,
-            },
+            kind: ItemKind::Table,
+        });
+    }
+    for e in &layout.enums {
+        items.push(Item {
+            label: e.name.clone(),
+            kind: ItemKind::Enum,
         });
     }
     items

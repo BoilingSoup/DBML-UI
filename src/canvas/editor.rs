@@ -636,46 +636,54 @@ fn word_at(app: &App, p: Point) -> Option<String> {
     Some(chars[s..e].iter().collect())
 }
 
-/// Definition doc for the hovered word: a table/enum by name or alias.
+/// Definition doc for the hovered word: a table by name or alias, or an
+/// enum by name (enums are not diagram boxes, so their docs come from the
+/// layout's enum list).
 pub fn doc_hover_at(app: &App, p: Point) -> Option<DocHover> {
-    use dbml_ui::model::NodeKind;
     let word = word_at(app, p)?;
+    let diagram = app.diagram();
     // exact name first, then alias (`Table users as U`); two tables could
     // share an alias — the first in document order wins
-    let boxes = &app.diagram().boxes;
-    let b = boxes.iter().find(|b| b.title == word).or_else(|| {
+    let boxes = &diagram.boxes;
+    if let Some(b) = boxes.iter().find(|b| b.title == word).or_else(|| {
         boxes
             .iter()
             .find(|b| b.alias.as_deref() == Some(word.as_str()))
-    })?;
-    let title = format!(
-        "{} {}",
-        match b.kind {
-            NodeKind::Enum => "Enum",
-            _ => "Table",
-        },
-        b.title
-    );
-    let rows = b
-        .rows
-        .iter()
-        .map(|r| {
-            let marker = if r.pk {
-                "\u{25c6}"
-            } else if r.fk {
-                "\u{25c7}"
-            } else {
-                " "
-            };
-            let text = if r.ty.is_empty() {
-                r.name.clone()
-            } else {
-                format!("{}  {}", r.name, r.ty)
-            };
-            (marker.to_string(), text)
-        })
-        .collect();
-    Some(DocHover { title, rows })
+    }) {
+        let rows = b
+            .rows
+            .iter()
+            .map(|r| {
+                let marker = if r.pk {
+                    "\u{25c6}"
+                } else if r.fk {
+                    "\u{25c7}"
+                } else {
+                    " "
+                };
+                let text = if r.ty.is_empty() {
+                    r.name.clone()
+                } else {
+                    format!("{}  {}", r.name, r.ty)
+                };
+                (marker.to_string(), text)
+            })
+            .collect();
+        return Some(DocHover {
+            title: format!("Table {}", b.title),
+            rows,
+        });
+    }
+    // an enum type name: its members, no pk/fk markers (plain marker slot)
+    let e = diagram.enums.iter().find(|e| e.name == word)?;
+    Some(DocHover {
+        title: format!("Enum {}", e.name),
+        rows: e
+            .values
+            .iter()
+            .map(|v| (" ".to_string(), v.clone()))
+            .collect(),
+    })
 }
 
 /// Doc tooltip geometry: same placement rules as the error tooltip.
@@ -909,6 +917,12 @@ mod doc_tests {
         assert_eq!(doc.title, "Enum post_status");
         assert_eq!(doc.rows.len(), 3);
         assert_eq!(doc.rows[0].1, "draft");
+        // enum members carry no pk/fk markers (a plain marker slot)
+        assert!(
+            doc.rows.iter().all(|(m, _)| m == " "),
+            "plain rows: {:?}",
+            doc.rows
+        );
     }
 
     #[test]

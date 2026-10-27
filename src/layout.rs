@@ -19,6 +19,9 @@ pub struct Row {
     /// diagram column row is clicked).
     pub name_span: Span,
     pub ty: String,
+    /// The type names a schema enum: the row gets dbdiagram's "Enum" pill
+    /// right of the type text (hovering it shows the enum's values).
+    pub ty_enum: bool,
     /// Some(true) = not null, Some(false) = explicit null.
     pub not_null: Option<bool>,
     pub unique: bool,
@@ -26,8 +29,8 @@ pub struct Row {
 }
 
 impl Row {
-    /// Extra width (cells) of the "Not Null" / "Unique" pills and the
-    /// trailing note icon.
+    /// Extra width (cells) of one left-cluster icon slot and of the
+    /// "Enum" / "Not Null" pills' lead-in.
     /// One icon slot in the left cluster: a 10.5px glyph plus its 4px gap,
     /// in cells (their WN.PADDING_X = 4 at the 20px 1:1 cell).
     pub const ICON_CELL: f32 = (10.5 + 4.0) / 20.0;
@@ -52,13 +55,16 @@ impl Row {
             w += Self::ICON_CELL;
         }
         if self.unique {
-            w += Self::badge_cell("Unique"); // text pill in the cluster slot
+            w += Self::ICON_CELL;
         }
         if self.note.is_some() {
             w += Self::ICON_CELL;
         }
-        // right: type text, then the "Not Null" pill flush right
+        // right: type text, then the "Enum" / "Not Null" pills flush right
         w += 0.6 + self.ty.width() as f32 * Self::CHAR_CELL;
+        if self.ty_enum {
+            w += Self::badge_cell("Enum");
+        }
         if self.not_null == Some(true) {
             w += Self::badge_cell("Not Null");
         }
@@ -71,7 +77,6 @@ impl Row {
 pub struct TableBox {
     /// Index into `Schema::nodes`.
     pub node: usize,
-    pub kind: NodeKind,
     pub x: i32,
     pub y: i32,
     pub w: i32,
@@ -121,10 +126,21 @@ pub struct EdgeRoute {
     pub card: Cardinality,
 }
 
+/// A schema enum definition, for the "Enum" pill's tooltip and the
+/// editor's hover docs (enums are never boxes).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnumInfo {
+    pub name: String,
+    pub values: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Layout {
     pub boxes: Vec<TableBox>,
     pub edges: Vec<EdgeRoute>,
+    /// The schema's enums, in document order: `Enum post_status { ... }`
+    /// feeds the "Enum" pill on enum-typed columns and the tooltips.
+    pub enums: Vec<EnumInfo>,
     /// (start_x, end_x) of each layer column, for gap routing.
     pub cols: Vec<(i32, i32)>,
     /// Diagram content extents (max right, max bottom).
@@ -193,7 +209,7 @@ fn ref_layers(schema: &Schema) -> Vec<usize> {
 /// dbdiagram's "Auto-arrange / Left-right" (ELK layered, left-to-right):
 /// referenced tables LEFT of their FK tables, long relationship chains
 /// become long left-to-right runs. Returns the same shape as the
-/// drag-override map — table/enum name -> (x, y) in CELLS — for the app to
+/// drag-override map — table name -> (x, y) in CELLS — for the app to
 /// write into `table_pos` and re-layout with `layout_with_overrides`; it
 /// never mutates `layout()` itself.
 ///
@@ -219,23 +235,49 @@ pub fn auto_arrange(
         return out;
     }
     let layer = ref_layers(schema);
-    let max_layer = layer.iter().copied().max().unwrap_or(0);
 
-    // Box sizes and titles by node index (one box per node).
+    // Box sizes and titles by node index. Enum nodes have no box (enums
+    // are "Enum" pills on their columns, never boxes) and stale nodes lose
+    // theirs on edits: both drop out of the arrangement entirely, so no
+    // phantom component gaps open up where they used to sit.
     let mut size = vec![(0i32, 0i32); n];
     let mut title = vec![String::new(); n];
     for b in boxes {
         size[b.node] = (b.w, b.h);
         title[b.node] = b.title.clone();
     }
+    let live: Vec<usize> = (0..n).filter(|&i| !title[i].is_empty()).collect();
+    if live.is_empty() {
+        return out;
+    }
+    let slot_of: std::collections::HashMap<usize, usize> = live
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(slot, i)| (i, slot))
+        .collect();
+    let m = live.len();
+    // everything below works in the compact (boxed) node space
+    let layer: Vec<usize> = live.iter().map(|&i| layer[i]).collect();
+    let size: Vec<(i32, i32)> = live.iter().map(|&i| size[i]).collect();
+    let title: Vec<String> = live.iter().map(|&i| title[i].clone()).collect();
+    let max_layer = layer.iter().copied().max().unwrap_or(0);
 
     // Ref adjacency (referenced -> FK) both ways, for the barycenter
-    // sweeps' neighbors in adjacent layers.
-    let mut succ: Vec<Vec<usize>> = vec![Vec::new(); n];
-    let mut pred: Vec<Vec<usize>> = vec![Vec::new(); n];
+    // sweeps' neighbors in adjacent layers. Edges into unboxed nodes
+    // (dangling after an edit) drop out with them.
+    let mut succ: Vec<Vec<usize>> = vec![Vec::new(); m];
+    let mut pred: Vec<Vec<usize>> = vec![Vec::new(); m];
     for e in &schema.edges {
         let (fk, rf) = fk_ref(e);
-        if fk != rf && !succ[rf].contains(&fk) {
+        if fk == rf {
+            continue;
+        }
+        let (Some(fk), Some(rf)) = (slot_of.get(&fk), slot_of.get(&rf)) else {
+            continue;
+        };
+        let (fk, rf) = (*fk, *rf);
+        if !succ[rf].contains(&fk) {
             succ[rf].push(fk);
             pred[fk].push(rf);
         }
@@ -245,10 +287,10 @@ pub fn auto_arrange(
     // each node's key is the average of its neighbors' positions in the
     // adjacent layers. Ties keep model order (forceNodeModelOrder).
     let mut order_layers: Vec<Vec<usize>> = vec![Vec::new(); max_layer + 1];
-    for i in 0..n {
+    for i in 0..m {
         order_layers[layer[i]].push(i);
     }
-    let mut pos = vec![0usize; n];
+    let mut pos = vec![0usize; m];
     for l in &mut order_layers {
         for (i, v) in l.iter().enumerate() {
             pos[*v] = i;
@@ -299,9 +341,9 @@ pub fn auto_arrange(
         }
     }
 
-    // Connected components over ref edges (union-find); isolated nodes
-    // (enums, unrelated tables) are their own component.
-    let mut parent: Vec<usize> = (0..n).collect();
+    // Connected components over ref edges (union-find); isolated tables
+    // (no refs) are their own component.
+    let mut parent: Vec<usize> = (0..m).collect();
     fn find(parent: &mut [usize], i: usize) -> usize {
         let mut i = i;
         while parent[i] != i {
@@ -310,10 +352,9 @@ pub fn auto_arrange(
         }
         i
     }
-    for e in &schema.edges {
-        let (fk, rf) = fk_ref(e);
-        if fk != rf {
-            let (a, b) = (find(&mut parent, fk), find(&mut parent, rf));
+    for (v, preds) in pred.iter().enumerate() {
+        for &u in preds {
+            let (a, b) = (find(&mut parent, u), find(&mut parent, v));
             if a != b {
                 parent[a] = b;
             }
@@ -322,7 +363,7 @@ pub fn auto_arrange(
     // Components in model order of their first node.
     let mut comps: Vec<Vec<usize>> = Vec::new();
     let mut by_root: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
-    for i in 0..n {
+    for i in 0..m {
         let root = find(&mut parent, i);
         let idx = *by_root.entry(root).or_insert_with(|| {
             comps.push(Vec::new());
@@ -335,7 +376,7 @@ pub fn auto_arrange(
     // previous x + previous max width + 12), each layer's nodes stacked
     // top-down in barycenter order with 2-cell gaps, the block centered on
     // the component's center line (local y 0).
-    let mut placed = vec![(0i32, 0i32); n];
+    let mut placed = vec![(0i32, 0i32); m];
     let mut comp_x = 0i32;
     for comp in &comps {
         let mut x = comp_x;
@@ -368,17 +409,14 @@ pub fn auto_arrange(
     // center line).
     let min_x = placed.iter().map(|p| p.0).min().unwrap_or(0);
     let min_y = placed.iter().map(|p| p.1).min().unwrap_or(0);
-    for (i, p) in placed.iter_mut().enumerate() {
-        if title[i].is_empty() {
-            continue; // no box for this node (stale diagram): skip it
-        }
+    for (i, p) in placed.iter().enumerate() {
         out.insert(title[i].clone(), (p.0 - min_x, p.1 - min_y));
     }
     out
 }
 
 /// Layout with user-dragged table positions (diagram coordinates, keyed by
-/// table/enum name). Overridden boxes keep their dragged position; column
+/// table name). Overridden boxes keep their dragged position; column
 /// extents, content bounds, and edge routes are computed from the final
 /// positions. New/renamed tables fall back to the automatic placement.
 pub fn layout_with_overrides(
@@ -387,14 +425,30 @@ pub fn layout_with_overrides(
 ) -> Layout {
     let layer = ref_layers(schema);
 
+    // The schema's enums: never boxes (dbdiagram draws an "Enum" pill
+    // after an enum-typed column instead). The definitions feed the
+    // pill's tooltip and the editor's hover docs; the name set flags the
+    // rows whose type names an enum.
+    let enums: Vec<EnumInfo> = schema
+        .nodes
+        .iter()
+        .filter(|n| n.kind == NodeKind::Enum)
+        .map(|n| EnumInfo {
+            name: n.name.clone(),
+            values: n.columns.iter().map(|c| c.name.clone()).collect(),
+        })
+        .collect();
+    let enum_names: std::collections::HashSet<&str> =
+        enums.iter().map(|e| e.name.as_str()).collect();
+
     // Boxes, sized from their content.
     let boxes: Vec<TableBox> = schema
         .nodes
         .iter()
         .enumerate()
+        .filter(|(_, node)| node.kind != NodeKind::Enum)
         .map(|(idx, node)| {
             let title = node.name.clone();
-            // enum type names, for the right-side enum pill flag
             let rows = node
                 .columns
                 .iter()
@@ -404,6 +458,7 @@ pub fn layout_with_overrides(
                     name: c.name.clone(),
                     name_span: c.name_span.clone(),
                     ty: c.ty.clone(),
+                    ty_enum: enum_names.contains(c.ty.as_str()),
                     not_null: c.not_null,
                     unique: c.unique,
                     note: c.note.clone(),
@@ -417,7 +472,6 @@ pub fn layout_with_overrides(
                 .unwrap_or(6);
             TableBox {
                 node: idx,
-                kind: node.kind,
                 x: 0,
                 y: 0,
                 w: content + 4,
@@ -522,6 +576,7 @@ pub fn layout_with_overrides(
     Layout {
         boxes: placed,
         edges,
+        enums,
         cols,
         extent: (max_right, max_bottom + 1),
     }
@@ -856,12 +911,42 @@ Ref: b.b_ref > a.id
     }
 
     #[test]
-    fn enums_lay_out_as_boxes() {
+    fn enums_are_never_boxes_but_carry_their_values() {
         let src = "Enum st { a b }\nTable t { s st }\n";
         let l = layout_of(src);
-        assert_eq!(l.boxes.len(), 2);
-        let st = l.boxes.iter().find(|b| b.title == "st").unwrap();
-        assert_eq!(st.h, 4); // 2 values + header + bottom border
+        // only the table is a box; the enum exists as a definition
+        assert_eq!(l.boxes.len(), 1);
+        assert_eq!(l.boxes[0].title, "t");
+        // the layout carries the enum for the pill's tooltip / hover docs
+        assert_eq!(
+            l.enums,
+            vec![EnumInfo {
+                name: "st".to_string(),
+                values: vec!["a".to_string(), "b".to_string()],
+            }]
+        );
+        // and the enum-typed column is flagged
+        assert!(l.boxes[0].rows[0].ty_enum);
+        // a column whose type is not an enum is not
+        let src = "Table t { s integer }\nEnum st { a }\n";
+        assert!(!layout_of(src).boxes[0].rows[0].ty_enum);
+    }
+
+    #[test]
+    fn an_enum_typed_column_widens_its_row_by_the_enum_pill() {
+        // identical rows except the type names a declared enum: the
+        // "Enum" pill's width shows up in the row width
+        let plain = layout_of("Table t { status_flag st }");
+        let typed = layout_of("Enum st { a b }\nTable t { status_flag st }");
+        assert!(!plain.boxes[0].rows[0].ty_enum);
+        assert!(typed.boxes[0].rows[0].ty_enum);
+        let w0 = plain.boxes[0].rows[0].width();
+        let w1 = typed.boxes[0].rows[0].width();
+        let pill = Row::badge_cell("Enum");
+        assert!(
+            (w1 - w0) as f32 >= pill.floor() && (w1 - w0) as f32 <= pill.ceil(),
+            "the Enum pill widens the row: {w1} vs {w0}"
+        );
     }
 
     #[test]
@@ -1086,19 +1171,14 @@ Ref: u.id > t.id
         for b in &l.boxes {
             assert!(pos1.contains_key(&b.title), "missing {}", b.title);
         }
-        // the enum is an isolated component: packed right of the main one
-        // with the component gap
-        let u = box_of(&l, "u");
+        // enums are not boxes: no position, and no phantom component gap
+        // between the tables
+        assert_eq!(l.boxes.len(), 2, "only the tables are boxes");
+        assert!(!pos1.contains_key("st"));
         assert_eq!(
-            pos1["st"].0,
-            pos1["u"].0 + u.w + ARRANGE_COMPONENT_GAP,
-            "enum component follows the main one"
+            pos1["u"].0,
+            pos1["t"].0 + box_of(&l, "t").w + ARRANGE_LAYER_GAP_X,
+            "t and u pack as one component, no enum gap"
         );
-        // and vertically centered on the same center line (rounding slack
-        // of half a cell for odd heights)
-        let t = box_of(&l, "t");
-        let center_t = pos1["t"].1 as f32 + t.h as f32 / 2.0;
-        let center_st = pos1["st"].1 as f32 + 4.0 / 2.0; // enum box h = 2 values + 2
-        assert!((center_t - center_st).abs() <= 1.0, "centered: {pos1:?}");
     }
 }
