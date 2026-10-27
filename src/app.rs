@@ -169,6 +169,9 @@ pub const ZOOM_MAX: f32 = 160.0;
 /// to one value).
 const FIT_MARGIN_PX: f32 = 40.0;
 
+/// How long the toast pill stays up before the tick clears it.
+const TOAST_TTL: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// Vim's 'scrolloff': the cursor is kept at least this many screen lines
 /// away from the top and bottom of the window whenever the buffer has
 /// room. j/k scroll the view to hold the margin; Ctrl-d/u first walk the
@@ -475,8 +478,12 @@ pub struct App {
     /// it is the chord's roll-out (ctrl released a few ms early, or the
     /// autorepeat tail), not a vim key — see `editor_key`.
     last_scroll_chord: Option<std::time::Instant>,
-    /// Status-bar toast.
+    /// Toast pill (bottom-right overlay; see `set_message`).
     pub message: Option<String>,
+    /// When the toast was set: the tick clears it after `TOAST_TTL` (the
+    /// subscription keeps ticks hot while a toast is up), any keypress
+    /// supersedes it sooner.
+    message_since: Option<std::time::Instant>,
     /// Open completion popup (insert mode) over the active buffer.
     pub completion: Option<Completion>,
     /// Editor-pane hover position (local px) for error tooltips.
@@ -521,6 +528,7 @@ impl App {
             should_quit: false,
             last_scroll_chord: None,
             message: None,
+            message_since: None,
             completion: None,
             editor_hover: None,
             show_help: false,
@@ -585,6 +593,26 @@ impl App {
             Some(f) => format!("dbml-ui — {}", f.display()),
             None => "dbml-ui".to_string(),
         }
+    }
+
+    // --------------------------- toast ---------------------------
+    //
+    // Every toast goes through `set_message` so the tick's expiry timer
+    // and the subscription's tick gate stay in step with `message`.
+
+    /// Show the toast pill (transient feedback: save confirmations,
+    /// clipboard errors, mode switches — it used to share the status bar).
+    /// Cleared by the tick after `TOAST_TTL` (the tick gate stays hot
+    /// while a toast is up) or superseded by the next keypress.
+    fn set_message(&mut self, msg: impl Into<String>) {
+        self.message = Some(msg.into());
+        self.message_since = Some(std::time::Instant::now());
+    }
+
+    /// Drop the toast (expired or superseded).
+    fn clear_message(&mut self) {
+        self.message = None;
+        self.message_since = None;
     }
 
     // ------------------------ tab actions ------------------------
@@ -784,10 +812,11 @@ impl App {
         };
         self.editor_mut()
             .set_register(t.split('\n').map(str::to_string).collect());
-        self.message = Some(match self.copy_to_system(&t) {
+        let msg = match self.copy_to_system(&t) {
             Ok(()) => format!("copied {} chars", t.chars().count()),
             Err(e) => format!("clipboard: {e}"),
-        });
+        };
+        self.set_message(msg);
     }
 
     /// Ctrl+X / menu Cut: the selection into the register and the system
@@ -798,10 +827,11 @@ impl App {
         };
         self.editor_mut()
             .set_register(t.split('\n').map(str::to_string).collect());
-        self.message = Some(match self.copy_to_system(&t) {
+        let msg = match self.copy_to_system(&t) {
             Ok(()) => format!("cut {} chars", t.chars().count()),
             Err(e) => format!("clipboard: {e}"),
-        });
+        };
+        self.set_message(msg);
         self.after_edit(editor::Action::Changed);
         self.follow_cursor_horizontal();
         self.keep_cursor_visible();
@@ -816,7 +846,7 @@ impl App {
             None => {
                 let reg = self.editor().register_lines();
                 if reg.is_empty() {
-                    self.message = Some("nothing to paste".to_string());
+                    self.set_message("nothing to paste");
                     return;
                 }
                 reg.join("\n")
@@ -1098,7 +1128,7 @@ impl App {
         self.cur_mut().set_source(&src);
         self.cur_mut().edge_anim = vec![0.0; self.cur().diagram.edges.len()];
         self.cur_mut().hover_edges.clear();
-        self.message = Some("auto-arranged".to_string());
+        self.set_message("auto-arranged");
     }
 
     /// Zoom to fit: scale + pan so the whole diagram (every box plus a
@@ -1203,13 +1233,15 @@ pub fn subscription(_app: &App) -> iced::Subscription<Message> {
     });
     // Ticks drive the scroll animation and the edge-highlight easing +
     // breathing glow: hot while scrolling, while something is hovered
-    // (the glow keeps breathing), until every fade-out has finished, and
-    // while the vim block cursor is blinking (canvas::editor::BlinkState).
+    // (the glow keeps breathing), until every fade-out has finished,
+    // while the vim block cursor is blinking (canvas::editor::BlinkState),
+    // and while a toast is up (its expiry needs them).
     let tick = if _app.cur().scroll_anim.is_some()
         || !_app.cur().hover_edges.is_empty()
         || _app.cur().edge_anim.iter().any(|&t| t > 0.0)
         || _app.tab_drag.is_some()
         || _app.tab_anim.iter().any(|o| o.abs() > 0.5)
+        || _app.message.is_some()
         || crate::canvas::editor::block_cursor_blinking(_app)
     {
         iced::time::every(std::time::Duration::from_millis(16)).map(|_| Message::Tick)
@@ -1339,6 +1371,10 @@ fn pick_file_blocking() -> PickOutcome {
 }
 
 pub fn update(app: &mut App, message: Message) -> iced::Task<Message> {
+    // any keypress supersedes the toast: feedback yields to input
+    if matches!(message, Message::KeyPressed(..)) {
+        app.clear_message();
+    }
     match message {
         // native file dialog (zenity/kdialog subprocess off the render
         // loop; the GTK rfd crate broke iced's event loop entirely)
@@ -1386,14 +1422,14 @@ pub fn update(app: &mut App, message: Message) -> iced::Task<Message> {
         Message::SaveAs(path) => {
             app.cur_mut().file = Some(std::path::PathBuf::from(&path));
             if let Err(e) = app.save_file(None) {
-                app.message = Some(format!("save failed: {e}"));
+                app.set_message(format!("save failed: {e}"));
             }
         }
         Message::FormatNow => app.format_now(),
         Message::ToggleFmtOnSave => {
             app.config.fmt_on_save = !app.config.fmt_on_save;
             app.config.save();
-            app.message = Some(if app.config.fmt_on_save {
+            app.set_message(if app.config.fmt_on_save {
                 "format on save: on".to_string()
             } else {
                 "format on save: off".to_string()
@@ -1492,7 +1528,7 @@ fn handle_message(app: &mut App, message: Message) {
         Message::ToggleVim => app.toggle_vim(),
         Message::OpenRecent(path) => {
             if let Err(e) = app.open_file(&path) {
-                app.message = Some(format!("cannot open {path}: {e}"));
+                app.set_message(format!("cannot open {path}: {e}"));
             }
         }
         Message::OpenFilePicker | Message::PickerDismissed => {} // handled in update
@@ -1552,6 +1588,13 @@ fn handle_message(app: &mut App, message: Message) {
             app.last_tick = Some(now);
             app.anim_clock += dt;
             app.tick_tab_anim();
+            // the toast expires after its TTL (the subscription keeps
+            // ticks hot while one is up)
+            if let Some(since) = app.message_since {
+                if now.duration_since(since) >= TOAST_TTL {
+                    app.clear_message();
+                }
+            }
             let hovered: Vec<usize> = app.cur().hover_edges.clone();
             for (i, t) in app.cur_mut().edge_anim.iter_mut().enumerate() {
                 let target = if hovered.contains(&i) { 1.0 } else { 0.0 };
@@ -1632,7 +1675,7 @@ impl App {
         self.cur_mut().doc_open = true;
         self.editor_collapsed = false;
         self.focus = Focus::Editor;
-        self.message = Some("new diagram".to_string());
+        self.set_message("new diagram");
     }
 
     /// True when editing is notepad-style (no modal operators).
@@ -1650,7 +1693,7 @@ impl App {
         self.editor_mut().buf.cancel_selection();
         self.completion = None;
         self.space_leader = false;
-        self.message = Some(if self.config.vim {
+        self.set_message(if self.config.vim {
             "vim mode".to_string()
         } else {
             "regular mode".to_string()
@@ -1838,7 +1881,7 @@ impl App {
         self.cur_mut().set_source(&content);
         self.cur_mut().editor_scroll = 0.0;
         self.cur_mut().editor_hscroll = 0.0;
-        self.message = Some(format!(
+        self.set_message(format!(
             "\"{path}\" {}L, {}B",
             content.lines().count(),
             content.len()
@@ -1863,10 +1906,10 @@ impl App {
                 self.cur_mut().set_source(&f);
                 self.cur_mut().editor_scroll = 0.0;
                 self.cur_mut().editor_hscroll = 0.0;
-                self.message = Some("formatted".to_string());
+                self.set_message("formatted");
             }
-            Some(_) => self.message = Some("already formatted".to_string()),
-            None => self.message = Some("format skipped: parse errors".to_string()),
+            Some(_) => self.set_message("already formatted"),
+            None => self.set_message("format skipped: parse errors"),
         }
     }
 
@@ -1898,7 +1941,7 @@ impl App {
         self.cur_mut().saved_text = text;
         self.config.push_recent(&target.to_string_lossy());
         self.config.save();
-        self.message = Some(format!(
+        self.set_message(format!(
             "\"{}\" written, {}B",
             target.display(),
             self.cur().saved_text.len()
@@ -1928,31 +1971,30 @@ impl App {
         match dbml_ui::commands::parse_ex(input) {
             ExCommand::Write(path) => {
                 if let Err(e) = self.save_file(path.as_deref()) {
-                    self.message = Some(format!(":w failed: {e}"));
+                    self.set_message(format!(":w failed: {e}"));
                 }
             }
             ExCommand::Quit { force } => {
                 if self.is_modified() && !force {
-                    self.message = Some("No write since last change (use :w or :q!)".to_string());
+                    self.set_message("No write since last change (use :w or :q!)");
                 } else {
                     self.should_quit = true;
                 }
             }
             ExCommand::WriteQuit => {
                 if self.cur().file.is_none() {
-                    self.message = Some("no file name (use :w <file>)".to_string());
+                    self.set_message("no file name (use :w <file>)");
                 } else if let Err(e) = self.save_file(None) {
-                    self.message = Some(format!(":wq failed: {e}"));
+                    self.set_message(format!(":wq failed: {e}"));
                 } else {
                     self.should_quit = true;
                 }
             }
             ExCommand::Open { path, force } => {
                 if self.is_modified() && !force {
-                    self.message =
-                        Some("No write since last change (use :e! or :w first)".to_string());
+                    self.set_message("No write since last change (use :e! or :w first)");
                 } else if let Err(e) = self.open_file(&path) {
-                    self.message = Some(format!("cannot open \"{path}\": {e}"));
+                    self.set_message(format!("cannot open \"{path}\": {e}"));
                 }
             }
             ExCommand::Export(arg) => {
@@ -1984,15 +2026,15 @@ impl App {
                             );
                             match std::fs::write(&path, sql) {
                                 Ok(()) => {
-                                    self.message = Some(format!(
+                                    self.set_message(format!(
                                         "\"{path}\" written ({}B)",
                                         std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
                                     ))
                                 }
-                                Err(e) => self.message = Some(format!("export failed: {e}")),
+                                Err(e) => self.set_message(format!("export failed: {e}")),
                             }
                         }
-                        Err(e) => self.message = Some(format!("export failed: {e}")),
+                        Err(e) => self.set_message(format!("export failed: {e}")),
                     }
                     return;
                 }
@@ -2002,11 +2044,11 @@ impl App {
                     arg
                 };
                 match self.export_diagram(&path) {
-                    Ok(msg) => self.message = Some(msg),
-                    Err(e) => self.message = Some(format!("export failed: {e}")),
+                    Ok(msg) => self.set_message(msg),
+                    Err(e) => self.set_message(format!("export failed: {e}")),
                 }
             }
-            ExCommand::Unknown(_) => self.message = Some(format!("not a command: {input}")),
+            ExCommand::Unknown(_) => self.set_message(format!("not a command: {input}")),
         }
     }
 
@@ -2031,7 +2073,7 @@ impl App {
             match key.code {
                 KeyCode::Char('s') => {
                     if let Err(e) = self.save_file(None) {
-                        self.message = Some(format!("save failed: {e}"));
+                        self.set_message(format!("save failed: {e}"));
                     }
                     return;
                 }
@@ -2471,7 +2513,7 @@ impl App {
         // a toast, never a panic)
         if let Some(text) = self.editor_mut().take_system_yank() {
             if let Err(e) = self.copy_to_system(&text) {
-                self.message = Some(format!("clipboard: {e}"));
+                self.set_message(format!("clipboard: {e}"));
             }
         }
         match action {
@@ -2486,7 +2528,7 @@ impl App {
     }
 
     /// Visible editor lines from the window size: the editor canvas gets
-    /// the window minus the root layout's chrome (toolbars, status bar,
+    /// the window minus the root layout's chrome (tab strip, toolbar,
     /// paddings — see `view::EDITOR_CHROME` for the term-by-term total).
     fn page_lines(&self) -> f32 {
         ((self.window_size.1 - crate::view::EDITOR_CHROME)
@@ -2780,6 +2822,35 @@ mod tests {
     }
 
     #[test]
+    fn toast_survives_ticks_until_its_ttl_then_clears() {
+        let mut app = app();
+        let _ = update(&mut app, Message::AutoArrange);
+        assert_eq!(app.message.as_deref(), Some("auto-arranged"));
+        // ticks inside the TTL leave the toast up
+        let _ = update(&mut app, Message::Tick);
+        assert_eq!(app.message.as_deref(), Some("auto-arranged"));
+        // aged past the TTL, a tick clears it (the subscription's tick gate
+        // stays hot while a toast is up, so these ticks do arrive)
+        app.message_since =
+            Some(std::time::Instant::now() - TOAST_TTL - std::time::Duration::from_millis(1));
+        let _ = update(&mut app, Message::Tick);
+        assert!(app.message.is_none());
+        assert!(app.message_since.is_none(), "the gate drops with the toast");
+    }
+
+    #[test]
+    fn a_keypress_supersedes_the_toast() {
+        let mut app = app();
+        let _ = update(&mut app, Message::AutoArrange);
+        assert!(app.message.is_some());
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Char('x'), KeyModifiers::NONE),
+        );
+        assert!(app.message.is_none(), "feedback yields to input");
+    }
+
+    #[test]
     fn zoom_to_fit_scales_and_pans_content_into_view() {
         let mut app = app();
         app.window_size = (1400.0, 900.0);
@@ -2968,7 +3039,6 @@ mod tests {
         // the caret sits at the column's name token on that line
         assert_eq!(after.1, line.find("username").unwrap());
     }
-
 }
 
 #[cfg(test)]
@@ -4411,9 +4481,9 @@ mod scroll_tests {
     /// Ground truth measured with a real iced 0.13.1 layout pass over
     /// `view::root` (flex/column/container/button metrics, text line
     /// height 1.3x size): at a 900px window the editor canvas measures
-    /// 780.5px tall. If the root layout chrome ever changes, re-measure
+    /// 831.7px tall. If the root layout chrome ever changes, re-measure
     /// this and `view::EDITOR_CHROME` together.
-    const CANVAS_H_AT_900: f32 = 780.5;
+    const CANVAS_H_AT_900: f32 = 831.7;
 
     #[test]
     fn page_lines_covers_the_real_chrome() {
@@ -4435,8 +4505,9 @@ mod scroll_tests {
     fn last_line_sits_on_screen_at_max_scroll() {
         // the user-visible invariant: scrolled all the way down, the last
         // line's drawn text (centered in its line box) is inside the true
-        // canvas — nothing hides beneath the status bar. Scroll clamps
-        // then round, so allow the half-line rounding overshoot.
+        // canvas — nothing hides beneath the window's flush bottom edge.
+        // Scroll clamps then round, so allow the half-line rounding
+        // overshoot.
         let mut app = tall_app(120);
         app.window_size = (1400.0, 900.0);
         let last = app.editor_mut().buf.line_count() - 1;
@@ -4451,7 +4522,7 @@ mod scroll_tests {
         assert!(
             text_center <= CANVAS_H_AT_900 + 0.6,
             "last line's text center at {text_center} is below the \
-             {CANVAS_H_AT_900}px canvas: the line hides under the status bar"
+             {CANVAS_H_AT_900}px canvas: the line hides off-window"
         );
         assert!(y >= 0.0, "overscrolled past the buffer start: {y}");
     }

@@ -1,8 +1,8 @@
 //! Window layout: tab strip on top, then the editor and diagram panes
 //! flush against each other (their shared border is the pane seam, with
-//! the collapse chevron + resize strip stacked over it), status bar at
-//! the bottom; help overlay, the record view and the tab context menu
-//! stack above all.
+//! the collapse chevron + resize strip stacked over it) and flush with
+//! the window's bottom edge; the toast pill, help overlay, the record
+//! view and the tab context menu stack above all.
 
 use crate::app::{
     App, Drag, EditorMenu, Focus, Message, RecordView, TabMenu, STRIP_LEFT, TAB_SLOT_W,
@@ -25,42 +25,40 @@ pub const BASE_ZOOM: f32 = 20.0;
 /// the window height to get the true visible-line count.
 ///
 /// Term by term (iced line height is 1.3x the text size):
-/// above the canvas — 30.0 tab strip canvas (fixed height) + 4.0 strip
-/// spacing + 8.0 body top padding + 23.6 mode row (text 12 + button
-/// padding 8) + 4.0 body spacing + 1.0 pane padding + 20.3 editor
-/// toolbar (text 11 + button padding 6) + 4.0 editor spacing = 94.9;
-/// below the canvas — 1.0 pane padding + 8.0 body spacing + 15.6 status
-/// bar (text 12, no padding) + 0.0 (the bar is flush with the window's
-/// bottom edge) = 24.6.
+/// above the canvas — 30.0 tab strip canvas (fixed height) + 4.0 outer
+/// spacing + 8.0 body top padding + 1.0 pane padding + 20.3 editor
+/// toolbar (text 11 + button padding [3,8]) + 4.0 editor spacing =
+/// 67.3; below the canvas — 1.0 pane padding, and nothing else (the
+/// content is flush with the window's bottom edge).
 ///
 /// Measured with a real iced 0.13.1 layout pass over a widget-for-widget
-/// replica of `root`: at a 900px window the canvas measures 780.5px tall
-/// (900 - 119.5). Keep this in sync with `root`; if the layout chrome
+/// replica of `root`: at a 900px window the canvas measures 831.7px tall
+/// (900 - 68.3). Keep this in sync with `root`; if the layout chrome
 /// changes, re-measure and update both.
-pub const EDITOR_CHROME: f32 = 119.5;
+pub const EDITOR_CHROME: f32 = 68.3;
 
 /// Window-y of the editor canvas's top edge: every pixel of chrome above
-/// it (tab strip 30 + spacing 4 + body top padding 8 + mode row 23.6 +
-/// spacing 4 + pane padding 1 + toolbar 20.3 + spacing 4 = 94.9). The
-/// Regular-mode selection drag converts window pointer px to the
-/// canvas-local coords px_to_pos expects with this constant, so it must
-/// move in lockstep with `EDITOR_CHROME` (which is this plus the 24.6
-/// below-canvas chrome) and `root`.
-pub const EDITOR_CANVAS_TOP: f32 = 94.9;
+/// it (tab strip 30 + outer spacing 4 + body top padding 8 + pane
+/// padding 1 + toolbar 20.3 + spacing 4 = 67.3). The Regular-mode
+/// selection drag converts window pointer px to the canvas-local coords
+/// px_to_pos expects with this constant, so it must move in lockstep
+/// with `EDITOR_CHROME` (which is this plus the 1.0 below-canvas pane
+/// padding) and `root`.
+pub const EDITOR_CANVAS_TOP: f32 = 67.3;
 
-/// Window-y of the diagram canvas's top edge: the pane row starts 69.6px
-/// down (tab strip 30 + spacing 4 + body top padding 8 + mode row 23.6 +
-/// body spacing 4) and the pane's 1px padding. Only true while a document
-/// is open (the mode row exists); the start screen's empty diagram never
-/// needs fit math. Keep in sync with `root`.
-pub const DIAGRAM_CANVAS_TOP: f32 = 70.6;
+/// Window-y of the diagram canvas's top edge: tab strip 30 + outer
+/// spacing 4 + body top padding 8 + the pane's 1px padding. Only true
+/// while a document is open (the start screen has no toolbar row above
+/// the panes); the start screen's empty diagram never needs fit math.
+/// Keep in sync with `root`.
+pub const DIAGRAM_CANVAS_TOP: f32 = 43.0;
 
 /// Every pixel of chrome around the diagram canvas: DIAGRAM_CANVAS_TOP
 /// above it; below it the diagram button row (column spacing 4 + buttons
-/// 20.3, text 11 + padding [3,8]), the pane's bottom padding 1, body
-/// spacing 8 and the status bar 15.6. The canvas height is
-/// `window height - DIAGRAM_CHROME`. Keep in sync with `root`.
-pub const DIAGRAM_CHROME: f32 = DIAGRAM_CANVAS_TOP + 4.0 + 20.3 + 1.0 + 8.0 + 15.6;
+/// 20.3, text 11 + padding [3,8]) and the pane's bottom padding 1. The
+/// canvas height is `window height - DIAGRAM_CHROME`. Keep in sync with
+/// `root`.
+pub const DIAGRAM_CHROME: f32 = DIAGRAM_CANVAS_TOP + 4.0 + 20.3 + 1.0;
 
 pub fn root(app: &App) -> Element<'_, Message> {
     let editor_body: Element<'_, Message> = if app.doc_open() {
@@ -169,35 +167,15 @@ pub fn root(app: &App) -> Element<'_, Message> {
         row![editor, diagram].height(Fill).into()
     };
 
-    // mode row + panes (only once a document is open)
-    let body = if app.doc_open() {
-        let mode_btn = button(
-            text(if app.config.vim {
-                "Mode: Vim"
-            } else {
-                "Mode: Regular"
-            })
-            .size(12.0)
-            .color(theme::TEXT),
-        )
-        .padding([4, 8])
-        .style(move |_t, _s| tool_button_style())
-        .on_press(Message::ToggleVim);
-        column![row![mode_btn].padding([0, 4]), panes]
-            .spacing(4)
-            .height(Fill)
-    } else {
-        column![panes].spacing(4).height(Fill)
-    };
-
-    // the tab strip runs full-bleed across the top; the content sits below
-    // it, flush with the window's left/right/bottom edges (only a little
-    // top padding keeps the body off the strip)
+    // panes (the start screen's is the centered welcome view, the split's
+    // is editor + diagram)
     let base = column![
         canvas(TabStrip { app })
             .height(Length::Fixed(STRIP_H))
             .width(Fill),
-        column![body, status_bar(app)].spacing(8).padding(iced::Padding {
+        // only a little top padding keeps the panes off the strip; they
+        // stay flush with the window's left/right/bottom edges
+        column![panes].padding(iced::Padding {
             top: 8.0,
             ..Default::default()
         })
@@ -210,6 +188,12 @@ pub fn root(app: &App) -> Element<'_, Message> {
         stack![base, edge_overlay(app)].into()
     } else {
         base.into()
+    };
+    // the toast pill floats over the panes' bottom-right corner
+    let base: Element<'_, Message> = if app.message.is_some() {
+        stack![base, toast_overlay(app)].into()
+    } else {
+        base
     };
     let base: Element<'_, Message> = if let Some(menu) = &app.tab_menu {
         stack![base, tab_menu_overlay(app, menu)].into()
@@ -921,7 +905,7 @@ fn editor_menu_overlay(app: &App, menu: &EditorMenu) -> Element<'static, Message
 }
 
 /// Small toolbar above the editor: Undo, Redo, Save, Save As, Format,
-/// fmt-on-save switch.
+/// the fmt-on-save switch and the vim/Regular mode switch.
 fn editor_toolbar(app: &App) -> Element<'static, Message> {
     use iced::widget::button;
     let btn = |label: &'static str, msg: Message, accent: bool| {
@@ -966,6 +950,24 @@ fn editor_toolbar(app: &App) -> Element<'static, Message> {
     .padding([3, 8])
     .style(move |_t, _s| tool_button_style())
     .on_press(Message::ToggleFmtOnSave);
+    // the mode switch shows the CURRENT mode (what you are in, not what a
+    // press would switch to); its accent mirrors the fmt switch's on/off
+    let vim_switch = button(
+        text(if app.config.vim {
+            "Vim"
+        } else {
+            "Regular"
+        })
+        .size(11.0)
+        .color(if app.config.vim {
+            theme::PK
+        } else {
+            theme::DIM
+        }),
+    )
+    .padding([3, 8])
+    .style(move |_t, _s| tool_button_style())
+    .on_press(Message::ToggleVim);
     row![
         step_btn("Undo", Message::Undo, app.editor().buf.can_undo()),
         step_btn("Redo", Message::Redo, app.editor().buf.can_redo()),
@@ -981,6 +983,7 @@ fn editor_toolbar(app: &App) -> Element<'static, Message> {
         ),
         btn("Format", Message::FormatNow, false),
         fmt_switch,
+        vim_switch,
         horizontal_space(),
     ]
     .padding([0, 2])
@@ -1374,106 +1377,33 @@ fn seam_panel_style(focused: bool, _seam: Seam) -> container::Style {
     }
 }
 
-fn mode_chip(mode: &crate::editor::Mode, linewise: bool) -> (&'static str, Color) {
-    match mode {
-        crate::editor::Mode::Insert => (" INSERT ", Color::from_rgb(0.30, 0.75, 0.95)),
-        crate::editor::Mode::Visual => {
-            if linewise {
-                (" V-LINE ", Color::from_rgb(0.98, 0.62, 0.80))
-            } else {
-                (" VISUAL ", Color::from_rgb(0.98, 0.75, 0.30))
-            }
-        }
-        crate::editor::Mode::Normal => (" NORMAL ", Color::from_rgb(0.55, 0.90, 0.55)),
-    }
-}
-
-fn status_bar(app: &App) -> Element<'_, Message> {
-    let tables = app.diagram().boxes.len();
-    let zoom = format!("zoom {:.0}%", app.cur().zoom / BASE_ZOOM * 100.0);
-    let errors = format!("errors {}", app.cur().parse_errors.len());
-    let (crow, ccol) = app.editor().buf.cursor();
-
-    let seg = |s: &str, color: Color| -> Element<'_, Message> {
-        text(s.to_string())
+/// The toast: a small pill floating over the window's bottom-right corner
+/// (transient feedback — save confirmations, clipboard errors, mode
+/// switches — that used to share the status bar). Set via
+/// `App::set_message`; the tick clears it after `TOAST_TTL` and any
+/// keypress supersedes it. Anchored by a full-size container aligned to
+/// the right/bottom edges (stack children land at (0,0), so padding alone
+/// cannot bottom-right a Shrink child).
+fn toast_overlay(app: &App) -> Element<'static, Message> {
+    let pill = container(
+        text(app.message.clone().unwrap_or_default())
             .size(12.0)
-            .color(color)
-            .width(Length::Shrink)
-            .into()
-    };
-
-    // leading segment: the cmdline when open, else mode + showcmd + focus
-    let mut items: Vec<Element<'_, Message>> = Vec::new();
-    if let Some(cmd) = &app.editor().cmdline {
-        items.push(seg(
-            &format!(" {}{}▏ ", cmd.kind, cmd.input),
-            iced::Color::BLACK,
-        ));
-    } else {
-        let (mode, color) = if app.regular_mode() {
-            (" REGULAR ", Color::from_rgb(0.55, 0.75, 0.95))
-        } else {
-            mode_chip(&app.editor().mode, app.editor().visual_linewise)
-        };
-        items.push(
-            container(seg(mode, Color::BLACK))
-                .style(move |_t| container::Style {
-                    background: Some(iced::Background::Color(color)),
-                    border: iced::border::rounded(4),
-                    ..Default::default()
-                })
-                .into(),
-        );
-        if let Some(sc) = app.editor().showcmd() {
-            items.push(seg(&sc, theme::DIM));
-        }
-        match app.focus {
-            Focus::Editor => items.push(seg("EDITOR", theme::TEXT)),
-            Focus::Canvas => items.push(seg("CANVAS", theme::TEXT)),
-        }
-    }
-    items.push(seg("·", theme::DIM));
-    if let Some(msg) = &app.message {
-        items.push(seg(msg, theme::FK));
-    } else {
-        let name = app
-            .file()
-            .as_ref()
-            .map(|f| f.display().to_string())
-            .unwrap_or_else(|| "[No Name]".to_string());
-        let modified = if app.is_modified() { " [+]" } else { "" };
-        items.push(seg(&format!("{name}{modified}"), theme::TEXT));
-    }
-    items.push(seg("·", theme::DIM));
-    items.push(seg(
-        &format!("Ln {}, Col {}", crow + 1, ccol + 1),
-        theme::DIM,
-    ));
-    items.push(seg("·", theme::DIM));
-    items.push(seg(&format!("tables {tables}"), theme::DIM));
-    items.push(seg("·", theme::DIM));
-    items.push(seg(&zoom, theme::DIM));
-    items.push(seg("·", theme::DIM));
-    items.push(seg(&errors, theme::DIM));
-
-    let mut bar = row![];
-    let mut any = false;
-    for item in items {
-        if any {
-            bar = bar.push(seg(" ", theme::DIM));
-        }
-        bar = bar.push(item);
-        any = true;
-    }
-
-    container(bar.spacing(6))
+            .color(theme::TEXT),
+    )
+    .padding([5, 10])
+    .style(|_t| container::Style {
+        background: Some(iced::Background::Color(iced::Color::from_rgba(
+            0.08, 0.09, 0.11, 0.98,
+        ))),
+        border: iced::border::rounded(8).color(theme::BORDER),
+        ..Default::default()
+    });
+    container(pill)
         .width(Fill)
-        .height(Length::Shrink)
-        .style(|_t| container::Style {
-            background: Some(iced::Background::Color(theme::BG)),
-            border: iced::border::rounded(6).color(theme::BORDER),
-            ..Default::default()
-        })
+        .height(Fill)
+        .padding(12.0)
+        .align_x(iced::alignment::Horizontal::Right)
+        .align_y(iced::alignment::Vertical::Bottom)
         .into()
 }
 
