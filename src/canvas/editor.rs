@@ -640,11 +640,14 @@ fn word_at(app: &App, p: Point) -> Option<String> {
 pub fn doc_hover_at(app: &App, p: Point) -> Option<DocHover> {
     use dbml_ui::model::NodeKind;
     let word = word_at(app, p)?;
-    let b = app
-        .diagram()
-        .boxes
-        .iter()
-        .find(|b| b.title == word || b.alias.as_deref() == Some(word.as_str()))?;
+    // exact name first, then alias (`Table users as U`); two tables could
+    // share an alias — the first in document order wins
+    let boxes = &app.diagram().boxes;
+    let b = boxes.iter().find(|b| b.title == word).or_else(|| {
+        boxes
+            .iter()
+            .find(|b| b.alias.as_deref() == Some(word.as_str()))
+    })?;
     let title = format!(
         "{} {}",
         match b.kind {
@@ -847,6 +850,48 @@ mod doc_tests {
         );
         let doc = doc_hover_at(&app, p + Vector::new(3.0, 10.0)).expect("alias doc");
         assert_eq!(doc.title, "Table users");
+    }
+
+    #[test]
+    fn hovering_an_alias_in_a_standalone_ref_shows_the_table_doc() {
+        // the reported case: `Ref: posts.user_id > U.id` — U is users' alias
+        let app = App::with_source(
+            "Table users as U {\n  id integer [pk]\n}\n\nTable posts {\n  id integer [pk]\n  user_id integer\n}\n\nRef: posts.user_id > U.id\n"
+                .to_string(),
+        );
+        let row = app.editor().buf.line_count() - 1;
+        let line = app.editor().buf.line(row);
+        let col = line.find("U.").unwrap();
+        let p = pos_to_px(
+            crate::editor::buffer::Pos { row, col },
+            app.cur().editor_scroll,
+            app.cur().editor_hscroll,
+        );
+        let doc = doc_hover_at(&app, p + Vector::new(3.0, 10.0)).expect("alias doc in a Ref");
+        assert_eq!(doc.title, "Table users");
+        assert!(doc.rows.iter().any(|(_, t)| t.starts_with("id ")));
+    }
+
+    #[test]
+    fn a_name_outranks_a_matching_alias_in_hover() {
+        // `Table t1 as X` + a table literally named X: hovering X shows the
+        // named table (exact name first, then alias)
+        let app = App::with_source(
+            "Table t1 as X {\n  id integer [pk]\n}\n\nTable X {\n  x integer [pk]\n}\n".to_string(),
+        );
+        let line = app.editor().buf.line(4);
+        let col = line.find("X").unwrap();
+        let p = pos_to_px(
+            crate::editor::buffer::Pos { row: 4, col },
+            app.cur().editor_scroll,
+            app.cur().editor_hscroll,
+        );
+        let doc = doc_hover_at(&app, p + Vector::new(3.0, 10.0)).expect("doc");
+        assert_eq!(doc.title, "Table X");
+        assert!(
+            doc.rows.iter().any(|(_, t)| t.starts_with("x ")),
+            "the named table's column, not t1's"
+        );
     }
 
     #[test]

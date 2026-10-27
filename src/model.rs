@@ -339,6 +339,37 @@ mod tests {
     }
 
     #[test]
+    fn refs_resolve_through_table_aliases() {
+        // dbdiagram accepts alias targets: `Ref: posts.user_id > U.id`
+        let s = schema(
+            "Table users as U {\n  id integer [pk]\n}\n\nTable posts {\n  id integer [pk]\n  user_id integer\n}\n\nRef: posts.user_id > U.id\n",
+        );
+        assert_eq!(s.dangling, 0, "the alias ref resolves");
+        assert_eq!(s.edges.len(), 1);
+        let users = s.nodes.iter().position(|n| n.name == "users").unwrap();
+        let posts = s.nodes.iter().position(|n| n.name == "posts").unwrap();
+        let e = &s.edges[0];
+        assert_eq!((e.from, e.to, e.from_col, e.to_col), (posts, users, 1, 0));
+        // the fk icon lands on the referencing side only
+        assert!(s.nodes[posts].columns[1].fk);
+        assert!(!s.nodes[users].columns[0].fk);
+
+        // a table whose real name equals another's alias: the name wins
+        let s = schema(
+            "Table t1 as X {\n  id integer [pk]\n}\n\nTable X {\n  x integer [pk]\n}\n\nTable src {\n  a integer\n}\n\nRef: src.a > X.id\n",
+        );
+        assert_eq!(s.dangling, 0);
+        assert_eq!(s.edges[0].to, 1, "the table named X outranks t1's alias");
+
+        // two tables sharing an alias: the first in document order wins
+        let s = schema(
+            "Table one as A {\n  id integer [pk]\n}\n\nTable two as A {\n  id integer [pk]\n}\n\nTable src {\n  a integer\n}\n\nRef: src.a > A.id\n",
+        );
+        assert_eq!(s.dangling, 0);
+        assert_eq!(s.edges[0].to, 0, "first alias match wins");
+    }
+
+    #[test]
     fn records_mark_fk_cells_that_lead_to_records() {
         let src = r#"
 Table users {

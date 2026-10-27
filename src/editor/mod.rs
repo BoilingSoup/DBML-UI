@@ -1145,6 +1145,25 @@ impl Editor {
                 ms.push(CursorMove::End);
                 self.operate(&ms, false, false, true)
             }
+            // dl / cl: [count] chars forward, never crossing the line end
+            // (vim's l motion clamps there, so the newline is safe). cl
+            // edits in place (cl ≈ s) even when there is nothing to delete.
+            (D, KeyCode::Char('l')) => {
+                if self.delete_chars_ahead(rep) {
+                    Action::Changed
+                } else {
+                    Action::None
+                }
+            }
+            (C, KeyCode::Char('l')) => {
+                let changed = self.delete_chars_ahead(rep);
+                self.mode = Mode::Insert;
+                if changed {
+                    Action::Changed
+                } else {
+                    Action::None
+                }
+            }
             // [count]G targets an absolute line, linewise (like vim)
             (D, KeyCode::Char('G')) => {
                 let target = self.line_target_row(false);
@@ -1660,6 +1679,17 @@ impl Editor {
     /// `x`: delete up to [count] chars, never crossing the line end.
     fn x_delete(&mut self) -> Action {
         let n = self.count.take().unwrap_or(1).max(1) as usize;
+        if self.delete_chars_ahead(n) {
+            Action::Changed
+        } else {
+            Action::None
+        }
+    }
+
+    /// Delete up to `n` chars forward from the cursor, clamped to the line
+    /// end (x/s semantics): true when anything was deleted. Shared by `x`
+    /// and the `dl`/`cl` operator forms.
+    fn delete_chars_ahead(&mut self, n: usize) -> bool {
         let (row, col) = self.buf.cursor();
         let remain = self
             .buf
@@ -1670,9 +1700,9 @@ impl Editor {
         let n = n.min(remain);
         if n > 0 {
             self.buf.delete_str(n);
-            Action::Changed
+            true
         } else {
-            Action::None
+            false
         }
     }
 
@@ -2224,6 +2254,41 @@ mod tests {
         // dw on the last word must not eat the newline (cursor on 'b')
         let (_, t) = typed("a b\nc", "lldw");
         assert_eq!(t, "a \nc");
+    }
+
+    #[test]
+    fn cl_and_dl_change_and_delete_chars() {
+        // cl ≈ s: the char under the cursor goes, insert begins
+        let (e, t) = typed("hello world", "cl");
+        assert_eq!(t, "ello world");
+        assert_eq!(e.mode, Mode::Insert);
+        // counts: 3cl == 3s, leading or trailing
+        let (_, t) = typed("hello world", "3cl");
+        assert_eq!(t, "lo world");
+        let (_, t) = typed("hello world", "c3l");
+        assert_eq!(t, "lo world");
+        // dl: the same delete without insert
+        let (e, t) = typed("hello world", "dl");
+        assert_eq!(t, "ello world");
+        assert_eq!(e.mode, Mode::Normal);
+        let (_, t) = typed("hello world", "3dl");
+        assert_eq!(t, "lo world");
+        // the cursor sits where the deletion happened
+        let mut e = editor("hello world");
+        for c in "llldl".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.cursor(), (0, 3));
+        // never crosses the line end; cl still enters insert there (vim:
+        // nothing to delete at EOL, but the edit starts)
+        let (e, t) = typed("ab", "$cl");
+        assert_eq!(t, "ab");
+        assert_eq!(e.mode, Mode::Insert);
+        let (_, t) = typed("ab", "$dl");
+        assert_eq!(t, "ab");
+        // a spent count does not multiply the typed text afterwards
+        let (_, t) = typed("hello world", "3clx");
+        assert_eq!(t, "xlo world");
     }
 
     #[test]
