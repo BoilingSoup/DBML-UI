@@ -15,23 +15,30 @@
 //! enter. No text. The highlight amount per edge is animated by the app
 //! (`edge_anim`), so transitions ease in and out instead of popping.
 
+use crate::app::RaisedItem;
 use crate::theme;
-use dbml_ui::layout::{many_ends, EdgeRoute, Layout, Row, TableBox};
+use dbml_ui::layout::{many_ends, row_icon_path, wrap_chars, EdgeRoute, Layout, NoteBox, Row, RowIcon, NOTE_ICON, TableBox};
 use iced::widget::canvas::{self, Path, Stroke, Text};
 use iced::{font, Color, Font, Point, Rectangle, Size, Vector};
-use unicode_width::UnicodeWidthStr;
 
 /// Diagram cells around the content (matches the SVG renderer's margin).
 pub const MARGIN_CELLS: f32 = 1.0;
+
+// Bold text runs wider than the advance classes `Row::est_width` was
+// calibrated on — the factor lives in layout (`layout::BOLD_TEXT`) where
+// the box width reserves the header's glyph room with the same measure
+// the painter places glyphs with.
+pub use dbml_ui::layout::BOLD_TEXT;
+
 /// A diagram cell is half as wide as it is tall (mirrors the SVG unit
 /// ratio 10x20); `zoom` is the cell height in pixels.
 pub const CELL_ASPECT: f32 = 0.5;
 
 /// One badge-font char, in cell widths (`Row::BADGE_CELL` is the same
 /// figure on the layout side).
-const BADGE_CHAR: f32 = 0.456;
+const BADGE_CHAR: f32 = 0.42;
 /// The badge pill's horizontal padding, in cell widths.
-const BADGE_PAD: f32 = 0.30;
+const BADGE_PAD: f32 = 0.24;
 
 /// Cell size in pixels at `zoom` (pixels per cell height).
 pub fn cell_size(zoom: f32) -> Size {
@@ -71,29 +78,138 @@ pub fn hit_test(layout: &Layout, zoom: f32, pan: Vector, p: Point) -> Option<&Ta
     })
 }
 
+/// The TOPMOST item at `p` in paint order: a raised table over a sticky
+/// must win the press (the click belongs to what you see), and a sticky
+/// over a table likewise. Mirrors `paint_items`' ranking — the raise
+/// order decides, the static layering (stickies above untouched tables)
+/// beneath it — so the cursor and the press routes agree with the render.
+/// A sticky's hit area includes its corner resize envelope.
+pub fn hit_topmost<'a>(
+    layout: &'a Layout,
+    zoom: f32,
+    pan: Vector,
+    p: Point,
+    item_z: &[RaisedItem],
+) -> Option<PaintItem<'a>> {
+    paint_items(layout, item_z, None, None, None)
+        .into_iter()
+        .rev()
+        .find(|item| match item {
+            PaintItem::Table(b) => {
+                // rect containment (not hit_test: that is doc-order and
+                // would disagree with the raise order on overlaps)
+                let tl = to_px(b.x, b.y, zoom, pan);
+                let sz = cell_size(zoom);
+                p.x >= tl.x
+                    && p.x < tl.x + b.w as f32 * sz.width
+                    && p.y >= tl.y
+                    && p.y < tl.y + b.h as f32 * sz.height
+            }
+            PaintItem::Note(n) => {
+                // per-note containment: a doc-order helper could return a
+                // DIFFERENT note at the same point and make the true
+                // topmost one skip itself (two stacked stickies clicked
+                // through to the lower one exactly that way)
+                super::notes::note_body_contains(n, zoom, pan, p)
+                    || super::notes::note_corner_zone_contains(n, zoom, pan, p)
+            }
+        })
+}
+
 /// Monospace character advance for row text at `zoom` (mono glyphs are
 /// ~0.6 em wide), used to find where a column name ends.
-fn char_px(zoom: f32) -> f32 {
-    // keep in sync with layout::Row::CHAR_CELL (0.58 cell of 10px)
-    0.58 * 0.5 * zoom
-}
-
-/// The embellishment icons of one column row, in dbdiagram's order:
-/// pk, fk, unique, note — a left cluster after the name, each 10.5px
-/// (1:1) with a 4px gap, vertically centered. Returns (kind, center).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RowIcon {
-    Pk,
-    Fk,
-    Unique,
-    Note,
-}
-
 /// The name's end x in frame px (the row text is drawn at this size).
 fn row_name_end_px(b: &TableBox, row: usize, zoom: f32, pan: Vector) -> f32 {
     let top_left = to_px(b.x, b.y, zoom, pan);
     let s = cell_size(zoom);
-    top_left.x + 1.0 * s.width + b.rows[row].name.width() as f32 * char_px(zoom)
+    // the shared per-character estimator (layout::Row::est_width): the old
+    // uniform 0.58/char factor overshot narrow names like "author_id" and
+    // left a dead gap before the row's first icon
+    top_left.x + 1.0 * s.width + Row::est_width(&b.rows[row].name) * s.width
+}
+
+/// The box's frame-px rect (the paint bounds, shadows excluded).
+fn box_rect(b: &TableBox, zoom: f32, pan: Vector) -> Rectangle {
+    let top_left = to_px(b.x, b.y, zoom, pan);
+    let s = cell_size(zoom);
+    Rectangle::new(
+        top_left,
+        Size::new(b.w as f32 * s.width, b.h as f32 * s.height),
+    )
+}
+
+/// A sticky's frame-px rect (the paint bounds, shadow excluded) — the
+/// same bounds `draw_notes` fills.
+fn note_rect_px(note: &NoteBox, zoom: f32, pan: Vector) -> Rectangle {
+    let (x, y, w, h) = note.rect;
+    let top_left = to_px(x, y, zoom, pan);
+    let s = cell_size(zoom);
+    Rectangle::new(
+        top_left,
+        Size::new(w as f32 * s.width, h as f32 * s.height),
+    )
+}
+
+/// `rect` minus ALL `occluders`: the region a covered table still
+/// draws its text in. Subtracts each occluder from the surviving set
+/// (`visible_slivers` removes one rect) — with three stacked tables the
+/// middle one must hide the bottom table's text too, not just the top
+/// occluder, or the bottom text leaks through it. Capped: a
+/// pathological stack stops subtracting rather than exploding.
+pub(crate) fn visible_region(rect: Rectangle, occluders: &[Rectangle]) -> Vec<Rectangle> {
+    let mut visible = vec![rect];
+    for occ in occluders {
+        if visible.len() >= 48 {
+            break;
+        }
+        let mut next = Vec::new();
+        for v in &visible {
+            if v.intersects(occ) {
+                next.extend(visible_slivers(*v, *occ));
+            } else {
+                next.push(*v);
+            }
+        }
+        visible = next;
+    }
+    visible
+}
+
+/// The parts of `rect` NOT covered by `occ` (the occluder), as up to
+/// four rectangles: left, right, top and bottom slivers around the
+/// occluder — the visible region a covered table still draws in.
+pub(crate) fn visible_slivers(rect: Rectangle, occ: Rectangle) -> Vec<Rectangle> {
+    let rr = rect.x + rect.width;
+    let rb = rect.y + rect.height;
+    let or = occ.x + occ.width;
+    let ob = occ.y + occ.height;
+    let x_lo = rect.x.max(occ.x);
+    let x_hi = rr.min(or);
+    vec![
+        // left of the occluder (full height, clamped into the rect)
+        Rectangle::new(
+            Point::new(rect.x, rect.y),
+            Size::new((occ.x - rect.x).max(0.0).min(rect.width), rect.height),
+        ),
+        // right of the occluder (full height, clamped into the rect)
+        Rectangle::new(
+            Point::new(or.max(rect.x), rect.y),
+            Size::new((rr - or).max(0.0).min(rect.width), rect.height),
+        ),
+        // above the occluder (the horizontal overlap band)
+        Rectangle::new(
+            Point::new(x_lo, rect.y),
+            Size::new((x_hi - x_lo).max(0.0), (occ.y - rect.y).max(0.0)),
+        ),
+        // below the occluder (the horizontal overlap band)
+        Rectangle::new(
+            Point::new(x_lo, ob),
+            Size::new((x_hi - x_lo).max(0.0), (rb - ob).max(0.0)),
+        ),
+    ]
+    .into_iter()
+    .filter(|s| s.width > 0.0 && s.height > 0.0)
+    .collect()
 }
 
 /// The vertical center of a column row in frame px.
@@ -122,45 +238,53 @@ fn row_icon_layout(b: &TableBox, row: usize, zoom: f32, pan: Vector) -> Vec<(Row
     if rowd.unique {
         push(RowIcon::Unique, &mut u, &mut out);
     }
-    if rowd.note.is_some() {
+    // the note icon is the "extra info on hover" affordance: ANY custom
+    // property triggers it (audit_log.event's `classification` too) —
+    // `note` is not a special custom-property key
+    if rowd.note.is_some() || !rowd.custom.is_empty() {
         push(RowIcon::Note, &mut u, &mut out);
     }
     out
 }
 
-/// The pk/fk marker under a canvas point, if any: the pointer must be
-/// inside one of the row's pk/fk icon slots.
-pub fn marker_hit(layout: &Layout, zoom: f32, pan: Vector, p: Point) -> Option<(&TableBox, usize)> {
+/// The EXACT icon of a row's left cluster under a canvas point, if any —
+/// pk, fk, unique, or the note affordance (whatever `row_icon_layout`
+/// draws). Reporting the glyph itself (not just its row) is what lets a
+/// pk+fk row tell its two markers apart when hovered.
+pub fn marker_icon_hit(
+    layout: &Layout,
+    zoom: f32,
+    pan: Vector,
+    p: Point,
+) -> Option<(&TableBox, usize, RowIcon)> {
     let (b, row) = hovered_row_of(layout, zoom, pan, p)?;
     let k = zoom / 20.0;
     for (icon, slot) in row_icon_layout(b, row, zoom, pan) {
-        if !matches!(icon, RowIcon::Pk | RowIcon::Fk) {
-            continue;
-        }
         let center = Point::new(slot + 5.25 * k, y_of(b, row, zoom, pan));
         let r = 5.25 * k;
         if (p.x - center.x).abs() <= r && (p.y - center.y).abs() <= r {
-            return Some((b, row));
+            return Some((b, row, icon));
         }
     }
     None
 }
 
+/// The pk/fk marker under a canvas point, if any: the pointer must be
+/// inside one of the row's pk/fk icon slots (the unique/note glyphs are
+/// not markers).
+#[allow(dead_code)] // the overlay now resolves the exact glyph; kept as the pk/fk-level hit test
+pub fn marker_hit(layout: &Layout, zoom: f32, pan: Vector, p: Point) -> Option<(&TableBox, usize)> {
+    marker_icon_hit(layout, zoom, pan, p)
+        .filter(|(_, _, icon)| matches!(icon, RowIcon::Pk | RowIcon::Fk))
+        .map(|(b, row, _)| (b, row))
+}
+
 /// The note icon under a canvas point, if any.
+#[allow(dead_code)] // the overlay now resolves the exact glyph; kept as the note-level hit test
 pub fn note_hit(layout: &Layout, zoom: f32, pan: Vector, p: Point) -> Option<(&TableBox, usize)> {
-    let (b, row) = hovered_row_of(layout, zoom, pan, p)?;
-    let k = zoom / 20.0;
-    for (icon, slot) in row_icon_layout(b, row, zoom, pan) {
-        if icon != RowIcon::Note {
-            continue;
-        }
-        let center = Point::new(slot + 5.25 * k, y_of(b, row, zoom, pan));
-        let r = 5.25 * k;
-        if (p.x - center.x).abs() <= r && (p.y - center.y).abs() <= r {
-            return Some((b, row));
-        }
-    }
-    None
+    marker_icon_hit(layout, zoom, pan, p)
+        .filter(|(_, _, icon)| *icon == RowIcon::Note)
+        .map(|(b, row, _)| (b, row))
 }
 
 /// X range (frame px) of an enum-typed row's "Enum" pill: the pill right
@@ -196,6 +320,51 @@ pub fn enum_hit(layout: &Layout, zoom: f32, pan: Vector, p: Point) -> Option<(&T
     (p.x >= x0 && p.x < x1 && (p.y - cy).abs() <= half).then_some((b, row))
 }
 
+/// The header-color palette glyph under a canvas point, if any — the
+/// same geometry `paint_table` draws (header right end, shifted left a
+/// band when the records glyph shares the header). The glyph only shows
+/// while the header is hovered, and a click on it is what opens the
+/// color menu.
+pub fn palette_icon_hit(
+    layout: &Layout,
+    zoom: f32,
+    pan: Vector,
+    p: Point,
+) -> Option<&TableBox> {
+    let b = hit_test(layout, zoom, pan, p)?;
+    let s = cell_size(zoom);
+    let top_left = to_px(b.x, b.y, zoom, pan);
+    // header band only
+    if (p.y - top_left.y) / s.height >= 1.0 {
+        return None;
+    }
+    let (c, half_w, half_h) = palette_icon_geometry(b, top_left, s);
+    ((p.x - c.x).abs() <= half_w && (p.y - c.y).abs() <= half_h).then_some(b)
+}
+
+/// The circles glyph's geometry, shared by the draw pass and the hit
+/// test: the icon is RIGHT-ALIGNED to the header's inset edge (0.6 cell
+/// in, shifted left a band when the records glyph shares the header) and
+/// centered vertically on the band. The viewBox is 578x531 — wider than
+/// tall, which is why the center and the two half-extents are computed
+/// together (a square hit zone around the band center let the drawn icon
+/// hang past the header's right edge).
+fn palette_icon_geometry(
+    b: &TableBox,
+    top_left: Point,
+    s: Size,
+) -> (Point, f32, f32) {
+    let right = top_left.x + b.w as f32 * s.width - 0.6 * s.width;
+    // the wheel ALWAYS owns the header's rightmost slot (records sits to
+    // its LEFT — see records_band), so the color glyph never jumps when
+    // a records-bearing table is hovered
+    let icon_h = 0.72 * s.height;
+    let icon_w = CIRCLES_VIEWBOX.0 / CIRCLES_VIEWBOX.1 * icon_h;
+    let c = Point::new(right - icon_w / 2.0, top_left.y + s.height * 0.5);
+    // grabbable: never smaller than 7px half-extents
+    (c, (icon_w / 2.0).max(7.0), (icon_h / 2.0).max(7.0))
+}
+
 /// The (box, row) the pointer is over, if it is on a column row.
 pub(crate) fn hovered_row_of(
     layout: &Layout,
@@ -213,12 +382,41 @@ pub(crate) fn hovered_row_of(
 /// X range (frame px) of the records affordance on a table that has
 /// records: the rows glyph at the right end of the header band (mirrors
 /// the note band, one row up).
-fn records_band(b: &TableBox, zoom: f32, pan: Vector) -> Option<(f32, f32)> {
+/// The header's title right edge in frame px: the 0.6-cell left inset
+/// plus the bold-measured title — the anchor every title-adjacent glyph
+/// (note, records) hangs from, and the same measure the width
+/// computation reserves (Row::BOLD_TEXT on both sides keeps them in step).
+fn title_end_px(b: &TableBox, top_left: Point, s: Size) -> f32 {
+    top_left.x + 0.6 * s.width + Row::est_width(&b.title) * BOLD_TEXT * s.width
+}
+
+/// The note affordance's (center x, size) in frame px, right of the
+/// title — shared by the painter and the records placement, which sits
+/// on the note's right when the table carries one.
+fn note_icon_geometry(b: &TableBox, top_left: Point, s: Size) -> Option<(f32, f32)> {
+    let has_info = b.note.is_some() || !b.custom.is_empty();
+    if !has_info {
+        return None;
+    }
+    let size = 0.5 * s.height;
+    let cx = title_end_px(b, top_left, s) + 0.6 * s.width + size * 0.5;
+    Some((cx, size))
+}
+
+pub(crate) fn records_band(b: &TableBox, zoom: f32, pan: Vector) -> Option<(f32, f32)> {
     b.records.as_ref()?;
     let top_left = to_px(b.x, b.y, zoom, pan);
     let s = cell_size(zoom);
-    let right = top_left.x + b.w as f32 * s.width;
-    Some((right - 1.5 * s.width, right - 0.5 * s.width))
+    // the records glyph ALWAYS sits in the title-adjacent glyph row:
+    // right of the note glyph when the table carries one, else right of
+    // the title — the header's right edge stays the wheel's (hover) slot
+    let records_size = 0.55 * s.height;
+    let left = match note_icon_geometry(b, top_left, s) {
+        Some((note_cx, note_size)) => note_cx + note_size * 0.5,
+        None => title_end_px(b, top_left, s),
+    };
+    let center = left + 0.45 * s.width + records_size * 0.5;
+    Some((center - 0.5 * s.width, center + 0.5 * s.width))
 }
 
 /// The records affordance under a canvas point: the rows glyph at the
@@ -245,6 +443,34 @@ pub fn marker_label(pk: bool) -> &'static str {
     }
 }
 
+/// The tooltip text for a hovered cluster icon: pk/fk/unique name their
+/// constraint; the note affordance shows the row's note text (60-char
+/// capped, the same pill the note icon has always popped).
+pub fn icon_tooltip(icon: RowIcon) -> Option<String> {
+    match icon {
+        RowIcon::Pk => Some(marker_label(true).to_string()),
+        RowIcon::Fk => Some(marker_label(false).to_string()),
+        RowIcon::Unique => Some("Unique".to_string()),
+        // the note glyph pops NO pill in any case: a real note is already
+        // duplicated by the field card's Note section, and custom
+        // properties by its Custom Properties section — a pill here would
+        // read as a third copy of the same information
+        RowIcon::Note => None,
+    }
+}
+
+/// The icon tooltip the overlay must pop for the pointer, if it sits on
+/// a cluster glyph: the EXACT glyph's label. The note glyph never pops a
+/// pill — whatever raised it (a note, custom properties) is already
+/// shown by the field card, whose Note / Custom Properties sections
+/// would just be duplicated by a pill. Pk/fk/unique glyphs pop their
+/// pill alongside the field card when the row also qualifies for one:
+/// the overlay draws the card first, the pill on top.
+fn icon_tooltip_line(layout: &Layout, zoom: f32, pan: Vector, p: Point) -> Option<String> {
+    marker_icon_hit(layout, zoom, pan, p)
+        .and_then(|(_, _, icon)| icon_tooltip(icon))
+}
+
 fn header_color(b: &TableBox) -> Color {
     b.header_color
         .as_deref()
@@ -263,8 +489,26 @@ pub struct Diagram<'a> {
     pub pan: Vector,
     /// Cursor position over the canvas (local px), for hover highlight.
     pub hover: Option<Point>,
+    /// The selected sticky note (its name): draw_notes paints its
+    /// selection border. Note text is edited in the source editor only.
+    pub selected_note: Option<String>,
     /// A drag is in flight (table or pan) — show the grab cursor.
     pub dragging: bool,
+    /// Raise order across tables AND stickies (most recently grabbed
+    /// last): a raised item paints after every unraised one, so the
+    /// last-grabbed item keeps priority over whatever it crossed.
+    pub item_z: &'a [RaisedItem],
+    /// The TableGroup being dragged (its name): member tables paint
+    /// after every non-member for the duration of the drag.
+    pub drag_group: Option<String>,
+    /// The sticky being dragged or resized (its name): it paints after
+    /// every other note (an item dragged over another rides on top).
+    pub drag_note: Option<String>,
+
+    /// Indices of the dragged table's relationship lines: while the drag
+    /// is live those lines paint ABOVE the tables they cross (back
+    /// beneath on release).
+    pub drag_edges: Option<Vec<usize>>,
     /// Per-edge highlight amount in 0..1 (animated by the app's tick);
     /// parallel to `layout.edges`.
     pub edge_anim: &'a [f32],
@@ -308,7 +552,20 @@ impl canvas::Program<crate::app::Message> for Diagram<'_> {
             ),
             canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => (
                 canvas::event::Status::Ignored,
-                tracked.map(Message::CanvasMoved),
+                if self.dragging {
+                    // a diagram drag keeps tracking past the pane edges
+                    tracked.map(Message::CanvasMoved)
+                } else {
+                    // hover tracks enter/leave like the editor's tooltip:
+                    // a move over another pane (or out of the window)
+                    // drops every hover effect — a quick hop to the
+                    // editor used to leave the border, cards, handle and
+                    // edge glow painted
+                    Some(match tracked {
+                        Some(p) => Message::CanvasMoved(p),
+                        None => Message::CanvasLeft,
+                    })
+                },
             ),
             canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
                 let notches = match delta {
@@ -349,6 +606,11 @@ impl canvas::Program<crate::app::Message> for Diagram<'_> {
                 anim: self.edge_anim,
                 pointer: self.hover,
                 clock: self.clock,
+                selected_note: self.selected_note.as_deref(),
+                item_z: self.item_z,
+                drag_group: self.drag_group.as_deref(),
+                drag_note: self.drag_note.as_deref(),
+                drag_edges: self.drag_edges.as_deref(),
             },
         );
 
@@ -362,28 +624,106 @@ impl canvas::Program<crate::app::Message> for Diagram<'_> {
         cursor: iced::mouse::Cursor,
     ) -> iced::mouse::Interaction {
         use iced::mouse::Interaction;
-        if self.dragging {
+        // the fist only over the diagram pane: canvas mouse_interaction is
+        // consulted window-wide, and an unbounded fist leaked over the
+        // editor while a table was dragged across the seam
+        if self.dragging && cursor.position_over(bounds).is_some() {
             return Interaction::Grabbing;
         }
         if let Some(p) = cursor.position_over(bounds) {
             let local = Point::new(p.x - bounds.x, p.y - bounds.y);
-            if hit_test(self.layout, self.zoom, self.pan, local).is_some() {
-                if records_icon_hit(self.layout, self.zoom, self.pan, local).is_some() {
-                    return Interaction::Pointer; // opens the record view
+            // the cursor mirrors the PRESS: the TOPMOST item wins (the
+            // raise order decides, stickies included) — a raised table
+            // over a sticky says table, a sticky over a table says grab.
+            // Band and line cursors only count in open space.
+            match hit_topmost(self.layout, self.zoom, self.pan, local, self.item_z) {
+                Some(PaintItem::Note(top)) => {
+                    // a corner press resizes (cursor = the corner's
+                    // resize axis); a body press drags the sticky. The
+                    // corner must belong to the TOPMOST note: a doc-order
+                    // scan could return a lower sticky's corner.
+                    if let Some((_, corner)) = super::notes::note_corner_hit(
+                        self.layout,
+                        self.zoom,
+                        self.pan,
+                        local,
+                    )
+                    .filter(|(h, _)| h.name == top.name)
+                    {
+                        // NW/SE corners take the nwse cursor (iced's
+                        // DiagonallyDown), NE/SW the nesw one
+                        return match corner {
+                            crate::app::StickyCorner::TopLeft
+                            | crate::app::StickyCorner::BottomRight => {
+                                Interaction::ResizingDiagonallyDown
+                            }
+                            crate::app::StickyCorner::TopRight
+                            | crate::app::StickyCorner::BottomLeft => {
+                                Interaction::ResizingDiagonallyUp
+                            }
+                        };
+                    }
+                    return Interaction::Grab;
                 }
-                if note_hit(self.layout, self.zoom, self.pan, local).is_some() {
-                    return Interaction::Help;
+                Some(PaintItem::Table(_)) => {
+                    if records_icon_hit(self.layout, self.zoom, self.pan, local).is_some() {
+                        return Interaction::Pointer; // opens the record view
+                    }
+                    // the color-picker glyph opens its menu: the link cursor
+                    if palette_icon_hit(self.layout, self.zoom, self.pan, local).is_some() {
+                        return Interaction::Pointer;
+                    }
+                    // dbdiagram's cursors: a column row grabs (drag =
+                    // re-order affordance in their editor), the rest of
+                    // the table moves. The note icon keeps the surrounding
+                    // cursor: it sits over a column row.
+                    if row_at(self.layout, self.zoom, self.pan, local).is_some() {
+                        return Interaction::Grab;
+                    }
+                    return Interaction::Move;
                 }
-                return Interaction::Pointer;
+                None => {
+                    // a group's header band reads as movable (it drags the
+                    // whole container) — except its picker icon, a link
+                    if super::groups::group_icon_hit(self.layout, self.zoom, self.pan, local)
+                        .is_some()
+                    {
+                        return Interaction::Pointer;
+                    }
+                    if super::groups::group_label_hit(self.layout, self.zoom, self.pan, local)
+                        .is_some()
+                    {
+                        return Interaction::Move;
+                    }
+                    // a relationship line reads as interactive, like
+                    // dbdiagram's
+                    if edge_hit(self.layout, self.zoom, self.pan, local, 7.0).is_some() {
+                        return Interaction::Pointer;
+                    }
+                    // dbdiagram's empty canvas stays the plain arrow
+                    return Interaction::default();
+                }
             }
-            // empty canvas: the open hand, signalling pan
-            return Interaction::Grab;
         }
         Interaction::default()
     }
 }
 
 /// The (box, row) under a canvas point, if any row of that box.
+/// The field card's identity for a pointer position: (table node, row)
+/// when the pointer sits on a column row whose table pops a field card
+/// (the popup rows are hover targets for the wheel-scroll too).
+pub fn field_card_at(
+    layout: &Layout,
+    zoom: f32,
+    pan: Vector,
+    p: Point,
+) -> Option<(usize, usize)> {
+    let b = hit_test(layout, zoom, pan, p)?;
+    let (hb, r) = row_at(layout, zoom, pan, p)?;
+    (hb.title == b.title && row_has_field_card(&b.rows[r])).then_some((b.node, r))
+}
+
 pub fn row_at(layout: &Layout, zoom: f32, pan: Vector, p: Point) -> Option<(&TableBox, usize)> {
     let b = hit_test(layout, zoom, pan, p)?;
     let top_left = to_px(b.x, b.y, zoom, pan);
@@ -443,6 +783,106 @@ struct HoverState<'a> {
     pointer: Option<Point>,
     /// Animation clock in seconds; advances the dash-flow phase.
     clock: f32,
+    /// The selected sticky note (its name), for the border.
+    selected_note: Option<&'a str>,
+    /// Raise order across tables AND stickies: raised items paint last.
+    item_z: &'a [RaisedItem],
+    /// The TableGroup being dragged (its name): member tables paint
+    /// after every non-member for the duration of the drag.
+    drag_group: Option<&'a str>,
+    /// The sticky being dragged/resized (its name): it paints last.
+    drag_note: Option<&'a str>,
+    /// Indices of the dragged table's lines: painted above the tables.
+    drag_edges: Option<&'a [usize]>,
+}
+
+/// One paintable diagram item: a table box or a sticky note. Tables and
+/// notes interleave in ONE paint sequence so the raise order can rank
+/// them against each other.
+pub enum PaintItem<'a> {
+    Table(&'a TableBox),
+    Note(&'a NoteBox),
+}
+
+/// The unified paint sequence. Rank rules:
+/// - unraised tables in doc order, then unraised notes in schema order
+///   (the static layering: stickies float above untouched tables)
+/// - raised items in grab order — tables and notes interleave, so the
+///   last-grabbed item outranks everything it crossed, whatever kind
+/// - a dragged group's members outrank every non-member (and every
+///   note) for the drag's duration
+/// - the dragged table / dragged sticky go LAST — the drag owns its own
+///   body and paints after its raised lines
+///
+/// Text occlusion then follows this sequence directly: every item's
+/// text clips around everything painted after it.
+pub(crate) fn paint_items<'a>(
+    layout: &'a Layout,
+    item_z: &[RaisedItem],
+    drag_group: Option<&str>,
+    drag_note: Option<&str>,
+    drag_table: Option<&str>,
+) -> Vec<PaintItem<'a>> {
+    #[derive(PartialEq, Eq, PartialOrd, Ord)]
+    enum Rank {
+        BaseTable(usize),
+        BaseNote(usize),
+        Raised(usize),
+        GroupMember(usize),
+        DragNote,
+    }
+    let group_members: &[usize] = drag_group
+        .and_then(|name| layout.groups.iter().find(|g| g.name == name))
+        .map(|g| g.members.as_slice())
+        .unwrap_or(&[]);
+    let rank_of = |t: &TableBox| {
+        item_z.iter().position(|r| match r {
+            RaisedItem::Table(title) => title == &t.title,
+            _ => false,
+        })
+    };
+    let note_rank_of = |n: &NoteBox| {
+        item_z.iter().position(|r| match r {
+            RaisedItem::Note(name) => name == &n.name,
+            _ => false,
+        })
+    };
+    let mut seq: Vec<(Rank, PaintItem)> = Vec::new();
+    for (i, b) in layout.boxes.iter().enumerate() {
+        let rank = match rank_of(b) {
+            None => Rank::BaseTable(i),
+            Some(pos) if group_members.contains(&b.node) => Rank::GroupMember(pos),
+            Some(pos) => Rank::Raised(pos),
+        };
+        seq.push((rank, PaintItem::Table(b)));
+    }
+    for (i, n) in layout.notes.iter().enumerate() {
+        let rank = match (note_rank_of(n), drag_note == Some(n.name.as_str())) {
+            (_, true) => Rank::DragNote,
+            (None, false) => Rank::BaseNote(i),
+            (Some(pos), false) => Rank::Raised(pos),
+        };
+        seq.push((rank, PaintItem::Note(n)));
+    }
+    seq.sort_by_key(|(rank, _)| match rank {
+        Rank::BaseTable(i) => (0, *i),
+        Rank::BaseNote(i) => (1, *i),
+        Rank::Raised(pos) => (2, *pos),
+        Rank::GroupMember(pos) => (3, *pos),
+        Rank::DragNote => (4, 0),
+    });
+    let mut seq: Vec<PaintItem> = seq.into_iter().map(|(_, item)| item).collect();
+    // the dragged table paints after its raised lines AND after every
+    // note: pull it to the very end
+    if let Some(title) = drag_table {
+        if let Some(i) = seq.iter().position(
+            |item| matches!(item, PaintItem::Table(b) if b.title == title),
+        ) {
+            let dragged = seq.remove(i);
+            seq.push(dragged);
+        }
+    }
+    seq
 }
 
 fn paint(
@@ -452,21 +892,255 @@ fn paint(
     pan: Vector,
     hs: &HoverState<'_>,
 ) {
-    for edge in &layout.edges {
-        let t = hs.anim.get(edge.edge).copied().unwrap_or(0.0);
-        paint_edge(frame, edge, zoom, pan, t, hs.clock);
-    }
-    let hovered = hs.pointer.and_then(|p| hit_test(layout, zoom, pan, p));
+    // the dragged table's own lines stay beneath while idle; while its
+    // drag is live they are pulled out and re-painted ABOVE the tables
+    // (back beneath on release — dbdiagram's drag behavior)
+    let raised = hs.drag_edges.unwrap_or(&[]);
+    // the hover border belongs to the TOPMOST table: a table under a
+    // sticky (or under a raised table) must not light up because the
+    // pointer crossed its hidden area
+    let hovered = hs.pointer.and_then(|p| {
+        match hit_topmost(layout, zoom, pan, p, hs.item_z) {
+            Some(PaintItem::Table(b)) => Some(b),
+            _ => None,
+        }
+    });
     // the hovered column row (dbdiagram tints it); only when its box is
     // the hovered one
-    let hovered_row = hs
+    // rows to tint: the hovered row, plus BOTH endpoint rows of every
+    // lit edge — dbdiagram tints the far end of a hovered relationship
+    // with the same hover background
+    let mut tinted: Vec<(usize, usize)> = hs
         .pointer
         .and_then(|p| row_at(layout, zoom, pan, p))
         .filter(|(b, _)| hovered.is_some_and(|h| h.title == b.title))
-        .map(|(_, r)| r);
-    for b in &layout.boxes {
-        let is_hovered = hovered.map(|h| h.title == b.title).unwrap_or(false);
-        paint_table(frame, b, zoom, pan, is_hovered, hovered_row);
+        .map(|(b, r)| vec![(b.node, r)])
+        .unwrap_or_default();
+    for edge in &layout.edges {
+        if hs.anim.get(edge.edge).copied().unwrap_or(0.0) > 0.0 {
+            tinted.extend(edge.ends);
+        }
+    }
+    // while a connected-table drag is live, drag_edges is Some and the
+    // grab pushed the dragged table to item_z's end — that title is the
+    // dragged table, painted after its raised lines below
+    let dragging_table = if hs.drag_edges.is_some() {
+        hs.item_z.iter().rev().find_map(|r| match r {
+            RaisedItem::Table(title) => Some(title.as_str()),
+            _ => None,
+        })
+    } else {
+        None
+    };
+    // while a TableGroup is dragged, its member tables paint after every
+    // non-member (and every note) for the drag's duration — the group
+    // takes priority over the canvas
+    let drag_group = hs
+        .drag_group
+        .and_then(|name| layout.groups.iter().find(|g| g.name == name));
+    // ONE paint sequence for tables and stickies: unraised tables (doc
+    // order), unraised notes (schema order), then raised items in grab
+    // order — the last-grabbed item outranks everything it crossed,
+    // whatever kind. The dragged table/note rank last.
+    let seq = paint_items(
+        layout,
+        hs.item_z,
+        drag_group.map(|g| g.name.as_str()),
+        hs.drag_note,
+        dragging_table,
+    );
+    let rect_of = |item: &PaintItem| match item {
+        PaintItem::Table(b) => box_rect(b, zoom, pan),
+        PaintItem::Note(n) => note_rect_px(n, zoom, pan),
+    };
+    let rects: Vec<Rectangle> = seq.iter().map(rect_of).collect();
+    // the groups paint first (behind everything), so EVERY table and
+    // sticky is above them — their label text clips around all of it
+    // group regions sit behind everything (dbdiagram's labeled frames)
+    super::groups::draw_groups(frame, layout, zoom, pan, hs.pointer, &rects);
+    // the highlight's glow pass FIRST (under every core): all highlighted
+    // edges' soft bands paint before any line core, so overlapping
+    // highlighted lines share one glow level instead of compounding
+    for (ei, edge) in layout.edges.iter().enumerate() {
+        if raised.contains(&ei) {
+            continue;
+        }
+        let t = hs.anim.get(edge.edge).copied().unwrap_or(0.0);
+        paint_edge(frame, edge, zoom, pan, t, hs.clock, true);
+    }
+    for (ei, edge) in layout.edges.iter().enumerate() {
+        if raised.contains(&ei) {
+            continue;
+        }
+        let t = hs.anim.get(edge.edge).copied().unwrap_or(0.0);
+        paint_edge(frame, edge, zoom, pan, t, hs.clock, false);
+    }
+    // the topmost note at the pointer: only IT draws its drag handles
+    // (a buried sticky's envelope must not sprout handles under the
+    // item covering it)
+    let hover_note = hs.pointer.and_then(|p| {
+        match hit_topmost(layout, zoom, pan, p, hs.item_z) {
+            Some(PaintItem::Note(n)) => Some(n.name.as_str()),
+            _ => None,
+        }
+    });
+    // iced draws ALL of a canvas's text above ALL of its geometry (the
+    // renderer emits meshes first, then the text stack), so paint order
+    // alone cannot hide an overlapped table's text — the covered table's
+    // text pass is therefore drawn CLIPPED to the region that sticks out
+    // around EVERY object above it (with_clip stamps clip_bounds into
+    // every text primitive — per-pixel). Fills always paint unclipped at
+    // draw order: the occluder's opaque body covers them in the overlap.
+    // ONE occlusion rule for tables and stickies alike: an item's text
+    // clips around EVERY object painted after it — the raise order
+    // decides who covers whom, and with three stacked items the middle
+    // one hides the bottom one's text too, not just the top occluder.
+    // The dragged table/note stay in `seq` (their rects occlude what
+    // they cover) but skip painting here — the drag owns its own body
+    // and paints after the raised lines below.
+    for (i, item) in seq.iter().enumerate() {
+        let rect = rects[i];
+        let occluders: Vec<Rectangle> = rects[i + 1..]
+            .iter()
+            .filter(|r| r.intersects(&rect))
+            .copied()
+            .collect();
+        match item {
+            PaintItem::Table(b) => {
+                if Some(b.title.as_str()) == dragging_table {
+                    continue;
+                }
+                let is_hovered = hovered.map(|h| h.title == b.title).unwrap_or(false);
+                let rows: Vec<usize> = tinted
+                    .iter()
+                    .filter(|(n, _)| *n == b.node)
+                    .map(|(_, r)| *r)
+                    .collect();
+                paint_table(frame, b, zoom, pan, is_hovered, &rows, rect.position(), false);
+                if occluders.is_empty() {
+                    paint_table(frame, b, zoom, pan, is_hovered, &rows, rect.position(), true);
+                } else {
+                    let visible = visible_region(rect, &occluders);
+                    for sliver in &visible {
+                        if sliver.width < 2.0 || sliver.height < 2.0 {
+                            continue;
+                        }
+                        frame.with_clip(*sliver, |f| {
+                            // the draft frame's origin is the sliver's:
+                            // paint the table shifted back under it
+                            paint_table(
+                                f,
+                                b,
+                                zoom,
+                                pan,
+                                is_hovered,
+                                &rows,
+                                Point::new(rect.x - sliver.x, rect.y - sliver.y),
+                                true,
+                            );
+                        });
+                    }
+                }
+            }
+            PaintItem::Note(n) => {
+                if hs.drag_note == Some(n.name.as_str()) {
+                    continue;
+                }
+                super::notes::draw_note(
+                    frame,
+                    n,
+                    zoom,
+                    pan,
+                    super::notes::NoteChrome {
+                        pointer: hs.pointer,
+                        selected: hs.selected_note,
+                        top_note: hover_note,
+                    },
+                    &occluders,
+                );
+            }
+        }
+    }
+    // the dragged table's lines: ABOVE every table they cross until the
+    // drag is released (the exception to tables-over-lines)
+    for ei in raised {
+        if let Some(edge) = layout.edges.get(*ei) {
+            let t = hs.anim.get(edge.edge).copied().unwrap_or(0.0);
+            paint_edge(frame, edge, zoom, pan, t, hs.clock, true);
+            paint_edge(frame, edge, zoom, pan, t, hs.clock, false);
+        }
+    }
+    // the DRAGGED items paint after the raised lines — the drag owns its
+    // own body: an item dragged over anything covers it fully (fill in
+    // the mesh pass, text later in the text pass), while its raised
+    // lines stay over every OTHER table. Known iced artifact: ALL canvas
+    // text renders above ALL meshes, so a dragged box's text layer still
+    // rides above a line crossing it — its fill, pills and borders do
+    // not.
+    if let Some(name) = hs.drag_note {
+        if let Some(n) = layout.notes.iter().find(|n| n.name == name) {
+            // the dragged note draws its own handles: it is topmost by
+            // construction
+            super::notes::draw_note(
+                frame,
+                n,
+                zoom,
+                pan,
+                super::notes::NoteChrome {
+                    pointer: hs.pointer,
+                    selected: hs.selected_note,
+                    top_note: Some(n.name.as_str()),
+                },
+                &[],
+            );
+        }
+    }
+    if let Some(title) = dragging_table {
+        if let Some(b) = layout.boxes.iter().find(|b| b.title == title) {
+            let rect = box_rect(b, zoom, pan);
+            let is_hovered = hovered.map(|h| h.title == b.title).unwrap_or(false);
+            let rows: Vec<usize> = tinted
+                .iter()
+                .filter(|(n, _)| *n == b.node)
+                .map(|(_, r)| *r)
+                .collect();
+            paint_table(frame, b, zoom, pan, is_hovered, &rows, rect.position(), false);
+            paint_table(frame, b, zoom, pan, is_hovered, &rows, rect.position(), true);
+        }
+    }
+}
+
+/// A line's base color: an explicit `[color: …]` wins, else the
+/// referenced table's resolved header color (its TableGroup cascade
+/// included), else the default gray.
+fn edge_base_color(edge: &EdgeRoute) -> Color {
+    edge.color
+        .as_deref()
+        .and_then(theme::hex_color)
+        .or_else(|| edge.inherited.as_deref().and_then(theme::hex_color))
+        .unwrap_or(theme::LINE)
+}
+
+/// A line's hover color (dbdiagram's highlight): a LIGHTER tone of the
+/// color the line already wears when it HAS one — an explicit
+/// `[color: …]` or a non-dark inherited header (their likes.post_id →
+/// posts purple line highlights in a lifted purple) — else the highlight
+/// blue. A line resolving to the dark header option (no inherited color
+/// at all — the default cascade — or the dark swatch/hex picked for the
+/// referenced table) has no visible highlight IN that color, so it eases
+/// to the blue.
+fn edge_hover_color(edge: &EdgeRoute) -> Color {
+    let colored = edge.color.is_some()
+        || edge
+            .inherited
+            .as_deref()
+            .is_some_and(|h| !h.eq_ignore_ascii_case(theme::DARK_HEADER_HEX));
+    if colored {
+        // a touch lighter than the line, through BRIGHTENING (their
+        // colorFactor move) — whitening reads as a washed pastel
+        brighten(edge_base_color(edge), 1.15)
+    } else {
+        theme::EDGE_HOVER
     }
 }
 
@@ -477,6 +1151,7 @@ fn paint_edge(
     pan: Vector,
     t: f32,
     clock: f32,
+    glow_pass: bool,
 ) {
     let s = cell_size(zoom);
     // waypoints are f32 cell coords; rows anchor at their vertical center
@@ -497,11 +1172,31 @@ fn paint_edge(
     let r = (0.9 * s.height).min(10.0 * zoom / 20.0);
     let path = rounded_edge_path(&pts, r);
 
-    // dbdiagram's hovered route: the core eases gray -> their highlight
-    // blue and doubles in width (their LINE_WIDTH_NORMAL 1 -> HIGHLIGHT 2)
+    // dbdiagram's hovered route: the core eases to the line's highlight
+    // color and their LINE_WIDTH_NORMAL 1 -> HIGHLIGHT 2 — exactly 2px at
+    // 1:1 (a 2x multiplier over our wider 1.5px base read as unusually
+    // thick under the highlight color). A `[color: ...]` ref replaces
+    // the gray base, and a line WITHOUT one renders in the referenced
+    // table's header color (`inherited`) — the whole relationship (line
+    // + markers) renders in it (live-verified).
+    let k = zoom / 20.0;
     let mut core = edge_stroke(zoom);
-    core.style = lerp_color(theme::LINE, theme::EDGE_HOVER, t).into();
-    core.width *= 1.0 + t;
+    let base = edge_base_color(edge);
+    let hover_color = edge_hover_color(edge);
+    if glow_pass {
+        // static glow hugging the path (their shape shadow: blur 10,
+        // opacity .5 in the dark theme — no pulsing). The nested rings
+        // ride in the line's own highlight color; MSAA blends the bands
+        // into a smooth falloff. Restored verbatim from f529342 — every
+        // replacement (opaque bands, dashed rings, disc ladders) read
+        // worse than this.
+        if t > 0.0 {
+            paint_glow(frame, &path, zoom, t, hover_color);
+        }
+        return;
+    }
+    core.style = lerp_color(base, hover_color, t).into();
+    core.width = core.width + (2.0 * zoom / 20.0 - core.width) * t;
 
     // end markers: the "many" end gets a chevron + open circle, the "one"
     // end a perpendicular tick. Each end also trims the flow path by the
@@ -513,17 +1208,15 @@ fn paint_edge(
     let trim_ref = if many_ref { 0.8 * zoom } else { 0.5 * zoom };
 
     if t > 0.0 {
-        // static glow hugging the path (their shape shadow: blur 10,
-        // opacity .5 in the dark theme — no pulsing)
-        paint_glow(frame, &path, zoom, t);
         frame.stroke(&path, core);
         // the flow: a dashed stroke on the SAME filleted path (their
         // setLineDash([3, 40]) with lineDashOffset = time/30), so dashes
         // ride the corners instead of cutting them. Increasing the offset
         // shifts the pattern toward the path start; pts[0] is the fk end,
-        // so the flow reads referenced key → foreign key.
+        // so the flow reads referenced key → foreign key. Their dash
+        // color is the line's brightened 1.2x.
         let phase = hs_clock(clock) * zoom / 20.0;
-        paint_flow(frame, &pts, r, phase, t, (trim_fk, trim_ref), zoom);
+        paint_flow(frame, &pts, r, phase, t, (trim_fk, trim_ref), zoom, hover_color, 4.0 * k);
     } else {
         frame.stroke(&path, core);
     }
@@ -538,6 +1231,44 @@ fn paint_edge(
     } else {
         one_tick(frame, pts[n - 1], pts[n - 2], zoom, core);
     }
+
+    // a named ref (`Ref name: ...`) shows its name at the route midpoint
+    // in the line's highlight color while hovered (dbdiagram does this
+    // for named refs only)
+    if t > 0.0 {
+        if let Some(name) = &edge.name {
+            frame.fill_text(Text {
+                content: name.clone(),
+                position: polyline_midpoint(&pts),
+                color: hover_color,
+                size: (0.6 * zoom).into(),
+                font: Font::MONOSPACE,
+                horizontal_alignment: iced::alignment::Horizontal::Center,
+                vertical_alignment: iced::alignment::Vertical::Center,
+                ..Default::default()
+            });
+        }
+    }
+}
+
+/// Arclength midpoint of the route polyline (corner fillets shift it by at
+/// most their radius — close enough for a hover label anchor).
+fn polyline_midpoint(pts: &[Point]) -> Point {
+    let dist = |a: Point, b: Point| (b.x - a.x).hypot(b.y - a.y);
+    let total: f32 = pts.windows(2).map(|w| dist(w[0], w[1])).sum();
+    let mut walked = 0.0;
+    for w in pts.windows(2) {
+        let seg = dist(w[0], w[1]);
+        if walked + seg >= total / 2.0 {
+            let f = if seg > 0.0 { (total / 2.0 - walked) / seg } else { 0.0 };
+            return Point::new(
+                w[0].x + (w[1].x - w[0].x) * f,
+                w[0].y + (w[1].y - w[0].y) * f,
+            );
+        }
+        walked += seg;
+    }
+    pts.last().copied().unwrap_or(Point::ORIGIN)
 }
 
 fn hs_clock(clock: f32) -> f32 {
@@ -545,26 +1276,41 @@ fn hs_clock(clock: f32) -> f32 {
     clock * 1000.0 / 30.0
 }
 
+/// Pull the first/last points inward along their segments by `first`/`last`
+/// px (their LGt trims the hover overlay by the marker gap). The glow must
+/// stop in the marker gap too: the rings are half as wide as the trim is
+/// deep, so a trimmed halo ends short of the anchor instead of stacking
+/// with every other route that ends on the same column.
 /// Static halo around a highlighted route: the canvas has no blur, so
 /// three nested strokes fake the falloff of dbdiagram's shape shadow.
-fn paint_glow(frame: &mut canvas::Frame, path: &Path, zoom: f32, t: f32) {
+/// The flowing dashes of a highlighted route: 3px dashes with 40px gaps
+/// (1:1 px), 4px wide, gliding along the filleted path. Rendered by
+/// stroking each dash's sub-range of the flattened path — a dash pattern
+/// can never cut a corner the way bead chords did.
+/// The highlighted route's gaussian glow: nested translucent rings in
+/// the line's brightened highlight color, MSAA blends the bands into a
+/// smooth falloff (f529342's paint_glow, restored verbatim).
+fn paint_glow(
+    frame: &mut canvas::Frame,
+    path: &Path,
+    zoom: f32,
+    t: f32,
+    hover_color: Color,
+) {
     let k = zoom / 20.0;
-    // approximate dbdiagram's gaussian shadow (blur 10, opacity .5) with
-    // nested rings; with MSAA the bands blend into a smooth falloff. The
-    // profile stays clear of the core so the highlight does not read as a
-    // thicker line (their shadow sits behind the line, not around it).
     for (w, a) in [
-        (4.0, 0.06),
-        (5.5, 0.05),
-        (7.0, 0.04),
-        (9.0, 0.03),
-        (11.0, 0.02),
-        (13.0, 0.012),
+        (2.0, 0.16),
+        (3.5, 0.13),
+        (5.0, 0.10),
+        (6.5, 0.075),
+        (8.5, 0.05),
+        (10.5, 0.03),
+        (12.5, 0.015),
     ] {
         frame.stroke(
             path,
             Stroke {
-                style: with_alpha(theme::EDGE_HOVER, a * t).into(),
+                style: with_alpha(brighten(hover_color, 1.4), a * t).into(),
                 width: w * k,
                 ..Default::default()
             },
@@ -572,10 +1318,7 @@ fn paint_glow(frame: &mut canvas::Frame, path: &Path, zoom: f32, t: f32) {
     }
 }
 
-/// The flowing dashes of a highlighted route: 3px dashes with 40px gaps
-/// (1:1 px), 4px wide, gliding along the filleted path. Rendered by
-/// stroking each dash's sub-range of the flattened path — a dash pattern
-/// can never cut a corner the way bead chords did.
+#[allow(clippy::too_many_arguments)]
 fn paint_flow(
     frame: &mut canvas::Frame,
     pts: &[Point],
@@ -584,6 +1327,8 @@ fn paint_flow(
     t: f32,
     trims: (f32, f32),
     zoom: f32,
+    hover_color: Color,
+    width: f32,
 ) {
     let flat = flatten_pieces(&rounded_pieces(pts, radius));
     if flat.total <= 0.0 {
@@ -595,7 +1340,7 @@ fn paint_flow(
     let lo = trims.0.min(flat.total);
     let hi = (flat.total - trims.1).max(lo);
     for (a, b) in dash_windows(phase, 43.0 * k, 3.0 * k, lo, hi) {
-        stroke_arc_range(frame, &flat, a, b, 4.0 * k, t);
+        stroke_arc_range(frame, &flat, a, b, width, hover_color, t);
     }
 }
 
@@ -760,7 +1505,15 @@ fn flat_point(flat: &Flat, s: f32) -> Point {
 }
 
 /// Stroke the path sub-range `[a, b]` (arc distances) as a polyline.
-fn stroke_arc_range(frame: &mut canvas::Frame, flat: &Flat, a: f32, b: f32, width: f32, t: f32) {
+fn stroke_arc_range(
+    frame: &mut canvas::Frame,
+    flat: &Flat,
+    a: f32,
+    b: f32,
+    width: f32,
+    color: Color,
+    t: f32,
+) {
     if b <= a {
         return;
     }
@@ -776,7 +1529,9 @@ fn stroke_arc_range(frame: &mut canvas::Frame, flat: &Flat, a: f32, b: f32, widt
     frame.stroke(
         &path,
         Stroke {
-            style: with_alpha(brighten(theme::EDGE_HOVER, 1.2), t).into(),
+            // the dashes brighten the line's own hover color — the flow
+            // dots match the line they ride (never a hardcoded blue)
+            style: with_alpha(brighten(color, 1.2), t).into(),
             width,
             ..Default::default()
         },
@@ -859,37 +1614,42 @@ fn edge_stroke_width(zoom: f32) -> f32 {
 
 /// dbdiagram's row icons, as SVG path data lifted from their renderer
 /// (Path2D strings), authored on a 10.5px grid.
-const PK_ICON: &str = "M 6.5625 0.9844 C 8.1935 0.9844 9.5156 2.3065 9.5156 3.9375 C 9.5156 5.5685 8.1935 6.8906 6.5625 6.8906 C 6.1735 6.8906 5.8022 6.8153 5.462 6.6786 L 4.5938 7.5469 H 3.9375 V 8.5313 H 2.9531 V 9.5156 H 0.9844 V 7.5469 L 3.736 4.7952 C 3.6518 4.5171 3.6092 4.2281 3.6094 3.9375 C 3.6094 2.3065 4.9315 0.9844 6.5625 0.9844 Z M 6.5625 0 C 4.388 0 2.625 1.7627 2.625 3.9375 C 2.625 4.1186 2.6373 4.2989 2.6619 4.4772 L 0.1441 6.995 C 0.0519 7.0873 0 7.2125 0 7.343 L 0 10.0078 C 0 10.2797 0.2204 10.5 0.4922 10.5 H 3.4453 C 3.7171 10.5 3.9375 10.2797 3.9375 10.0078 V 9.5156 H 4.4297 C 4.7015 9.5156 4.9219 9.2953 4.9219 9.0234 V 8.6133 L 5.7432 7.7895 C 6.011 7.8464 6.2848 7.875 6.5625 7.875 C 8.737 7.875 10.5 6.1123 10.5 3.9375 C 10.5 1.763 8.7373 0 6.5625 0 Z M 6.5625 2.9531 C 6.5625 3.4968 7.0032 3.9375 7.5469 3.9375 C 8.0905 3.9375 8.5313 3.4968 8.5313 2.9531 C 8.5313 2.4095 8.0905 1.9688 7.5469 1.9688 C 7.0032 1.9688 6.5625 2.4095 6.5625 2.9531 Z";
-const FK_ICON: &str = "M 4.6244 6.6258 c -0.2002 0 -0.3885 -0.078 -0.5304 -0.2197 c -1.1204 -1.1205 -1.1204 -2.9437 0 -4.0641 l 1.5016 -1.5016 c 0.5419 -0.542 1.2635 -0.8405 2.032 -0.8405 s 1.4901 0.2985 2.032 0.8405 c 1.1204 1.1204 1.1204 2.9436 0 4.0641 l -1.001 1.001 c -0.1416 0.1417 -0.3299 0.2197 -0.5304 0.2198 c -0.2002 0 -0.3885 -0.078 -0.5304 -0.2197 c -0.1416 -0.1417 -0.2198 -0.3301 -0.2198 -0.5305 c 0 -0.2004 0.0781 -0.3888 0.2198 -0.5305 l 1.001 -1.001 c 0.5355 -0.5355 0.5355 -1.4068 0 -1.9423 c -0.2588 -0.2588 -0.6039 -0.4015 -0.9712 -0.4015 s -0.7123 0.1426 -0.9712 0.4015 l -1.5016 1.5016 c -0.5355 0.5355 -0.5355 1.4068 0 1.9422 c 0.2925 0.2925 0.2925 0.7684 0 1.0609 c -0.1419 0.1417 -0.3302 0.2197 -0.5304 0.2197 z M 2.8725 10.5 c -0.7685 0 -1.4901 -0.2985 -2.032 -0.8405 c -1.1204 -1.1204 -1.1204 -2.9436 0 -4.0641 l 0.7509 -0.7509 c 0.1416 -0.1416 0.3302 -0.2197 0.5304 -0.2197 c 0.2002 0 0.3888 0.0781 0.5304 0.2198 c 0.1416 0.1416 0.2198 0.33 0.2198 0.5304 c 0 0.2004 -0.0781 0.3888 -0.2198 0.5305 l -0.7509 0.7508 c -0.5355 0.5354 -0.5355 1.4067 0 1.9422 c 0.2588 0.2588 0.6039 0.4015 0.9712 0.4015 s 0.7123 -0.1425 0.9712 -0.4015 l 1.5016 -1.5016 c 0.5355 -0.5355 0.5355 -1.4068 0 -1.9422 c -0.1416 -0.1417 -0.2198 -0.3301 -0.2198 -0.5305 s 0.0781 -0.3888 0.2198 -0.5305 c 0.1416 -0.1417 0.3302 -0.2197 0.5304 -0.2197 s 0.3888 0.078 0.5304 0.2196 c 1.1204 1.1205 1.1204 2.9437 0 4.0641 l -1.5016 1.5016 c -0.5419 0.542 -1.2635 0.8405 -2.032 0.8405 z";
+/// The header-color affordance (shared with group headers): three
+/// overlapping circles (green/red/blue) on a 578x531 viewBox, the
+/// classic color-wheel mark. Drawn directly (the source IS three
+/// circles) at the header's right end while hovered.
+pub(crate) const CIRCLES_ICON: [(f32, f32, f32, Color); 3] = [
+    // (cx, cy, r, fill) in viewBox units
+    (
+        166.0,
+        366.0,
+        166.0,
+        Color::from_rgb(0x6D as f32 / 255.0, 0xBB as f32 / 255.0, 0x68 as f32 / 255.0),
+    ),
+    (
+        412.0,
+        366.0,
+        166.0,
+        Color::from_rgb(0xFF as f32 / 255.0, 0x41 as f32 / 255.0, 0x46 as f32 / 255.0),
+    ),
+    (
+        277.0,
+        165.0,
+        166.0,
+        Color::from_rgb(0x00 as f32 / 255.0, 0x9F as f32 / 255.0, 0xF3 as f32 / 255.0),
+    ),
+];
+pub(crate) const CIRCLES_VIEWBOX: (f32, f32) = (578.0, 531.0);
+
+/// The SVG path data for one row-icon glyph (shared with the hover docs).
 /// dbdiagram's unique fingerprint icon (their QTn), lifted verbatim
 /// from their bundle (minified: implicit command repetition).
-const UNIQUE_ICON: &str = "m6.179 10.5005c\
-    -.0797 0-.1606-.0181-.2367-.0562-.2613-.1309-.3669-.4489-.236-.7101.311-.6204.5644-1.2734.7533-1.9409.0796-.2812.3721-.4446.6532-.365.2812.0796.4446.372.365.6532-.207.7314-.4848 1.447-.8255 2.1268-.0928.1852-.2795.2922-.4734.2922z\
-    m-2.3451-.1445c\
-    -.0963 0-.1937-.0263-.2813-.0813-.2473-.1556-.3217-.4823-.1661-.7296.8998-1.4301 1.3753-3.0838 1.3753-4.7822 0-.2922.2369-.5291.5291-.5291s\
-    .5291.2369.5291.5291c0 1.8981-.5318 3.7467-1.5378 5.3457-.1005.1598-.2725.2474-.4483.2474zm\
-    -1.8201-1.0793c-.0927 0-.1865-.0244-.2718-.0755-.2506-.1504-.3318-.4754-.1814-.7259l.0286-.0476c\
-    .0019-.0032.0039-.0064.0059-.0096.6898-1.0958 1.053-2.3593 1.0504-3.6541-0-.7077.2752-1.372.7748-1.8717.4997-.4997 1.164-.7749 1.8706-.7749.7067 0 1.371.2752 1.8707.7749.4997.4996.7748 1.164.7748 1.8706 0 .5513-.0378 1.1093-.1122 1.6584-.0393.2896-.3059.4924-.5954.4532-.2896-.0393-.4925-.3058-.4532-.5954.0681-.5022.1026-1.0123.1026-1.5162 0-.424-.1651-.8226-.4649-1.1224-.2998-.2998-.6984-.4649-1.1224-.4649-.424 0-.8226.1651-1.1224.4649-.2998.2998-.4649.6984-.4649 1.1224.003 1.4923-.4154 2.9496-1.2099 4.2139l\
-    -.0259.0431c-.0992.1653-.2744.2569-.4542.2569zm6.9865-.2111c\
-    -.048 0-.0967-.0066-.1451-.0203-.281-.08-.444-.3727-.364-.6537.3342-1.174.5036-2.3949.5036-3.6287.0002-.6494-.1713-1.2899-.4959-1.8522-.3245-.5624-.7933-1.0312-1.3556-1.356-.5623-.3247-1.2027-.4964-1.852-.4964-.0001 0-.0002 0-.0003 0-.6492 0-1.2895.1716-1.8517.4962-.2531.1461-.5767.0594-.7228-.1937s\
-    -.0594-.5767.1937-.7228c.7229-.4174 1.5463-.638 2.381-.638h.0003c\
-    .8348 0 1.6582.2208 2.3812.6382.7229.4175 1.3257 1.0204 1.7429 1.7434.4173.7231.6378 1.5465.6376 2.3813 0 1.3317-.183 2.65-.544 3.9183-.0662.2326-.2781.3844-.5086.3844z\
-    m-8.4715-1.4646c\
-    -.0775 0-.1562-.0171-.2306-.0532-.2629-.1276-.3726-.4441-.245-.707.3159-.651.476-1.3501.476-2.078 0-.8363.2203-1.6596.6371-2.381.1462-.253.4698-.3397.7228-.1935.253.1462.3397.4698.1935.7228-.3239.5607-.4952 1.201-.4952 1.8517 0 .8893-.1959 1.7438-.5822 2.54-.0915.1885-.2801.2982-.4764.2982z";
-
+///
 /// dbdiagram's note page icon (their Exn).
-const NOTE_ICON: &str = "M 9 1.125 C 9.2063 1.125 9.375 1.2938 9.375 1.5 V 6.75 H 7.5 C 7.0852 6.75 6.75 7.0852 6.75 7.5 V 9.375 H 1.5 C 1.2938 9.375 1.125 9.2063 1.125 9 V 1.5 C 1.125 1.2938 1.2938 1.125 1.5 1.125 H 9 Z M 1.5 10.5 H 6.75 H 6.8789 C 7.2773 10.5 7.6594 10.343 7.9406 10.0617 L 10.0617 7.9406 C 10.343 7.6594 10.5 7.2773 10.5 6.8789 V 6.75 V 1.5 C 10.5 0.6727 9.8273 0 9 0 H 1.5 C 0.6727 0 0 0.6727 0 1.5 V 9 C 0 9.8273 0.6727 10.5 1.5 10.5 Z M 3 7.6875 C 3 7.5383 2.9407 7.3952 2.8352 7.2897 C 2.7298 7.1843 2.5867 7.125 2.4375 7.125 C 2.2883 7.125 2.1452 7.1843 2.0398 7.2897 C 1.9343 7.3952 1.875 7.5383 1.875 7.6875 C 1.875 7.8367 1.9343 7.9798 2.0398 8.0853 C 2.1452 8.1907 2.2883 8.25 2.4375 8.25 C 2.5867 8.25 2.7298 8.1907 2.8352 8.0853 C 2.9407 7.9798 3 7.8367 3 7.6875 Z M 2.4375 2.25 C 2.2883 2.25 2.1452 2.3093 2.0398 2.4148 C 1.9343 2.5202 1.875 2.6633 1.875 2.8125 C 1.875 2.9617 1.9343 3.1048 2.0398 3.2102 C 2.1452 3.3157 2.2883 3.375 2.4375 3.375 C 2.5867 3.375 2.7298 3.3157 2.8352 3.2102 C 2.9407 3.1048 3 2.9617 3 2.8125 C 3 2.6633 2.9407 2.5202 2.8352 2.4148 C 2.7298 2.3093 2.5867 2.25 2.4375 2.25 Z M 3 5.25 C 3 5.1008 2.9407 4.9577 2.8352 4.8522 C 2.7298 4.7468 2.5867 4.6875 2.4375 4.6875 C 2.2883 4.6875 2.1452 4.7468 2.0398 4.8522 C 1.9343 4.9577 1.875 5.1008 1.875 5.25 C 1.875 5.3992 1.9343 5.5423 2.0398 5.6478 C 2.1452 5.7532 2.2883 5.8125 2.4375 5.8125 C 2.5867 5.8125 2.7298 5.7532 2.8352 5.6478 C 2.9407 5.5423 3 5.3992 3 5.25 Z";
 /// The records affordance glyph (a table with rows), used at the right
 /// end of the header of a records-bearing table on hover, on an 18px grid.
 const TABLE_RING_ICON: &str = "M18 2c0-1.103-.897-2-2-2H2c-1.103 0-2 .897-2 2v14c0 1.103.897 2 2 2h14c1.103 0 2-.897 2-2zM2 16V2h14l.002 14z";
 const TABLE_ROWS_ICON: &str = "M4 4h1.998v2H4zm4 0h6v2h-6zm-4 4h1.998v2H4zm4 0h6v2h-6zm-4 4h1.998v2H4zm4 0h6v2h-6z";
-/// dbdiagram's table pictogram, lifted from their renderer (Path2D
-/// strings): the rounded-rect ring and its header band, on an 11.25x10
-/// grid. The ring's two subpaths wind oppositely, so a plain fill punches
-/// the window; the band is filled on top.
-const TABLE_PICTO_RING: &str = "M9.93182 0.909091H2.31818C1.8161 0.909091 1.40909 1.3161 1.40909 1.81818V8.18182C1.40909 8.6839 1.8161 9.09091 2.31818 9.09091H9.93182C10.4339 9.09091 10.8409 8.6839 10.8409 8.18182V1.81818C10.8409 1.3161 10.4339 0.909091 9.93182 0.909091ZM2.31818 0C1.31403 0 0.5 0.814028 0.5 1.81818V8.18182C0.5 9.18597 1.31403 10 2.31818 10H9.93182C10.936 10 11.7 9.18597 11.7 8.18182V1.81818C11.7 0.814028 10.936 0 9.93182 0Z";
-const TABLE_PICTO_BAND: &str = "M0.5 1.81818C0.5 0.814028 1.31403 0 2.31818 0H9.93182C10.936 0 11.75 0.814028 11.75 1.81818V2.5H0.5V1.81818Z";
-
 /// Tokenize SVG path data into (command, params) pairs.
 fn svg_path_cmds(data: &str) -> Vec<(u8, Vec<f32>)> {
     let b = data.as_bytes();
@@ -938,7 +1698,7 @@ fn svg_group(cmd: u8) -> usize {
 
 /// Fill an icon authored as SVG path data (dbdiagram's Path2D strings),
 /// scaled from its `grid` to `size` px and centered on `center`.
-fn svg_icon(frame: &mut canvas::Frame, center: Point, size: f32, grid: f32, color: Color, data: &str) {
+pub(crate) fn svg_icon(frame: &mut canvas::Frame, center: Point, size: f32, grid: f32, color: Color, data: &str) {
     let k = size / grid;
     let px = |x: f32, y: f32| Point::new(center.x - size / 2.0 + x * k, center.y - size / 2.0 + y * k);
     let cmds = svg_path_cmds(data);
@@ -1057,26 +1817,36 @@ fn svg_icon(frame: &mut canvas::Frame, center: Point, size: f32, grid: f32, colo
     frame.fill(&path, color);
 }
 
-/// dbdiagram's table pictogram: the rounded-rect ring with its header
-/// band filled on top, scaled to `size` px and centered on `center`.
-/// Shared by the table header and the record view's title row.
-pub(crate) fn draw_table_pictogram(frame: &mut canvas::Frame, center: Point, size: f32, color: Color) {
-    svg_icon(frame, center, size, 11.25, color, TABLE_PICTO_RING);
-    svg_icon(frame, center, size, 11.25, color, TABLE_PICTO_BAND);
-}
-
+#[allow(clippy::too_many_arguments)]
 fn paint_table(
     frame: &mut canvas::Frame,
     b: &TableBox,
     zoom: f32,
     pan: Vector,
     hovered: bool,
-    hovered_row: Option<usize>,
+    tinted: &[usize],
+    at: Point,
+    text_pass: bool,
 ) {
     let s = cell_size(zoom);
-    let top_left = to_px(b.x, b.y, zoom, pan);
+    // `at` is the box's frame-px origin in the target frame: to_px(b.x,
+    // b.y) normally, shifted when painting under a clip sliver.
+    // `text_pass`: iced draws ALL canvas text above ALL canvas geometry
+    // (Frame::fill_text's warning), so a table paints in TWO passes —
+    // shapes (body, band, tints, icons: correct draw-order z, an
+    // occluder's body covers them) and text (title, names, pills: bound
+    // to whatever clip the caller set). A full table = shapes pass +
+    // text pass back to back.
+    let top_left = at;
     let size = Size::new(b.w as f32 * s.width, b.h as f32 * s.height);
 
+    // ALL shared chrome — shadow, body, band, borders, hover glyphs — is
+    // SHAPES-PASS ONLY. The text pass must draw strictly text: it runs a
+    // second time after the shapes pass (and, when covered, once per clip
+    // sliver), and an opaque body repaint there would blank the shapes
+    // pass's icons, tints and pill backgrounds (exactly the regression
+    // where uncovered tables lost their icons until covered).
+    if !text_pass {
     // soft drop shadow: the canvas has no blur, so two stacked offset
     // fills fake the falloff (dbdiagram boxes float on the canvas)
     let sh = 0.22 * s.height;
@@ -1102,7 +1872,7 @@ fn paint_table(
     // header band first: solid near-black, full-width, with a hairline
     // below it — the body border strokes LAST so the band never thins it
     let band = Size::new(size.width, s.height);
-    frame.fill_rectangle(top_left, band, header_color(b));
+    frame.fill_rectangle(top_left, band, theme::readable_band(header_color(b)));
     frame.stroke(
         &body,
         Stroke {
@@ -1127,37 +1897,70 @@ fn paint_table(
             ..Default::default()
         },
     );
+    } // !text_pass (shared chrome)
 
-    // the table pictogram before the title (dbdiagram's own table icon:
-    // rounded-rect ring with its header band filled on top)
-    let glyph = 0.55 * s.height;
-    let gx = top_left.x + 0.9 * s.width;
-    let gy = top_left.y + (s.height - glyph) / 2.0;
-    let gcolor = Color::from_rgba(0.91, 0.92, 0.93, 0.55);
-    draw_table_pictogram(
-        frame,
-        Point::new(gx + glyph / 2.0, gy + glyph / 2.0),
-        glyph,
-        gcolor,
-    );
-
-    // records affordance: tables with sample rows grow a rows glyph at
-    // the right end of the header while hovered (press opens the record
-    // view)
-    if b.records.is_some() && hovered {
+    // records affordance: tables with sample rows carry the rows glyph
+    // ALWAYS visible, in the title-adjacent glyph row — right of the
+    // note glyph when the table has one, else right of the title (press
+    // opens the record view). Geometry: shapes pass; records_band is the
+    // single source of the placement. The band under the chrome is
+    // readability-clamped (readable_band), so the near-white ink reads
+    // on ANY user hex.
+    if b.records.is_some() && !text_pass {
         if let Some((rx0, rx1)) = records_band(b, zoom, pan) {
             let center = Point::new((rx0 + rx1) / 2.0, top_left.y + s.height * 0.5);
             let size = 0.55 * s.height;
-            svg_icon(frame, center, size, 18.0, theme::MARKER, TABLE_RING_ICON);
-            svg_icon(frame, center, size, 18.0, theme::MARKER, TABLE_ROWS_ICON);
+            svg_icon(frame, center, size, 18.0, theme::TEXT, TABLE_RING_ICON);
+            svg_icon(frame, center, size, 18.0, theme::TEXT, TABLE_ROWS_ICON);
         }
     }
 
-    // title, bold white, after the glyph
+    // header-color affordance (dbdiagram's gif): the palette glyph at the
+    // header's right end while hovered — CLICKING it opens the color menu
+    if hovered && !text_pass {
+        let s1 = cell_size(zoom);
+        let (c, _, _) = palette_icon_geometry(b, top_left, s1);
+        // the circle wheel, right-aligned to the header's inset edge
+        let icon_h = 0.72 * s1.height;
+        let k = icon_h / CIRCLES_VIEWBOX.1;
+        let x0 = c.x - CIRCLES_VIEWBOX.0 * k * 0.5;
+        let y0 = c.y - icon_h * 0.5;
+        for (cx, cy, r, color) in CIRCLES_ICON {
+            frame.fill(
+                &Path::circle(Point::new(x0 + cx * k, y0 + cy * k), r * k),
+                color,
+            );
+        }
+    }
+
+    // note affordance (dbdiagram): tables with a note or custom
+    // properties carry the paper glyph right AFTER THE TITLE — the
+    // affordance belongs to the name. Always visible (hovering the
+    // header pops the card); the records glyph rides on its right. The
+    // ink tracks the band color.
+    if let Some((note_icon_cx, note_icon_size)) = note_icon_geometry(b, top_left, s) {
+        if !text_pass {
+            svg_icon(
+                frame,
+                Point::new(note_icon_cx, top_left.y + s.height * 0.5),
+                note_icon_size,
+                10.5,
+                theme::TEXT,
+                NOTE_ICON,
+            );
+        }
+    }
+    // title, bold white, inset from the left edge by the same 0.6-cell
+    // inset the group-header labels use (the pictogram that occupied
+    // 1.4 cells here is gone — the wide indent read as an accidental
+    // tab). Text draws in the text pass (the canvas's top text layer).
     let title_size = 0.55 * s.height;
+    if text_pass {
     frame.fill_text(Text {
         content: b.title.clone(),
-        position: Point::new(gx + glyph + 0.5 * s.width, top_left.y + s.height * 0.5),
+        position: Point::new(top_left.x + 0.6 * s.width, top_left.y + s.height * 0.5),
+        // the name stays WHITE: the band itself is readability-clamped
+        // (readable_band) so white chrome reads on any user hex
         color: Color::WHITE,
         size: title_size.into(),
         font: Font {
@@ -1168,15 +1971,16 @@ fn paint_table(
         vertical_alignment: iced::alignment::Vertical::Center,
         ..Default::default()
     });
+    }
 
     // column rows: name at the left, gray outline marker right AFTER the
     // name (dbdiagram's placement), type right-aligned in muted gray
     let row_size = 0.55 * s.height;
     for (i, row) in b.rows.iter().enumerate() {
         let y = top_left.y + (i as f32 + 1.0) * s.height + s.height * 0.5;
-        if hovered && hovered_row == Some(i) {
-            // dbdiagram tints the hovered column row, edge-to-edge inside
-            // the border
+        if tinted.contains(&i) && !text_pass {
+            // dbdiagram tints hovered column rows — and the far end of a
+            // hovered relationship — edge-to-edge inside the border
             frame.fill_rectangle(
                 Point::new(top_left.x + 1.0, top_left.y + (i as f32 + 1.0) * s.height),
                 Size::new(size.width - 2.0, s.height),
@@ -1193,6 +1997,7 @@ fn paint_table(
         } else {
             Font::DEFAULT
         };
+        if text_pass {
         frame.fill_text(Text {
             content: row.name.clone(),
             position: baseline(top_left.x + 1.0 * s.width),
@@ -1203,16 +2008,13 @@ fn paint_table(
             vertical_alignment: iced::alignment::Vertical::Center,
             ..Default::default()
         });
+        }
         // dbdiagram's left cluster: pk, fk, unique, note in order — 10.5px
         // glyphs (the unique one their QTn fingerprint), each with a 4px
         // gap
+        if !text_pass {
         for (icon, slot) in row_icon_layout(b, i, zoom, pan) {
-            let path = match icon {
-                RowIcon::Pk => PK_ICON,
-                RowIcon::Fk => FK_ICON,
-                RowIcon::Unique => UNIQUE_ICON,
-                RowIcon::Note => NOTE_ICON,
-            };
+            let path = row_icon_path(icon);
             svg_icon(
                 frame,
                 Point::new(slot + 5.25 * zoom / 20.0, y),
@@ -1221,6 +2023,7 @@ fn paint_table(
                 theme::MARKER,
                 path,
             );
+        }
         }
         // right side: type text, then the "Enum" / "Not Null" pills flush
         // right; the type's right edge shifts left of both pills (their
@@ -1236,7 +2039,7 @@ fn paint_table(
             0.0
         };
         let right = top_left.x + size.width - 0.5 * s.width - nn_w - en_w;
-        if !row.ty.is_empty() {
+        if !row.ty.is_empty() && text_pass {
             frame.fill_text(Text {
                 content: row.ty.clone(),
                 position: baseline(right),
@@ -1249,7 +2052,7 @@ fn paint_table(
             });
         }
         if row.ty_enum {
-            badge_pill(frame, "Enum", right + 0.3 * s.width, y, s);
+            badge_pill(frame, "Enum", right + 0.3 * s.width, y, s, text_pass);
         }
         if row.not_null == Some(true) {
             badge_pill(
@@ -1258,6 +2061,7 @@ fn paint_table(
                 right + en_w + 0.3 * s.width,
                 y,
                 s,
+                text_pass,
             );
         }
     }
@@ -1265,13 +2069,21 @@ fn paint_table(
 
 /// A subtle text badge pill ("Enum" / "Not Null"), left edge at `x`,
 /// vertically centered on the row line.
-fn badge_pill(frame: &mut canvas::Frame, label: &str, x: f32, y: f32, s: Size) {
+fn badge_pill(
+    frame: &mut canvas::Frame,
+    label: &str,
+    x: f32,
+    y: f32,
+    s: Size,
+    text_pass: bool,
+) {
     let tw = label.chars().count() as f32 * BADGE_CHAR * s.width;
     let pad = BADGE_PAD * s.width;
     let rect = Rectangle::new(
-        Point::new(x, y - 0.30 * s.height),
-        Size::new(tw + 2.0 * pad, 0.60 * s.height),
+        Point::new(x, y - 0.275 * s.height),
+        Size::new(tw + 2.0 * pad, 0.55 * s.height),
     );
+    if !text_pass {
     frame.fill(
         &Path::rounded_rectangle(
             rect.position(),
@@ -1280,16 +2092,27 @@ fn badge_pill(frame: &mut canvas::Frame, label: &str, x: f32, y: f32, s: Size) {
         ),
         Color::from_rgba(0.545, 0.565, 0.612, 0.14),
     );
+    }
+    // the label is CENTERED in the pill: the width reservation is an
+    // estimate, and a left-aligned label drifted right when it ran narrow.
+    // Vertical: Vertical::Center centers the LINE-HEIGHT box, whose
+    // baseline puts the label ink ~1.6px above the pill's center at 1:1 —
+    // the label reads pinned to the top. The bias is a fixed raster
+    // metric (verified ~-1.5px at zoom 20 and ~-1.75px at zoom 56), so
+    // the correction is a CONSTANT px nudge, not zoom-scaled — scaling it
+    // over-corrected at high zoom and pushed the label below center.
+    if text_pass {
     frame.fill_text(Text {
         content: label.to_string(),
-        position: Point::new(rect.x + pad, y),
+        position: Point::new(rect.center().x, y + 1.6),
         color: theme::TYPE_TEXT,
-        size: (0.38 * s.height).into(),
+        size: (0.35 * s.height).into(),
         font: Font::DEFAULT,
-        horizontal_alignment: iced::alignment::Horizontal::Left,
+        horizontal_alignment: iced::alignment::Horizontal::Center,
         vertical_alignment: iced::alignment::Vertical::Center,
         ..Default::default()
     });
+    }
 }
 
 
@@ -1392,7 +2215,8 @@ mod tests {
     #[test]
     fn unique_rows_carry_the_fingerprint_in_the_cluster() {
         // fixture: Table a { id integer [pk, unique] email varchar }
-        let src = "Table a { id integer [pk, unique] email varchar }\n";
+        let src = "Table a { id integer [pk, unique] email varchar }
+";
         let l = dbml_ui::layout::layout(&dbml_ui::model::build(
             &dbml_ui::dbml::parser::parse(src).doc,
         ));
@@ -1416,16 +2240,362 @@ mod tests {
     }
 
     #[test]
+    fn icon_tooltips_name_the_exact_glyph_under_the_pointer() {
+        // fixture: id is pk AND fk (inline ref), email is unique with a
+        // note — a pk+fk row must label its two markers separately (the
+        // old row-level label showed "Primary Key" for both), and the
+        // unique fingerprint gets its own tooltip
+        let src = "Table a { id integer [pk, ref: > b.id] email varchar [unique, note: 'hi'] }
+\
+                   Table b { id integer }
+";
+        let l = dbml_ui::layout::layout(&dbml_ui::model::build(
+            &dbml_ui::dbml::parser::parse(src).doc,
+        ));
+        let zoom = 20.0;
+        let pan = Vector::new(40.0, 40.0);
+        let b = l
+            .boxes
+            .iter()
+            .find(|b| b.title == "a")
+            .expect("table a laid out");
+        assert!(b.rows[0].pk && b.rows[0].fk, "id is pk + fk");
+        assert!(b.rows[1].unique && b.rows[1].note.is_some());
+        let slot_of = |row: usize, icon: RowIcon| {
+            row_icon_layout(b, row, zoom, pan)
+                .into_iter()
+                .find(|(ic, _)| *ic == icon)
+                .map(|(_, slot)| slot)
+                .expect("icon present")
+        };
+        let hover = |row: usize, slot: f32| {
+            icon_tooltip_line(
+                &l,
+                zoom,
+                pan,
+                Point::new(slot + 5.25 * zoom / 20.0, y_of(b, row, zoom, pan)),
+            )
+        };
+        // the fk slot (second) says "Foreign Key" even though the row is pk
+        assert_eq!(
+            hover(0, slot_of(0, RowIcon::Fk)).as_deref(),
+            Some("Foreign Key")
+        );
+        // the pk slot (first) says "Primary Key"
+        assert_eq!(
+            hover(0, slot_of(0, RowIcon::Pk)).as_deref(),
+            Some("Primary Key")
+        );
+        // the unique fingerprint has its own tooltip now
+        assert_eq!(hover(1, slot_of(1, RowIcon::Unique)).as_deref(), Some("Unique"));
+        // the note glyph never pops a pill — whatever raised it (note /
+        // custom properties) is already shown by the field card
+        assert_eq!(hover(1, slot_of(1, RowIcon::Note)), None);
+        // and the hit contract is unchanged: unique/note slots are no
+        // marker (marker_hit), the pk/fk slots are
+        let uniq_p = Point::new(
+            slot_of(1, RowIcon::Unique) + 5.25 * zoom / 20.0,
+            y_of(b, 1, zoom, pan),
+        );
+        assert!(marker_hit(&l, zoom, pan, uniq_p).is_none());
+        let pk_p = Point::new(
+            slot_of(0, RowIcon::Pk) + 5.25 * zoom / 20.0,
+            y_of(b, 0, zoom, pan),
+        );
+        assert!(marker_hit(&l, zoom, pan, pk_p).is_some());
+    }
+
+    #[test]
+    fn glyph_tooltips_compose_with_the_field_card() {
+        // The overlay draws the field card first, the hovered glyph's
+        // tooltip pill on top: on a custom-properties row the pk glyph
+        // must pop BOTH (the pill no longer hides the card), while the
+        // note glyph — raised by the custom property, no `note` key —
+        // pops NO pill (the card's Custom Properties section is the
+        // affordance there). A plain pk row keeps the pill alone: no
+        // card ever qualifies for it.
+        let src = "Table a { id integer [pk, owner: \"x\"] email integer [pk] }
+";
+        let l = dbml_ui::layout::layout(&dbml_ui::model::build(
+            &dbml_ui::dbml::parser::parse(src).doc,
+        ));
+        let zoom = 20.0;
+        let pan = Vector::new(40.0, 40.0);
+        let b = &l.boxes[0];
+        assert!(b.rows[0].note.is_none() && !b.rows[0].custom.is_empty());
+        assert!(b.rows[1].pk && b.rows[1].custom.is_empty());
+        let pill_at = |row: usize, icon: RowIcon| {
+            let slot = row_icon_layout(b, row, zoom, pan)
+                .into_iter()
+                .find(|(ic, _)| *ic == icon)
+                .expect("icon present")
+                .1;
+            icon_tooltip_line(
+                &l,
+                zoom,
+                pan,
+                Point::new(slot + 5.25 * zoom / 20.0, y_of(b, row, zoom, pan)),
+            )
+        };
+        // pk glyph on the custom-props row: pill AND card together
+        assert_eq!(
+            pill_at(0, RowIcon::Pk).as_deref(),
+            Some("Primary Key"),
+            "the glyph keeps its pill where the card also pops"
+        );
+        assert!(row_has_field_card(&b.rows[0]), "the card stays up too");
+        // the note glyph on the SAME row pops no pill — the field card
+        // is the custom-properties affordance
+        assert!(pill_at(0, RowIcon::Note).is_none());
+        assert!(row_has_field_card(&b.rows[0]));
+        // a plain pk row keeps today's behavior: the pill alone, no card
+        assert_eq!(pill_at(1, RowIcon::Pk).as_deref(), Some("Primary Key"));
+        assert!(!row_has_field_card(&b.rows[1]));
+        // away from the glyphs the helper yields — the rest of the row
+        // owns the card
+        let top_left = to_px(b.x, b.y, zoom, pan);
+        let s = cell_size(zoom);
+        let name_p = Point::new(top_left.x + 1.2 * s.width, top_left.y + 1.5 * s.height);
+        assert!(icon_tooltip_line(&l, zoom, pan, name_p).is_none());
+        assert!(row_has_field_card(&b.rows[0]));
+    }
+
+    #[test]
+    fn box_rect_matches_the_paint_bounds() {
+        let src = "Table a { id int }
+Table b { x int }";
+        let l = dbml_ui::layout::layout(&dbml_ui::model::build(
+            &dbml_ui::dbml::parser::parse(src).doc,
+        ));
+        let zoom = 20.0;
+        let pan = Vector::new(0.0, 0.0);
+        let a = box_rect(&l.boxes[0], zoom, pan);
+        let s = cell_size(zoom);
+        assert_eq!(
+            a.size(),
+            Size::new(l.boxes[0].w as f32 * s.width, l.boxes[0].h as f32 * s.height)
+        );
+    }
+
+    #[test]
+    fn visible_slivers_decompose_the_covered_region() {
+        // a 20x4 table fully overlapped in x by an occluder spanning the
+        // middle: left + right slivers carry the full height, top/bottom
+        // slivers span only the horizontal overlap band
+        let rect = Rectangle::new(Point::new(0.0, 0.0), Size::new(20.0, 8.0));
+        let occ = Rectangle::new(Point::new(5.0, 2.0), Size::new(6.0, 3.0));
+        let sl = visible_slivers(rect, occ);
+        // left: 5 wide, full height; right: 9 wide, full height
+        assert!(sl.iter().any(|s| s.x == 0.0 && s.width == 5.0 && s.height == 8.0));
+        assert!(sl.iter().any(|s| s.x == 11.0 && s.width == 9.0 && s.height == 8.0));
+        // top: 6 wide, 2 tall; bottom: 6 wide, 3 tall
+        assert!(sl.iter().any(|s| s.x == 5.0 && s.y == 0.0 && s.width == 6.0 && s.height == 2.0));
+        assert!(sl.iter().any(|s| s.x == 5.0 && s.y == 5.0 && s.width == 6.0 && s.height == 3.0));
+        // the slivers never intersect the occluder
+        for sl in &sl {
+            assert!(!sl.intersects(&occ), "{sl:?} overlaps the occluder");
+        }
+        // a disjoint occluder leaves the whole rect visible (the paint
+        // loop never calls it without an intersection)
+        let sl = visible_slivers(rect, Rectangle::new(Point::new(50.0, 50.0), Size::new(5.0, 5.0)));
+        assert_eq!(sl.len(), 1);
+        assert_eq!(sl[0], rect);
+    }
+
+    #[test]
+    fn the_topmost_item_wins_the_hit() {
+        // the raise order decides who a click belongs to: a sticky over
+        // a table hits the sticky; raise the table and the TABLE wins —
+        // the click must not fall through to the sticky beneath. Corner
+        // envelopes belong to the topmost note too.
+        let src = "Table a { id integer [pk] }
+Note n { '''x''' }";
+        // pin the table and the sticky overlapping (note_pos pins the
+        // sticky, table_pos the table — the same maps drags fill), so
+        // neither moves under the other
+        let mut tpos = std::collections::HashMap::new();
+        tpos.insert("a".to_string(), (22, 22));
+        let mut npos = std::collections::HashMap::new();
+        npos.insert("n".to_string(), (20, 22, 14, 5));
+        let l = dbml_ui::layout::layout_with_all_overrides(
+            &dbml_ui::model::build(&dbml_ui::dbml::parser::parse(src).doc),
+            &tpos,
+            &npos,
+        );
+        let (zoom, pan) = (20.0, Vector::default());
+        // the press point: inside BOTH the sticky (20..34, 22..27) and
+        // the table (22..32, 22..24 — header + its one row)
+        let p = to_px(23, 23, zoom, pan);
+        // static layering: the sticky floats above the untouched table
+        let hit = hit_topmost(&l, zoom, pan, p, &[]);
+        assert!(
+            matches!(hit, Some(PaintItem::Note(_))),
+            "the sticky floats above an unraised table"
+        );
+        // the table raised: it wins the same press
+        let z = vec![RaisedItem::Table("a".into())];
+        let hit = hit_topmost(&l, zoom, pan, p, &z);
+        assert!(
+            matches!(hit, Some(PaintItem::Table(_))),
+            "the raised table keeps its press priority"
+        );
+        // and the sticky re-grabbed takes it back
+        let z = vec![RaisedItem::Table("a".into()), RaisedItem::Note("n".into())];
+        let hit = hit_topmost(&l, zoom, pan, p, &z);
+        assert!(matches!(hit, Some(PaintItem::Note(_))), "the last grab wins");
+    }
+
+    #[test]
+    fn stacked_stickies_hit_the_topmost_one() {
+        // two stickies piled on the same spot: the LAST-raised one wins
+        // the press — a doc-order note scan returned the lower one and
+        // the click fell straight through the top sticky
+        let src = "Note a { '''x''' }\nNote b { '''y''' }\n";
+        let build = || {
+            dbml_ui::model::build(&dbml_ui::dbml::parser::parse(src).doc)
+        };
+        let mut npos = std::collections::HashMap::new();
+        npos.insert("a".to_string(), (5, 5, 14, 5));
+        npos.insert("b".to_string(), (6, 6, 14, 5)); // overlapping a
+        let l = dbml_ui::layout::layout_with_all_overrides(
+            &build(),
+            &Default::default(),
+            &npos,
+        );
+        let (zoom, pan) = (20.0, Vector::default());
+        // inside BOTH bodies
+        let p = to_px(10, 8, zoom, pan);
+        fn name_of<'a>(hit: &'a Option<PaintItem<'a>>) -> &'a str {
+            match hit {
+                Some(PaintItem::Note(n)) => n.name.as_str(),
+                _ => "?",
+            }
+        }
+        // no raises: schema order puts b on top
+        assert_eq!(name_of(&hit_topmost(&l, zoom, pan, p, &[])), "b");
+        // a raised takes the top...
+        let z = vec![RaisedItem::Note("a".into())];
+        assert_eq!(name_of(&hit_topmost(&l, zoom, pan, p, &z)), "a");
+        // ...and hands it back when the other re-grabs
+        let z = vec![RaisedItem::Note("a".into()), RaisedItem::Note("b".into())];
+        assert_eq!(name_of(&hit_topmost(&l, zoom, pan, p, &z)), "b");
+    }
+
+    #[test]
+    fn visible_region_subtracts_every_occluder() {
+        // three stacked tables: the bottom table's text must hide under
+        // the middle one AND the top one — one-occluder slivers leaked
+        // the bottom text through the middle table's body
+        let rect = Rectangle::new(Point::new(0.0, 0.0), Size::new(100.0, 100.0));
+        let middle = Rectangle::new(Point::new(0.0, 0.0), Size::new(60.0, 100.0));
+        let top = Rectangle::new(Point::new(50.0, 0.0), Size::new(50.0, 50.0));
+        let vis = visible_region(rect, &[middle, top]);
+        // everything is covered except the bottom-right quadrant
+        assert_eq!(vis.len(), 1, "{vis:?}");
+        assert_eq!(vis[0], Rectangle::new(Point::new(60.0, 50.0), Size::new(40.0, 50.0)));
+        // no visible piece ever intersects any occluder
+        for v in &vis {
+            assert!(!v.intersects(&middle) || !v.intersects(&top) || {
+                // a piece may touch both only if it exits both — it cannot
+                false
+            });
+        }
+        // disjoint occluders leave the whole rect
+        let vis = visible_region(rect, &[Rectangle::new(Point::new(200.0, 200.0), Size::new(5.0, 5.0))]);
+        assert_eq!(vis, vec![rect]);
+    }
+
+    #[test]
+    fn raised_tables_paint_after_every_other_box() {
+        // doc order: a before b; raising b (a grab) moves it last —
+        // unraised tables keep doc order, a stale raise (renamed table)
+        // is harmless
+        let src = "Table a { id int }
+Table b { x int }";
+        let l = dbml_ui::layout::layout(&dbml_ui::model::build(
+            &dbml_ui::dbml::parser::parse(src).doc,
+        ));
+        // b raised paints after a; raising a flips it; a raised NOTE
+        // outranks raised tables grabbed BEFORE it, and vice versa
+        let z = vec![RaisedItem::Table("b".into())];
+        let seq = paint_items(&l, &z, None, None, None);
+        let names: Vec<&str> = seq
+            .iter()
+            .map(|item| match item {
+                PaintItem::Table(b) => b.title.as_str(),
+                PaintItem::Note(n) => n.name.as_str(),
+            })
+            .collect();
+        assert_eq!(names, vec!["a", "b"], "b raised paints after a");
+        let z = vec![RaisedItem::Table("a".into())];
+        let seq = paint_items(&l, &z, None, None, None);
+        let names: Vec<&str> = seq
+            .iter()
+            .map(|item| match item {
+                PaintItem::Table(b) => b.title.as_str(),
+                PaintItem::Note(n) => n.name.as_str(),
+            })
+            .collect();
+        assert_eq!(names, vec!["b", "a"], "a raised paints after b");
+    }
+
+    #[test]
+    fn the_shared_raise_order_ranks_tables_and_stickies() {
+        // the static base: tables in doc order, then stickies floating
+        // above them; a grabbed TABLE then paints above every unraised
+        // sticky; a sticky grabbed AFTER it takes the top back — the
+        // last grab wins in both directions
+        let src = "Table a { id int }
+Note n { '''x''' }";
+        let l = dbml_ui::layout::layout(&dbml_ui::model::build(
+            &dbml_ui::dbml::parser::parse(src).doc,
+        ));
+        fn names<'a>(seq: &'a [PaintItem<'_>]) -> Vec<&'a str> {
+            seq.iter()
+                .map(|item| match item {
+                    PaintItem::Table(b) => b.title.as_str(),
+                    PaintItem::Note(n) => n.name.as_str(),
+                })
+                .collect()
+        }
+        // no raises: sticky above the table
+        assert_eq!(names(&paint_items(&l, &[], None, None, None)), vec!["a", "n"]);
+        // the table grabbed: it outranks the unraised sticky
+        let z = vec![RaisedItem::Table("a".into())];
+        assert_eq!(names(&paint_items(&l, &z, None, None, None)), vec!["n", "a"]);
+        // then the sticky grabbed: the last grab wins
+        let z = vec![RaisedItem::Table("a".into()), RaisedItem::Note("n".into())];
+        assert_eq!(names(&paint_items(&l, &z, None, None, None)), vec!["a", "n"]);
+        // and a second table grab flips it again
+        let z = vec![RaisedItem::Note("n".into()), RaisedItem::Table("a".into())];
+        assert_eq!(names(&paint_items(&l, &z, None, None, None)), vec!["n", "a"]);
+        // a raised NOTE paints before a table grabbed later, above one
+        // grabbed earlier
+        let src2 = "Table a { id int }
+Table b { x int }
+Note n { '''x''' }";
+        let l2 = dbml_ui::layout::layout(&dbml_ui::model::build(
+            &dbml_ui::dbml::parser::parse(src2).doc,
+        ));
+        let z = vec![
+            RaisedItem::Note("n".into()),
+            RaisedItem::Table("a".into()),
+            RaisedItem::Table("b".into()),
+        ];
+        assert_eq!(names(&paint_items(&l2, &z, None, None, None)), vec!["n", "a", "b"]);
+    }
+
+    #[test]
     fn icon_paths_parse_into_whole_command_groups() {
         // every icon's path data must divide into whole per-command
         // parameter groups and use only supported commands — dbdiagram's
         // minified unique fingerprint relies on implicit repetition, which
         // the renderer expands
         for (name, data) in [
-            ("pk", PK_ICON),
-            ("fk", FK_ICON),
-            ("unique", UNIQUE_ICON),
-            ("note", NOTE_ICON),
+            ("pk", row_icon_path(RowIcon::Pk)),
+            ("fk", row_icon_path(RowIcon::Fk)),
+            ("unique", row_icon_path(RowIcon::Unique)),
+            ("note", row_icon_path(RowIcon::Note)),
             ("table ring", TABLE_RING_ICON),
             ("table rows", TABLE_ROWS_ICON),
         ] {
@@ -1451,7 +2621,9 @@ mod tests {
 
     #[test]
     fn enum_pill_hit_tests_the_band_right_of_the_type() {
-        let src = "Enum st { draft published archived }\nTable t { s st [not null] n integer }\n";
+        let src = "Enum st { draft published archived }
+Table t { s st [not null] n integer }
+";
         let l = dbml_ui::layout::layout(&dbml_ui::model::build(
             &dbml_ui::dbml::parser::parse(src).doc,
         ));
@@ -1505,7 +2677,8 @@ mod tests {
 
     #[test]
     fn note_hit_tests_the_note_icon_slot() {
-        let src = "Table a { id integer [pk, note: 'the identifier'] user_id integer }\n";
+        let src = "Table a { id integer [pk, note: 'the identifier'] user_id integer }
+";
         let l = dbml_ui::layout::layout(&dbml_ui::model::build(
             &dbml_ui::dbml::parser::parse(src).doc,
         ));
@@ -1534,7 +2707,13 @@ mod tests {
 
     #[test]
     fn records_icon_hit_tests_the_header_band() {
-        let src = "Table a { id integer [pk] name varchar\n  records (id, name) {\n    1, 'x'\n  }\n}\nTable b { c integer }\n";
+        let src = "Table a { id integer [pk] name varchar
+  records (id, name) {
+    1, 'x'
+  }
+}
+Table b { c integer }
+";
         let l = dbml_ui::layout::layout(&dbml_ui::model::build(
             &dbml_ui::dbml::parser::parse(src).doc,
         ));
@@ -1544,13 +2723,21 @@ mod tests {
         assert!(b.records.is_some(), "fixture carries records");
         let top_left = to_px(b.x, b.y, zoom, pan);
         let s = cell_size(zoom);
-        let right = top_left.x + b.w as f32 * s.width;
-        // the rows glyph at the right end of the header band
-        let p = Point::new(right - 1.0 * s.width, top_left.y + s.height * 0.5);
+        // the rows glyph LEFT of the wheel's fixed rightmost slot
+        let (x0, x1) = records_band(b, zoom, pan).expect("records band");
+        let p = Point::new((x0 + x1) / 2.0, top_left.y + s.height * 0.5);
         let hit = records_icon_hit(&l, zoom, pan, p).expect("records affordance hit");
         assert_eq!(hit.title, "a");
+        // the records slot is LEFT of the color wheel's slot
+        let (wc, _, _) = palette_icon_geometry(b, top_left, s);
+        assert!(
+            (x0 + x1) / 2.0 < wc.x,
+            "records ({}) left of the wheel ({})",
+            (x0 + x1) / 2.0,
+            wc.x
+        );
         // body rows and the title area are not the affordance
-        let body = Point::new(right - 1.0 * s.width, top_left.y + s.height * 1.5);
+        let body = Point::new((x0 + x1) / 2.0, top_left.y + s.height * 1.5);
         assert!(records_icon_hit(&l, zoom, pan, body).is_none());
         let title_area = Point::new(top_left.x + 3.0 * s.width, top_left.y + s.height * 0.5);
         assert!(records_icon_hit(&l, zoom, pan, title_area).is_none());
@@ -1567,7 +2754,8 @@ mod tests {
 
     #[test]
     fn badge_flags_follow_settings() {
-        let src = "Table a { id integer [pk, not null, unique] email varchar(80) }\n";
+        let src = "Table a { id integer [pk, not null, unique] email varchar(80) }
+";
         let l = dbml_ui::layout::layout(&dbml_ui::model::build(
             &dbml_ui::dbml::parser::parse(src).doc,
         ));
@@ -1576,14 +2764,16 @@ mod tests {
         assert!(r.unique);
         assert_eq!(l.boxes[0].rows[1].not_null, None);
         // null (explicit) is NOT the NN pill
-        let src2 = "Table b { x integer [null] }\n";
+        let src2 = "Table b { x integer [null] }
+";
         let l2 = dbml_ui::layout::layout(&dbml_ui::model::build(
             &dbml_ui::dbml::parser::parse(src2).doc,
         ));
         assert_eq!(l2.boxes[0].rows[0].not_null, Some(false));
         // the NN pill widens an otherwise identical row
         let w_plain = {
-            let src3 = "Table c { email varchar(80) }\n";
+            let src3 = "Table c { email varchar(80) }
+";
             dbml_ui::layout::layout(&dbml_ui::model::build(
                 &dbml_ui::dbml::parser::parse(src3).doc,
             ))
@@ -1591,7 +2781,8 @@ mod tests {
                 .w
         };
         let w_nn = {
-            let src4 = "Table c { email varchar(80) [not null] }\n";
+            let src4 = "Table c { email varchar(80) [not null] }
+";
             dbml_ui::layout::layout(&dbml_ui::model::build(
                 &dbml_ui::dbml::parser::parse(src4).doc,
             ))
@@ -1605,10 +2796,76 @@ mod tests {
     }
 
     #[test]
+    fn a_line_highlights_in_the_referenced_tables_header_color() {
+        // dbdiagram's highlight rule: a line with a color of its own —
+        // an explicit `[color:]` or a non-dark inherited header —
+        // highlights IN that color; a line resolving to the dark header
+        // option (no inherited color at all, or the dark swatch) eases
+        // to the highlight blue.
+        let layout_of = |src: &str| {
+            dbml_ui::layout::layout(&dbml_ui::model::build(
+                &dbml_ui::dbml::parser::parse(src).doc,
+            ))
+        };
+        let purple = theme::hex_color("#7a4f9e").unwrap();
+        // likes.post_id -> posts (#7a4f9e): the purple case
+        let l = layout_of(
+            "Table posts [headercolor: #7a4f9e] { id integer [pk] }
+Table likes { post_id integer }
+Ref: likes.post_id > posts.id
+",
+        );
+        assert_eq!(l.edges[0].inherited.as_deref(), Some("#7a4f9e"));
+        assert_eq!(edge_hover_color(&l.edges[0]), brighten(purple, 1.15));
+        // an explicit `[color:]` still owns the highlight
+        let l = layout_of(
+            "Table posts [headercolor: #7a4f9e] { id integer [pk] }
+Table likes { post_id integer }
+Ref: likes.post_id > posts.id [color: #123456]
+",
+        );
+        assert_eq!(
+            edge_hover_color(&l.edges[0]),
+            brighten(theme::hex_color("#123456").unwrap(), 1.15)
+        );
+        // the dark option THROUGH THE DEFAULT CASCADE (no headercolor at
+        // all): the highlight blue
+        let l = layout_of(
+            "Table posts { id integer [pk] }
+Table likes { post_id integer }
+Ref: likes.post_id > posts.id
+",
+        );
+        assert_eq!(l.edges[0].inherited, None);
+        assert_eq!(edge_hover_color(&l.edges[0]), theme::EDGE_HOVER);
+        // the dark option THROUGH AN EXPLICIT PICK (the picker's dark
+        // swatch): still the highlight blue
+        let l = layout_of(
+            "Table posts [headercolor: #1f2128] { id integer [pk] }
+Table likes { post_id integer }
+Ref: likes.post_id > posts.id
+",
+        );
+        assert_eq!(l.edges[0].inherited.as_deref(), Some("#1f2128"));
+        assert_eq!(edge_hover_color(&l.edges[0]), theme::EDGE_HOVER);
+        // …case-insensitively (a hand-typed hex)
+        let l = layout_of(
+            "Table posts [headercolor: #1F2128] { id integer [pk] }
+Table likes { post_id integer }
+Ref: likes.post_id > posts.id
+",
+        );
+        assert_eq!(edge_hover_color(&l.edges[0]), theme::EDGE_HOVER);
+    }
+
+    #[test]
     fn edge_hit_finds_the_line_under_the_pointer() {
         let l = dbml_ui::layout::layout(&dbml_ui::model::build(
             &dbml_ui::dbml::parser::parse(
-                "Table a { id integer [pk] }\nTable b { a_id integer }\nRef: b.a_id > a.id\n",
+                "Table a { id integer [pk] }
+Table b { a_id integer }
+Ref: b.a_id > a.id
+",
             )
             .doc,
         ));
@@ -1636,7 +2893,10 @@ mod tests {
     fn row_at_finds_rows_not_borders() {
         let l = dbml_ui::layout::layout(&dbml_ui::model::build(
             &dbml_ui::dbml::parser::parse(
-                "Table a { id integer [pk] }\nTable b { a_id integer }\nRef: b.a_id > a.id\n",
+                "Table a { id integer [pk] }
+Table b { a_id integer }
+Ref: b.a_id > a.id
+",
             )
             .doc,
         ));
@@ -1699,6 +2959,14 @@ mod interaction_tests {
             dragging: false,
             edge_anim: &[],
             clock: 0.0,
+            selected_note: None,
+            // the test constructor leaks an empty raise list (a Diagram
+            // borrows its item_z for its lifetime)
+            item_z: Box::leak(Vec::new().into_boxed_slice()),
+            drag_group: None,
+            drag_note: None,
+            drag_edges: None,
+
         }
     }
 
@@ -1762,16 +3030,16 @@ mod interaction_tests {
     fn cursor_shape_matches_context() {
         use iced::mouse::Interaction;
         let mut d = diagram();
-        // over a table box: the pointer (click-to-jump)
+        // over a table box: the move cursor (drag = reposition)
         let (bx, by) = first_box_point();
         let over_box = Cursor::Available(Point::new(BOUNDS.x + bx, BOUNDS.y + by));
         assert_eq!(
             d.mouse_interaction(&(), BOUNDS, over_box),
-            Interaction::Pointer
+            Interaction::Move
         );
-        // empty canvas (past all content): the open grab hand
+        // empty canvas (past all content): the plain arrow, like dbdiagram
         let empty = Cursor::Available(Point::new(BOUNDS.x + 550.0, BOUNDS.y + 380.0));
-        assert_eq!(d.mouse_interaction(&(), BOUNDS, empty), Interaction::Grab);
+        assert_eq!(d.mouse_interaction(&(), BOUNDS, empty), Interaction::default());
         // mid-drag: grabbing
         d.dragging = true;
         assert_eq!(
@@ -1796,6 +3064,936 @@ mod interaction_tests {
     }
 }
 
+/// True when hovering the row shows the field card (dbdiagram's trigger:
+/// note OR enum type OR default OR custom properties — verified against
+/// their bundle's `t.enumId || t.note || t.dbdefault ...` condition and
+/// live against the Custom Properties popup).
+fn row_has_field_card(row: &Row) -> bool {
+    row.note.is_some() || row.ty_enum || row.default.is_some() || !row.custom.is_empty()
+}
+
+// ---- shared popup model (field/table/group popups)
+
+/// dbdiagram's canvas popovers (FieldTooltipPopup / TableTooltipPopup /
+/// TableGroupTooltipPopup over their CanvasPopover), dark theme — ported
+/// from their bundle + CSS 1:1: a content-hugging card (min-w 260,
+/// max-w 360, r 8, bg #303137, hairline border, `0 8px 24px` shadow) with
+/// a speech-bubble tail on the edge facing the anchor, a px-3 py-2.5
+/// header band (#3a3c42: glyph + semibold name + mono type), then
+/// sections: Note (pt-1 pb-2 label, pb-2.5 body), Enum ("Enum" + blue
+/// name inline, tab-indented blue values, leading-relaxed), Default (one
+/// py-2 row: label + orange value inline), Custom Properties (py-1
+/// label, pl-4 disc bullets, pb-1.5). Hairline dividers after the
+/// header, after the Note, and before Custom Properties — never between
+/// Enum and Default (their template's exact divider placement). The body
+/// wheel-scrolls when it overflows (their canvas-popover__scroll).
+enum PopupEntry {
+    /// A text line (wrapped note lines, enum values).
+    Plain(String, Color),
+    /// A `• key: value` bullet — key gray-300, value orange-300 (their
+    /// li spans), truncating instead of wrapping.
+    Bullet(String, Color, String, Color),
+}
+
+struct PopupSection {
+    label: &'static str,
+    /// inline colored run after the label (the enum name, the default
+    /// value — their `Enum {name}` header pair and Default row)
+    label_sub: Option<(String, Color)>,
+    entries: Vec<PopupEntry>,
+    /// entry-line pitch, 1:1 px at zoom 20 (default vs leading-relaxed)
+    pitch: f32,
+    pad_top: f32,
+    label_pad_bottom: f32,
+    pad_bottom: f32,
+    /// hairline divider above this section (their TooltipSectionDivider)
+    divider_before: bool,
+}
+
+/// The Note section (their TooltipNoteSection: pt-1 pb-2 label + the
+/// wrapped note at pb-2.5).
+fn note_section(note: &str, wrap_cols: usize, divider_before: bool) -> PopupSection {
+    PopupSection {
+        label: "Note",
+        label_sub: None,
+        entries: wrap_chars(note, wrap_cols)
+            .into_iter()
+            .map(|l| PopupEntry::Plain(l, theme::TEXT))
+            .collect(),
+        pitch: POPUP_LINE_H,
+        pad_top: 4.0,
+        label_pad_bottom: 8.0,
+        pad_bottom: 10.0,
+        divider_before,
+    }
+}
+
+/// The Custom Properties section (their TooltipCustomPropertySection:
+/// py-1 label + pl-4 disc bullets + pb-1.5).
+fn custom_props_section(
+    custom: &[(String, String)],
+    divider_before: bool,
+) -> PopupSection {
+    PopupSection {
+        label: "Custom Properties",
+        label_sub: None,
+        entries: custom
+            .iter()
+            .map(|(k, v)| {
+                PopupEntry::Bullet(
+                    k.clone(),
+                    Color::from_rgb8(0xd1, 0xd5, 0xdb), // gray-300
+                    v.clone(),
+                    TYPE_ORANGE,
+                )
+            })
+            .collect(),
+        pitch: POPUP_RELAXED_H,
+        pad_top: 4.0,
+        label_pad_bottom: 4.0,
+        pad_bottom: 6.0,
+        divider_before,
+    }
+}
+
+const POPUP_PAD_X: f32 = 12.0; // their px-3
+const POPUP_MIN_W: f32 = 260.0; // their min-width, 1:1 px
+const POPUP_MAX_W: f32 = 360.0; // their max-width, 1:1 px
+const POPUP_LINE_H: f32 = 18.0; // default 1.5 pitch on 12px text
+const POPUP_RELAXED_H: f32 = 19.5; // leading-relaxed pitch on 12px text
+const POPUP_HEADER_H: f32 = 40.0; // py-2.5 + the 20px text-sm line
+const POPUP_TAB_INDENT: f32 = 13.2; // tab-size 4 ≈ 4 spaces on 12px text
+
+/// Width of `text` at font size `size` px: the shared per-character
+/// advance classes (Row::est_width) are calibrated on the row font
+/// (0.55×zoom, `est × 0.5×zoom` px), so at any size the advance scales
+/// linearly: `est × size / 1.1`.
+fn est_px(text: &str, size: f32) -> f32 {
+    Row::est_width(text) * size / 1.1
+}
+
+/// Width of `text` at font size `size` px in the SEMIBOLD header font:
+/// semibold runs past the regular-calibrated classes (live-measured
+/// "created_at" renders 1.13×, "referrer_id" 1.18× its regular estimate
+/// — undershooting puts the type ON the name), so a 1.18 factor keeps
+/// the type clear of every letter mix.
+fn semibold_px(text: &str, size: f32) -> f32 {
+    est_px(text, size) * 1.18
+}
+
+/// The bullet key's run width: the regular-weight classes undershoot a
+/// little (live: "sla_hours" rendered past its estimate, putting the
+/// value ON the colon), so the key carries a 1.08 factor — the value
+/// keeps its colon+nbsp clearance on every key mix.
+fn bullet_key_px(key: &str, k: f32) -> f32 {
+    est_px(key, 12.0 * k) * 1.08
+}
+
+/// Width of `text` at font size `size` px in the monospace font —
+/// live-measured advance ~0.545em (the old 0.6em guess overshot the
+/// type's width by 13%).
+fn mono_px(text: &str, size: f32) -> f32 {
+    text.chars().count() as f32 * 0.545 * size
+}
+
+/// The hovered shape's rect the popover anchors to (their popper's
+/// `rect` prop — the row's / header band's / group band's frame rect):
+/// the card sits right-start of it (left edge = rect.right + 5), the
+/// tail points at its vertical center.
+struct PopupAnchor {
+    left: f32,
+    right: f32,
+    top: f32,
+    bottom: f32,
+}
+
+struct PopupGeom {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    header_h: f32,
+    scroll: f32,
+    max_scroll: f32,
+    /// the tail rides the card's LEFT edge (false: flipped to the right
+    /// edge when there is no room on the anchor's side)
+    tail_left: bool,
+    /// the tail tip's clamped y in frame px (the anchor's center)
+    tail_y: f32,
+}
+
+/// Size + place a popup card: content-hugging (their width:max-content)
+/// between the 260/360 clamps, the body capped by the canvas height
+/// (their max-height calc(100vh - 24px)) with the passed scroll clamped,
+/// right-start of the anchor (top = rect.top - 12, their skidding) and
+/// clamped — flipping to the anchor's left when the right overflows
+/// (popper's flip).
+fn popup_layout(
+    sections: &[PopupSection],
+    header_w: f32,
+    anchor: PopupAnchor,
+    zoom: f32,
+    bounds: Rectangle,
+    scroll: f32,
+) -> PopupGeom {
+    let k = zoom / 20.0;
+    let wrap_cols = ((POPUP_MAX_W - 2.0 * POPUP_PAD_X) / (6.6 * k)) as usize;
+    let mut content_w = header_w;
+    // body top pad (their first section's flow starts under the divider)
+    let mut content_h = 0.0;
+    for sec in sections {
+        if sec.divider_before {
+            content_h += 1.0; // h-px divider in flow
+        }
+        content_h += sec.pad_top * k;
+        content_w = content_w
+            .max(2.0 * POPUP_PAD_X * k + semibold_px(sec.label, 12.0 * k));
+        if let Some((sub, _)) = &sec.label_sub {
+            content_w = content_w.max(
+                2.0 * POPUP_PAD_X * k
+                    + semibold_px(sec.label, 12.0 * k)
+                    + 6.0 * k
+                    + est_px(sub, 12.0 * k),
+            );
+        }
+        content_h += POPUP_LINE_H * k + sec.label_pad_bottom * k;
+        for e in &sec.entries {
+            match e {
+                PopupEntry::Plain(text, _) => {
+                    for l in wrap_chars(text, wrap_cols) {
+                        content_w = content_w.max(
+                            2.0 * POPUP_PAD_X * k
+                                + l.chars().count() as f32 * 6.6 * k,
+                        );
+                        content_h += sec.pitch * k;
+                    }
+                }
+                PopupEntry::Bullet(key, _, value, _) => {
+                    content_w = content_w.max(
+                        2.0 * POPUP_PAD_X * k
+                            + 16.0 * k
+                            + bullet_key_px(key, k)
+                            + 6.6 * k
+                            + est_px(value, 12.0 * k),
+                    );
+                    content_h += sec.pitch * k;
+                }
+            }
+        }
+        content_h += sec.pad_bottom * k;
+    }
+    // the whole card never outgrows the canvas (their max-height
+    // calc(100vh - 24px) on canvas-popover__scroll)
+    let header_h = POPUP_HEADER_H * k;
+    let body_cap = (bounds.height - 24.0 * k - header_h).max(60.0 * k);
+    let body_visible = content_h.min(body_cap);
+    let max_scroll = (content_h - body_visible).max(0.0);
+    let scroll = scroll.min(max_scroll);
+    let h = header_h + body_visible;
+    let w = content_w
+        .max(POPUP_MIN_W * k)
+        .min(POPUP_MAX_W * k)
+        .min((bounds.width - 8.0).max(60.0));
+    // right-start (distance 5): the tail tip lands on the anchor's edge
+    let mut tail_left = true;
+    let mut x = anchor.right + 5.0 * k;
+    if x + w > bounds.width - 4.0 {
+        // popper's flip: the card moves to the anchor's left, the tail
+        // to the card's right edge
+        x = anchor.left - 5.0 * k - w;
+        tail_left = false;
+        if x < 2.0 {
+            x = (bounds.width - 4.0 - w).max(2.0);
+            tail_left = true;
+        }
+    }
+    let mut y = anchor.top - 12.0 * k;
+    if y + h > bounds.height - 4.0 {
+        y = (bounds.height - 4.0 - h).max(2.0);
+    }
+    y = y.max(2.0);
+    // the tail points at the anchor's vertical center, kept clear of the
+    // rounded corners (their arrowPadding)
+    let tail_y = ((anchor.top + anchor.bottom) * 0.5).clamp(y + 14.0 * k, y + h - 14.0 * k);
+    PopupGeom { x, y, w, h, header_h, scroll, max_scroll, tail_left, tail_y }
+}
+
+/// The popup header's little glyph (their w-3 svg before the title): the
+/// field card's table-with-columns glyph, the table popup's table glyph,
+/// the group popup's overlapping-panels glyph.
+#[derive(Clone, Copy, PartialEq)]
+enum PopupIcon {
+    Field,
+    Table,
+    Group,
+}
+
+/// The card: speech-bubble tail toward the anchor, soft shadow, rounded
+/// body, hairline border, rounded-TOP header band with the glyph + title
+/// (+ optional colored type after a 6px gap — their items-baseline
+/// gap-1.5 header pair), hairline under the band.
+fn draw_popup_chrome(
+    frame: &mut canvas::Frame,
+    g: &PopupGeom,
+    icon: PopupIcon,
+    title: &str,
+    sub: Option<(&str, Color)>,
+    zoom: f32,
+) {
+    let k = zoom / 20.0;
+    let radius = 8.0 * k;
+    let border = Color::from_rgba(1.0, 1.0, 1.0, 0.1);
+    let bg = Color::from_rgba8(0x30, 0x31, 0x37, 0.98);
+    // soft shadow (their box-shadow 0 8px 24px #0006): two stacked
+    // offset fills fake the falloff — the canvas has no blur
+    for (off, alpha) in [(3.0, 0.16), (6.0, 0.10)] {
+        frame.fill(
+            &Path::rounded_rectangle(
+                Point::new(g.x - radius * 0.4, g.y - radius * 0.4 + off * k),
+                Size::new(g.w + radius * 0.8, g.h + radius * 0.8),
+                radius.into(),
+            ),
+            Color::from_rgba(0.0, 0.0, 0.0, alpha),
+        );
+    }
+    // the speech-bubble tail: a triangle poking out of the card edge
+    // toward the anchor (their v-popper arrow — a 6px-deep, 12px-tall
+    // CSS triangle with the border color outlining it), drawn BEFORE the
+    // card so the body covers its base
+    let depth = 6.0 * k;
+    let half = 6.0 * k;
+    let (tip_x, base_x) = if g.tail_left {
+        (g.x - depth, g.x)
+    } else {
+        (g.x + g.w + depth, g.x + g.w)
+    };
+    let tail = Path::new(|p| {
+        p.move_to(Point::new(tip_x, g.tail_y));
+        p.line_to(Point::new(base_x, g.tail_y - half));
+        p.line_to(Point::new(base_x, g.tail_y + half));
+        p.close();
+    });
+    frame.fill(&tail, bg);
+    frame.stroke(
+        &Path::new(|p| {
+            p.move_to(Point::new(base_x, g.tail_y - half));
+            p.line_to(Point::new(tip_x, g.tail_y));
+            p.line_to(Point::new(base_x, g.tail_y + half));
+        }),
+        canvas::Stroke {
+            style: border.into(),
+            width: 1.0,
+            ..Default::default()
+        },
+    );
+    frame.fill(
+        &Path::rounded_rectangle(
+            Point::new(g.x, g.y),
+            Size::new(g.w, g.h),
+            iced::border::Radius::from(radius),
+        ),
+        bg,
+    );
+    frame.stroke(
+        &Path::rounded_rectangle(
+            Point::new(g.x, g.y),
+            Size::new(g.w, g.h),
+            iced::border::Radius::from(radius),
+        ),
+        canvas::Stroke {
+            style: border.into(),
+            width: 1.0,
+            ..Default::default()
+        },
+    );
+    frame.fill(
+        &Path::rounded_rectangle(
+            Point::new(g.x, g.y),
+            Size::new(g.w, g.header_h),
+            iced::border::Radius {
+                top_left: radius,
+                top_right: radius,
+                bottom_right: 0.0,
+                bottom_left: 0.0,
+            },
+        ),
+        Color::from_rgba8(0x3a, 0x3c, 0x42, 0.98),
+    );
+    frame.fill_rectangle(
+        Point::new(g.x, g.y + g.header_h),
+        Size::new(g.w, 1.0),
+        border,
+    );
+    // the header glyph (their w-3 h-3 svg, gray-50), then the title
+    // 6px after it (their gap-1.5)
+    let icon_size = if icon == PopupIcon::Group { 13.0 } else { 12.0 } * k;
+    let icon_cx = g.x + POPUP_PAD_X * k + icon_size * 0.5;
+    let icon_cy = g.y + g.header_h * 0.5;
+    let ink = Color::from_rgb8(0xf9, 0xfa, 0xfb); // gray-50
+    draw_popup_icon(frame, icon, icon_cx, icon_cy, icon_size, ink);
+    let title_x = g.x + POPUP_PAD_X * k + icon_size + 6.0 * k;
+    frame.fill_text(Text {
+        content: title.to_string(),
+        position: Point::new(title_x, icon_cy),
+        color: Color::WHITE,
+        size: (0.7 * zoom).into(),
+        font: Font {
+            weight: font::Weight::Semibold,
+            ..Font::DEFAULT
+        },
+        horizontal_alignment: iced::alignment::Horizontal::Left,
+        vertical_alignment: iced::alignment::Vertical::Center,
+        ..Default::default()
+    });
+    if let Some((text, color)) = sub {
+        // the name advance is measured with the shared advance classes —
+        // the old flat per-char factor both overshot (a dead gap before
+        // the type) and undershot (the type sliding under the name)
+        // depending on the name's letters
+        let name_w = semibold_px(title, 0.7 * zoom);
+        frame.fill_text(Text {
+            content: text.to_string(),
+            position: Point::new(title_x + name_w + 6.0 * k, icon_cy),
+            color,
+            size: (0.7 * zoom).into(),
+            font: Font::MONOSPACE,
+            horizontal_alignment: iced::alignment::Horizontal::Left,
+            vertical_alignment: iced::alignment::Vertical::Center,
+            ..Default::default()
+        });
+    }
+}
+
+/// The header glyph, on a `size`-square box centered at (cx, cy): thin
+/// currentColor strokes, matching their svgs (field: 12×12 table with a
+/// header line + first-column divider; table: 12×10 rounded rect with a
+/// filled top band; group: 13×12 overlapping panels).
+fn draw_popup_icon(
+    frame: &mut canvas::Frame,
+    icon: PopupIcon,
+    cx: f32,
+    cy: f32,
+    size: f32,
+    ink: Color,
+) {
+    let stroke = |frame: &mut canvas::Frame, p: Path| frame.stroke(
+        &p,
+        canvas::Stroke {
+            style: ink.into(),
+            width: 1.0,
+            ..Default::default()
+        },
+    );
+    match icon {
+        PopupIcon::Field => {
+            // rect(0.5,0.5,11,11 rx1.5), h-line at y=4, v-line at x=4
+            let s = size / 12.0;
+            let x0 = cx - 6.0 * s;
+            let y0 = cy - 6.0 * s;
+            stroke(
+                frame,
+                Path::rounded_rectangle(
+                    Point::new(x0 + 0.5 * s, y0 + 0.5 * s),
+                    Size::new(11.0 * s, 11.0 * s),
+                    iced::border::Radius::from(1.5 * s),
+                ),
+            );
+            stroke(
+                frame,
+                Path::new(|p| {
+                    p.move_to(Point::new(x0 + 0.5 * s, y0 + 4.0 * s));
+                    p.line_to(Point::new(x0 + 11.5 * s, y0 + 4.0 * s));
+                }),
+            );
+            stroke(
+                frame,
+                Path::new(|p| {
+                    p.move_to(Point::new(x0 + 4.0 * s, y0 + 4.0 * s));
+                    p.line_to(Point::new(x0 + 4.0 * s, y0 + 11.5 * s));
+                }),
+            );
+        }
+        PopupIcon::Table => {
+            // rect(0.5,0.5,11,9 rx~2) outline + filled top band to y=2.5
+            let s = size / 12.0;
+            let x0 = cx - 6.0 * s;
+            let y0 = cy - 5.0 * s;
+            stroke(
+                frame,
+                Path::rounded_rectangle(
+                    Point::new(x0 + 0.5 * s, y0 + 0.5 * s),
+                    Size::new(11.0 * s, 9.0 * s),
+                    iced::border::Radius::from(2.0 * s),
+                ),
+            );
+            frame.fill(
+                &Path::rounded_rectangle(
+                    Point::new(x0 + 0.9 * s, y0 + 0.9 * s),
+                    Size::new(10.2 * s, 2.0 * s),
+                    iced::border::Radius {
+                        top_left: 1.6 * s,
+                        top_right: 1.6 * s,
+                        bottom_right: 0.0,
+                        bottom_left: 0.0,
+                    },
+                ),
+                ink,
+            );
+        }
+        PopupIcon::Group => {
+            // two overlapping rounded panels (their 13×12 TableGroupIcon)
+            let s = size / 13.0;
+            let x0 = cx - 6.5 * s;
+            let y0 = cy - 6.0 * s;
+            stroke(
+                frame,
+                Path::rounded_rectangle(
+                    Point::new(x0 + 0.7 * s, y0 + 2.2 * s),
+                    Size::new(7.6 * s, 8.1 * s),
+                    iced::border::Radius::from(1.5 * s),
+                ),
+            );
+            stroke(
+                frame,
+                Path::rounded_rectangle(
+                    Point::new(x0 + 4.0 * s, y0 + 3.7 * s),
+                    Size::new(8.3 * s, 3.9 * s),
+                    iced::border::Radius::from(1.5 * s),
+                ),
+            );
+        }
+    }
+}
+
+/// The body: sections inside a CLIPPED card area translated up by the
+/// scroll offset (text primitives honor the clip bounds) — hairline
+/// dividers between sections, semibold labels (with an optional inline
+/// colored run), wrapped plain lines, truncating bullets. Clip-relative
+/// coordinates (with_clip drafts at the clip origin).
+fn draw_popup_body(
+    frame: &mut canvas::Frame,
+    g: &PopupGeom,
+    sections: &[PopupSection],
+    zoom: f32,
+) {
+    let k = zoom / 20.0;
+    let wrap_cols = ((POPUP_MAX_W - 2.0 * POPUP_PAD_X) / (6.6 * k)) as usize;
+    let body_top = g.y + g.header_h;
+    let body_clip_h = g.h - g.header_h;
+    frame.with_clip(
+        Rectangle::new(Point::new(g.x, body_top), Size::new(g.w, body_clip_h)),
+        |f| {
+            f.translate(Vector::new(0.0, -g.scroll));
+            let mut cy = 0.0;
+            for sec in sections {
+                if sec.divider_before {
+                    // TooltipSectionDivider: h-px bg-white/10
+                    f.fill_rectangle(
+                        Point::new(0.0, cy),
+                        Size::new(g.w, 1.0),
+                        Color::from_rgba(1.0, 1.0, 1.0, 0.1),
+                    );
+                    cy += 1.0;
+                }
+                cy += sec.pad_top * k;
+                // the section label (12px semibold, gray-200), with the
+                // inline colored run after it (the enum name rides the
+                // label line; the Default row IS this line)
+                let label_cy = cy + POPUP_LINE_H * k * 0.5;
+                f.fill_text(Text {
+                    content: sec.label.to_string(),
+                    position: Point::new(POPUP_PAD_X * k, label_cy),
+                    color: Color::from_rgb8(0xe5, 0xe7, 0xeb), // gray-200
+                    size: (0.6 * zoom).into(),
+                    font: Font {
+                        weight: font::Weight::Semibold,
+                        ..Font::DEFAULT
+                    },
+                    horizontal_alignment: iced::alignment::Horizontal::Left,
+                    vertical_alignment: iced::alignment::Vertical::Center,
+                    ..Default::default()
+                });
+                if let Some((sub, color)) = &sec.label_sub {
+                    // "Enum " carries a trailing space in their markup,
+                    // the Default row uses their gap-1.5
+                    let gap = if sec.label == "Enum" { 4.0 } else { 6.0 } * k;
+                    f.fill_text(Text {
+                        content: sub.clone(),
+                        position: Point::new(
+                            POPUP_PAD_X * k + semibold_px(sec.label, 12.0 * k) + gap,
+                            label_cy,
+                        ),
+                        color: *color,
+                        size: (0.6 * zoom).into(),
+                        font: Font::DEFAULT,
+                        horizontal_alignment: iced::alignment::Horizontal::Left,
+                        vertical_alignment: iced::alignment::Vertical::Center,
+                        ..Default::default()
+                    });
+                }
+                cy += POPUP_LINE_H * k + sec.label_pad_bottom * k;
+                // the enum values hang one tab stop in (their
+                // whitespace-pre-wrap block leads every value with \t)
+                let entry_indent = if sec.label == "Enum" { POPUP_TAB_INDENT * k } else { 0.0 };
+                for e in &sec.entries {
+                    match e {
+                        PopupEntry::Plain(text, color) => {
+                            for l in wrap_chars(text, wrap_cols) {
+                                f.fill_text(Text {
+                                    content: l,
+                                    position: Point::new(
+                                        POPUP_PAD_X * k + entry_indent,
+                                        cy + sec.pitch * k * 0.5,
+                                    ),
+                                    color: *color,
+                                    size: (0.6 * zoom).into(),
+                                    font: Font::DEFAULT,
+                                    horizontal_alignment: iced::alignment::Horizontal::Left,
+                                    vertical_alignment: iced::alignment::Vertical::Center,
+                                    ..Default::default()
+                                });
+                                cy += sec.pitch * k;
+                            }
+                        }
+                        PopupEntry::Bullet(key, key_color, value, value_color) => {
+                            f.fill_text(Text {
+                                content: "\u{2022}".to_string(),
+                                position: Point::new(
+                                    POPUP_PAD_X * k + 4.0 * k,
+                                    cy + sec.pitch * k * 0.5,
+                                ),
+                                color: *key_color,
+                                size: (0.6 * zoom).into(),
+                                font: Font::DEFAULT,
+                                horizontal_alignment: iced::alignment::Horizontal::Left,
+                                vertical_alignment: iced::alignment::Vertical::Center,
+                                ..Default::default()
+                            });
+                            let text_x = POPUP_PAD_X * k + 16.0 * k; // their pl-4
+                            let usable = g.w - 2.0 * POPUP_PAD_X * k - 16.0 * k;
+                            // natural first: truncation (their 40% key
+                            // cap) only when the pair genuinely overflows
+                            // the card (huge properties at the max width)
+                            let key_nat = bullet_key_px(key, k);
+                            let val_nat = est_px(value, 12.0 * k);
+                            let colon_w = est_px(":", 12.0 * k) + 3.3 * k;
+                            let (key_text, key_w, val_text) =
+                                if key_nat + colon_w + val_nat <= usable {
+                                    (key.clone(), key_nat, value.clone())
+                                } else {
+                                    let (kt, kw) =
+                                        truncate_to(key, usable * 0.4, 6.6 * k);
+                                    let (vt, _) = truncate_to(
+                                        value,
+                                        (usable - kw - colon_w).max(6.6 * k),
+                                        6.6 * k,
+                                    );
+                                    (kt, kw, vt)
+                                };
+                            // the key run carries its colon+nbsp (their
+                            // `:` span between the two truncate spans)
+                            let key_w_px = key_w + colon_w;
+                            f.fill_text(Text {
+                                content: format!("{key_text}:"),
+                                position: Point::new(text_x, cy + sec.pitch * k * 0.5),
+                                color: *key_color,
+                                size: (0.6 * zoom).into(),
+                                font: Font::DEFAULT,
+                                horizontal_alignment: iced::alignment::Horizontal::Left,
+                                vertical_alignment: iced::alignment::Vertical::Center,
+                                ..Default::default()
+                            });
+                            f.fill_text(Text {
+                                content: val_text,
+                                position: Point::new(
+                                    text_x + key_w_px,
+                                    cy + sec.pitch * k * 0.5,
+                                ),
+                                color: *value_color,
+                                size: (0.6 * zoom).into(),
+                                font: Font::DEFAULT,
+                                horizontal_alignment: iced::alignment::Horizontal::Left,
+                                vertical_alignment: iced::alignment::Vertical::Center,
+                                ..Default::default()
+                            });
+                            cy += sec.pitch * k;
+                        }
+                    }
+                }
+                cy += sec.pad_bottom * k;
+            }
+        },
+    );
+    // scrollbar hint when the body scrolls: 4px track, thumb proportional
+    // to the visible share
+    if g.max_scroll > 0.0 {
+        let track_x = g.x + g.w - 6.0 * k;
+        let track_y = body_top + 4.0 * k;
+        let track_h = body_clip_h - 8.0 * k;
+        frame.fill_rectangle(
+            Point::new(track_x, track_y),
+            Size::new(4.0, track_h),
+            Color::from_rgba(1.0, 1.0, 1.0, 0.08),
+        );
+        let thumb_h = (track_h
+            * ((g.h - g.header_h) / (g.h - g.header_h + g.max_scroll)))
+        .max(18.0 * k)
+        .min(track_h);
+        let thumb_y = track_y
+            + (track_h - thumb_h)
+                * (if g.max_scroll > 0.0 { g.scroll / g.max_scroll } else { 0.0 });
+        frame.fill_rectangle(
+            Point::new(track_x, thumb_y),
+            Size::new(4.0, thumb_h),
+            Color::from_rgba(1.0, 1.0, 1.0, 0.25),
+        );
+    }
+}
+
+/// Truncate `text` to at most `max_w` px at the given per-char advance,
+/// ending with an ellipsis when cut. Returns (text, drawn width).
+fn truncate_to(text: &str, max_w: f32, per_char: f32) -> (String, f32) {
+    let count = text.chars().count();
+    let full = count as f32 * per_char;
+    if full <= max_w {
+        return (text.to_string(), full);
+    }
+    let fit = ((max_w - per_char) / per_char).max(0.0) as usize; // room for …
+    let cut: String = text.chars().take(fit).collect();
+    let w = (fit + 1) as f32 * per_char;
+    (format!("{cut}\u{2026}"), w)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_field_popup(
+    frame: &mut canvas::Frame,
+    layout: &Layout,
+    b: &TableBox,
+    r: usize,
+    zoom: f32,
+    pan: Vector,
+    bounds: Rectangle,
+    scroll: f32,
+) {
+    let k = zoom / 20.0;
+    let row = &b.rows[r];
+    let wrap_cols = ((POPUP_MAX_W - 2.0 * POPUP_PAD_X) / (6.6 * k)) as usize;
+
+    // sections stack in their order (Note, Enum, Default, Custom
+    // Properties); dividers follow their template exactly: after the
+    // Note when anything follows, never between Enum and Default, and
+    // before Custom Properties when anything precedes
+    let mut sections: Vec<PopupSection> = Vec::new();
+    if let Some(note) = &row.note {
+        sections.push(note_section(note, wrap_cols, false));
+    }
+    let mut enum_found = false;
+    if row.ty_enum {
+        if let Some(e) = layout.enums.iter().find(|e| e.name == row.ty) {
+            enum_found = true;
+            // every value, tab-indented (their whitespace-pre-wrap
+            // block); the body scrolls when it overflows
+            let entries = e
+                .values
+                .iter()
+                .cloned()
+                .map(|v| PopupEntry::Plain(v, ENUM_VALUE_BLUE))
+                .collect();
+            sections.push(PopupSection {
+                label: "Enum",
+                label_sub: Some((e.name.clone(), ENUM_VALUE_BLUE)),
+                entries,
+                pitch: POPUP_RELAXED_H,
+                pad_top: 4.0,
+                label_pad_bottom: 0.0,
+                pad_bottom: 6.0,
+                divider_before: row.note.is_some(),
+            });
+        }
+    }
+    if let Some(d) = &row.default {
+        // theirs shows the raw expression: quotes AND backticks stripped
+        let raw = d.trim_matches(|c| c == '\'' || c == '"' || c == '`');
+        sections.push(PopupSection {
+            label: "Default",
+            label_sub: Some((raw.to_string(), TYPE_ORANGE)),
+            entries: Vec::new(),
+            pitch: POPUP_LINE_H,
+            pad_top: 8.0,
+            label_pad_bottom: 0.0,
+            pad_bottom: 8.0,
+            // their divider after the Note skips the Enum section (which
+            // carries its own) — a Note followed directly by the Default
+            // row still gets one
+            divider_before: row.note.is_some() && !enum_found,
+        });
+    }
+    if !row.custom.is_empty() {
+        let preceded = row.note.is_some() || enum_found || row.default.is_some();
+        sections.push(custom_props_section(&row.custom, preceded));
+    }
+
+    let header_w = 12.0 * k
+        + 6.0 * k
+        + semibold_px(&row.name, 14.0 * k)
+        + 6.0 * k
+        + mono_px(&row.ty, 14.0 * k)
+        + 2.0 * POPUP_PAD_X * k;
+    let s = cell_size(zoom);
+    let box_left = to_px(b.x, b.y, zoom, pan).x;
+    let anchor = PopupAnchor {
+        left: box_left,
+        right: to_px(b.x + b.w, b.y, zoom, pan).x,
+        top: to_px(b.x, b.y + r as i32 + 1, zoom, pan).y,
+        bottom: to_px(b.x, b.y + r as i32 + 1, zoom, pan).y + s.height,
+    };
+    let g = popup_layout(&sections, header_w, anchor, zoom, bounds, scroll);
+    let type_color = if row.ty_enum { ENUM_VALUE_BLUE } else { TYPE_ORANGE };
+    draw_popup_chrome(frame, &g, PopupIcon::Field, &row.name, Some((row.ty.as_str(), type_color)), zoom);
+    draw_popup_body(frame, &g, &sections, zoom);
+}
+
+fn draw_table_popup(
+    frame: &mut canvas::Frame,
+    b: &TableBox,
+    zoom: f32,
+    pan: Vector,
+    bounds: Rectangle,
+    scroll: f32,
+) {
+    let k = zoom / 20.0;
+    let wrap_cols = ((POPUP_MAX_W - 2.0 * POPUP_PAD_X) / (6.6 * k)) as usize;
+    let mut sections: Vec<PopupSection> = Vec::new();
+    if let Some(note) = &b.note {
+        sections.push(note_section(note, wrap_cols, false));
+    }
+    if !b.custom.is_empty() {
+        sections.push(custom_props_section(&b.custom, b.note.is_some()));
+    }
+    let header_w = 12.0 * k
+        + 6.0 * k
+        + semibold_px(&b.title, 14.0 * k)
+        + 2.0 * POPUP_PAD_X * k;
+    let s = cell_size(zoom);
+    let box_left = to_px(b.x, b.y, zoom, pan).x;
+    let header_top = to_px(b.x, b.y, zoom, pan).y;
+    let anchor = PopupAnchor {
+        left: box_left,
+        right: to_px(b.x + b.w, b.y, zoom, pan).x,
+        top: header_top,
+        bottom: header_top + s.height,
+    };
+    let g = popup_layout(&sections, header_w, anchor, zoom, bounds, scroll);
+    draw_popup_chrome(frame, &g, PopupIcon::Table, &b.title, None, zoom);
+    draw_popup_body(frame, &g, &sections, zoom);
+}
+
+fn draw_group_popup(
+    frame: &mut canvas::Frame,
+    g: &dbml_ui::layout::GroupRegion,
+    zoom: f32,
+    pan: Vector,
+    bounds: Rectangle,
+    scroll: f32,
+) {
+    let k = zoom / 20.0;
+    let wrap_cols = ((POPUP_MAX_W - 2.0 * POPUP_PAD_X) / (6.6 * k)) as usize;
+    let mut sections: Vec<PopupSection> = Vec::new();
+    if let Some(note) = &g.note {
+        sections.push(note_section(note, wrap_cols, false));
+    }
+    if !g.custom.is_empty() {
+        sections.push(custom_props_section(&g.custom, g.note.is_some()));
+    }
+    let header_w = 13.0 * k
+        + 6.0 * k
+        + semibold_px(&g.name, 14.0 * k)
+        + 2.0 * POPUP_PAD_X * k;
+    let s = cell_size(zoom);
+    let band_left = to_px(g.rect.0, g.rect.1, zoom, pan).x;
+    let band_top = to_px(g.rect.0, g.rect.1, zoom, pan).y;
+    let anchor = PopupAnchor {
+        left: band_left,
+        right: band_left + g.rect.2 as f32 * s.width,
+        top: band_top,
+        bottom: band_top + s.height,
+    };
+    let geom = popup_layout(&sections, header_w, anchor, zoom, bounds, scroll);
+    draw_popup_chrome(frame, &geom, PopupIcon::Group, &g.name, None, zoom);
+    draw_popup_body(frame, &geom, &sections, zoom);
+}
+
+pub(crate) const ENUM_VALUE_BLUE: iced::Color = iced::Color::from_rgb(0.376, 0.647, 0.980); // #60A5FA
+const TYPE_ORANGE: iced::Color = iced::Color::from_rgb(0.992, 0.729, 0.455); // #FDBA74
+
+/// dbdiagram's pointer-anchored tooltip pill (pointer + 10,10, clamped,
+/// dark bg) — it follows the cursor. Draws one line per entry; the first
+/// line reads as the title (bold) when there are several (the enum
+/// definition tooltip).
+fn draw_tooltip_pill(
+    frame: &mut canvas::Frame,
+    lines: &[String],
+    p: Point,
+    zoom: f32,
+    bounds: Rectangle,
+) {
+    let k = zoom / 20.0;
+    let widest = lines
+        .iter()
+        .map(|l| l.chars().count())
+        .max()
+        .unwrap_or(0) as f32;
+    // the codebase's standard 0.58em advance for the 10px tooltip font —
+    // the old 6.2 + 16px padding sized the pill ~25% past its text
+    let w = widest * 5.8 * k + 12.0 * k;
+    // 15k per line + 4k padding: a single line is an 18k pill, snug
+    // around its 10k text
+    let h = (lines.len() as f32 * 15.0 + 4.0) * k;
+    let x = (p.x + 10.0 * k)
+        .clamp(2.0, (bounds.width - w - 2.0).max(2.0));
+    let y = (p.y + 10.0 * k)
+        .clamp(2.0, (bounds.height - h - 2.0).max(2.0));
+    frame.fill(
+        &Path::rounded_rectangle(
+            Point::new(x, y),
+            Size::new(w, h),
+            iced::border::Radius::from(4.0),
+        ),
+        theme::BG,
+    );
+    for (i, line) in lines.iter().enumerate() {
+        // the enum's name line reads as the tooltip's title
+        let title = i == 0 && lines.len() > 1;
+        frame.fill_text(Text {
+            content: line.clone(),
+            // horizontally CENTERED in the pill (each line, so shorter
+            // enum-definition lines stay balanced under the bold title)
+            position: Point::new(x + w / 2.0, y + (2.0 + (i as f32 + 0.5) * 15.0) * k),
+            color: theme::TEXT,
+            size: (0.5 * zoom).into(),
+            font: Font {
+                weight: if title {
+                    font::Weight::Bold
+                } else {
+                    font::Weight::Normal
+                },
+                ..Font::DEFAULT
+            },
+            horizontal_alignment: iced::alignment::Horizontal::Center,
+            vertical_alignment: iced::alignment::Vertical::Center,
+            ..Default::default()
+        });
+    }
+}
+
+/// True when the pointer sits on a header's color-picker glyph: the
+/// overlay suppresses the popup/glyph chrome there (the picker owns the
+/// press).
+fn picker_glyph_hovered(layout: &Layout, zoom: f32, pan: Vector, p: Point) -> bool {
+    palette_icon_hit(layout, zoom, pan, p).is_some()
+        || super::groups::group_icon_hit(layout, zoom, pan, p).is_some()
+}
+
 /// The diagram's marker/note/enum-pill tooltip as its own canvas widget,
 /// STACKED above the diagram canvas: iced flattens one widget's geometries
 /// into a mesh pass + a text pass, so a second-geometry tooltip pill painted
@@ -1806,10 +4004,72 @@ pub struct DiagramOverlay<'a> {
     pub pan: Vector,
     /// Cursor position over the canvas (local px), as `Diagram::hover`.
     pub hover: Option<Point>,
+    /// The field card's scroll offset (px below its top): the wheel over
+    /// a field-card row scrolls the card's body, not the canvas.
+    pub field_card_scroll: f32,
+    /// The table popup's scroll offset (wheel over the table's header
+    /// band while its popup is open).
+    pub table_card_scroll: f32,
+    /// The group popup's scroll offset (wheel over the group's band
+    /// while its popup is open).
+    pub group_card_scroll: f32,
 }
 
 impl canvas::Program<crate::app::Message> for DiagramOverlay<'_> {
     type State = ();
+
+    fn update(
+        &self,
+        _state: &mut Self::State,
+        event: canvas::Event,
+        bounds: Rectangle,
+        cursor: iced::mouse::Cursor,
+    ) -> (canvas::event::Status, Option<crate::app::Message>) {
+        use crate::app::Message;
+        use iced::mouse;
+
+        // the wheel over a field-card row scrolls the CARD (dbdiagram's
+        // popup scrolls too), never the canvas underneath: captured.
+        if let canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) = event {
+            if let Some(p) = cursor.position_over(bounds).map(|p| Point::new(p.x - bounds.x, p.y - bounds.y)) {
+                let notches = match delta {
+                    mouse::ScrollDelta::Pixels { y, .. } => y / 40.0,
+                    mouse::ScrollDelta::Lines { y, .. } => y,
+                };
+                // field card: wheel over a qualifying column row
+                if field_card_at(self.layout, self.zoom, self.pan, p).is_some() {
+                    return (
+                        canvas::event::Status::Captured,
+                        Some(Message::FieldCardScroll(notches * 40.0)),
+                    );
+                }
+                // table popup: wheel over the table's header band while
+                // its popup is open
+                if let Some(b) = hit_test(self.layout, self.zoom, self.pan, p) {
+                    let top_left = to_px(b.x, b.y, self.zoom, self.pan);
+                    let s = cell_size(self.zoom);
+                    let rowf = (p.y - top_left.y) / s.height;
+                    if rowf < 1.0 && (!b.custom.is_empty() || b.note.is_some()) {
+                        return (
+                            canvas::event::Status::Captured,
+                            Some(Message::TableCardScroll(notches * 40.0)),
+                        );
+                    }
+                }
+                // group popup: wheel over the group's band while its
+                // popup is open
+                if let Some(g) = super::groups::group_label_hit(self.layout, self.zoom, self.pan, p) {
+                    if g.note.is_some() || !g.custom.is_empty() {
+                        return (
+                            canvas::event::Status::Captured,
+                            Some(Message::GroupCardScroll(notches * 40.0)),
+                        );
+                    }
+                }
+            }
+        }
+        (canvas::event::Status::Ignored, None)
+    }
 
     fn draw(
         &self,
@@ -1823,11 +4083,80 @@ impl canvas::Program<crate::app::Message> for DiagramOverlay<'_> {
         let Some(p) = self.hover else {
             return vec![frame.into_geometry()];
         };
+        // the picker glyphs sit on the same header/band hover targets the
+        // popups below use: while one is under the pointer nothing pops
+        if picker_glyph_hovered(self.layout, self.zoom, self.pan, p) {
+            return vec![frame.into_geometry()];
+        }
+        // The left icon cluster and the field card compose: hovering a
+        // pk/fk/unique GLYPH pops that glyph's tooltip pill AND, when the
+        // row also qualifies, the field card — the card draws first, the
+        // pill on top. The note glyph raised by custom properties alone
+        // pops no pill (icon_tooltip_line already filtered it): the card
+        // below is that row's affordance. With a real `note` the pill
+        // shows the note text, again beside the card.
+        let icon_pill = icon_tooltip_line(self.layout, self.zoom, self.pan, p);
+        // the field card (dbdiagram's FieldTooltipPopup): hovering a
+        // column row shows a popup IFF the column has a note, an enum
+        // type, or a default — plain/nn/unique/pk/fk rows never pop.
+        // Content sections stack in their order: Note, Enum, Default.
+        let field_card: Option<(&TableBox, usize)> = {
+            let hovered = hit_test(self.layout, self.zoom, self.pan, p);
+            hovered.and_then(|b| {
+                row_at(self.layout, self.zoom, self.pan, p)
+                    .filter(|(hb, r)| hb.title == b.title && row_has_field_card(&b.rows[*r]))
+            })
+        };
+        if let Some((b, r)) = field_card {
+            draw_field_popup(
+                &mut frame,
+                self.layout,
+                b,
+                r,
+                self.zoom,
+                self.pan,
+                bounds,
+                self.field_card_scroll,
+            );
+            // the hovered glyph's tooltip pill rides on top of the card
+            if let Some(line) = icon_pill {
+                draw_tooltip_pill(&mut frame, &[line], p, self.zoom, bounds);
+            }
+            return vec![frame.into_geometry()];
+        }
+        // a glyph on a row the card never pops (a plain pk row, say)
+        // keeps today's behavior: its tooltip pill alone
+        if let Some(line) = icon_pill {
+            draw_tooltip_pill(&mut frame, &[line], p, self.zoom, bounds);
+            return vec![frame.into_geometry()];
+        }
+        // dbdiagram's table popup: hovering a table's HEADER band pops a
+        // card with the title and its Custom Properties (live-verified:
+        // `users` + owner/sla_hours/pii). Tables without custom properties
+        // never pop.
+        if let Some(b) = hit_test(self.layout, self.zoom, self.pan, p) {
+            let top_left = to_px(b.x, b.y, self.zoom, self.pan);
+            let s = cell_size(self.zoom);
+            let rowf = (p.y - top_left.y) / s.height;
+            if rowf < 1.0 && (!b.custom.is_empty() || b.note.is_some()) {
+                draw_table_popup(&mut frame, b, self.zoom, self.pan, bounds, self.table_card_scroll);
+                return vec![frame.into_geometry()];
+            }
+        }
         // tooltip lines: the "Enum" pill shows the enum's definition (its
-        // name, then the values one per line); then pk/fk markers, then
-        // the note icon's note text. dbdiagram's tooltip is
-        // pointer-anchored (pointer + 10,10, clamped) with a dark #222
-        // pill — it follows the cursor.
+        // name, then the values one per line). The cluster glyphs resolved
+        // above never reach this branch — every glyph hover returned at
+        // the card or pill branch (a pill-suppressed note glyph means
+        // custom properties, and that row always pops the card).
+        // a group's label hover pops the same card a column does — the
+        // Note section and the Custom Properties bullet list (the old
+        // pointer note pill duplicated the card's Note section)
+        if let Some(g) = super::groups::group_label_hit(self.layout, self.zoom, self.pan, p) {
+            if g.note.is_some() || !g.custom.is_empty() {
+                draw_group_popup(&mut frame, g, self.zoom, self.pan, bounds, self.group_card_scroll);
+                return vec![frame.into_geometry()];
+            }
+        }
         let lines: Option<Vec<String>> =
             if let Some((b, row)) = enum_hit(self.layout, self.zoom, self.pan, p) {
                 let ty = &b.rows[row].ty;
@@ -1841,65 +4170,150 @@ impl canvas::Program<crate::app::Message> for DiagramOverlay<'_> {
                     lines
                 })
             } else {
-                marker_hit(self.layout, self.zoom, self.pan, p)
-                    .map(|(b, row)| vec![marker_label(b.rows[row].pk).to_string()])
-                    .or_else(|| {
-                        note_hit(self.layout, self.zoom, self.pan, p).map(|(b, row)| {
-                            // 60-char cap keeps the pill readable
-                            let mut text: String =
-                                b.rows[row].note.clone().unwrap_or_default();
-                            if text.chars().count() > 60 {
-                                text = text.chars().take(60).collect::<String>() + "\u{2026}";
-                            }
-                            vec![text]
-                        })
-                    })
+                None
             };
         if let Some(lines) = lines {
-            let k = self.zoom / 20.0;
-            let widest = lines
-                .iter()
-                .map(|l| l.chars().count())
-                .max()
-                .unwrap_or(0) as f32;
-            let w = widest * 6.2 * k + 16.0 * k;
-            // 16k per line + 4k padding: a single line is the 20k pill the
-            // marker/note tooltips have always drawn
-            let h = (lines.len() as f32 * 16.0 + 4.0) * k;
-            let x = (p.x + 10.0 * k)
-                .clamp(2.0, (bounds.width - w - 2.0).max(2.0));
-            let y = (p.y + 10.0 * k)
-                .clamp(2.0, (bounds.height - h - 2.0).max(2.0));
-            frame.fill(
-                &Path::rounded_rectangle(
-                    Point::new(x, y),
-                    Size::new(w, h),
-                    iced::border::Radius::from(4.0),
-                ),
-                theme::BG,
-            );
-            for (i, line) in lines.iter().enumerate() {
-                // the enum's name line reads as the tooltip's title
-                let title = i == 0 && lines.len() > 1;
-                frame.fill_text(Text {
-                    content: line.clone(),
-                    position: Point::new(x + 8.0 * k, y + (2.0 + (i as f32 + 0.5) * 16.0) * k),
-                    color: theme::TEXT,
-                    size: (0.5 * self.zoom).into(),
-                    font: Font {
-                        weight: if title {
-                            font::Weight::Bold
-                        } else {
-                            font::Weight::Normal
-                        },
-                        ..Font::DEFAULT
-                    },
-                    horizontal_alignment: iced::alignment::Horizontal::Left,
-                    vertical_alignment: iced::alignment::Vertical::Center,
-                    ..Default::default()
-                });
-            }
+            draw_tooltip_pill(&mut frame, &lines, p, self.zoom, bounds);
         }
         vec![frame.into_geometry()]
+    }
+}
+
+#[cfg(test)]
+mod picker_suppression_tests {
+    use super::*;
+
+    /// The overlay's suppression contract: wherever a picker glyph
+    /// accepts the pointer the overlay draws nothing; the same header
+    /// away from the glyph still pops.
+    #[test]
+    fn the_overlay_yields_wherever_a_picker_glyph_accepts_the_pointer() {
+        let src = "Table users [owner: \"data-team\"] { id int }
+Table t { x int }
+TableGroup g { users t }
+";
+        let l = dbml_ui::layout::layout(&dbml_ui::model::build(
+            &dbml_ui::dbml::parser::parse(src).doc,
+        ));
+        let zoom = 20.0;
+        let pan = Vector::new(0.0, 0.0);
+        let s = cell_size(zoom);
+
+        // the TABLE glyph's center: the draw pass's own geometry
+        let b = &l.boxes[0];
+        let tl = to_px(b.x, b.y, zoom, pan);
+        let (c, _, _) = palette_icon_geometry(b, tl, s);
+        assert!(palette_icon_hit(&l, zoom, pan, c).is_some());
+        assert!(picker_glyph_hovered(&l, zoom, pan, c));
+
+        // the GROUP glyph's center: the band's right end (the zone
+        // groups.rs draws)
+        let g = &l.groups[0];
+        let gtl = to_px(g.rect.0, g.rect.1, zoom, pan);
+        let icon_h = 0.72 * s.height;
+        let icon_w = CIRCLES_VIEWBOX.0 / CIRCLES_VIEWBOX.1 * icon_h;
+        let gc = Point::new(
+            gtl.x + g.rect.2 as f32 * s.width - 0.6 * s.width - icon_w / 2.0,
+            gtl.y + s.height * 0.5,
+        );
+        assert!(super::super::groups::group_icon_hit(&l, zoom, pan, gc).is_some());
+        assert!(picker_glyph_hovered(&l, zoom, pan, gc));
+
+        // the same header away from the glyph: the custom-properties
+        // card still shows (users carries [owner: ...])
+        let header_left = Point::new(tl.x + 1.0 * s.width, tl.y + 0.5 * s.height);
+        assert!(!picker_glyph_hovered(&l, zoom, pan, header_left));
+    }
+
+    #[test]
+    fn the_records_slot_follows_the_note_glyph() {
+        // the records glyph rides in the title-adjacent row: right of the
+        // note glyph when the table carries one, else right of the title
+        // — and always clear of the wheel's hover slot at the right edge
+        // (the width computation reserves that room, Row::BOLD_TEXT on
+        // both sides keeps the measures in step)
+        let src = "Table plain { id int
+
+  records (id) {
+    1
+  }
+}
+Table noted { id int
+  Note: 'hi'
+
+  records (id) {
+    1
+  }
+}
+";
+        let l = dbml_ui::layout::layout(&dbml_ui::model::build(
+            &dbml_ui::dbml::parser::parse(src).doc,
+        ));
+        let zoom = 20.0;
+        let pan = Vector::new(0.0, 0.0);
+        let s = cell_size(zoom);
+        let band_center = |b: &TableBox| {
+            let (x0, x1) = records_band(b, zoom, pan).unwrap();
+            (x0 + x1) / 2.0
+        };
+        let plain = l.boxes.iter().find(|b| b.title == "plain").unwrap();
+        let noted = l.boxes.iter().find(|b| b.title == "noted").unwrap();
+        // plain: right of the title; noted: right of the note glyph
+        let ptl = to_px(plain.x, plain.y, zoom, pan);
+        assert!(band_center(plain) > title_end_px(plain, ptl, s));
+        let ntl = to_px(noted.x, noted.y, zoom, pan);
+        let (note_cx, note_size) = note_icon_geometry(noted, ntl, s).unwrap();
+        assert!(band_center(noted) > note_cx + note_size * 0.5);
+        // and the note pushes the records slot further right than the
+        // plain table's title-side slot
+        assert!(band_center(noted) > band_center(plain));
+        // both stay left of the wheel's hover zone
+        for b in [&plain, &noted] {
+            let tl = to_px(b.x, b.y, zoom, pan);
+            let (wc, half_w, _) = palette_icon_geometry(b, tl, s);
+            assert!(
+                band_center(b) + 0.5 * s.width < wc.x - half_w,
+                "the records band must clear the wheel's slot"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod drag_priority_tests {
+    use super::*;
+
+    fn layout_of(src: &str) -> Layout {
+        dbml_ui::layout::layout(&dbml_ui::model::build(
+            &dbml_ui::dbml::parser::parse(src).doc,
+        ))
+    }
+
+    #[test]
+    fn the_dragged_table_paints_after_its_raised_lines() {
+        let src = "Table a { id integer [pk] }
+Table b { a_id integer }
+Ref: b.a_id > a.id
+";
+        let l = layout_of(src);
+        fn titles<'a>(seq: &'a [PaintItem<'_>]) -> Vec<&'a str> {
+            seq.iter()
+                .filter_map(|item| match item {
+                    PaintItem::Table(b) => Some(b.title.as_str()),
+                    _ => None,
+                })
+                .collect()
+        }
+        // mid-drag: a's grab raised it to item_z's end and its line is
+        // raised — the table must come AFTER the raised edges, i.e. last
+        let z = vec![RaisedItem::Table("a".into())];
+        let seq = paint_items(&l, &z, None, None, Some("a"));
+        assert_eq!(titles(&seq).last(), Some(&"a"));
+        // at rest: the persistent raise keeps a last either way
+        let seq = paint_items(&l, &z, None, None, None);
+        assert_eq!(titles(&seq).last(), Some(&"a"));
+        // no raise at all: doc order is preserved
+        let seq = paint_items(&l, &[], None, None, None);
+        assert_eq!(titles(&seq), vec!["a", "b"]);
     }
 }

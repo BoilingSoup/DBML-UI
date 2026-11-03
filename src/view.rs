@@ -2943,19 +2943,19 @@ fn start_screen(_app: &App) -> Element<'static, Message> {
     };
     let cards = column![
         card(
-            include_bytes!("../file-plus-icon.svg").as_slice(),
+            include_bytes!("../icons/file-plus-icon.svg").as_slice(),
             "New diagram",
             "Start from an empty DBML file",
             Message::NewDiagram,
         ),
         card(
-            include_bytes!("../folder-open-icon.svg").as_slice(),
+            include_bytes!("../icons/folder-open-icon.svg").as_slice(),
             "Open DBML",
             "Continue working on a .dbml diagram",
             Message::OpenFilePicker(PickerKind::Dbml),
         ),
         card(
-            include_bytes!("../import-icon.svg").as_slice(),
+            include_bytes!("../icons/import-icon.svg").as_slice(),
             "Import SQL schema",
             "Convert a .sql dump into DBML",
             Message::OpenFilePicker(PickerKind::Sql),
