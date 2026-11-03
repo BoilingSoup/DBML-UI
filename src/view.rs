@@ -148,7 +148,10 @@ pub fn root(app: &App) -> Element<'_, Message> {
             layout: app.diagram(),
             zoom: app.cur().zoom,
             pan: app.cur().pan,
-            hover: if app.drag == Drag::None {
+            hover: if app.drag == Drag::None
+                && !app.modal_open()
+                && !app.pointer_in_export_dropdown()
+            {
                 app.canvas_cursor
             } else {
                 None
@@ -160,12 +163,21 @@ pub fn root(app: &App) -> Element<'_, Message> {
                 app.drag,
                 Drag::Pan { .. } | Drag::Table { .. } | Drag::Group { .. } | Drag::Sticky { .. }
             ),
-            // raised tables (recently grabbed) paint last: the overlap
-            // priority persists after the drop
-            z_order: &app.cur().z_order,
+            // raised items (recently grabbed) paint last: the overlap
+            // priority persists after the drop, tables over stickies
+            // and stickies over tables alike
+            item_z: &app.cur().item_z,
             // a dragged TableGroup raises all its member tables
             drag_group: match &app.drag {
                 Drag::Group { name, .. } => Some(name.clone()),
+                _ => None,
+            },
+            // the sticky being dragged/resized paints after every other
+            // note: an item dragged over another rides on top
+            drag_note: match &app.drag {
+                Drag::Sticky { name, .. } | Drag::StickyResize { name, .. } => {
+                    Some(name.clone())
+                }
                 _ => None,
             },
             // while a connected table is dragged, ITS relationship lines
@@ -192,7 +204,10 @@ pub fn root(app: &App) -> Element<'_, Message> {
             layout: app.diagram(),
             zoom: app.cur().zoom,
             pan: app.cur().pan,
-            hover: if app.drag == Drag::None {
+            hover: if app.drag == Drag::None
+                && !app.modal_open()
+                && !app.pointer_in_export_dropdown()
+            {
                 app.canvas_cursor
             } else {
                 None
@@ -203,12 +218,16 @@ pub fn root(app: &App) -> Element<'_, Message> {
         })
         .width(Fill)
         .height(Fill),
-        // the floating maximize button rides on top (F2 does the same)
-        canvas(DiagramMaxButton {
-            maximized: app.maximized == Maximized::Diagram,
-        })
+        // the maximize button rides the top-right corner (F2 does the
+        // same) — the toolbar's own icon chrome, flush with the corner
+        container(
+            diagram_max_button(app.maximized == Maximized::Diagram),
+        )
         .width(Fill)
-        .height(Fill),
+        .height(Fill)
+        .align_x(iced::alignment::Horizontal::Right)
+        .align_y(iced::alignment::Vertical::Top),
+
         // the right-click twin (the header-color menu's entry point): the
         // Diagram canvas itself only forwards left presses
         canvas(DiagramRightClick).width(Fill).height(Fill),
@@ -219,17 +238,225 @@ pub fn root(app: &App) -> Element<'_, Message> {
     // the tables left-to-right along their refs, and zoom so everything
     // fits — no opaque bar behind them, centered on the pane's bottom
     // edge. (A plain container overlay doesn't intercept canvas events;
-    // only the buttons themselves do.)
+    // only the buttons themselves do.) The exports consolidate into one
+    // dropdown at the TOP of the pane, centered.
+    let export_ink = format!(
+        "#{:02x}{:02x}{:02x}",
+        (theme::TEXT.r * 255.0) as u32,
+        (theme::TEXT.g * 255.0) as u32,
+        (theme::TEXT.b * 255.0) as u32
+    );
+    let export_svg = iced::widget::svg(iced::widget::svg::Handle::from_memory(
+        format!(
+            "<svg xmlns='http://www.w3.org/2000/svg' viewBox='{}' width='16' height='16'><path d='{}' fill='{export_ink}'/></svg>",
+            ICON_EXPORT.1,
+            ICON_EXPORT.0,
+        )
+        .into_bytes(),
+    ))
+    .width(Length::Fixed(16.0))
+    .height(Length::Fixed(16.0));
+    let mut export_dialect_layer: Option<Element<'_, Message>> = None;
+    let mut export_dropdown = column![
+        button(
+            container(
+                row![
+                    export_svg,
+                    text("Export".to_string()),
+                    // the caret stays DOWN in both states (an up caret
+                    // read as a strange sideways flick when opening)
+                    chevron_svg(true),
+                ]
+                .spacing(6)
+                .align_y(iced::alignment::Vertical::Center),
+            )
+            .width(Fill)
+            .height(Fill)
+            .align_x(iced::alignment::Horizontal::Center)
+            .align_y(iced::alignment::Vertical::Center),
+        )
+        // FIXED 112x30 — the same slot the menu card occupies below, so
+        // the trigger, the card and the dialect card are one aligned
+        // column (the natural-height trigger made the card read as
+        // left-shifted under it)
+        .width(Length::Fixed(112.0))
+        .height(Length::Fixed(30.0))
+        .style(move |_t, s| {
+            let mut st = tool_button_style();
+            st.background = Some(iced::Background::Color(
+                // OPEN wins over HOVER: the pointer rests on the trigger
+                // when the menu opens, and the button must read as held
+                // down (near-black) the whole time, not as hovered. At
+                // rest: the same surface as every toolbar button. HOVER
+                // is a whisper — one opaque step up from the rest state,
+                // not the toolbar's gray lift and not a translucent wash
+                // (this button sits ON the diagram: a translucent layer
+                // composites with the canvas colors behind it and shifts
+                // hue with every group/table it crosses).
+                if app.export_menu_open {
+                    theme::BG
+                } else if s == iced::widget::button::Status::Hovered {
+                    Color::from_rgb8(0x26, 0x2b, 0x31)
+                } else {
+                    theme::PANEL
+                },
+            ));
+            st
+        })
+        .on_press(Message::ToggleExportMenu),
+    ]
+    .spacing(4)
+    .align_x(iced::alignment::Horizontal::Center);
+    if app.export_menu_open {
+        // the menu drops under the button, centered over the canvas: the
+        // image exports, then the SQL row whose dialect list cascades to
+        // the RIGHT on hover (a click toggles it too — hover delivery can
+        // be starved). Leaving the whole dropdown folds the list back up.
+        let menu_style = |_t: &iced::Theme| container::Style {
+            background: Some(iced::Background::Color(theme::PANEL)),
+            border: iced::border::rounded(6).color(theme::BORDER),
+            shadow: iced::Shadow {
+                color: Color::from_rgba(0.0, 0.0, 0.0, 0.4),
+                offset: iced::Vector::new(0.0, 4.0),
+                blur_radius: 10.0,
+            },
+            ..Default::default()
+        };
+        // the image rows fold the SQL list back up on hover (a different
+        // item hovered = the submenu's gone, dbdiagram-style)
+        let image_item = |label: &'static str| -> Element<'static, Message> {
+            let msg = if label == "Export SVG" {
+                Message::ExportAs(crate::app::ExportKind::Svg)
+            } else {
+                Message::ExportAs(crate::app::ExportKind::Png)
+            };
+            mouse_area(export_menu_item(label, msg))
+                .on_enter(Message::ExportSqlMenuOpen(false))
+                .into()
+        };
+        // the SQL row STAYS dark while its dialect list is open — the
+        // open state is visible on the row that owns it
+        let sql_row = mouse_area(
+            button(
+                container(
+                    row![
+                        text("Export SQL".to_string())
+                            .size(12)
+                            .color(theme::TEXT),
+                        chevron_svg_colored(false, DIAG_GRAY_200, 10.0),
+                    ]
+                    .spacing(6)
+                    .align_y(iced::alignment::Vertical::Center),
+                )
+                .width(Fill)
+                .height(Fill)
+                .align_x(iced::alignment::Horizontal::Left)
+                .align_y(iced::alignment::Vertical::Center),
+            )
+            .width(Fill)
+            .height(Length::Fixed(28.0))
+            .padding([0, 10])
+            .style(move |_t, s| iced::widget::button::Style {
+                background: Some(iced::Background::Color(match s {
+                    iced::widget::button::Status::Hovered => theme::TOOLTIP,
+                    // the open state is visible on the row that owns the
+                    // dialect list
+                    _ if app.export_menu_sql_open => theme::TOOLTIP,
+                    _ => Color::TRANSPARENT,
+                })),
+                text_color: theme::TEXT,
+                border: Default::default(),
+                ..Default::default()
+            })
+            .on_press(Message::ToggleExportSqlMenu),
+        )
+        .on_enter(Message::ExportSqlMenuOpen(true));
+        // the main card: three FIXED-height rows (28px each) so the
+        // dialect list's alignment offset is exact, not a magic guess.
+        // NO outer mouse_area re-sync: its on_enter published a
+        // BUILD-TIME snapshot of export_menu_sql_open — a stale false
+        // that stomped the SQL row's enter(true) the moment the pointer
+        // reached the row. The rows carry their own enter state.
+        let main_menu = container(
+            column![
+                image_item("Export SVG"),
+                image_item("Export PNG"),
+                sql_row,
+            ],
+        )
+        .width(Length::Fixed(112.0))
+        .style(menu_style);
+        // (no outer mouse_area re-sync: its on_enter published a
+        // build-time snapshot of export_menu_sql_open — a stale false
+        // that stomped the SQL row's enter(true). The rows own the state.)
+        export_dropdown = export_dropdown.push(main_menu);
+        if app.export_menu_sql_open {
+            // the dialect card is a SEPARATE floating card beside the
+            // main one — a nested sibling inside the dropdown stretched
+            // the whole card and double-bordered it, and a row sibling
+            // overflow is impossible: iced flex passes the remaining
+            // space (0) as the next child's max limit, clamping its
+            // Fixed width to nothing. It rides the pane's layer stack
+            // instead, anchored beside the SQL row: card border 1 + the
+            // two fixed-height image rows (2 x 30) + the dropdown top
+            // pad 8 puts the SQL row at pane-y 99; the card's own border
+            // aligns a pixel above.
+            let dialects = [
+                ("PostgreSQL", dbml_ui::dbml::sql::Dialect::Postgres),
+                ("MySQL", dbml_ui::dbml::sql::Dialect::MySQL),
+                ("SQL Server", dbml_ui::dbml::sql::Dialect::MSSQL),
+                ("Oracle", dbml_ui::dbml::sql::Dialect::Oracle),
+                ("SQLite", dbml_ui::dbml::sql::Dialect::SQLite),
+            ];
+            let mut sub = column![].spacing(0);
+            for (label, dialect) in dialects {
+                sub = sub.push(export_menu_item(label, Message::ExportSql(dialect)));
+            }
+            // pane geometry, EXACT: dropdown top pad 8 + trigger 30 +
+            // spacing 4 = the main card's top at 42; + its 1px border +
+            // two 28px rows = the SQL row's top at 99 pane-relative. The
+            // dialect card's border aligns the row's top edge (98). The
+            // main card spans [pane_w/2 - 56, pane_w/2 + 56] (112 wide,
+            // centered on the pane) — the dialect card's LEFT edge pins
+            // flush to the main card's RIGHT (pane_w/2 + 56): the zones
+            // are adjacent, so the pointer crosses from the SQL row into
+            // the submenu without a gap to lose.
+            let pane_w = (app.window_size.0 - app.seam_x()).max(220.0);
+            let card = container(sub)
+                .width(Length::Fixed(118.0))
+                .style(menu_style);
+            // the mouse_area bounds = THE CARD only (the padding lives
+            // OUTSIDE it): its enter fires exactly when the pointer
+            // crosses the flush edge from the SQL row. A full-pane
+            // mouse_area here entered at spawn and never re-fired at the
+            // boundary — the main card's exit closed the menu mid-cross.
+            // No hover-out close anywhere: the submenu folds via the
+            // SVG/PNG rows, a pick, or the backdrop click.
+            export_dialect_layer = Some(
+                container(
+                    mouse_area(card).on_enter(Message::ExportSqlMenuOpen(true)),
+                )
+                .width(Fill)
+                .height(Fill)
+                .align_y(iced::alignment::Vertical::Top)
+                .align_x(iced::alignment::Horizontal::Left)
+                .padding(iced::Padding {
+                    top: 98.0,
+                    left: (pane_w / 2.0 + 56.0).max(0.0),
+                    ..Default::default()
+                })
+                .into(),
+            );
+        }
+    }
     let diagram_buttons = container(
         row![
-            diagram_button("Export SQL", Message::ExportSql, false),
-            diagram_button("Export SVG", Message::ExportSvg, false),
+            diagram_button("Add Sticky Note", Message::AddStickyNote, false),
             diagram_button(
-                "Highlight",
+                "Highlight Relationships",
                 Message::ToggleEdgeHighlight,
                 app.cur().highlight_all,
             ),
-            diagram_button("Add note", Message::AddStickyNote, false),
             diagram_button("Auto-arrange", Message::AutoArrange, false),
             diagram_button("Zoom to Fit", Message::ZoomToFit, false),
         ]
@@ -240,7 +467,36 @@ pub fn root(app: &App) -> Element<'_, Message> {
     .align_x(iced::alignment::Horizontal::Center)
     .align_y(iced::alignment::Vertical::Bottom)
     .padding(iced::Padding { bottom: 8.0, ..Default::default() });
-    let diagram_pane = container(stack![diagram_canvas, diagram_buttons])
+    // while the export menu is open, a full-pane backdrop sits between the
+    // canvas and the dropdown: clicking anywhere outside closes the menu
+    // (the canvas click is consumed — standard menu behavior)
+    let export_backdrop = button(text(""))
+        .width(Fill)
+        .height(Fill)
+        .style(|_t, _s| iced::widget::button::Style {
+            background: None,
+            ..Default::default()
+        })
+        .on_press(Message::ToggleExportMenu);
+    let mut diagram_layers: Vec<Element<'_, Message>> = vec![diagram_canvas.into()];
+    if app.export_menu_open {
+        diagram_layers.push(export_backdrop.into());
+    }
+    diagram_layers.push(
+        // the export dropdown rides the top edge, centered
+        container(export_dropdown)
+            .width(Fill)
+            .height(Fill)
+            .align_x(iced::alignment::Horizontal::Center)
+            .align_y(iced::alignment::Vertical::Top)
+            .padding(iced::Padding { top: 8.0, ..Default::default() })
+            .into(),
+    );
+    if let Some(layer) = export_dialect_layer {
+        diagram_layers.push(layer);
+    }
+    diagram_layers.push(diagram_buttons.into());
+    let diagram_pane = container(iced::widget::Stack::with_children(diagram_layers))
     .padding(1.0)
     .width(Fill)
     .height(Fill)
@@ -354,11 +610,7 @@ pub fn root(app: &App) -> Element<'_, Message> {
     } else {
         base
     };
-    if app.show_help {
-        stack![base, help_overlay()].into()
-    } else {
-        base
-    }
+    base
 }
 
 /// The record view: a centered modal over everything (topmost in `root`),
@@ -451,10 +703,9 @@ fn modal_shadow() -> iced::Shadow {
 fn exit_confirm_overlay() -> Element<'static, Message> {
     confirm_modal(
         "Unsaved changes",
-        "Unsaved changes will be lost. Exit anyway?",
+        "You have unsaved changes. Are you sure you want to exit?",
         &[
-            ("Save all & exit", Message::ExitSaveAll, true),
-            ("Exit without saving", Message::ExitDiscard, false),
+            ("Exit", Message::ExitDiscard, true),
             ("Cancel", Message::ExitCancel, false),
         ],
         Message::ExitCancel,
@@ -968,6 +1219,7 @@ fn record_text(label: String, c: Color, italic: bool) -> iced::widget::Text<'sta
         })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn record_cell(
     boxes: &[dbml_ui::layout::TableBox],
     b: &dbml_ui::layout::TableBox,
@@ -1314,7 +1566,9 @@ impl canvas::Program<Message> for TabStrip<'_> {
                 // a ? for it) — vertically centered on the tab text's
                 // line, in its own slot so the label never shifts
                 if tab.is_modified() {
-                    let c = Point::new(rect.x + 11.0, rect.center_y());
+                    // +0.5 optical: the drawn spokes center a half-pixel
+                    // high of the × glyph's ink (measured off the strip)
+                    let c = Point::new(rect.x + 15.0, rect.center_y() + 0.5);
                     let r = 4.5;
                     for i in 0..4 {
                         let a = i as f32 * std::f32::consts::FRAC_PI_4;
@@ -1338,7 +1592,9 @@ impl canvas::Program<Message> for TabStrip<'_> {
                     // centers on (the old 2px optical lift lifted the
                     // label high of the glyph — the eye catches that)
                     content: truncate_title(&title, 16),
-                    position: Point::new(rect.x + 20.0, rect.center_y()),
+                    // +1.5 optical: the font centers the ink high of the
+                    // × glyph's band (measured off the strip)
+                    position: Point::new(rect.x + 25.0, rect.center_y() + 1.0),
                     color: base,
                     size: 12.0.into(),
                     vertical_alignment: iced::alignment::Vertical::Center,
@@ -2142,9 +2398,6 @@ fn brighten(c: Color) -> Color {
     }
 }
 
-/// Small toolbar above the editor: Undo, Redo, Save, Save As, Format,
-/// the fmt-on-save switch and the vim/Regular mode switch.
-
 // ---- toolbar glyphs: Font Awesome solid paths lifted from dbdiagram's
 // bundle (save / edit / search) and the FA6 free set (undo / redo /
 // format wand / maximize expand + compress), rendered as inline SVGs
@@ -2156,6 +2409,9 @@ const ICON_UNDO: (&str, &str) = ("M125.7 160l50.3 0c17.7 0 32 14.3 32 32s-14.3 3
 const ICON_REDO: (&str, &str) = ("M386.3 160L336 160c-17.7 0-32 14.3-32 32s14.3 32 32 32l128 0c17.7 0 32-14.3 32-32l0-128c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 51.2L414.4 97.6c-87.5-87.5-229.3-87.5-316.8 0s-87.5 229.3 0 316.8s229.3 87.5 316.8 0c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0c-62.5 62.5-163.8 62.5-226.3 0s-62.5-163.8 0-226.3s163.8-62.5 226.3 0L386.3 160z", "0 0 512 512");
 const ICON_FORMAT: (&str, &str) = ("M234.7 42.7L197 56.8c-3 1.1-5 4-5 7.2s2 6.1 5 7.2l37.7 14.1L248.8 123c1.1 3 4 5 7.2 5s6.1-2 7.2-5l14.1-37.7L315 71.2c3-1.1 5-4 5-7.2s-2-6.1-5-7.2L277.3 42.7 263.2 5c-1.1-3-4-5-7.2-5s-6.1 2-7.2 5L234.7 42.7zM46.1 395.4c-18.7 18.7-18.7 49.1 0 67.9l34.6 34.6c18.7 18.7 49.1 18.7 67.9 0L529.9 116.5c18.7-18.7 18.7-49.1 0-67.9L495.3 14.1c-18.7-18.7-49.1-18.7-67.9 0L46.1 395.4zM484.6 82.6l-105 105-23.3-23.3 105-105 23.3 23.3zM7.5 117.2C3 118.9 0 123.2 0 128s3 9.1 7.5 10.8L64 160l21.2 56.5c1.7 4.5 6 7.5 10.8 7.5s9.1-3 10.8-7.5L128 160l56.5-21.2c4.5-1.7 7.5-6 7.5-10.8s-3-9.1-7.5-10.8L128 96 106.8 39.5C105.1 35 100.8 32 96 32s-9.1 3-10.8 7.5L64 96 7.5 117.2zm352 256c-4.5 1.7-7.5 6-7.5 10.8s3 9.1 7.5 10.8L416 416l21.2 56.5c1.7 4.5 6 7.5 10.8 7.5s9.1-3 10.8-7.5L480 416l56.5-21.2c4.5-1.7 7.5-6 7.5-10.8s-3-9.1-7.5-10.8L480 352l-21.2-56.5c-1.7-4.5-6-7.5-10.8-7.5s-9.1 3-10.8 7.5L416 352l-56.5 21.2z", "0 0 576 512");
 const ICON_EXPAND: (&str, &str) = ("M344 0L488 0c13.3 0 24 10.7 24 24l0 144c0 9.7-5.8 18.5-14.8 22.2s-19.3 1.7-26.2-5.2l-39-39-87 87c-9.4 9.4-24.6 9.4-33.9 0l-32-32c-9.4-9.4-9.4-24.6 0-33.9l87-87L327 41c-6.9-6.9-8.9-17.2-5.2-26.2S334.3 0 344 0zM168 512L24 512c-13.3 0-24-10.7-24-24L0 344c0-9.7 5.8-18.5 14.8-22.2s19.3-1.7 26.2 5.2l39 39 87-87c9.4-9.4 24.6-9.4 33.9 0l32 32c9.4 9.4 9.4 24.6 0 33.9l-87 87 39 39c6.9 6.9 8.9 17.2 5.2 26.2s-12.5 14.8-22.2 14.8z", "0 0 512 512");
+/// Font Awesome's file-export (a document with an outbound arrow) —
+/// reads as "export" at a glance; the Export trigger button uses it.
+const ICON_EXPORT: (&str, &str) = ("M0 64C0 28.7 28.7 0 64 0L224 0l0 128c0 17.7 14.3 32 32 32l128 0 0 128-168 0c-13.3 0-24 10.7-24 24s10.7 24 24 24l168 0 0 112c0 35.3-28.7 64-64 64L64 512c-35.3 0-64-28.7-64-64L0 64zM384 336l0-48 110.1 0-39-39c-9.4-9.4-9.4-24.6 0-33.9s24.6-9.4 33.9 0l80 80c9.4 9.4 9.4 24.6 0 33.9l-80 80c-9.4 9.4-24.6 9.4-33.9 0s-9.4-24.6 0-33.9l39-39L384 336zm0-208l-128 0L256 0 384 128z", "0 0 576 512");
 const MARK_CHECK: &str = "M438.6 105.4c12.5 12.5 12.5 32.8 0 45.3l-256 256c-12.5 12.5-32.8 12.5-45.3 0l-128-128c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0L160 338.7 393.4 105.4c12.5-12.5 32.8-12.5 45.3 0z";
 const ICON_COMPRESS: (&str, &str) = ("M439 7c9.4-9.4 24.6-9.4 33.9 0l32 32c9.4 9.4 9.4 24.6 0 33.9l-87 87 39 39c6.9 6.9 8.9 17.2 5.2 26.2s-12.5 14.8-22.2 14.8l-144 0c-13.3 0-24-10.7-24-24l0-144c0-9.7 5.8-18.5 14.8-22.2s19.3-1.7 26.2 5.2l39 39L439 7zM72 272l144 0c13.3 0 24 10.7 24 24l0 144c0 9.7-5.8 18.5-14.8 22.2s-19.3 1.7-26.2-5.2l-39-39L73 505c-9.4 9.4-24.6 9.4-33.9 0L7 473c-9.4-9.4-9.4-24.6 0-33.9l87-87L55 313c-6.9-6.9-8.9-17.2-5.2-26.2s12.5-14.8 22.2-14.8z", "0 0 512 512");
 
@@ -2178,6 +2434,8 @@ fn mark_svg(d: &str, ink: Color) -> Element<'static, Message> {
     .into()
 }
 
+/// Small toolbar above the editor: Undo, Redo, Save, Save As, Format,
+/// the fmt-on-save switch and the vim/Regular mode switch.
 fn editor_toolbar(app: &App) -> Element<'static, Message> {
     use iced::widget::button;
     // an icon button: the FA glyph tinted per state, with a hover tooltip
@@ -2329,7 +2587,7 @@ fn editor_toolbar(app: &App) -> Element<'static, Message> {
             true,
             false
         ),
-        icon_btn(ICON_SAVE_AS, "Save As", Message::SaveAsPrompt, true, false),
+        icon_btn(ICON_SAVE_AS, "Save As (F12)", Message::SaveAsPrompt, true, false),
         icon_btn(
             ICON_UNDO,
             "Undo (Ctrl+Z)",
@@ -2394,56 +2652,122 @@ fn find_bar_overlay(app: &App) -> Option<Element<'_, Message>> {
     if !app.editor().find_open() {
         return None;
     }
-    let input = app
-        .editor()
-        .find
-        .as_ref()
-        .map(|f| f.input.clone())
-        .unwrap_or_default();
+    let find = app.editor().find.as_ref();
+    let input = find.map(|f| f.input.clone()).unwrap_or_default();
     let (idx, total) = app.editor().find_position();
     // the field owns the keys while the bar is open (focused input): a
     // blinking block caret on the app's anim tick (hot while the bar is
     // open), ~600ms on / 500ms off
     let caret_on = app.anim_clock % 1.1 < 0.6;
-    let caret = container(horizontal_space())
-        .width(Length::Fixed(1.5))
-        .height(Length::Fixed(13.0))
-        .style(move |_t| container::Style {
-            background: Some(iced::Background::Color(if caret_on {
-                theme::TEXT
-            } else {
-                Color::TRANSPARENT
-            })),
+    let caret = || {
+        // 1px — a native input caret's width (the 2px bar read as a blob
+        // at the 12px font)
+        container(horizontal_space())
+            .width(Length::Fixed(1.0))
+            .height(Length::Fixed(13.0))
+            .style(move |_t| container::Style {
+                background: Some(iced::Background::Color(if caret_on {
+                    theme::TEXT
+                } else {
+                    Color::TRANSPARENT
+                })),
+                ..Default::default()
+            })
+    };
+    // the caret + selection as char offsets (the field is a mini input:
+    // ctrl+a/c/x/v and shift/alt+arrows move and select)
+    let (caret_pos, sel) = find
+        .map(|f| {
+            let len = f.input.chars().count();
+            let c = f.caret.min(len);
+            match f.anchor {
+                Some(a) => {
+                    let a = a.min(len);
+                    (c, Some((a.min(c), a.max(c))))
+                }
+                None => (c, None),
+            }
+        })
+        .unwrap_or((0, None));
+    // the field text is MONO: deterministic char widths, so the caret
+    // overlay lands exactly on the boundary. The caret is an OVERLAY —
+    // as a row sibling it occupied layout space and the characters
+    // shifted every time it moved (the editor's canvas caret is an
+    // overlay for the same reason)
+    const FIELD_ADVANCE: f32 = 7.2; // 12px mono at the editor's 0.6 ratio
+    let mono = |t: &str, color: iced::Color| {
+        text(t.to_string())
+            .size(12.0)
+            .color(color)
+            .font(Font::MONOSPACE)
+    };
+    let bytes = |ci: usize| {
+        input
+            .char_indices()
+            .nth(ci)
+            .map(|(i, _)| i)
+            .unwrap_or(input.len())
+    };
+    let span = |t: &str, color: iced::Color| mono(t, color);
+    // layer 0: the text spans (no caret — it overlays above). Fill width:
+    // a Shrink layer in a Stack collapses to zero alongside the Fill
+    // caret layer (both must fill for the stack to size correctly)
+    let text_row: iced::widget::Row<'_, Message> = if input.is_empty() {
+        row![mono("find\u{2026}", theme::DIM)]
+    } else {
+        let (lo, hi) = sel.unwrap_or((caret_pos, caret_pos));
+        let mut inner = row![span(&input[..bytes(lo)], theme::TEXT)];
+        if hi > lo {
+            inner = inner.push(
+                container(mono(&input[bytes(lo)..bytes(hi)], theme::TEXT))
+                    .style(move |_t| container::Style {
+                        background: Some(iced::Background::Color(Color::from_rgba(
+                            0.3, 0.5, 0.9, 0.45,
+                        ))),
+                        ..Default::default()
+                    }),
+            );
+        }
+        inner.push(span(&input[bytes(hi)..], theme::TEXT))
+    };
+    // layer 1: the caret bar, x = the chars before it (the insertion
+    // boundary), vertically centered in the field
+    let caret_x = caret_pos as f32 * FIELD_ADVANCE;
+    let caret_layer = container(caret())
+        .width(Fill)
+        .height(Fill)
+        .align_y(iced::alignment::Vertical::Center)
+        .align_x(iced::alignment::Horizontal::Left)
+        .padding(iced::Padding {
+            left: caret_x,
             ..Default::default()
         });
     // the inset input surface: darker than the bar, hairline border, the
-    // query (or the placeholder) centered with the caret riding it
+    // query (or the placeholder) with the caret overlaying its boundary —
+    // the placeholder is GHOST text with the caret BEFORE it when nothing
+    // is typed
     let field = container(
-        row![
-            text(if input.is_empty() {
-                "find\u{2026}".to_string()
-            } else {
-                input.clone()
-            })
-            .size(12.0)
-            .color(if input.is_empty() {
-                theme::DIM
-            } else {
-                theme::TEXT
-            }),
-            caret,
+        iced::widget::stack![
+            // both layers center in the 22px field so the text baseline
+            // matches the caret bar's center
+            container(text_row)
+                .width(Fill)
+                .height(Fill)
+                .align_y(iced::alignment::Vertical::Center),
+            caret_layer
         ]
-        .spacing(1),
+        .width(Fill)
+        .height(Fill),
     )
-    .padding([0, 8])
-    .width(Fill)
-    .height(Length::Fixed(22.0))
-    .align_y(iced::alignment::Vertical::Center)
-    .style(|_t| container::Style {
-        background: Some(iced::Background::Color(theme::BG)),
-        border: iced::border::rounded(4).color(theme::BORDER),
-        ..Default::default()
-    });
+        .padding([0, 8])
+        .width(Fill)
+        .height(Length::Fixed(22.0))
+        .align_y(iced::alignment::Vertical::Center)
+        .style(|_t| container::Style {
+            background: Some(iced::Background::Color(theme::BG)),
+            border: iced::border::rounded(4).color(theme::BORDER),
+            ..Default::default()
+        });
     let zone_btn = |label: &'static str, msg: Message| {
         button(text(label.to_string()).size(12.0).color(theme::TEXT))
             .padding([3, 8])
@@ -2473,6 +2797,12 @@ fn find_bar_overlay(app: &App) -> Option<Element<'_, Message>> {
         .push(zone_btn("<", Message::FindPrev))
         .push(zone_btn(">", Message::FindNext))
         .push(zone_btn("\u{00d7}", Message::FindClose));
+    // the bar swallows its own clicks: a press on its surface (field,
+    // counter, padding) must not fall through to the editor canvas and
+    // move the caret to the clicked line
+    let bar: Element<'_, Message> = mouse_area(bar)
+        .on_press(Message::PanelSwallowed)
+        .into();
     // the bar floats as a card (clearly lighter than the editor bg), its
     // content centered in the 34px strip
     Some(
@@ -2521,6 +2851,11 @@ fn vim_search_overlay(app: &App) -> Option<Element<'_, Message>> {
                 .color(theme::DIM),
         );
     }
+    // the prompt swallows its clicks too: same pass-through hazard as
+    // the find bar (a press would land on the editor underneath)
+    let line: Element<'_, Message> = mouse_area(line)
+        .on_press(Message::PanelSwallowed)
+        .into();
     Some(
         container(line)
             .padding([5, 10])
@@ -2622,7 +2957,7 @@ fn start_screen(_app: &App) -> Element<'static, Message> {
         card(
             include_bytes!("../import-icon.svg").as_slice(),
             "Import SQL schema",
-            "Convert a .sql dump (any dialect) into DBML",
+            "Convert a .sql dump into DBML",
             Message::OpenFilePicker(PickerKind::Sql),
         ),
     ]
@@ -2680,6 +3015,36 @@ fn tool_button_style() -> iced::widget::button::Style {
         border: iced::border::rounded(6).color(theme::BORDER),
         ..Default::default()
     }
+}
+
+/// A dropdown menu entry inside the export menu: full-width quiet row,
+/// 12px label, hover lift.
+fn export_menu_item(label: &'static str, msg: Message) -> Element<'static, Message> {
+    // the content wraps in a Fill + align-LEFT container: a bare text
+    // child in a Fill-width button is CENTERED by iced's flex — the
+    // three rows read as differently indented. FIXED height: the dialect
+    // card's alignment offset is computed from the rows above it.
+    button(
+        container(text(label.to_string()).size(12).color(theme::TEXT))
+            .width(Fill)
+            .height(Fill)
+            .align_x(iced::alignment::Horizontal::Left)
+            .align_y(iced::alignment::Vertical::Center),
+    )
+    .width(Fill)
+    .height(Length::Fixed(28.0))
+    .padding([0, 10])
+    .style(|_t, s| iced::widget::button::Style {
+        background: Some(iced::Background::Color(match s {
+            iced::widget::button::Status::Hovered => theme::TOOLTIP,
+            _ => Color::TRANSPARENT,
+        })),
+        text_color: theme::TEXT,
+        border: Default::default(),
+        ..Default::default()
+    })
+    .on_press(msg)
+    .into()
 }
 
 /// Small button in the diagram pane's bottom row (Auto-arrange, Zoom to
@@ -2828,161 +3193,59 @@ impl canvas::Program<Message> for EdgeHandle {
 /// toolbar bar behind it. Expand icon while split (two arrows leaving the
 /// center along the diagonal), restore icon while maximized (two
 /// overlapping squares), with the pane-switch accent on the border.
-struct DiagramMaxButton {
-    maximized: bool,
-}
-
-/// Button size, and its inset from the diagram canvas's top-right corner.
-const MAX_BTN: f32 = 26.0;
-const MAX_BTN_INSET: f32 = 10.0;
-
-impl DiagramMaxButton {
-    /// The button in WINDOW coordinates (`position_over` is
-    /// window-relative).
-    fn rect(&self, bounds: Rectangle) -> Rectangle {
-        Rectangle::new(
-            Point::new(
-                bounds.x + bounds.width - MAX_BTN - MAX_BTN_INSET,
-                bounds.y + MAX_BTN_INSET,
-            ),
-            Size::new(MAX_BTN, MAX_BTN),
-        )
-    }
-
-    /// The same rect in canvas-local px, for drawing.
-    fn local_rect(&self, bounds: Rectangle) -> Rectangle {
-        Rectangle::new(
-            Point::new(bounds.width - MAX_BTN - MAX_BTN_INSET, MAX_BTN_INSET),
-            Size::new(MAX_BTN, MAX_BTN),
-        )
-    }
-
-    /// The icon strokes around the button's center: expand arrows, or the
-    /// restore squares, in `color`.
-    fn icon(&self, frame: &mut canvas::Frame, c: Point, color: Color) {
-        let stroke = canvas::Stroke {
-            style: color.into(),
-            width: 1.4,
-            ..Default::default()
-        };
-        if self.maximized {
-            // restore: two overlapping squares (the classic
-            // restore-down icon)
-            let path = canvas::Path::rectangle(
-                Point::new(c.x - 1.5, c.y - 5.5),
-                Size::new(7.0, 7.0),
-            );
-            frame.stroke(&path, stroke);
-            let path =
-                canvas::Path::rectangle(Point::new(c.x - 5.5, c.y - 1.5), Size::new(7.0, 7.0));
-            frame.stroke(&path, stroke);
-        } else {
-            // expand: a diagonal with outward corner arrowheads (⤢)
-            let d = 4.5;
-            let path = canvas::Path::new(|b| {
-                b.move_to(Point::new(c.x - d, c.y + d));
-                b.line_to(Point::new(c.x + d, c.y - d));
-                // NE head: back along both axes
-                b.move_to(Point::new(c.x + d - 4.0, c.y - d));
-                b.line_to(Point::new(c.x + d, c.y - d));
-                b.line_to(Point::new(c.x + d, c.y - d + 4.0));
-                // SW head
-                b.move_to(Point::new(c.x - d + 4.0, c.y + d));
-                b.line_to(Point::new(c.x - d, c.y + d));
-                b.line_to(Point::new(c.x - d, c.y + d - 4.0));
-            });
-            frame.stroke(&path, stroke);
-        }
-    }
-}
-
-impl canvas::Program<Message> for DiagramMaxButton {
-    type State = ();
-
-    fn update(
-        &self,
-        _state: &mut Self::State,
-        event: canvas::Event,
-        bounds: Rectangle,
-        cursor: iced::mouse::Cursor,
-    ) -> (canvas::event::Status, Option<Message>) {
-        // the overlay canvas covers the whole diagram, but only the button
-        // itself is interactive — everything else falls through to the
-        // diagram (pan, hover, table drags)
-        let Some(p) = cursor.position_over(bounds) else {
-            return (canvas::event::Status::Ignored, None);
-        };
-        if let canvas::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) =
-            event
-        {
-            if self.rect(bounds).contains(p) {
-                return (
-                    canvas::event::Status::Captured,
-                    Some(Message::ToggleDiagramMaximize),
-                );
-            }
-        }
-        (canvas::event::Status::Ignored, None)
-    }
-
-    fn draw(
-        &self,
-        _state: &Self::State,
-        renderer: &iced::Renderer,
-        _theme: &iced::Theme,
-        bounds: Rectangle,
-        cursor: iced::mouse::Cursor,
-    ) -> Vec<canvas::Geometry> {
-        let mut frame = canvas::Frame::new(renderer, bounds.size());
-        let rect = self.local_rect(bounds);
-        let hovered = cursor
-            .position()
-            .is_some_and(|p| self.rect(bounds).contains(p));
-        let path =
-            canvas::Path::rounded_rectangle(rect.position(), rect.size(), iced::border::Radius::from(6.0));
-        // translucent at rest, opaque on hover — the pane's other quiet
-        // chrome (the tooltip pills) behaves the same way
-        frame.fill(
-            &path,
-            if hovered {
-                theme::TOOLTIP
+/// The diagram pane's maximize button (F2 in button form): the editor
+/// toolbar's expand/contract glyph and quiet chrome — no accent ring —
+/// flush with the pane's top-right corner.
+fn diagram_max_button(maximized: bool) -> Element<'static, Message> {
+    let ink = if maximized { Color::WHITE } else { theme::TEXT };
+    let (r, g, b) = (
+        (ink.r * 255.0) as u32,
+        (ink.g * 255.0) as u32,
+        (ink.b * 255.0) as u32,
+    );
+    let svg = iced::widget::svg(iced::widget::svg::Handle::from_memory(
+        format!(
+            "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512' width='14' height='14'><path d='{}' fill='#{r:02x}{g:02x}{b:02x}'/></svg>",
+            if maximized {
+                ICON_COMPRESS.0
             } else {
-                Color { a: 0.72, ..theme::PANEL }
+                ICON_EXPAND.0
             },
-        );
-        frame.stroke(
-            &path,
-            canvas::Stroke {
-                // the maximized state carries the accent, like the fmt/vim
-                // switches' on-state
-                style: (if self.maximized { theme::PK } else { theme::BORDER }).into(),
-                width: 1.0,
-                ..Default::default()
-            },
-        );
-        let c = rect.center();
-        self.icon(
-            &mut frame,
-            c,
-            if hovered { theme::TEXT } else { theme::DIM },
-        );
-        vec![frame.into_geometry()]
-    }
-
-    fn mouse_interaction(
-        &self,
-        _state: &Self::State,
-        bounds: Rectangle,
-        cursor: iced::mouse::Cursor,
-    ) -> iced::mouse::Interaction {
-        // bounds-gated like the other canvas widgets: the pointer over the
-        // diagram reads as a hand only on the button itself
-        match cursor.position_over(bounds) {
-            Some(p) if self.rect(bounds).contains(p) => iced::mouse::Interaction::Pointer,
-            _ => iced::mouse::Interaction::default(),
-        }
-    }
+        )
+        .into_bytes(),
+    ))
+    .width(Length::Fixed(14.0))
+    .height(Length::Fixed(14.0));
+    mouse_area(
+        button(svg)
+            .padding([5, 8])
+            .style(move |_t, s| {
+                let mut st = tool_button_style();
+                if maximized {
+                    st.background = Some(iced::Background::Color(match s {
+                        iced::widget::button::Status::Hovered => {
+                            Color { a: 0.85, ..theme::FK }
+                        }
+                        _ => theme::FK,
+                    }));
+                    st.border = iced::border::rounded(6).color(theme::FK);
+                } else if s == iced::widget::button::Status::Hovered {
+                    st.background = Some(iced::Background::Color(theme::TOOLTIP));
+                }
+                st
+            })
+            .on_press(Message::ToggleDiagramMaximize),
+    )
+    .on_enter(Message::ToolbarTip(Some(if maximized {
+        "Restore diagram"
+    } else {
+        "Maximize diagram"
+    })))
+    .on_exit(Message::ToolbarTip(None))
+    .into()
 }
+
+
 
 /// Invisible listener canvas covering the diagram pane: the frozen
 /// `Diagram` widget only forwards LEFT presses, so this stacked twin turns
@@ -3029,74 +3292,6 @@ impl canvas::Program<Message> for DiagramRightClick {
     }
 }
 
-fn help_overlay() -> Element<'static, Message> {
-    let line = |key: &str, desc: &str| -> Element<'static, Message> {
-        row![
-            text(key.to_string())
-                .size(13.0)
-                .color(theme::FK)
-                .width(Length::Fixed(210.0)),
-            text(desc.to_string()).size(13.0).color(theme::TEXT),
-        ]
-        .spacing(8)
-        .into()
-    };
-    let help = column![
-        text("dbml-ui — keys").size(16.0).color(theme::TEXT),
-        line("i a o O / Esc", "enter / leave insert mode"),
-        line(
-            "hjkl w b e 0 $ ^ gg G { }",
-            "motions (counts work: 3w, 2gg, ...)"
-        ),
-        line("x dd dw cw cc d$ c0 yy p P diw ciw", "operators"),
-        line("r{c}", "replace char (with [count])"),
-        line(
-            "v + motions, y / d / u / U / o",
-            "visual: yank/delete/lower/upper/swap"
-        ),
-        line("u Ctrl-r / pattern n N", "undo redo / search next prev"),
-        line(
-            "Ctrl-d Ctrl-u PgUp PgDn",
-            "scroll half/full page (animated)"
-        ),
-        line("arrows Home End Delete", "work in every mode"),
-        line("Ctrl+T / Ctrl+W", "new / close tab (right-click a tab: menu)"),
-        line(
-            "Ctrl-Space / type 2+ letters",
-            "completion popup (insert mode)"
-        ),
-        line("Up Down Enter Tab Esc", "navigate / accept / dismiss popup"),
-        line(
-            "wheel / drag / drag a table",
-            "zoom at cursor / pan / move table (live)"
-        ),
-        line("click a table", "jump the editor to its definition"),
-        line(
-            "F1 / F2",
-            "maximize the editor / diagram; press again to restore",
-        ),
-        line(
-            "Ctrl-Left / Ctrl-Right",
-            "shrink / grow the editor pane a step",
-        ),
-        line("Tab / ?", "switch pane focus / close this help"),
-    ]
-    .spacing(6)
-    .padding(20);
-    container(help)
-        .style(|_t| container::Style {
-            background: Some(iced::Background::Color(iced::Color::from_rgba(
-                0.08, 0.09, 0.11, 0.96,
-            ))),
-            border: iced::border::rounded(10).color(theme::BORDER),
-            shadow: modal_shadow(),
-            ..Default::default()
-        })
-        .width(Length::Fixed(580.0))
-        .height(Length::Shrink)
-        .into()
-}
-
 fn panel_style() -> container::Style {
     seam_panel_style(Seam::None)
 }
@@ -3138,7 +3333,7 @@ fn seam_panel_style(_seam: Seam) -> container::Style {
 /// spec): two floating pills in the editor pane's bottom-right corner —
 /// a red "N error(s)" pill, and (only while no errors stand) a blue
 /// warning-count pill, both hidden when zero. Clicking a pill pops the
-/// 450px diagnostics panel above it; rows carry a severity dot, the
+/// 520px diagnostics panel above it; rows carry a severity dot, the
 /// message, and a `line:col` position; clicking a row moves the editor
 /// caret to that line (panel stays open); Esc / outside click closes.
 /// FA chevron-right, lifted from their bundle (the group header's
@@ -3146,6 +3341,8 @@ fn seam_panel_style(_seam: Seam) -> container::Style {
 /// down path is the same glyph rotated, inlined here).
 const CHEVRON_RIGHT: &str = "M285.476 272.971L91.132 467.314c-9.373 9.373-24.569 9.373-33.941 0l-22.667-22.667c-9.357-9.357-9.375-24.522-.04-33.901L188.505 256 34.484 101.255c-9.335-9.379-9.317-24.544.04-33.901l22.667-22.667c9.373-9.373 24.569-9.373 33.941 0L285.475 239.03c9.373 9.372 9.373 24.568.001 33.941z";
 const CHEVRON_DOWN: &str = "M31.3 192h257.3c17.8 0 26.7 21.5 14.1 34.1L174.1 354.8c-7.8 7.8-20.5 7.8-28.3 0L17.2 226.1C4.6 213.5 13.5 192 31.3 192z";
+
+
 /// FA times-circle (the error pill's icon), lifted from their bundle.
 const TIMES_CIRCLE: &str = "M256 8C119 8 8 119 8 256s111 248 248 248 248-111 248-248S393 8 256 8zm121.6 313.1c4.7 4.7 4.7 12.3 0 17L338 377.6c-4.7 4.7-12.3 4.7-17 0L256 312l-65.1 65.6c-4.7 4.7-12.3 4.7-17 0L134.4 338c-4.7-4.7-4.7-12.3 0-17l65.6-65-65.6-65.1c-4.7-4.7-4.7-12.3 0-17l39.6-39.6c4.7-4.7 12.3-4.7 17 0l65 65.7 65.1-65.6c4.7-4.7 12.3-4.7 17 0l39.6 39.6c4.7 4.7 4.7 12.3 0 17L312 256l65.6 65.1z";
 /// FA exclamation-triangle (their `triangle-exclamation` warning severity
@@ -3176,26 +3373,43 @@ fn triangle_svg(fill: iced::Color, size: f32) -> Element<'static, Message> {
 /// A 12px chevron glyph in the group-header gray (their
 /// `w-3 h-3 text-dbx-gray-500`).
 fn chevron_svg(down: bool) -> Element<'static, Message> {
+    chevron_svg_colored(down, Color::from_rgb8(0x76, 0x7a, 0x97), 10.0)
+}
+
+
+/// The chevron in an arbitrary ink (the fix selector's sits on a mid-gray
+/// button, where the default gray-500 disappears).
+fn chevron_svg_colored(down: bool, ink: Color, size: f32) -> Element<'static, Message> {
+    let hex = format!(
+        "#{:02x}{:02x}{:02x}",
+        (ink.r * 255.0) as u8,
+        (ink.g * 255.0) as u8,
+        (ink.b * 255.0) as u8
+    );
     iced::widget::svg(iced::widget::svg::Handle::from_memory(
         format!(
-            "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 512' width='10' height='10'><path d='{}' fill='#767a97'/></svg>",
+            "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 512' width='{size}' height='{size}'><path d='{}' fill='{hex}'/></svg>",
             if down { CHEVRON_DOWN } else { CHEVRON_RIGHT },
         )
         .into_bytes(),
     ))
-    .width(Length::Fixed(10.0))
-    .height(Length::Fixed(10.0))
+    .width(Length::Fixed(size))
+    .height(Length::Fixed(size))
     .into()
 }
 
 /// The problems panel's inks (live-sampled computed styles from their
 /// dark theme): the panel surface family, the gray text scale, the
 /// severity dots, and the NOW/FIXED diff accents.
-const DIAG_BG: Color = Color { r: 0.110, g: 0.129, b: 0.157, a: 1.0 }; // #1C2128
+const DIAG_BG: Color = Color { r: 0.133, g: 0.133, b: 0.133, a: 1.0 }; // #222222
+/// The NOW/FIXED diff cells: an inset darker than the #222 panel (the
+/// editor canvas shares the old panel tone, so the panel surface moved
+/// to the record-modal family).
+const DIAG_CELL_BG: Color = Color { r: 0.110, g: 0.129, b: 0.157, a: 1.0 }; // #1C2128
 const DIAG_DIVIDER: Color = Color { r: 0.184, g: 0.184, b: 0.184, a: 1.0 }; // #2F2F2F
 const DIAG_BORDER: Color = Color { r: 0.275, g: 0.298, b: 0.345, a: 1.0 }; // #464C58
 const DIAG_FOOTER: Color = Color { r: 0.153, g: 0.165, b: 0.180, a: 1.0 }; // #272A2E
-const DIAG_ROW_ACTIVE: Color = Color { r: 0.125, g: 0.149, b: 0.180, a: 1.0 }; // #20262E
+const DIAG_ROW_ACTIVE: Color = Color { r: 0.157, g: 0.157, b: 0.157, a: 1.0 }; // #282828
 const DIAG_GRAY_50: Color = Color { r: 0.937, g: 0.941, b: 0.953, a: 1.0 }; // #EFF0F3
 const DIAG_GRAY_100: Color = Color { r: 0.835, g: 0.855, b: 0.882, a: 1.0 }; // #D5DAE1
 const DIAG_GRAY_200: Color = Color { r: 0.733, g: 0.757, b: 0.800, a: 1.0 }; // #BBC1CC
@@ -3203,6 +3417,7 @@ const DIAG_GRAY_300: Color = Color { r: 0.627, g: 0.659, b: 0.718, a: 1.0 }; // 
 const DIAG_GRAY_500: Color = Color { r: 0.463, g: 0.510, b: 0.592, a: 1.0 }; // #768297
 const DIAG_GRAY_600: Color = Color { r: 0.404, g: 0.451, b: 0.522, a: 1.0 }; // #677385
 const DIAG_GRAY_700: Color = Color { r: 0.337, g: 0.373, b: 0.431, a: 1.0 }; // #565F6E
+const DIAG_GRAY_800: Color = Color { r: 0.275, g: 0.298, b: 0.345, a: 1.0 }; // #464C58
 const DIAG_GRAY_900: Color = Color { r: 0.196, g: 0.216, b: 0.251, a: 1.0 }; // #323740
 const DIAG_RED_DOT: Color = Color { r: 0.980, g: 0.510, b: 0.510, a: 1.0 }; // #FA8282
 const DIAG_BLUE_DOT: Color = Color { r: 0.349, g: 0.733, b: 1.0, a: 1.0 }; // #59BBFF
@@ -3374,9 +3589,11 @@ fn diagnostics_overlay(app: &App) -> Element<'_, Message> {
             .into();
     }
 
-    // the panel: 450 wide, a FIXED 60vh of the window clamped to
-    // [300, 700] — the list scrolls inside, the frame never grows
-    let panel_h = (app.window_size.1 * 0.6).clamp(300.0, 700.0);
+    // the panel: 520 wide, a FIXED height — dbdiagram's problems
+    // container does not shrink with the viewport (the list scrolls
+    // inside, the frame never grows and never resizes under the mouse)
+    const PANEL_H: f32 = 560.0;
+    let panel_h = PANEL_H;
     let title = if errors > 0 { "Errors" } else { "Warnings" };
 
     // group the entries by category ("Other" when uncategorized), headers
@@ -3449,13 +3666,8 @@ fn diagnostics_overlay(app: &App) -> Element<'_, Message> {
                     .padding(iced::Padding { top: 8.0, ..Default::default() });
                 // the message: backticked tokens render as the inline code
                 // chips, flow-wrapped to the row's width budget
-                let panel_w = 450.0f32.min(app.seam_x().max(220.0));
+                let panel_w = 520.0f32.min(app.seam_x().max(220.0));
                 let msg_budget = panel_w - 24.0 - 6.0 - 20.0 - 46.0;
-                // the diff cell's char budget: half the panel minus the
-                // bar, padding, borders and the mark's own padding, on the
-                // 13px mono grid
-                let cell_chars = (((panel_w - 8.0) / 2.0 - 3.0 - 20.0 - 4.0 - 10.0) / 7.8)
-                    .max(4.0) as usize;
                 let msg_rows: Vec<Element<'_, Message>> = message_rows(&d.message, msg_budget)
                     .iter()
                     .map(|segs| message_row(segs))
@@ -3524,38 +3736,47 @@ fn diagnostics_overlay(app: &App) -> Element<'_, Message> {
                             .min(d.quick_fixes.len() - 1);
                         let mut fix_col = column![].spacing(6);
                         let mut fix_row = row![].spacing(8).align_y(iced::alignment::Vertical::Center);
-                        if d.quick_fixes.len() > 1 {
+                        if !d.quick_fixes.is_empty() {
                             fix_row = fix_row.push(
                                 button(
-                                    row![
-                                        text(d.quick_fixes[selected].title.clone())
-                                            .size(12)
-                                            .color(DIAG_GRAY_200),
-                                        chevron_svg(true),
-                                    ]
-                                    .spacing(6)
+                                    container(
+                                        row![
+                                            text(d.quick_fixes[selected].short_title.clone())
+                                                .size(12)
+                                                .color(DIAG_GRAY_200),
+                                            chevron_svg_colored(true, DIAG_GRAY_100, 10.0),
+                                        ]
+                                        .spacing(6)
+                                        .align_y(iced::alignment::Vertical::Center),
+                                    )
+                                    .height(Fill)
                                     .align_y(iced::alignment::Vertical::Center),
                                 )
                                 .padding([0, 10])
                                 .height(Length::Fixed(32.0))
                                 .style(move |_t, s| iced::widget::button::Style {
                                     background: Some(iced::Background::Color(match s {
+                                        // their hover:brightness-110: one step up
                                         iced::widget::button::Status::Hovered => {
-                                            Color { a: 1.0, ..DIAG_GRAY_600 }
+                                            Color { a: 1.0, ..DIAG_GRAY_700 }
                                         }
-                                        _ => DIAG_GRAY_600,
+                                        _ => DIAG_GRAY_800,
                                     })),
                                     text_color: DIAG_GRAY_200,
-                                    border: iced::border::rounded(4).color(DIAG_GRAY_500),
+                                    border: iced::border::rounded(4).color(DIAG_GRAY_600),
                                     ..Default::default()
                                 })
                                 .on_press(Message::DiagnosticToggleFixMenu),
                             );
                         }
                         fix_row = fix_row.push(
-                            button(text("Apply fix".to_string()).size(12).color(Color::WHITE))
-                                .padding([0, 12])
-                                .height(Length::Fixed(32.0))
+                            button(
+                                container(text("Apply fix".to_string()).size(12).color(Color::WHITE))
+                                    .height(Fill)
+                                    .align_y(iced::alignment::Vertical::Center),
+                            )
+                            .padding([0, 12])
+                            .height(Length::Fixed(32.0))
                                 .style(move |_t, s| iced::widget::button::Style {
                                     background: Some(iced::Background::Color(match s {
                                         iced::widget::button::Status::Hovered => {
@@ -3569,44 +3790,10 @@ fn diagnostics_overlay(app: &App) -> Element<'_, Message> {
                                 })
                                 .on_press(Message::ApplyDiagnosticFix(*i, selected)),
                         );
-                        fix_col = fix_col.push(fix_row);
-                        if app.diagnostics_fix_menu && d.quick_fixes.len() > 1 {
-                            let mut menu = column![].spacing(0);
-                            for (f, fix) in d.quick_fixes.iter().enumerate() {
-                                menu = menu.push(
-                                    button(
-                                        text(fix.title.clone())
-                                            .size(12)
-                                            .color(DIAG_GRAY_200),
-                                    )
-                                    .width(Fill)
-                                    .padding([6, 10])
-                                    .style(move |_t, s| iced::widget::button::Style {
-                                        background: Some(iced::Background::Color(match s {
-                                            iced::widget::button::Status::Hovered => DIAG_GRAY_600,
-                                            _ => DIAG_GRAY_900,
-                                        })),
-                                        text_color: DIAG_GRAY_200,
-                                        border: Default::default(),
-                                        ..Default::default()
-                                    })
-                                    .on_press(Message::DiagnosticSelectFix(f)),
-                                );
-                            }
-                            fix_col = fix_col.push(
-                                container(menu)
-                                    .width(Fill)
-                                    .style(|_t| container::Style {
-                                        background: Some(iced::Background::Color(DIAG_GRAY_900)),
-                                        border: iced::border::rounded(6).color(DIAG_BORDER),
-                                        ..Default::default()
-                                    }),
-                            );
-                        }
-                        body = body.push(fix_col);
                         // the NOW/FIXED pair for the SELECTED fix: the
                         // line holding the fix's span, as-is vs rewritten,
                         // the changed token marked in each
+                        let mut diff_part: Option<Element<'_, Message>> = None;
                         if let Some(fix) = d.quick_fixes.get(selected) {
                             let fix_line = src[..fix.span.start].matches('\n').count();
                             if let Some(now) = src.lines().nth(fix_line) {
@@ -3622,10 +3809,22 @@ fn diagnostics_overlay(app: &App) -> Element<'_, Message> {
                                     .saturating_sub(line_start)
                                     .min(now.len())
                                     .max(s);
-                                let before = now[..s].to_string();
+                                let mut before = now[..s].to_string();
                                 let marked = now[s..e].to_string();
-                                let after = now[e.min(now.len())..].to_string();
-                                body = body.push(
+                                let mut after = now[e.min(now.len())..].to_string();
+                                trim_marked_line(&mut before, &marked, &mut after);
+                                // the cell's text width in px: half the
+                                // panel (minus the grid gap) minus bezel,
+                                // frame and the cell's own padding — the
+                                // 13px mono grid is 8.1px/char
+                                let cell_w = ((panel_w - 8.0) / 2.0 - 4.0 - 20.0).max(31.2);
+                                if std::env::var("DBML_UI_DIFF_DEBUG").is_ok() {
+                                    eprintln!(
+                                        "[diff] marked={marked:?} cell_w={cell_w} rows={:?}",
+                                        code_marked_rows(&before, &marked, &after, cell_w)
+                                    );
+                                }
+                                diff_part = Some(
                                     row![
                                         diff_cell(
                                             "NOW",
@@ -3636,25 +3835,117 @@ fn diagnostics_overlay(app: &App) -> Element<'_, Message> {
                                             before.clone(),
                                             marked,
                                             after.clone(),
-                                            cell_chars,
+                                            cell_w,
                                         ),
-                                        diff_cell(
-                                            "FIXED",
-                                            DIAG_GREEN_LABEL,
-                                            DIAG_GREEN_EDGE,
-                                            Color { a: 0.32, ..DIAG_GREEN_MARK_BG },
-                                            DIAG_GREEN_MARK_TEXT,
-                                            before,
-                                            fix.new_text.clone(),
-                                            after,
-                                            cell_chars,
-                                        ),
+                                        {
+                                            let mut fb = before.clone();
+                                            let fm = fix.new_text.clone();
+                                            let mut fa = after.clone();
+                                            trim_marked_line(&mut fb, &fm, &mut fa);
+                                            diff_cell(
+                                                "FIXED",
+                                                DIAG_GREEN_LABEL,
+                                                DIAG_GREEN_EDGE,
+                                                Color { a: 0.32, ..DIAG_GREEN_MARK_BG },
+                                                DIAG_GREEN_MARK_TEXT,
+                                                fb,
+                                                fm,
+                                                fa,
+                                                cell_w,
+                                            )
+                                        },
                                     ]
-                                    .spacing(8),
+                                    .spacing(8)
+                                    .into(),
                                 );
                             }
                         }
+                        // the selector and the diff share a stack: the
+                        // open menu FLOATS over the diff (no push-down),
+                        // fading in over ~120ms (their dropdown)
+                        let mut fix_and_diff = column![fix_row].spacing(12);
+                        if let Some(diff) = diff_part {
+                            fix_and_diff = fix_and_diff.push(diff);
+                        }
+                        let mut fix_stack_layers: Vec<Element<'_, Message>> =
+                            vec![fix_and_diff.into()];
+                        if app.diagnostics_fix_menu && !d.quick_fixes.is_empty() {
+                            let fade = app
+                                .diagnostics_fix_menu_since
+                                .map(|t| (t.elapsed().as_millis() as f32 / 120.0).min(1.0))
+                                .unwrap_or(1.0);
+                            let mut menu = column![].spacing(0);
+                            for (f, fix) in d.quick_fixes.iter().enumerate() {
+                                let selected = f == selected;
+                                menu = menu.push(
+                                    button(
+                                        container(
+                                            text(fix.short_title.clone())
+                                                .size(12)
+                                                .color(if selected {
+                                                    Color::WHITE
+                                                } else {
+                                                    DIAG_GRAY_200
+                                                }),
+                                        )
+                                        .align_y(iced::alignment::Vertical::Center),
+                                    )
+                                    .width(Fill)
+                                    .padding([6, 10])
+                                    .style(move |_t, s| iced::widget::button::Style {
+                                        background: Some(iced::Background::Color(match s {
+                                            // the hover lifts harder than the
+                                            // selected mark: the selection is a
+                                            // quiet state, the hover a response
+                                            iced::widget::button::Status::Hovered => DIAG_GRAY_600,
+                                            _ if selected => DIAG_GRAY_800,
+                                            _ => DIAG_GRAY_900,
+                                        })),
+                                        text_color: DIAG_GRAY_200,
+                                        border: iced::border::rounded(8),
+                                        ..Default::default()
+                                    })
+                                    .on_press(Message::DiagnosticSelectFix(f)),
+                                );
+                            }
+                            // the menu floats from the selector's bottom
+                            // edge down, its alpha riding the fade
+                            fix_stack_layers.push(
+                                container(
+                                    container(menu)
+                                        .width(Length::Fixed(190.0))
+                                        .style(move |_t| container::Style {
+                                            background: Some(iced::Background::Color(Color {
+                                                a: fade,
+                                                ..DIAG_GRAY_900
+                                            })),
+                                            border: iced::border::rounded(12).color(DIAG_BORDER),
+                                            shadow: iced::Shadow {
+                                                color: Color::from_rgba(0.0, 0.0, 0.0, 0.35 * fade),
+                                                offset: iced::Vector::new(0.0, 4.0),
+                                                blur_radius: 10.0,
+                                            },
+                                            ..Default::default()
+                                        }),
+                                )
+                                .width(Fill)
+                                .height(Fill)
+                                .align_x(iced::alignment::Horizontal::Left)
+                                .align_y(iced::alignment::Vertical::Top)
+                                .padding(iced::Padding { top: 32.0, ..Default::default() })
+                                .into(),
+                            );
+                        }
+                        fix_col = fix_col.push(iced::widget::Stack::with_children(fix_stack_layers));
+                        body = body.push(fix_col);
                     }
+                    // the expanded card is a click backdrop: a press
+                    // anywhere in it outside the floating fix menu closes
+                    // the menu (dbdiagram's autoHide) — the menu's own
+                    // buttons sit on the stack layer above and win
+                    let body: Element<'_, Message> = mouse_area(body)
+                        .on_press(Message::DiagnosticDismissFixMenu)
+                        .into();
                     rows.push(
                         container(body)
                             .width(Fill)
@@ -3724,20 +4015,33 @@ fn diagnostics_overlay(app: &App) -> Element<'_, Message> {
             .into()
     };
 
-    let panel = container(body)
-        .width(Length::Fixed(450.0f32.min(app.seam_x().max(220.0))))
-        .height(Length::Fixed(panel_h))
-        .style(|_t| container::Style {
-            background: Some(iced::Background::Color(DIAG_BG)),
-            border: iced::border::rounded(8).color(DIAG_BORDER),
-            // their panel-container box-shadow
-            shadow: iced::Shadow {
-                color: Color::from_rgba(0.0, 0.0, 0.0, 0.4),
-                offset: iced::Vector::new(0.0, 6.0),
-                blur_radius: 30.0,
-            },
-            ..Default::default()
-        });
+    // the panel's capture layer: a press anywhere inside the panel that
+    // misses a button lands HERE instead of the backdrop below — the list
+    // never closes on its own text (their floating panel behaves the same)
+    let panel = container(stack![
+        button(text(""))
+            .width(Fill)
+            .height(Fill)
+            .style(|_t, _s| iced::widget::button::Style {
+                background: None,
+                ..Default::default()
+            })
+            .on_press(Message::PanelSwallowed),
+        body,
+    ])
+    .width(Length::Fixed(520.0f32.min(app.seam_x().max(220.0))))
+    .height(Length::Fixed(panel_h))
+    .style(|_t| container::Style {
+        background: Some(iced::Background::Color(DIAG_BG)),
+        border: iced::border::rounded(8).color(DIAG_BORDER),
+        // their panel-container box-shadow
+        shadow: iced::Shadow {
+            color: Color::from_rgba(0.0, 0.0, 0.0, 0.4),
+            offset: iced::Vector::new(0.0, 6.0),
+            blur_radius: 30.0,
+        },
+        ..Default::default()
+    });
 
     let content = column![panel, pills]
         .spacing(4)
@@ -3776,21 +4080,6 @@ fn line_col_of(src: &str, line: usize) -> usize {
         .take(line)
         .map(|l| l.len() + 1)
         .sum()
-}
-
-/// The diagnostic message split on its backticks: (text, is_code)
-/// segments — the code tokens render as inline chips.
-fn message_segments(msg: &str) -> Vec<(String, bool)> {
-    let mut out: Vec<(String, bool)> = Vec::new();
-    for (i, seg) in msg.split('`').enumerate() {
-        if !seg.is_empty() {
-            out.push((seg.to_string(), i % 2 == 1));
-        }
-    }
-    if out.is_empty() {
-        out.push((msg.to_string(), false));
-    }
-    out
 }
 
 /// The message flow-wrapped into rows of segments: a Row can't wrap its
@@ -3872,38 +4161,399 @@ fn code_chip(seg: &str) -> Element<'static, Message> {
         .into()
 }
 
-/// The line's characters packed into rows of `chars_per_row`, cut on the
-/// mono grid, carrying their marked flag — the mark chip may split across
-/// rows, like their pre's wrap.
+/// The composed diff line wrapped for one cell — CSS
+/// `white-space: pre-wrap; overflow-wrap: break-word` semantics, like
+/// their `pre`: lines break at SPACES and the wrap-space is consumed BY
+/// the break (rows never start or end in it), while a word is broken
+/// mid-word only when it ALONE is wider than the line. Segments carry
+/// their marked flag (the diff tint — a mark may span a break), and the
+/// mark's pill padding (3px each side, once per contiguous marked run
+/// per row) counts against the line's pixel width.
 fn code_marked_rows(
     before: &str,
     marked: &str,
     after: &str,
-    chars_per_row: usize,
+    width_px: f32,
 ) -> Vec<Vec<(String, bool)>> {
-    let mut rows: Vec<Vec<(String, bool)>> = vec![Vec::new()];
-    let mut cur_len = 0usize;
-    let mut push = |rows: &mut Vec<Vec<(String, bool)>>, cur_len: &mut usize, text: &str, marked: bool| {
-        for c in text.chars() {
-            if *cur_len >= chars_per_row {
-                rows.push(Vec::new());
-                *cur_len = 0;
+    // the 13px mono grid's REAL advance (DejaVu-style mono measures
+    // 8.09px here — a 7.8 estimate under-counted, the wrapped rows
+    // overflowed the cell and the flex squeezed the mark pill to a zero
+    // width: the deleted `>` vanished while its row still rendered)
+    const CHAR_PX: f32 = 8.1;
+    const PILL_PX: f32 = 6.0; // the mark's 3px + 3px
+
+    // pixel width of `segs` appended to a line whose last segment is
+    // marked (`pill_open`): a marked segment opens a pill unless it
+    // directly follows marked content — a marked SPACE keeps the pill
+    // open, so `not` + its space + `null` render as ONE pill
+    fn segs_px(segs: &[(String, bool)], pill_open: bool) -> f32 {
+        let mut px = 0.0;
+        let mut open = pill_open;
+        for (t, m) in segs {
+            px += t.chars().count() as f32 * CHAR_PX;
+            if *m && !open {
+                px += PILL_PX;
             }
-            match rows.last_mut().unwrap().last_mut() {
-                Some((t, m)) if *m == marked => t.push(c),
-                _ => rows.last_mut().unwrap().push((c.to_string(), marked)),
-            }
-            *cur_len += 1;
+            open = *m;
         }
-    };
-    push(&mut rows, &mut cur_len, before, false);
-    push(&mut rows, &mut cur_len, marked, true);
-    push(&mut rows, &mut cur_len, after, false);
+        px
+    }
+
+    // append `segs` to `row`, merging into its trailing segment when the
+    // flag matches — one segment is one text run / one pill
+    fn push_segs(row: &mut Vec<(String, bool)>, segs: &[(String, bool)]) {
+        for (t, m) in segs {
+            match row.last_mut() {
+                Some((tt, tm)) if *tm == *m => tt.push_str(t),
+                _ => row.push((t.clone(), *m)),
+            }
+        }
+    }
+
+    // close the current row (a no-op on an empty one)
+    fn close(rows: &mut Vec<Vec<(String, bool)>>, cur: &mut Vec<(String, bool)>, cur_px: &mut f32) {
+        if !cur.is_empty() {
+            rows.push(std::mem::take(cur));
+            *cur_px = 0.0;
+        }
+    }
+
+    // one pixel of fit slack: CHAR_PX is the advance rounded UP to a
+    // tenth (real ~8.09 — ~0.3px over a 28-char line) and the pill's
+    // paddings land sub-pixel, so a line their browser fits (28 chars +
+    // one pill at 232px) must not wrap a word early
+    const FIT_TOL: f32 = 1.0;
+
+    // the char stream with its flag, cut into alternating ATOMS: maximal
+    // space runs and maximal words. Both carry flags — the mark can hold
+    // spaces (`not null`) — and a word can mix flags (`[null,` is plain
+    // `[` + marked `null` + plain `,`), each same-flag stretch its own
+    // segment
+    let chars = before
+        .chars()
+        .map(|c| (c, false))
+        .chain(marked.chars().map(|c| (c, true)))
+        .chain(after.chars().map(|c| (c, false)));
+    let mut atoms: Vec<(bool, Vec<(String, bool)>)> = Vec::new(); // (is_space, segs)
+    for (c, m) in chars {
+        let sp = c.is_whitespace();
+        match atoms.last_mut() {
+            // same atom class (space / word): extend its last segment on
+            // a flag match, else open a new segment inside it — a word
+            // is NEVER cut at its flag changes (only at spaces)
+            Some((s, segs)) if *s == sp => match segs.last_mut() {
+                Some((tt, tm)) if *tm == m => tt.push(c),
+                _ => segs.push((c.to_string(), m)),
+            },
+            _ => atoms.push((sp, vec![(c.to_string(), m)])),
+        }
+    }
+
+    let mut rows: Vec<Vec<(String, bool)>> = Vec::new();
+    let mut cur: Vec<(String, bool)> = Vec::new();
+    let mut cur_px = 0.0;
+    // spaces met since the last word: committed only once the next word
+    // provably fits behind them, otherwise dropped at the wrap — CSS
+    // consumes the whitespace at a soft break (a marked space in here
+    // dies with it: the break itself renders that whitespace)
+    let mut pending: Vec<(String, bool)> = Vec::new();
+    for (is_space, segs) in &atoms {
+        if *is_space {
+            // spaces are never hard-broken; a run wider than the line
+            // dies whole at the next wrap (only pathological input)
+            push_segs(&mut pending, segs);
+            continue;
+        }
+        let open = matches!(cur.last(), Some((_, true)));
+        let open_after_pending = pending.last().map(|(_, m)| *m).unwrap_or(open);
+        if cur_px + segs_px(&pending, open) + segs_px(segs, open_after_pending)
+            <= width_px + FIT_TOL
+        {
+            // the word fits behind its spaces: commit both
+            push_segs(&mut cur, &pending);
+            push_segs(&mut cur, segs);
+            pending.clear();
+            cur_px = segs_px(&cur, false);
+        } else {
+            // wrap BEFORE the word
+            pending.clear();
+            close(&mut rows, &mut cur, &mut cur_px);
+            let fresh = segs_px(segs, false);
+            if fresh <= width_px + FIT_TOL {
+                push_segs(&mut cur, segs);
+                cur_px = fresh;
+            } else {
+                // break-words: the word ALONE is wider than the line —
+                // hard-break it at the width. Pill metering stays
+                // conservative: each contiguous marked fragment ON A ROW
+                // pays PILL_PX once, so a mark split across rows pays
+                // twice (renders a touch wider than CSS would, never
+                // narrower — this can only wrap earlier, not overflow)
+                for (t, m) in segs {
+                    let mut remaining = t.as_str();
+                    while !remaining.is_empty() {
+                        let open = matches!(cur.last(), Some((_, true)));
+                        let pill = if *m && !open { PILL_PX } else { 0.0 };
+                        let take = (((width_px - cur_px - pill) / CHAR_PX).floor() as usize)
+                            .clamp(1, remaining.chars().count());
+                        let cut = remaining
+                            .char_indices()
+                            .nth(take)
+                            .map(|(i, _)| i)
+                            .unwrap_or(remaining.len());
+                        let (chunk, rest) = remaining.split_at(cut);
+                        match cur.last_mut() {
+                            Some((tt, tm)) if *tm == *m => tt.push_str(chunk),
+                            _ => cur.push((chunk.to_string(), *m)),
+                        }
+                        cur_px += chunk.chars().count() as f32 * CHAR_PX + pill;
+                        remaining = rest;
+                        if !remaining.is_empty() {
+                            close(&mut rows, &mut cur, &mut cur_px);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // trailing spaces survive only if they still fit (pre-wrap preserves
+    // them; the caller trims the line's real ends before this anyway)
+    let open = matches!(cur.last(), Some((_, true)));
+    if cur_px + segs_px(&pending, open) <= width_px + FIT_TOL {
+        push_segs(&mut cur, &pending);
+    }
+    close(&mut rows, &mut cur, &mut cur_px);
+    if rows.is_empty() {
+        rows.push(Vec::new()); // empty input still lays out one (empty) row
+    }
     rows
 }
 
-/// One NOW/FIXED cell: the 3px accent bar, then the label over the
-/// wrapped line with the changed token marked (the diff tint).
+#[cfg(test)]
+mod diff_tests {
+    /// The deleted operator must appear marked in the NOW cell: the
+    /// regression — the `Change to >?` fix rendered NOW with the `>`
+    /// simply gone.
+    #[test]
+    fn the_operator_fix_marks_the_deleted_char() {
+        // the real fixture: the synthetic minimal source passed while the
+        // showcase file dropped the `>` in the NOW cell
+        for src in [
+            "Table users {\n  id integer [pk]\n  referrer_id integer [null]\n}\nRef: users.referrer_id > users.id\n"
+                .to_string(),
+            std::fs::read_to_string("showcase.dbml").unwrap_or_default(),
+        ] {
+            if src.is_empty() {
+                continue;
+            }
+            let app = crate::app::App::with_source(src.clone());
+            let diags = app.all_diagnostics();
+            let fixes: Vec<_> = diags
+                .iter()
+                .flat_map(|d| d.quick_fixes.iter())
+                .filter(|f| f.short_title.starts_with("Change to"))
+                .collect();
+            assert!(!fixes.is_empty(), "the operator fix exists");
+            for fix in &fixes {
+                let fix_line = src[..fix.span.start].matches('\n').count();
+                let now = src.lines().nth(fix_line).unwrap();
+                let line_start = super::line_col_of(&src, fix_line);
+                let s = fix.span.start.saturating_sub(line_start).min(now.len());
+                let e = fix.span.end.saturating_sub(line_start).min(now.len()).max(s);
+                let marked = &now[s..e];
+                assert_eq!(
+                    marked, ">",
+                    "the deleted operator is the mark (fix at {}..{}, line {fix_line})",
+                    fix.span.start, fix.span.end
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod wrap_tests {
+    use super::code_marked_rows;
+
+    /// each row's segments joined back into their rendered text
+    fn rows_text(rows: &[Vec<(String, bool)>]) -> Vec<String> {
+        rows.iter()
+            .map(|r| r.iter().map(|(t, _)| t.as_str()).collect())
+            .collect()
+    }
+
+    /// the wrap must read like CSS: no row opens with wrap-space or a
+    /// leading comma, and `'Self-reference:` (129.6px — far under any
+    /// fixture width) is never broken mid-word
+    fn assert_wrap_hygiene(rows: &[Vec<(String, bool)>]) {
+        let flat = rows_text(rows);
+        for r in &flat {
+            assert!(
+                !r.starts_with(' ') && !r.starts_with(','),
+                "a wrap leaked its space / comma: {flat:?}"
+            );
+            assert!(
+                !r.ends_with("Self-") && !r.starts_with("reference"),
+                "`Self-reference:` split mid-word: {flat:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_diff_wraps_at_word_boundaries() {
+        // pre-wrap + break-words: lines break at SPACES, whole — the
+        // mark's word `[null,` misses the fit behind `integer`
+        // (153.9 + 8.1 + 54.6 > 184.2) and moves down WHOLE: a word that
+        // fits on a line of its own is never split
+        let rows = code_marked_rows(
+            "referrer_id integer [",
+            "null,",
+            " note: 'x']",
+            22.0 * 8.1 + 6.0, // 22 chars + one pill
+        );
+        let flat = rows_text(&rows);
+        assert_eq!(flat, vec!["referrer_id integer", "[null, note: 'x']"]);
+        // every row respects the budget (chars + pill allowance)
+        for r in &rows {
+            let px: f32 = r
+                .iter()
+                .map(|(t, m)| t.chars().count() as f32 * 8.1 + if *m { 6.0 } else { 0.0 })
+                .sum();
+            assert!(px <= 22.0 * 8.1 + 6.0 + 1.0, "{px} over: {r:?}");
+        }
+    }
+
+    #[test]
+    fn the_mark_never_leaks_across_rows_uncaned() {
+        // the regression from the screenshot: a fixed char wrap put the
+        // mark's first char at the end of the previous line as PLAIN
+        // text. Every char keeps its flag where it lands.
+        let rows = code_marked_rows("a [", "not null", ", note: 'x']", 12.0 * 8.1 + 6.0);
+        let marked_text: String = rows
+            .iter()
+            .flat_map(|r| r.iter())
+            .filter(|(_, m)| *m)
+            .map(|(t, _)| t.as_str())
+            .collect();
+        assert_eq!(marked_text, "not null", "the mark survives wrapping");
+    }
+
+    #[test]
+    fn the_one_char_mark_survives_the_line_break() {
+        // the regression: `Change to >?` on `Ref: users.referrer_id > users.id`
+        // rendered NOW with the `>` GONE — the 1-char marked token broke to
+        // a new line and vanished
+        let rows = code_marked_rows(
+            "Ref: users.referrer_id ",
+            ">",
+            " users.id",
+            (520.0 - 8.0) / 2.0 - 4.0 - 20.0,
+        );
+        let joined: String = rows
+            .iter()
+            .flat_map(|r| r.iter())
+            .map(|(t, _)| t.as_str())
+            .collect();
+        assert!(joined.contains('>'), "the > survives: {rows:?}");
+        let marked: String = rows
+            .iter()
+            .flat_map(|r| r.iter())
+            .filter(|(_, m)| *m)
+            .map(|(t, _)| t.as_str())
+            .collect();
+        assert_eq!(marked, ">", "exactly the > is marked: {rows:?}");
+    }
+
+    #[test]
+    fn a_long_word_breaks_mid_word() {
+        // break-words: a single word wider than the line still breaks
+        let rows = code_marked_rows("", "a_very_long_identifier_here", "", 10.0 * 8.1 + 6.0);
+        assert!(rows.len() >= 3, "the word hard-broke: {rows:?}");
+        let joined: String = rows
+            .iter()
+            .flat_map(|r| r.iter().map(|(t, _)| t.as_str()))
+            .collect();
+        assert_eq!(joined, "a_very_long_identifier_here");
+    }
+
+    #[test]
+    fn the_showcase_now_line_wraps_like_dbdiagram() {
+        // acceptance fixture, off their screenshot: showcase.dbml's
+        // referrer_id line in the NOW cell — panel 520 gives the cell
+        // (520-8)/2 - 4 - 20 = 232px
+        let rows = code_marked_rows(
+            "referrer_id integer [",
+            "null",
+            ", note: 'Self-reference: who invited this user']",
+            232.0,
+        );
+        let flat = rows_text(&rows);
+        assert_eq!(
+            flat,
+            vec![
+                "referrer_id integer [null,",
+                "note: 'Self-reference: who",
+                "invited this user']",
+            ]
+        );
+        assert_wrap_hygiene(&rows);
+    }
+
+    #[test]
+    fn the_showcase_fixed_line_wraps_like_dbdiagram() {
+        // the FIXED twin: the mark wraps at the space after `not` —
+        // ` null,` misses 232px even with the pill continuing across the
+        // marked space — exactly their screenshot's break
+        let rows = code_marked_rows(
+            "referrer_id integer [",
+            "not null",
+            ", note: 'Self-reference: who invited this user']",
+            232.0,
+        );
+        let flat = rows_text(&rows);
+        assert_eq!(
+            flat,
+            vec![
+                "referrer_id integer [not",
+                "null, note: 'Self-reference:",
+                "who invited this user']",
+            ]
+        );
+        assert_wrap_hygiene(&rows);
+        // the mark's own space died with the break; the halves stay
+        // marked and reunite as `notnull`
+        let marked: String = rows
+            .iter()
+            .flat_map(|r| r.iter())
+            .filter(|(_, m)| *m)
+            .map(|(t, _)| t.as_str())
+            .collect();
+        assert_eq!(marked, "notnull");
+    }
+}
+
+/// dbdiagram's `.trim()` on the composed diff line: the leading
+/// whitespace of the line's before-part and the trailing whitespace of
+/// the after-part never render (theirs trims the concatenated HTML).
+/// With an empty mark the strip continues into the opposite part, the
+/// same way `String::trim` walks a single string.
+fn trim_marked_line(before: &mut String, marked: &str, after: &mut String) {
+    *before = before.trim_start().to_string();
+    if before.is_empty() && marked.is_empty() {
+        *after = after.trim_start().to_string();
+    }
+    *after = after.trim_end().to_string();
+    if after.is_empty() && marked.is_empty() {
+        *before = before.trim_end().to_string();
+    }
+}
+
+/// One NOW/FIXED cell, replicated from their DiffPreview: a 1px
+/// #2F2F2F frame with the LEFT side a 3px accent bezel (#F17874 red /
+/// #3FBE8D green), rounded 6 all around — the accent reaches the edge
+/// (the old inset bar left a dark line between bezel and edge) — then
+/// the uppercase label over the wrapped line with the changed token
+/// marked (the diff tint).
 #[allow(clippy::too_many_arguments)]
 fn diff_cell(
     label: &'static str,
@@ -3914,15 +4564,21 @@ fn diff_cell(
     before: String,
     marked: String,
     after: String,
-    chars_per_row: usize,
+    width_px: f32,
 ) -> Element<'static, Message> {
     let mut code_col: Vec<Element<'static, Message>> = Vec::new();
-    for segs in code_marked_rows(&before, &marked, &after, chars_per_row) {
+    for segs in code_marked_rows(&before, &marked, &after, width_px) {
         let mut r = row![].spacing(0);
         for (t, marked) in segs {
+            let pill_w = t.chars().count() as f32 * 8.1 + 6.0;
             r = if marked {
                 r.push(
                     container(text(t).size(13).color(mark_text).font(Font::MONOSPACE))
+                        // Fixed: the pill is the row's last child and the
+                        // flex squeezes exactly that child to zero width
+                        // when the segments overflow — the mark vanished
+                        // while its row still rendered
+                        .width(Length::Fixed(pill_w))
                         .padding(iced::Padding {
                             top: 0.0,
                             right: 3.0,
@@ -3941,44 +4597,63 @@ fn diff_cell(
         }
         code_col.push(r.into());
     }
-    container(
-        row![
-            container(horizontal_space())
-                .width(Length::Fixed(3.0))
-                .height(Fill)
-                .style(move |_t| container::Style {
-                    background: Some(iced::Background::Color(edge)),
-                    ..Default::default()
-                }),
-            container(
-                column![
-                    text(label.to_string())
-                        .size(10)
-                        .color(label_color)
-                        .font(Font {
-                            weight: iced::font::Weight::Semibold,
-                            ..Font::DEFAULT
-                        }),
-                    column(code_col).spacing(0),
-                ]
-                .spacing(5),
-            )
-            .padding([8, 10])
-            .width(Fill),
-        ]
-        .spacing(0),
-    )
-    .width(Fill)
-    .style(move |_t| container::Style {
-        background: Some(iced::Background::Color(DIAG_BG)),
-        border: iced::Border {
-            radius: iced::border::Radius::from(6.0),
-            width: 1.0,
-            color: DIAG_DIVIDER,
-        },
-        ..Default::default()
-    })
-    .into()
+    // the frame trick: iced borders have no per-side widths, so the cell
+    // is a DIVIDER-painted rounded frame (1px all around) over a stack
+    // of [content | 3px accent overlay]. The overlay is a STACK LAYER —
+    // a Shrink-height row would resolve a Fill-height bar to zero (the
+    // bar painted nothing; the stack bounds it to the content instead) —
+    // covering the frame's left side, so the accent reads as the
+    // border's left side, like their `border-l-[3px]` over `rounded-md`.
+    let stack = iced::widget::Stack::with_children(vec![
+        container(
+            column![
+                text(label.to_string())
+                    .size(10)
+                    .color(label_color)
+                    .font(Font {
+                        weight: iced::font::Weight::Semibold,
+                        ..Font::DEFAULT
+                    }),
+                column(code_col).spacing(0),
+            ]
+            .spacing(5),
+        )
+        .padding([8, 10])
+        .width(Fill)
+        .style(move |_t| container::Style {
+            background: Some(iced::Background::Color(DIAG_CELL_BG)),
+            border: iced::border::rounded(6),
+            ..Default::default()
+        })
+        .into(),
+        container(horizontal_space())
+            .width(Length::Fixed(3.0))
+            .height(Fill)
+            .style(move |_t| container::Style {
+                background: Some(iced::Background::Color(edge)),
+                border: iced::Border {
+                    radius: iced::border::Radius {
+                        top_left: 5.0,
+                        top_right: 0.0,
+                        bottom_right: 0.0,
+                        bottom_left: 5.0,
+                    },
+                    width: 0.0,
+                    color: Color::TRANSPARENT,
+                },
+                ..Default::default()
+            })
+            .into(),
+    ]);
+    container(stack)
+        .width(Fill)
+        .style(move |_t| container::Style {
+            background: Some(iced::Background::Color(DIAG_DIVIDER)),
+            border: iced::border::rounded(6),
+            ..Default::default()
+        })
+        .padding(1.0)
+        .into()
 }
 
 /// The file-problem pill (bottom-left of the editor pane): one floating
@@ -4051,10 +4726,31 @@ fn file_status_overlay(app: &App) -> Element<'_, Message> {
         .into()
 }
 
-fn toast_overlay(app: &App) -> Element<'static, Message> {    let pill = container(
-        text(app.message.clone().unwrap_or_default())
-            .size(12.0)
-            .color(theme::TEXT),
+fn toast_overlay(app: &App) -> Element<'static, Message> {
+    // the severity accent: a dot in the kind's color (green success, blue
+    // info, amber warning, red error) before the text
+    let accent = match app.message_kind {
+        crate::app::ToastKind::Success => Color::from_rgb8(0x3F, 0xBE, 0x8D),
+        crate::app::ToastKind::Info => Color::from_rgb8(0x59, 0xBB, 0xFF),
+        crate::app::ToastKind::Warning => Color::from_rgb8(0xE8, 0xB3, 0x40),
+        crate::app::ToastKind::Error => Color::from_rgb8(0xF1, 0x78, 0x74),
+    };
+    let pill = container(
+        row![
+            container(horizontal_space())
+                .width(Length::Fixed(7.0))
+                .height(Length::Fixed(7.0))
+                .style(move |_t| container::Style {
+                    background: Some(iced::Background::Color(accent)),
+                    border: iced::border::rounded(4),
+                    ..Default::default()
+                }),
+            text(app.message.clone().unwrap_or_default())
+                .size(12.0)
+                .color(theme::TEXT),
+        ]
+        .spacing(8)
+        .align_y(iced::alignment::Vertical::Center),
     )
     .padding([5, 10])
     .style(|_t| container::Style {
