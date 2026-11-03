@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>dbml-ui</title>
+  <base data-trunk-public-url>
+  <!-- rust std's time shim for wasm32-unknown-unknown: the module imports
+       one function, env.now() (epoch milliseconds), which the browser
+       provides here via an import map (performance.timeOrigin anchors the
+       monotonic performance clock to the epoch, so SystemTime and Instant
+       both see the same timeline) -->
+  <script type="importmap">
+  {
+    "imports": {
+      "env": "data:text/javascript;base64,ZXhwb3J0IGZ1bmN0aW9uIG5vdygpe3JldHVybiBwZXJmb3JtYW5jZS50aW1lT3JpZ2luICsgcGVyZm9ybWFuY2Uubm93KCl9"
+    }
+  }
+  </script>
+  <style>
+    /* the app owns the whole viewport: winit appends its canvas to the
+       body, and a dark page background hides the load flash */
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      overflow: hidden;
+      background: #16181d;
+    }
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+    }
+  </style>
+  <link data-trunk rel="rust" data-type="main" data-bin="dbml-ui" />
+</head>
+<body></body>
+</html>

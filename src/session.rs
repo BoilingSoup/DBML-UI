@@ -15,6 +15,9 @@
 //! Hand-rolled length-prefixed text, no serde: buffer text is arbitrary
 //! UTF-8, so sections carry byte lengths rather than trusting newlines.
 
+// Desktop only: the web session is inert (no file system), so the
+// encoding machinery has no caller there.
+#[cfg(not(target_arch = "wasm32"))]
 const MAGIC: &str = "dbml-ui session 1";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -46,7 +49,9 @@ pub struct Session {
 }
 
 /// `$DBML_UI_SESSION`, else the config dir's `session` file (next to the
-/// config key=value store).
+/// config key=value store). Desktop only: the web build has no file
+/// system, so the session is inert there.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn path() -> std::path::PathBuf {
     if let Ok(p) = std::env::var("DBML_UI_SESSION") {
         return std::path::PathBuf::from(p);
@@ -61,7 +66,9 @@ pub fn path() -> std::path::PathBuf {
 }
 
 /// Atomic write (tmp + rename): a process dying mid-write can never leave
-/// a half-formed session behind to be restored.
+/// a half-formed session behind to be restored. Inert on the web build
+/// (no file system — nothing to persist or restore).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn save(s: &Session) -> std::io::Result<()> {
     let path = path();
     if let Some(dir) = path.parent() {
@@ -72,11 +79,24 @@ pub fn save(s: &Session) -> std::io::Result<()> {
     std::fs::rename(&tmp, &path)
 }
 
+/// No-op on the web build: the web session is always empty.
+#[cfg(target_arch = "wasm32")]
+pub fn save(_s: &Session) -> std::io::Result<()> {
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub fn load() -> Option<Session> {
     let text = std::fs::read_to_string(path()).ok()?;
     decode(&text)
 }
 
+#[cfg(target_arch = "wasm32")]
+pub fn load() -> Option<Session> {
+    None
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub fn encode(s: &Session) -> String {
     let mut out = String::new();
     out.push_str(MAGIC);
@@ -103,6 +123,7 @@ pub fn encode(s: &Session) -> String {
     out
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn decode(text: &str) -> Option<Session> {
     let mut rest = text.strip_prefix(MAGIC)?.strip_prefix('\n')?;
     let mut session = Session::default();

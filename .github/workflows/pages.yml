@@ -1,0 +1,56 @@
+# Build the web bundle and publish it to GitHub Pages.
+#
+# The bundle is built with trunk (index.html + Trunk.toml); public_url "./"
+# makes asset links relative, so the site serves from any Pages path
+# (user.github.io/repo/). The Pages site must be set to "GitHub Actions"
+# as its source in the repo settings.
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/
+            ~/.cargo/git/
+            target/
+          key: wasm-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: Install trunk
+        run: cargo install trunk --locked
+      - name: Build web bundle
+        run: trunk build --release
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

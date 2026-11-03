@@ -3,16 +3,29 @@ name = "dbml-ui"
 version = "0.1.0"
 edition = "2021"
 
+# The 0x0-viewport guard for the web build: iced_tiny_skia 0.13 creates
+# the softbuffer surface with NonZeroU32::expect on the window size, but
+# on the web the window exists before the browser's first resize report —
+# the boot dies there. Upstream-worthy.
+[patch.crates-io]
+iced_tiny_skia = { path = "vendor/iced_tiny_skia" }
+iced_graphics = { path = "vendor/iced_graphics" }
+
 [dependencies]
 anyhow = "1.0.104"
-# System-clipboard text (copy/paste) on X11/Wayland/Windows/macOS. Text
-# only: no image-data feature. Unreachable clipboards (headless CI, SSH)
-# are a handled error, never a panic.
-arboard = { version = "3.7", default-features = false }
-iced = { version = "=0.13.1", features = ["canvas", "smol"] }
-# iced's runtime (smol feature); also hands the file-picker thread's result
-# back to the update loop
-smol = "2"
+# The renderer is per-target: the desktop keeps wgpu (added below), the
+# web build renders with tiny-skia (software) — wgpu 0.19's WebGPU backend
+# deadlocks against modern browsers' navigator.gpu, and WebGL2-only isn't
+# selectable through iced 0.13's settings. Software rendering is
+# requirement-free for GitHub Pages. `fira-sans` embeds the default UI
+# font (the web has no system-font scan).
+iced = { version = "=0.13.1", default-features = false, features = [
+    "canvas",
+    "smol",
+    "svg",
+    "tiny-skia",
+    "fira-sans",
+] }
 # MSRV pins for rustc 1.84: newer releases of these crates require 1.85+.
 image = { version = "=0.25.6", default-features = false, features = ["png"] }
 regex = "1.13.1"
@@ -20,3 +33,49 @@ resvg = { version = "0.45.1", features = ["raster-images", "text"] }
 tiny-skia = "0.11.4"
 unicode-width = "=0.2.0"
 usvg = "0.45.1"
+# std's Instant/SystemTime are unimplemented on wasm32-unknown-unknown;
+# this swaps in performance.now() there and keeps std elsewhere
+web-time = "1"
+
+# Desktop-only OS plumbing: smol's reactor (async-io/rustix/errno) has no
+# wasm32-unknown-unknown backend, rfd drives GTK, arboard drives the
+# system clipboard. The web build cfg-gates every use site.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { version = "0.3", features = ["console"] }
+# wasm panics write to a stderr nobody reads: route them to the browser
+# console (the iced web examples do the same)
+console_error_panic_hook = "0.1"
+# Chrome on Linux advertises navigator.gpu but requestAdapter() resolves
+# null (no WebGPU there) — wgpu 0.19's WebGPU path stalls the boot instead
+# of failing over. Compiling the WebGL2 backend in gives the adapter
+# request a real answer (iced#2978).
+wgpu = { version = "0.19", features = ["webgl"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# System-clipboard text (copy/paste) on X11/Wayland/Windows/macOS. Text
+# only: no image-data feature. Unreachable clipboards (headless CI, SSH)
+# are a handled error, never a panic.
+arboard = { version = "3.7", default-features = false }
+# Native file dialogs (Save As, exports): GTK on Linux, native
+# on Windows/macOS. XDG portal compatibility via the async-xdg
+# feature is not needed — the blocking API runs off the UI thread.
+rfd = { version = "0.15", default-features = false, features = ["gtk3"] }
+# iced's runtime (smol feature); also hands the file-picker thread's result
+# back to the update loop
+smol = "2"
+# the desktop renderer: wgpu (with the tiny-skia fallback iced activates
+# when the adapter request fails). `auto-detect-theme` follows the system
+# theme — the desktop's original default feature set.
+iced = { version = "=0.13.1", features = ["wgpu", "auto-detect-theme"] }
+
+# X11 keymap query for the physical-ctrl bridge (left-ctrl chords under DE
+# modifier grabs): already in the tree as winit's X11 backend, so this adds
+# no new compilation.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+x11rb = { version = "0.13", features = ["xkb"] }
+# (the same crate raises the rfd save dialogs to the front)
+
+# XTEST injection for the key-replay example (examples/xtest_repro.rs):
+# dev-only, so the shipped binary keeps its feature set.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dev-dependencies]
+x11rb = { version = "0.13", features = ["xtest", "xkb"] }

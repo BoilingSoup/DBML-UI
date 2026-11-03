@@ -1,0 +1,13 @@
+# trunk build configuration for the web (GitHub Pages) target:
+# `trunk build` compiles the dbml-ui bin to wasm32-unknown-unknown and
+# emits the site into dist/. public_url "./" makes asset links relative,
+# so the bundle serves from any Pages path (user.github.io/repo/).
+[build]
+target = "index.html"
+dist = "dist"
+public_url = "./"
+
+[watch]
+# dev-server rebuild triggers; the working files that never affect the
+# build stay out of it
+ignore = ["target", "dist"]

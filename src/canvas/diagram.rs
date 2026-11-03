@@ -1242,7 +1242,7 @@ fn paint_edge(
                 position: polyline_midpoint(&pts),
                 color: hover_color,
                 size: (0.6 * zoom).into(),
-                font: Font::MONOSPACE,
+                font: theme::mono(),
                 horizontal_alignment: iced::alignment::Horizontal::Center,
                 vertical_alignment: iced::alignment::Vertical::Center,
                 ..Default::default()
@@ -3456,7 +3456,7 @@ fn draw_popup_chrome(
             position: Point::new(title_x + name_w + 6.0 * k, icon_cy),
             color,
             size: (0.7 * zoom).into(),
-            font: Font::MONOSPACE,
+            font: theme::mono(),
             horizontal_alignment: iced::alignment::Horizontal::Left,
             vertical_alignment: iced::alignment::Vertical::Center,
             ..Default::default()

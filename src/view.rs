@@ -2699,7 +2699,7 @@ fn find_bar_overlay(app: &App) -> Option<Element<'_, Message>> {
         text(t.to_string())
             .size(12.0)
             .color(color)
-            .font(Font::MONOSPACE)
+            .font(theme::mono())
     };
     let bytes = |ci: usize| {
         input
@@ -2965,7 +2965,7 @@ fn start_screen(_app: &App) -> Element<'static, Message> {
 
     let masthead = text(WORD_ART.to_string())
         .size(13.0)
-        .font(iced::Font::MONOSPACE)
+        .font(theme::mono())
         .color(theme::TEXT);
 
     let content = column![
@@ -3682,7 +3682,7 @@ fn diagnostics_overlay(app: &App) -> Element<'_, Message> {
                                 text(format!("{}:{}", line + 1, col + 1))
                                     .size(12)
                                     .color(DIAG_GRAY_700)
-                                    .font(Font::MONOSPACE),
+                                    .font(theme::mono()),
                             )
                             .padding(iced::Padding { top: 3.0, ..Default::default() }),
                         ]
@@ -4146,7 +4146,7 @@ fn message_row(segments: &[(String, bool)]) -> Element<'static, Message> {
 /// An inline code chip: the backticked token's pill (gray-900 body, mono
 /// 12px, 1px 5px pad, radius 4).
 fn code_chip(seg: &str) -> Element<'static, Message> {
-    container(text(seg.to_string()).size(12).color(DIAG_GRAY_50).font(Font::MONOSPACE))
+    container(text(seg.to_string()).size(12).color(DIAG_GRAY_50).font(theme::mono()))
         .padding(iced::Padding {
             top: 1.0,
             right: 5.0,
@@ -4573,7 +4573,7 @@ fn diff_cell(
             let pill_w = t.chars().count() as f32 * 8.1 + 6.0;
             r = if marked {
                 r.push(
-                    container(text(t).size(13).color(mark_text).font(Font::MONOSPACE))
+                    container(text(t).size(13).color(mark_text).font(theme::mono()))
                         // Fixed: the pill is the row's last child and the
                         // flex squeezes exactly that child to zero width
                         // when the segments overflow — the mark vanished
@@ -4592,7 +4592,7 @@ fn diff_cell(
                         }),
                 )
             } else {
-                r.push(text(t).size(13).color(DIAG_GRAY_100).font(Font::MONOSPACE))
+                r.push(text(t).size(13).color(DIAG_GRAY_100).font(theme::mono()))
             };
         }
         code_col.push(r.into());

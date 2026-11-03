@@ -8,7 +8,8 @@
 //! Every operation is fallible by design: no display (headless CI, SSH
 //! without forwarding), a dead Wayland compositor or X11 errors surface
 //! as `Err(String)` and the app turns them into a status-bar toast
-//! instead of a panic.
+//! instead of a panic. The web build has no system clipboard yet: the
+//! backend factory reports that, and the same toast path handles it.
 
 /// Text-only view of the system clipboard.
 pub trait ClipboardBackend: std::fmt::Debug {
@@ -24,14 +25,17 @@ pub trait ClipboardBackend: std::fmt::Debug {
 
 /// The real arboard-backed clipboard. (arboard::Clipboard is not Debug,
 /// so the Debug impl is hand-rolled for the trait bound.)
+#[cfg(not(target_arch = "wasm32"))]
 pub struct SystemClipboard(arboard::Clipboard);
 
+#[cfg(not(target_arch = "wasm32"))]
 impl std::fmt::Debug for SystemClipboard {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SystemClipboard").finish()
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl ClipboardBackend for SystemClipboard {
     fn set_text(&mut self, text: String) -> Result<(), String> {
         self.0.set_text(text).map_err(|e| e.to_string())
@@ -43,11 +47,35 @@ impl ClipboardBackend for SystemClipboard {
 }
 
 /// Create the real backend, or explain why there is none (the reason
-/// becomes the status-bar toast).
+/// becomes the status-bar toast). The web build reports the missing
+/// clipboard through the same `Err` path.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn system_backend() -> Result<SystemClipboard, String> {
     arboard::Clipboard::new()
         .map(SystemClipboard)
         .map_err(|e| e.to_string())
+}
+
+/// The web stand-in: creation always fails upstream, so this type never
+/// operates — it exists to keep the factory signature uniform.
+#[cfg(target_arch = "wasm32")]
+#[derive(Debug)]
+pub struct SystemClipboard;
+
+#[cfg(target_arch = "wasm32")]
+impl ClipboardBackend for SystemClipboard {
+    fn set_text(&mut self, _text: String) -> Result<(), String> {
+        Err("the clipboard isn't available in the web build yet".to_string())
+    }
+
+    fn get_text(&mut self) -> Result<String, String> {
+        Err("the clipboard isn't available in the web build yet".to_string())
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn system_backend() -> Result<SystemClipboard, String> {
+    Err("the clipboard isn't available in the web build yet".to_string())
 }
 
 /// In-memory stand-in for the OS clipboard, shared by the interaction

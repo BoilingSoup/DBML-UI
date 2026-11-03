@@ -4,6 +4,15 @@
 mod app;
 #[cfg(all(unix, not(target_os = "macos")))]
 mod platform;
+// The web build has no X keymap to query: `None` is the documented
+// "inert" answer (the same as Wayland/no-X on the desktop), so every
+// physical-ctrl bridge call site falls back to its tracked switch.
+#[cfg(target_arch = "wasm32")]
+mod platform {
+    pub fn ctrl_held() -> Option<bool> {
+        None
+    }
+}
 mod canvas;
 mod clipboard;
 mod config;
@@ -15,6 +24,8 @@ mod view;
 fn main() -> Result<(), iced::Error> {
     let run = || -> Result<(), iced::Error> {
         // dbml-ui [FILE]
+        #[cfg(target_arch = "wasm32")]
+        std::panic::set_hook(Box::new(console_error_panic_hook::hook));
         let restarted = std::env::var_os("DBML_UI_RESTARTED").is_some();
         let arg_file = std::env::args().nth(1);
         // an explicit file argument opens as-is; everything else starts
@@ -53,6 +64,9 @@ fn main() -> Result<(), iced::Error> {
         // the window title follows the active tab's file
         iced::application(|app: &app::App| app.window_title(), app::update, view::root)
             .theme(|_| theme::app())
+            // the editor/diagram mono font, embedded for the web build
+            // (theme::mono() names it there; desktop resolves MONOSPACE)
+            .font(include_bytes!("../fonts/DejaVuSansMono.ttf").as_slice())
             .subscription(app::subscription)
             // canvas strokes (dash flow, markers, glow) are triangle meshes;
             // without MSAA every moving stroke rasterizes hard-edged
@@ -87,7 +101,9 @@ fn main() -> Result<(), iced::Error> {
     // live surface — which happens when the screen blanks / the machine
     // suspends and the driver drops the device ("Parent device is lost" at
     // the next frame). The next process initializes wgpu cleanly, so this
-    // specific panic restarts the app once instead of dying.
+    // specific panic restarts the app once instead of dying. Desktop only:
+    // wasm panics abort (no unwinding) and there is nothing to restart.
+    #[cfg(not(target_arch = "wasm32"))]
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)) {
         Ok(result) => result,
         Err(panic) => {
@@ -117,15 +133,19 @@ fn main() -> Result<(), iced::Error> {
             std::panic::resume_unwind(panic)
         }
     }
+
+    #[cfg(target_arch = "wasm32")]
+    run()
 }
 
 /// The wgpu panic signatures that mean "the GPU device died under us"
 /// (screen blank, suspend, driver reset): nothing else should restart.
+#[cfg(not(target_arch = "wasm32"))]
 fn is_gpu_device_loss(message: &str) -> bool {
     message.contains("Parent device is lost") || message.contains("Surface::get_current_texture")
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::is_gpu_device_loss;
 

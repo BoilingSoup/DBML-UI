@@ -7,6 +7,9 @@ use dbml_ui::layout::{self, Layout};
 use dbml_ui::{dbml, model};
 use iced::{Point, Vector};
 
+// The web build stubs every dialog task, so the path-bearing messages
+// the dialogs resolve to are never constructed there.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Message {
     CanvasPressed(Point),
@@ -279,7 +282,7 @@ pub struct ScrollbarDrag {
 pub struct ScrollAnim {
     pub scroll_from: f32,
     pub scroll_to: f32,
-    pub started: std::time::Instant,
+    pub started: web_time::Instant,
     /// Seconds; see `scroll_duration_override`.
     pub duration: f32,
     /// Cursor rows coupled to the scroll (neoscroll scrolls the cursor one
@@ -845,7 +848,7 @@ pub struct App {
     /// Animation clock in seconds; drives the hover glow's breathing.
     pub anim_clock: f32,
     /// Instant of the last Tick, for the real elapsed delta.
-    last_tick: Option<std::time::Instant>,
+    last_tick: Option<web_time::Instant>,
     /// Set by `key_pressed` when ctrl+S hit an unpacked buffer: the next
     /// update drains it into the Save As picker task (ctrl+S IS the first
     /// save for a file-less tab).
@@ -858,7 +861,7 @@ pub struct App {
     pub diagnostics_fix_menu: bool,
     /// When the fix menu opened: the fade-in samples this (the ticks run
     /// while the menu is up).
-    pub diagnostics_fix_menu_since: Option<std::time::Instant>,
+    pub diagnostics_fix_menu_since: Option<web_time::Instant>,
     /// The diagram's export dropdown is open (the consolidated Export
     /// button on the pane's top edge).
     pub export_menu_open: bool,
@@ -894,7 +897,7 @@ pub struct App {
     /// When the last ctrl+d/u scroll chord fired: a bare d/u right after
     /// it is the chord's roll-out (ctrl released a few ms early, or the
     /// autorepeat tail), not a vim key — see `editor_key`.
-    last_scroll_chord: Option<std::time::Instant>,
+    last_scroll_chord: Option<web_time::Instant>,
     /// Toast pill (bottom-right overlay; see `set_message`).
     pub message: Option<String>,
     /// The toast's severity: drives the pill's accent dot.
@@ -902,14 +905,14 @@ pub struct App {
     /// When the toast was set: the tick clears it after `TOAST_TTL` (the
     /// subscription keeps ticks hot while a toast is up), any keypress
     /// supersedes it sooner.
-    message_since: Option<std::time::Instant>,
+    message_since: Option<web_time::Instant>,
     /// Open completion popup (insert mode) over the active buffer.
     pub completion: Option<Completion>,
     /// Editor-pane hover position (local px) for error tooltips.
     pub editor_hover: Option<Point>,
     /// Last user scroll of the editor (wheel, scrollbar, paging): the
     /// overlay scrollbars stay revealed for a moment after it, Monaco-style.
-    pub last_editor_scroll: Option<std::time::Instant>,
+    pub last_editor_scroll: Option<web_time::Instant>,
     /// Help overlay visibility.
     /// The diagnostics panel (dbdiagram's problems pop-out) is open.
     pub diagnostics_open: bool,
@@ -943,24 +946,24 @@ pub struct App {
     /// first copy, restored by the X arbiter): its flagged twin is a
     /// duplicate of the same physical press and is dropped when it arrives.
     /// KeyCode, not char: the chord set is not letters-only (ctrl+space).
-    stripped_chord: Option<(KeyCode, std::time::Instant)>,
+    stripped_chord: Option<(KeyCode, web_time::Instant)>,
     /// The last NON-CHAR key echo (arrows and other named keys) — the DE
     /// re-injection pair delivers ONE physical press as two echoes, so a
     /// shift+arrow selected two cells (the user's "highlights 2 chars").
     /// A same-code+mods echo inside 80ms is the twin and is dropped (key
     /// repeat never lands that early: winit's delay is 250ms+).
-    last_named_echo: Option<(KeyCode, KeyModifiers, std::time::Instant)>,
+    last_named_echo: Option<(KeyCode, KeyModifiers, web_time::Instant)>,
     /// The last bare (unflagged) key typed in insert mode — the DE
     /// re-injection's stripped copy whose flagged twin carries the chord.
     /// The usize is the buffer's history length BEFORE the key ran: the
     /// twin's salvage undoes the copy only when it actually edited (an
     /// `i`/`a` merely switched mode — undoing then would eat a real edit).
-    last_bare: Option<(KeyCode, std::time::Instant, usize)>,
+    last_bare: Option<(KeyCode, web_time::Instant, usize)>,
     /// The key of a chord fired through the physical-ctrl arbiter: its
     /// flagged twin is a duplicate of the same physical press and is
     /// dropped when it arrives. KeyCode, not char: the chord set is not
     /// letters-only (ctrl+space).
-    bridged_chord: Option<(KeyCode, std::time::Instant)>,
+    bridged_chord: Option<(KeyCode, web_time::Instant)>,
     /// Category groups collapsed in the open diagnostics panel.
     pub diagnostics_collapsed: std::collections::HashSet<String>,
     /// The one expanded diagnostics row (their accordion), if any.
@@ -1347,7 +1350,7 @@ impl App {
     fn set_message_kind(&mut self, kind: ToastKind, msg: impl Into<String>) {
         self.message = Some(msg.into());
         self.message_kind = kind;
-        self.message_since = Some(std::time::Instant::now());
+        self.message_since = Some(web_time::Instant::now());
     }
 
     /// Drop the toast (expired or superseded).
@@ -2917,6 +2920,15 @@ impl ExportKind {
     }
 }
 
+// ------------------- file dialogs -------------------
+//
+// Desktop: rfd drives the native save dialog, zenity/kdialog the open
+// picker, all off the UI thread with the result handed back through a
+// channel. The web build has no dialogs yet — every task stub resolves
+// to `PickerUnavailable`, whose toast explains.
+
+/// The dialog result handed back from the picker thread.
+#[cfg(not(target_arch = "wasm32"))]
 enum PickOutcome {
     Chosen(String),
     Cancelled,
@@ -2924,8 +2936,16 @@ enum PickOutcome {
     NoDialog,
 }
 
+/// The web placeholder for every dialog task: no file system, no native
+/// dialogs (a browser file input is a later milestone).
+#[cfg(target_arch = "wasm32")]
+fn picker_unavailable_task() -> iced::Task<Message> {
+    iced::Task::future(async { Message::PickerUnavailable })
+}
+
 /// Spawn the native save dialog off the UI thread; the confirmed path
 /// comes back through `then` (a dismissal folds to `PickerDismissed`).
+#[cfg(not(target_arch = "wasm32"))]
 fn save_dialog_task(
     default_name: String,
     filter_name: &'static str,
@@ -2947,6 +2967,7 @@ fn save_dialog_task(
 }
 
 /// The Save As picker: the native dialog with the DBML filter.
+#[cfg(not(target_arch = "wasm32"))]
 fn save_as_picker_task(default_name: String) -> iced::Task<Message> {
     save_dialog_task(
         default_name,
@@ -2957,8 +2978,14 @@ fn save_as_picker_task(default_name: String) -> iced::Task<Message> {
     )
 }
 
+#[cfg(target_arch = "wasm32")]
+fn save_as_picker_task(_default_name: String) -> iced::Task<Message> {
+    picker_unavailable_task()
+}
+
 /// The native save dialog (rfd: GTK on Linux, native on Windows/macOS).
 /// Must run off the UI thread — the blocking API drives its own event loop.
+#[cfg(not(target_arch = "wasm32"))]
 fn pick_save_path_blocking(default_name: &str, filter_name: &str, patterns: &[&str], title: &str) -> PickOutcome {
     // the native dialog maps behind the app window (no transient parent):
     // raise + focus it as soon as it maps
@@ -2985,6 +3012,7 @@ pub enum PickerKind {
     Sql,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn picker_filters(kind: PickerKind) -> Vec<&'static str> {
     let combined = [
         "--file-filter=Diagram & SQL files | *.dbml *.sql",
@@ -3002,6 +3030,7 @@ fn picker_filters(kind: PickerKind) -> Vec<&'static str> {
 }
 
 /// Blocking zenity/kdialog file picker. Must run off the UI thread.
+#[cfg(not(target_arch = "wasm32"))]
 fn pick_file_blocking(kind: PickerKind) -> PickOutcome {
     let run = |cmd: &str, args: &[&str]| -> Option<std::process::Output> {
         std::process::Command::new(cmd)
@@ -3040,8 +3069,66 @@ fn pick_file_blocking(kind: PickerKind) -> PickOutcome {
     PickOutcome::NoDialog
 }
 
+/// The open-file picker task: desktop spawns the blocking picker off the
+/// UI thread (a missing tool folds to `PickerUnavailable`); the web build
+/// has no dialog yet.
+#[cfg(not(target_arch = "wasm32"))]
+fn open_file_picker_task(kind: PickerKind) -> iced::Task<Message> {
+    let (tx, rx) = smol::channel::bounded(1);
+    std::thread::spawn(move || {
+        let outcome = pick_file_blocking(kind);
+        let _ = smol::block_on(tx.send(outcome));
+    });
+    iced::Task::future(async move {
+        match rx.recv().await {
+            Ok(PickOutcome::Chosen(p)) => Message::OpenRecent(p),
+            Ok(PickOutcome::NoDialog) => Message::PickerUnavailable,
+            _ => Message::PickerDismissed,
+        }
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
+fn open_file_picker_task(_kind: PickerKind) -> iced::Task<Message> {
+    picker_unavailable_task()
+}
+
+/// The export save-dialog task: desktop asks for a destination path; the
+/// web build has no dialog yet.
+#[cfg(not(target_arch = "wasm32"))]
+fn export_pick_task(
+    kind: ExportKind,
+    default_name: String,
+    filter_name: &'static str,
+    patterns: &'static [&'static str],
+    title: &'static str,
+) -> iced::Task<Message> {
+    let (tx, rx) = smol::channel::bounded(1);
+    std::thread::spawn(move || {
+        let outcome = pick_save_path_blocking(&default_name, filter_name, patterns, title);
+        let _ = smol::block_on(tx.send(outcome));
+    });
+    iced::Task::future(async move {
+        match rx.recv().await {
+            Ok(PickOutcome::Chosen(p)) => Message::ExportTo(kind, p),
+            _ => Message::PickerDismissed,
+        }
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
+fn export_pick_task(
+    _kind: ExportKind,
+    _default_name: String,
+    _filter_name: &'static str,
+    _patterns: &'static [&'static str],
+    _title: &'static str,
+) -> iced::Task<Message> {
+    picker_unavailable_task()
+}
+
 pub fn update(app: &mut App, message: Message) -> iced::Task<Message> {
-    // any keypress supersedes the toast: feedback yields to input
+        // any keypress supersedes the toast: feedback yields to input
     if matches!(message, Message::KeyPressed(..)) {
         app.clear_message();
     }
@@ -3063,18 +3150,7 @@ pub fn update(app: &mut App, message: Message) -> iced::Task<Message> {
             return update(app, Message::OpenFilePicker(PickerKind::DiagramAndSql));
         }
         Message::OpenFilePicker(kind) => {
-            let (tx, rx) = smol::channel::bounded(1);
-            std::thread::spawn(move || {
-                let outcome = pick_file_blocking(kind);
-                let _ = smol::block_on(tx.send(outcome));
-            });
-            return iced::Task::future(async move {
-                match rx.recv().await {
-                    Ok(PickOutcome::Chosen(p)) => Message::OpenRecent(p),
-                    Ok(PickOutcome::NoDialog) => Message::PickerUnavailable,
-                    _ => Message::PickerDismissed,
-                }
-            });
+            return open_file_picker_task(kind);
         }
         Message::PickerDismissed => {}
         // Ctrl+O opens the picker from either editing mode
@@ -3362,7 +3438,7 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
         Message::DiagnosticToggleFixMenu => {
             app.diagnostics_fix_menu = !app.diagnostics_fix_menu;
             app.diagnostics_fix_menu_since =
-                app.diagnostics_fix_menu.then(std::time::Instant::now);
+                app.diagnostics_fix_menu.then(web_time::Instant::now);
         }
         Message::DiagnosticDismissFixMenu => {
             app.diagnostics_fix_menu = false;
@@ -3425,7 +3501,7 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
                             && t.elapsed().as_millis() < 80
                     });
                 app.last_named_echo =
-                    Some((code, mods, std::time::Instant::now()));
+                    Some((code, mods, web_time::Instant::now()));
                 if twin {
                     if app.key_debug {
                         app.set_message("echo twin dropped");
@@ -3434,7 +3510,7 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
                 }
             }
             if stripped {
-                app.stripped_chord = Some((code, std::time::Instant::now()));
+                app.stripped_chord = Some((code, web_time::Instant::now()));
             } else if mods.contains(KeyModifiers::CONTROL) {
                 if app
                     .stripped_chord
@@ -3460,7 +3536,7 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
             // the wheel path converts its notch deltas before emitting
             // (canvas/editor.rs), so the scrollbar drag and the wheel
             // share one contract and neither under-shoots the target.
-            app.last_editor_scroll = Some(std::time::Instant::now());
+            app.last_editor_scroll = Some(web_time::Instant::now());
             // scrolling dismisses the hover tooltip (Monaco does too) and
             // it must not sit stale through a scrollbar drag
             app.editor_hover = None;
@@ -3565,9 +3641,17 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
         Message::FormatNow => {}                                 // handled in update
         Message::ToggleFmtOnSave => {}                           // handled in update
         Message::PickerUnavailable => {
-            // no zenity/kdialog and no cmdline to type a path into either:
-            // the way in is the launcher (dbml-ui <file>)
-            app.set_message_kind(ToastKind::Error, "no file dialog available — open via the launcher: dbml-ui <file>");
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                // no zenity/kdialog and no cmdline to type a path into
+                // either: the way in is the launcher (dbml-ui <file>)
+                app.set_message_kind(ToastKind::Error, "no file dialog available — open via the launcher: dbml-ui <file>");
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                // the web build has no file system or dialogs yet
+                app.set_message_kind(ToastKind::Info, "file dialogs aren't available in the web build yet");
+            }
         }
         Message::NewDiagram => app.new_diagram(),
         Message::NewTab => app.new_tab(),
@@ -3668,38 +3752,14 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
             let kind = ExportKind::Sql(dialect);
             let default_name = kind.default_name(&app.export_stem());
             let (filter_name, patterns) = kind.filter();
-            let title = kind.title();
-            let (tx, rx) = smol::channel::bounded(1);
-            std::thread::spawn(move || {
-                let outcome =
-                    pick_save_path_blocking(&default_name, filter_name, patterns, title);
-                let _ = smol::block_on(tx.send(outcome));
-            });
-            return iced::Task::future(async move {
-                match rx.recv().await {
-                    Ok(PickOutcome::Chosen(p)) => Message::ExportTo(ExportKind::Sql(dialect), p),
-                    _ => Message::PickerDismissed,
-                }
-            });
+            return export_pick_task(kind, default_name, filter_name, patterns, kind.title());
         }
         Message::ExportAs(kind) => {
             app.export_menu_open = false;
             app.export_menu_sql_open = false;
             let default_name = kind.default_name(&app.export_stem());
             let (filter_name, patterns) = kind.filter();
-            let title = kind.title();
-            let (tx, rx) = smol::channel::bounded(1);
-            std::thread::spawn(move || {
-                let outcome =
-                    pick_save_path_blocking(&default_name, filter_name, patterns, title);
-                let _ = smol::block_on(tx.send(outcome));
-            });
-            return iced::Task::future(async move {
-                match rx.recv().await {
-                    Ok(PickOutcome::Chosen(p)) => Message::ExportTo(kind, p),
-                    _ => Message::PickerDismissed,
-                }
-            });
+            return export_pick_task(kind, default_name, filter_name, patterns, kind.title());
         }
         Message::ExportTo(kind, path) => {
             let result = match kind {
@@ -3758,7 +3818,7 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
         Message::Tick => {
             // ease every edge's highlight toward its hover target with the
             // real elapsed delta (fade-in ~0.22s, fade-out ~0.30s)
-            let now = std::time::Instant::now();
+            let now = web_time::Instant::now();
             let dt = app
                 .last_tick
                 .map_or(0.016, |t| (now - t).as_secs_f32().min(0.1));
@@ -3894,7 +3954,6 @@ impl App {
         self.cur_mut().editor_hscroll = 0.0;
         self.cur_mut().doc_open = true;
         self.focus = Focus::Editor;
-
     }
 
     /// True when editing is notepad-style (no modal operators).
@@ -4309,7 +4368,7 @@ impl App {
     /// the same side effects a user scroll has (animation cleared, hover
     /// dismissed, reveal-timer restarted).
     fn apply_scroll_target(app: &mut App, vertical: bool, target: f32) {
-        app.last_editor_scroll = Some(std::time::Instant::now());
+        app.last_editor_scroll = Some(web_time::Instant::now());
         app.editor_hover = None;
         app.cur_mut().scroll_anim = None;
         app.cur_mut().scroll_target = None;
@@ -5073,7 +5132,7 @@ impl App {
                     mods.contains(KeyModifiers::SHIFT),
                     mods.contains(KeyModifiers::ALT),
                 );
-                self.bridged_chord = Some((code, std::time::Instant::now()));
+                self.bridged_chord = Some((code, web_time::Instant::now()));
             } else {
                 // a stale switch (the DE ate the ctrl release): heal it —
                 // this key is a plain key
@@ -5089,7 +5148,7 @@ impl App {
                 {
                     self.last_bare = Some((
                         code,
-                        std::time::Instant::now(),
+                        web_time::Instant::now(),
                         self.editor().buf.history_len(),
                     ));
                 }
@@ -5375,7 +5434,7 @@ impl App {
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL)
                 && self.editor().mode != editor::Mode::Insert =>
             {
-                self.last_scroll_chord = Some(std::time::Instant::now());
+                self.last_scroll_chord = Some(web_time::Instant::now());
                 // the DE re-injection: the stripped twin of this very press
                 // may have armed the delete operator — a ctrl chord never
                 // leaves one armed
@@ -5386,7 +5445,7 @@ impl App {
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL)
                 && self.editor().mode != editor::Mode::Insert =>
             {
-                self.last_scroll_chord = Some(std::time::Instant::now());
+                self.last_scroll_chord = Some(web_time::Instant::now());
                 self.editor_mut().cancel_pending();
                 self.half_page(-1.0);
                 return;
@@ -5412,7 +5471,7 @@ impl App {
                 if matches!(key.code, KeyCode::Char('d') | KeyCode::Char('u'))
                     && !key.modifiers.contains(KeyModifiers::CONTROL)
                 {
-                    self.last_scroll_chord = Some(std::time::Instant::now());
+                    self.last_scroll_chord = Some(web_time::Instant::now());
                     return;
                 }
             } else {
@@ -5975,7 +6034,7 @@ impl App {
         self.cur_mut().scroll_anim = Some(ScrollAnim {
             scroll_from: from,
             scroll_to: to,
-            started: std::time::Instant::now(),
+            started: web_time::Instant::now(),
             duration: scroll_duration_override().unwrap_or(duration_ms / 1000.0),
             cursor,
         });
@@ -7120,7 +7179,7 @@ TableGroup g { a c }
         // aged past the TTL, a tick clears it (the subscription's tick gate
         // stays hot while a toast is up, so these ticks do arrive)
         app.message_since =
-            Some(std::time::Instant::now() - TOAST_TTL - std::time::Duration::from_millis(1));
+            Some(web_time::Instant::now() - TOAST_TTL - std::time::Duration::from_millis(1));
         let _ = update(&mut app, Message::Tick);
         assert!(app.message.is_none());
         assert!(app.message_since.is_none(), "the gate drops with the toast");
@@ -8992,7 +9051,7 @@ mod scroll_tests {
         );
         force_finish(&mut app);
         app.last_scroll_chord =
-            Some(std::time::Instant::now() - SCROLL_CHORD_ROLLOUT - std::time::Duration::from_millis(1));
+            Some(web_time::Instant::now() - SCROLL_CHORD_ROLLOUT - std::time::Duration::from_millis(1));
         let _ = update(
             &mut app,
             Message::KeyPressed(KeyCode::Char('d'), KeyModifiers::NONE),
@@ -12764,7 +12823,7 @@ mod yank_flash_tests {
         let _ = update(&mut app, Message::Tick);
         assert!(app.editor().yank_flash.is_some(), "within the 250ms window");
         app.editor_mut().yank_flash.as_mut().unwrap().started =
-            std::time::Instant::now() - std::time::Duration::from_millis(400);
+            web_time::Instant::now() - std::time::Duration::from_millis(400);
         let _ = update(&mut app, Message::Tick);
         assert!(app.editor().yank_flash.is_none(), "expired");
     }

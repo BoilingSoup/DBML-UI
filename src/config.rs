@@ -5,6 +5,57 @@
 //! — no serde dependency for two keys. Saves are best-effort: preferences
 //! are cosmetic, so failures are silent.
 
+/// Serializes config file access. Reentrant: tests hold it across a
+/// whole test body while production code inside (`save` from a save
+/// flow) takes it again on the same thread — and `save`/`load` take it
+/// internally, so no caller can write the config file unserialized
+/// (test-suite config files were getting cross-written). Hand-rolled:
+/// `std::sync::ReentrantLock` is unstable at this toolchain.
+pub static CONFIG_ENV_LOCK: ReentrantFlag = ReentrantFlag {
+    owner: std::sync::Mutex::new(None),
+    signal: std::sync::Condvar::new(),
+};
+
+pub struct ReentrantFlag {
+    owner: std::sync::Mutex<Option<std::thread::ThreadId>>,
+    signal: std::sync::Condvar,
+}
+
+impl ReentrantFlag {
+    pub fn lock(&self) -> ReentrantGuard<'_> {
+        let id = std::thread::current().id();
+        let mut owner = self.owner.lock().unwrap_or_else(|e| e.into_inner());
+        if *owner == Some(id) {
+            // same-thread re-entry: the outermost guard releases
+            return ReentrantGuard { flag: self, top: false };
+        }
+        while owner.is_some() {
+            owner = self.signal.wait(owner).unwrap_or_else(|e| e.into_inner());
+        }
+        *owner = Some(id);
+        ReentrantGuard { flag: self, top: true }
+    }
+}
+
+pub struct ReentrantGuard<'a> {
+    flag: &'a ReentrantFlag,
+    top: bool,
+}
+
+impl Drop for ReentrantGuard<'_> {
+    fn drop(&mut self) {
+        if self.top {
+            let mut owner = self.flag.owner.lock().unwrap_or_else(|e| e.into_inner());
+            *owner = None;
+            self.flag.signal.notify_all();
+        }
+    }
+}
+
+
+
+
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     /// Vim modal editing; false = Regular notepad-style editing.
@@ -29,7 +80,14 @@ impl Default for Config {
 pub const RECENT_CAP: usize = 8;
 
 impl Config {
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn path() -> std::path::PathBuf {
+        #[cfg(test)]
+        if let Ok(g) = CONFIG_PATH_OVERRIDE.lock() {
+            if let Some(p) = g.as_ref() {
+                return p.clone();
+            }
+        }
         if let Ok(p) = std::env::var("DBML_UI_CONFIG") {
             return std::path::PathBuf::from(p);
         }
@@ -43,19 +101,26 @@ impl Config {
     }
 
     pub fn load() -> Config {
+        let _g = CONFIG_ENV_LOCK.lock();
+        #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
         let mut c = Config::default();
-        let Ok(text) = std::fs::read_to_string(Self::path()) else {
-            return c;
-        };
-        for line in text.lines() {
-            if let Some(v) = line.strip_prefix("vim=") {
-                c.vim = v.trim() != "0";
-            } else if let Some(v) = line.strip_prefix("fmt_on_save=") {
-                c.fmt_on_save = v.trim() != "0";
-            } else if let Some(p) = line.strip_prefix("recent=") {
-                let p = p.trim();
-                if !p.is_empty() && !c.recent.iter().any(|r| r == p) {
-                    c.recent.push(p.to_string());
+        // the web build has no file system: defaults only (a
+        // localStorage mirror is a later milestone)
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let Ok(text) = std::fs::read_to_string(Self::path()) else {
+                return c;
+            };
+            for line in text.lines() {
+                if let Some(v) = line.strip_prefix("vim=") {
+                    c.vim = v.trim() != "0";
+                } else if let Some(v) = line.strip_prefix("fmt_on_save=") {
+                    c.fmt_on_save = v.trim() != "0";
+                } else if let Some(p) = line.strip_prefix("recent=") {
+                    let p = p.trim();
+                    if !p.is_empty() && !c.recent.iter().any(|r| r == p) {
+                        c.recent.push(p.to_string());
+                    }
                 }
             }
         }
@@ -63,21 +128,27 @@ impl Config {
     }
 
     pub fn save(&self) {
-        let p = Self::path();
-        if let Some(dir) = p.parent() {
-            let _ = std::fs::create_dir_all(dir);
+        // the web build has no file system: the config lives for the
+        // session only
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _g = CONFIG_ENV_LOCK.lock();
+            let p = Self::path();
+            if let Some(dir) = p.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let mut out = format!(
+                "vim={}\nfmt_on_save={}\n",
+                if self.vim { 1 } else { 0 },
+                if self.fmt_on_save { 1 } else { 0 }
+            );
+            for r in &self.recent {
+                out.push_str("recent=");
+                out.push_str(r);
+                out.push('\n');
+            }
+            let _ = std::fs::write(p, out);
         }
-        let mut out = format!(
-            "vim={}\nfmt_on_save={}\n",
-            if self.vim { 1 } else { 0 },
-            if self.fmt_on_save { 1 } else { 0 }
-        );
-        for r in &self.recent {
-            out.push_str("recent=");
-            out.push_str(r);
-            out.push('\n');
-        }
-        let _ = std::fs::write(p, out);
     }
 
     /// Push to the front, dropping duplicates and overflowing entries.
@@ -88,9 +159,24 @@ impl Config {
     }
 }
 
-/// Serializes tests that mutate the process-global DBML_UI_CONFIG.
+/// Test-only config path override. Process env mutation (`set_var`) is
+/// not thread-safe on Unix — it can corrupt a concurrent `getenv` read
+/// anywhere in the process, which flaked config asserts ~30% of full
+/// runs even with every writer serialized by CONFIG_ENV_LOCK. Tests that
+/// need a private config set this instead; no env, no cross-thread race.
 #[cfg(test)]
-pub static CONFIG_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static CONFIG_PATH_OVERRIDE: std::sync::Mutex<Option<std::path::PathBuf>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+pub fn set_config_path_override(p: std::path::PathBuf) {
+    *CONFIG_PATH_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = Some(p);
+}
+
+#[cfg(test)]
+pub fn clear_config_path_override() {
+    *CONFIG_PATH_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
 
 #[cfg(test)]
 mod tests {
@@ -99,8 +185,7 @@ mod tests {
     #[test]
     fn roundtrip_and_recent_rules() {
         let _g = super::CONFIG_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+            .lock();
         let dir = std::env::temp_dir().join(format!("dbml-ui-cfg-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("config");
@@ -131,8 +216,7 @@ mod tests {
     #[test]
     fn missing_file_is_default_vim() {
         let _g = super::CONFIG_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+            .lock();
         std::env::set_var(
             "DBML_UI_CONFIG",
             std::env::temp_dir().join("dbml-ui-cfg-missing-none"),
