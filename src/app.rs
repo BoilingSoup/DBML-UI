@@ -1,6 +1,6 @@
 //! Application state and the iced update loop.
 
-use crate::canvas::diagram::{cell_size, hit_test, to_cell_f, to_px, CELL_ASPECT, MARGIN_CELLS};
+use crate::canvas::diagram::{cell_size, to_cell_f, to_px, CELL_ASPECT, MARGIN_CELLS};
 use crate::editor::{self, Action, Editor, KeyCode, KeyEvent, KeyModifiers};
 use dbml_ui::dbml::ast::Span;
 use dbml_ui::layout::{self, Layout};
@@ -11,6 +11,9 @@ use iced::{Point, Vector};
 pub enum Message {
     CanvasPressed(Point),
     CanvasMoved(Point),
+    /// The pointer left the diagram section (the canvas sees every
+    /// window-level move): every hover effect drops.
+    CanvasLeft,
     CanvasReleased(Point),
     /// Wheel notches (normalized: lines, or pixels / 40).
     Wheel(f32),
@@ -51,7 +54,6 @@ pub enum Message {
     /// changes; the GPU-loss restart never takes this path.
     WindowCloseRequested,
     /// Exit confirmation: save every dirty tab, then exit.
-    ExitSaveAll,
     /// Exit confirmation: drop unsaved edits (the session is rewritten
     /// with saved content so they never resurrect) and exit.
     ExitDiscard,
@@ -64,10 +66,17 @@ pub enum Message {
     TabCloseDiscard,
     /// Tab-close confirmation dismissed.
     TabCloseCancel,
-    /// Export the active diagram to SVG next to its file.
-    ExportSvg,
-    /// Export the active diagram's DDL (Postgres) next to its file.
-    ExportSql,
+    /// Export the active diagram to SVG/PNG/DDL through the native save
+    /// dialog (the menu items spawn it; the confirmed path lands in
+    /// ExportTo).
+    ExportAs(ExportKind),
+    ExportTo(ExportKind, String),
+    /// The SQL cascade row: the dialect picked in the submenu.
+    ExportSql(dbml_ui::dbml::sql::Dialect),
+    ToggleExportMenu,
+    ToggleExportSqlMenu,
+    ExportSqlMenuOpen(bool),
+    PanelSwallowed,
     /// Toggle the diagram's Highlight mode: every relationship renders
     /// hovered (highlight + flow animation).
     ToggleEdgeHighlight,
@@ -156,6 +165,9 @@ pub enum Message {
     DiagnosticGoto(usize),
     DiagnosticSelectFix(usize),
     DiagnosticToggleFixMenu,
+    /// A press in the expanded suggestion's card body outside the fix
+    /// dropdown: the dropdown closes (their autoHide).
+    DiagnosticDismissFixMenu,
     /// A diagnostics group header was clicked: collapse/expand it.
     ToggleDiagnosticsGroup(String),
     /// A real keyboard event: the RAW fields (pre-mapping, for key debug)
@@ -309,6 +321,17 @@ const TOAST_TTL: std::time::Duration = std::time::Duration::from_secs(3);
 const SPLIT_STEP: f32 = 0.02;
 const SPLIT_MIN: f32 = 0.15;
 const SPLIT_MAX: f32 = 0.85;
+/// Absolute pane floors beneath the split ratios: the editor keeps its
+/// toolbars/diagnostics readable (500px), the diagram keeps the export
+/// dropdown usable (340px). clamp_split translates them into split
+/// bounds on the current window width.
+const EDITOR_MIN_PX: f32 = 500.0;
+const DIAGRAM_MIN_PX: f32 = 340.0;
+/// One FillPortion unit (view.rs maps the split through
+/// FillPortion((split * 1000) as u16), truncating to u16): without this
+/// much bias the truncated portions can leave a pane a pixel under its
+/// floor, so the translated bounds are widened by one portion unit.
+const PORTION_SLACK: f32 = 0.001;
 
 /// Vim's 'scrolloff': the cursor is kept at least this many screen lines
 /// away from the top and bottom of the window whenever the buffer has
@@ -401,6 +424,16 @@ pub enum StickyCorner {
     TopRight,
     BottomLeft,
     BottomRight,
+}
+
+/// What a raise entry refers to: tables and stickies share ONE raise
+/// order, so the last-grabbed item wins over everything it crosses —
+/// a table dropped on a sticky keeps that priority (and a sticky
+/// grabbed afterwards takes it back), the same rule in both directions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RaisedItem {
+    Table(String),
+    Note(String),
 }
 
 /// A drag in progress, started by a canvas press and tracked window-wide
@@ -583,10 +616,13 @@ pub struct Tab {
     /// User-dragged table positions (diagram cells, by table name);
     /// survive re-parses while editing.
     pub table_pos: std::collections::HashMap<String, (i32, i32)>,
-    /// Table titles in raise order (most recently grabbed last): the
-    /// diagram paints them after every other box, so a dragged table
-    /// KEEPS visual priority over whatever it was dropped onto.
-    pub z_order: Vec<String>,
+    /// Raise order across tables AND stickies (most recently grabbed
+    /// last): the diagram paints a raised item after every unraised one,
+    /// so the last-grabbed item KEEPS visual priority over whatever it
+    /// was dropped onto — tables over stickies and stickies over tables
+    /// alike. Unraised items keep the static order (tables, then
+    /// stickies floating above them).
+    pub item_z: Vec<RaisedItem>,
     /// Sticky-note rects (x, y, w, h in cells, by note name) — user
     /// drags + corner resizes; absent notes keep the auto slot.
     pub note_pos: std::collections::HashMap<String, (i32, i32, i32, i32)>,
@@ -645,7 +681,7 @@ impl Tab {
             editor_hscroll: 0.0,
             scroll_anim: None,
             scroll_target: None,
-            z_order: Vec::new(),
+            item_z: Vec::new(),
             zoom: crate::view::BASE_ZOOM,
             pan: Vector::default(),
             hover_edges: Vec::new(),
@@ -726,6 +762,32 @@ impl Tab {
             None => "Untitled".to_string(),
         }
     }
+
+    /// The file name the Save As dialog pre-fills: the current file's
+    /// name, or Untitled.dbml for the non-file-backed buffers (New
+    /// Diagram / Imported SQL).
+    pub fn save_as_default_name(&self) -> String {
+        match (&self.file, self.doc_open) {
+            (Some(f), true) => f
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "Untitled.dbml".to_string()),
+            _ => "Untitled.dbml".to_string(),
+        }
+    }
+}
+
+/// The toast's severity: drives the pill's accent dot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToastKind {
+    /// An action completed.
+    Success,
+    /// A neutral state notice.
+    Info,
+    /// Attention needed — nothing broke, but something didn't happen.
+    Warning,
+    /// An operation failed.
+    Error,
 }
 
 pub struct App {
@@ -794,6 +856,14 @@ pub struct App {
     pub diagnostics_selected_fix: usize,
     /// The quick-fix dropdown's menu is open.
     pub diagnostics_fix_menu: bool,
+    /// When the fix menu opened: the fade-in samples this (the ticks run
+    /// while the menu is up).
+    pub diagnostics_fix_menu_since: Option<std::time::Instant>,
+    /// The diagram's export dropdown is open (the consolidated Export
+    /// button on the pane's top edge).
+    pub export_menu_open: bool,
+    /// The Export SQL dialect submenu is expanded (hover on the row).
+    pub export_menu_sql_open: bool,
     /// Mouse interaction in flight.
     pub drag: Drag,
     /// Last known cursor position over the diagram canvas (local px).
@@ -827,6 +897,8 @@ pub struct App {
     last_scroll_chord: Option<std::time::Instant>,
     /// Toast pill (bottom-right overlay; see `set_message`).
     pub message: Option<String>,
+    /// The toast's severity: drives the pill's accent dot.
+    pub message_kind: ToastKind,
     /// When the toast was set: the tick clears it after `TOAST_TTL` (the
     /// subscription keeps ticks hot while a toast is up), any keypress
     /// supersedes it sooner.
@@ -839,7 +911,6 @@ pub struct App {
     /// overlay scrollbars stay revealed for a moment after it, Monaco-style.
     pub last_editor_scroll: Option<std::time::Instant>,
     /// Help overlay visibility.
-    pub show_help: bool,
     /// The diagnostics panel (dbdiagram's problems pop-out) is open.
     pub diagnostics_open: bool,
     /// The hovered toolbar button's tooltip label (None = no hover).
@@ -873,6 +944,12 @@ pub struct App {
     /// duplicate of the same physical press and is dropped when it arrives.
     /// KeyCode, not char: the chord set is not letters-only (ctrl+space).
     stripped_chord: Option<(KeyCode, std::time::Instant)>,
+    /// The last NON-CHAR key echo (arrows and other named keys) — the DE
+    /// re-injection pair delivers ONE physical press as two echoes, so a
+    /// shift+arrow selected two cells (the user's "highlights 2 chars").
+    /// A same-code+mods echo inside 80ms is the twin and is dropped (key
+    /// repeat never lands that early: winit's delay is 250ms+).
+    last_named_echo: Option<(KeyCode, KeyModifiers, std::time::Instant)>,
     /// The last bare (unflagged) key typed in insert mode — the DE
     /// re-injection's stripped copy whose flagged twin carries the chord.
     /// The usize is the buffer's history length BEFORE the key ran: the
@@ -928,6 +1005,9 @@ impl App {
             chain_save_as: false,
             diagnostics_selected_fix: 0,
             diagnostics_fix_menu: false,
+            diagnostics_fix_menu_since: None,
+            export_menu_open: false,
+            export_menu_sql_open: false,
             last_tick: None,
             drag: Drag::None,
             canvas_cursor: None,
@@ -942,10 +1022,10 @@ impl App {
             last_scroll_chord: None,
             message: None,
             message_since: None,
+            message_kind: ToastKind::Info,
             completion: None,
             editor_hover: None,
             last_editor_scroll: None,
-            show_help: false,
             diagnostics_open: false,
             vim_menu: None,
             toolbar_tip: None,
@@ -956,6 +1036,7 @@ impl App {
             tab_close_confirm: None,
             session_dirty: false,
             stripped_chord: None,
+            last_named_echo: None,
             last_bare: None,
             bridged_chord: None,
             diagnostics_collapsed: Default::default(),
@@ -976,10 +1057,12 @@ impl App {
     /// tab's buffer (unsaved edits included), cursor, vim mode, scrolls,
     /// backing file, plus the split.
     pub fn session_snapshot(&self) -> crate::session::Session {
-        let mode_of = |m: editor::Mode| match m {
-            editor::Mode::Normal => 0u8,
-            editor::Mode::Insert => 1,
-            editor::Mode::Visual => 2,
+        // the editing mode is the config's global preference: every tab
+        // snapshots the configured mode (restored tabs come back in it)
+        let mode = if self.config.vim {
+            editor::Mode::Normal
+        } else {
+            editor::Mode::Insert
         };
         // splash (start-screen) tabs carry no state worth restoring: they
         // drop out of the snapshot entirely. Restore's filter decides the
@@ -997,7 +1080,7 @@ impl App {
                     let p = t.editor.buf.pos();
                     (p.row, p.col)
                 },
-                mode: mode_of(t.editor.mode),
+                mode: if mode == editor::Mode::Normal { 0u8 } else { 1 },
                 scroll: t.editor_scroll,
                 hscroll: t.editor_hscroll,
                 doc_open: true,
@@ -1007,6 +1090,38 @@ impl App {
             active: self.active,
             split: self.split,
             tabs,
+            clean: false,
+        }
+    }
+
+    /// The clean-exit record: which files were open (paths, tab order,
+    /// active tab, split) with NO buffer contents — the next start reopens
+    /// them from disk. Untitled tabs drop out (there is no path to
+    /// reopen), so their unsaved state is intentionally lost on a manual
+    /// exit; the record holds no edits to resurrect.
+    pub fn clean_record(&self) -> crate::session::Session {
+        let mut tabs: Vec<crate::session::SessionTab> = Vec::new();
+        let mut active = 0usize;
+        for (i, t) in self.tabs.iter().enumerate() {
+            let Some(file) = &t.file else { continue };
+            if i == self.active {
+                active = tabs.len();
+            }
+            tabs.push(crate::session::SessionTab {
+                file: Some(file.to_string_lossy().into_owned()),
+                text: String::new(),
+                cursor: (0, 0),
+                mode: 0,
+                scroll: 0.0,
+                hscroll: 0.0,
+                doc_open: true,
+            });
+        }
+        crate::session::Session {
+            active,
+            split: self.split,
+            tabs,
+            clean: true,
         }
     }
 
@@ -1016,8 +1131,21 @@ impl App {
     /// the split are restored. `is_modified` compares against disk, so the
     /// dirty flags land exactly where they were.
     pub fn restore_session(&mut self, s: crate::session::Session) {
+        // a clean record holds no buffers to restore verbatim; it takes
+        // the file-only path (defensive — the boot gate routes it here)
+        if s.clean {
+            self.restore_open_files(s);
+            return;
+        }
         let mut dropped = 0usize;
-        let mode_of = |m: u8| match m {
+        let mode_of = |_m: u8| {
+            if self.config.vim {
+                editor::Mode::Normal
+            } else {
+                editor::Mode::Insert
+            }
+        };
+        let _unused = |m: u8| match m {
             1 => editor::Mode::Insert,
             2 => editor::Mode::Visual,
             _ => editor::Mode::Normal,
@@ -1083,9 +1211,57 @@ impl App {
         }
         self.tabs = tabs;
         self.active = s.active.min(self.tabs.len() - 1);
-        self.split = s.split.clamp(0.1, 0.9);
+        // restored splits obey the same pane floors as live drags
+        self.split = self.clamp_split(s.split);
         // dropped tabs leave the session stale: the SessionTick rewrites
         // the file without them
+        self.session_dirty = dropped > 0;
+    }
+
+    /// Reopen the files named by a clean-exit record: each path is read
+    /// fresh from disk (the record carries no buffer text). A path that
+    /// has vanished (moved, renamed, deleted) — or that cannot be read at
+    /// all — skips silently. Nothing restorable leaves the boot shape
+    /// untouched: the single splash tab stays.
+    pub fn restore_open_files(&mut self, s: crate::session::Session) {
+        let mut tabs: Vec<Tab> = Vec::new();
+        let mut dropped = 0usize;
+        let mode = if self.config.vim {
+            editor::Mode::Normal
+        } else {
+            editor::Mode::Insert
+        };
+        for st in &s.tabs {
+            let Some(path) = st.file.as_ref().map(std::path::PathBuf::from) else {
+                continue;
+            };
+            let text = match std::fs::read_to_string(&path) {
+                Ok(text) => text,
+                Err(_) => {
+                    dropped += 1;
+                    continue;
+                }
+            };
+            let mut tab = Tab::with_source(text.clone());
+            tab.file = Some(path);
+            // the baseline is the disk content just read: unmodified
+            tab.saved_text = text;
+            tab.editor.mode = mode;
+            tabs.push(tab);
+        }
+        if tabs.is_empty() {
+            // every path failed (or none was recorded): keep the splash,
+            // and prune the dead record on the next tick so the same
+            // paths don't retry every boot
+            if dropped > 0 {
+                self.session_dirty = true;
+            }
+            return;
+        }
+        self.tabs = tabs;
+        self.active = s.active.min(self.tabs.len() - 1);
+        // restored splits obey the same pane floors as live drags
+        self.split = self.clamp_split(s.split);
         self.session_dirty = dropped > 0;
     }
 
@@ -1099,48 +1275,6 @@ impl App {
     /// trigger).
     pub fn any_dirty(&self) -> bool {
         self.tabs.iter().any(|t| t.is_modified())
-    }
-
-    /// Save every dirty tab that has a file. False when something blocks
-    /// the exit (an untitled dirty tab, or a write failure) — the confirm
-    /// stays up.
-    fn save_all(&mut self) -> bool {
-        if self.tabs.iter().any(|t| t.is_modified() && t.file.is_none()) {
-            self.set_message("an untitled tab has unsaved changes — save it first");
-            return false;
-        }
-        let dirty: Vec<usize> = (0..self.tabs.len())
-            .filter(|&i| self.tabs[i].is_modified())
-            .collect();
-        let active = self.active;
-        for i in dirty {
-            self.active = i;
-            if let Err(e) = self.save_file(None) {
-                self.set_message(format!("save failed: {e}"));
-                self.active = active;
-                return false;
-            }
-        }
-        self.active = active;
-        true
-    }
-
-    /// Write the session synchronously on the way out (the 2s autosave
-    /// cannot run during exit). With `discard_unsaved`, dirty buffers are
-    /// snapshotted at their SAVED content — the discarded edits never
-    /// resurrect on the next launch.
-    fn write_session_now(&self, discard_unsaved: bool) {
-        let mut snap = self.session_snapshot();
-        if discard_unsaved {
-            for (i, t) in self.tabs.iter().enumerate() {
-                if t.is_modified() {
-                    if let Some(st) = snap.tabs.get_mut(i) {
-                        st.text = t.saved_text.clone();
-                    }
-                }
-            }
-        }
-        let _ = crate::session::save(&snap);
     }
 
     // ------------------------- accessors -------------------------
@@ -1206,7 +1340,13 @@ impl App {
     /// Cleared by the tick after `TOAST_TTL` (the tick gate stays hot
     /// while a toast is up) or superseded by the next keypress.
     fn set_message(&mut self, msg: impl Into<String>) {
+        self.set_message_kind(ToastKind::Info, msg);
+    }
+
+    /// The severity-carrying form: the pill's accent dot follows the kind.
+    fn set_message_kind(&mut self, kind: ToastKind, msg: impl Into<String>) {
         self.message = Some(msg.into());
+        self.message_kind = kind;
         self.message_since = Some(std::time::Instant::now());
     }
 
@@ -1355,6 +1495,15 @@ impl App {
     /// state swaps itself; hover animation lives on the Tab with the edge
     /// indices it indexes.)
     fn after_tab_switch(&mut self) {
+        // the editing mode is a global preference: a tab opened/saved
+        // under the other mode comes back in the config's mode
+        self.editor_mut().mode = if self.config.vim {
+            editor::Mode::Normal
+        } else {
+            editor::Mode::Insert
+        };
+        self.editor_mut().visual_linewise = false;
+        self.editor_mut().buf.cancel_selection();
         self.completion = None;
         self.editor_hover = None;
         self.pending_jump = None;
@@ -1540,11 +1689,11 @@ impl App {
         };
         self.editor_mut()
             .set_register(t.split('\n').map(str::to_string).collect());
-        let msg = match self.copy_to_system(&t) {
-            Ok(()) => format!("copied {} chars", t.chars().count()),
-            Err(e) => format!("clipboard: {e}"),
-        };
-        self.set_message(msg);
+        // silent on success (the selection is its own feedback); only a
+        // clipboard failure toasts
+        if let Err(e) = self.copy_to_system(&t) {
+            self.set_message_kind(ToastKind::Error, format!("clipboard: {e}"));
+        }
     }
 
     /// Ctrl+X / menu Cut: the selection into the register and the system
@@ -1555,11 +1704,10 @@ impl App {
         };
         self.editor_mut()
             .set_register(t.split('\n').map(str::to_string).collect());
-        let msg = match self.copy_to_system(&t) {
-            Ok(()) => format!("cut {} chars", t.chars().count()),
-            Err(e) => format!("clipboard: {e}"),
-        };
-        self.set_message(msg);
+        // silent on success; only a clipboard failure toasts
+        if let Err(e) = self.copy_to_system(&t) {
+            self.set_message_kind(ToastKind::Error, format!("clipboard: {e}"));
+        }
         self.after_edit(editor::Action::Changed);
         self.follow_cursor_horizontal();
         self.keep_cursor_visible();
@@ -1600,7 +1748,7 @@ impl App {
             None => {
                 let reg = self.editor().register_lines();
                 if reg.is_empty() {
-                    self.set_message("nothing to paste");
+                    // silent: an empty clipboard is a normal state, not an event
                     return;
                 }
                 reg.join("\n")
@@ -1669,9 +1817,8 @@ impl App {
             local.x,
             local.y + crate::view::EDITOR_CANVAS_TOP,
         ));
-        let has_definition = crate::canvas::editor::word_at(self, local)
-            .and_then(|w| self.definition_span_of(&w))
-            .is_some();
+        let pos = crate::canvas::editor::px_to_pos(self, local);
+        let has_definition = self.definition_span_at(pos.row, pos.col).is_some();
         let menu = EditorMenu {
             at,
             has_selection: self.editor().buf.selection_anchor().is_some(),
@@ -1737,6 +1884,31 @@ impl App {
         self.keep_cursor_visible();
     }
 
+    /// Freeze the auto-placed stickies at their laid-out rects. A drag
+    /// that reflows the diagram (a table or group move grows the
+    /// extents) would otherwise slide the notes' auto row beneath the
+    /// pointer — the notes hold still instead, like the tables the drag
+    /// passes over. User-dragged/resized stickies already carry a
+    /// note_pos override; the untouched ones join them. Auto-arrange
+    /// clears note_pos, which reflows the row again.
+    fn pin_auto_notes(&mut self) {
+        let unpinned: Vec<(String, (i32, i32, i32, i32))> = self
+            .cur()
+            .diagram
+            .notes
+            .iter()
+            .filter(|n| !self.cur().note_pos.contains_key(&n.name))
+            .map(|n| (n.name.clone(), n.rect))
+            .collect();
+        if unpinned.is_empty() {
+            return;
+        }
+        let pos = &mut self.cur_mut().note_pos;
+        for (name, rect) in unpinned {
+            pos.insert(name, rect);
+        }
+    }
+
     fn canvas_pressed(&mut self, p: Point) {
         use crate::canvas::diagram as dia;
         self.canvas_cursor = Some(p);
@@ -1773,51 +1945,66 @@ impl App {
                 self.selected_note = None;
             }
         }
-        // sticky notes float above the tables: a CORNER press resizes,
-        // a body press drags
-        if let Some((n, corner)) = crate::canvas::notes::note_corner_hit(
-            &self.cur().diagram,
-            self.cur().zoom,
-            self.cur().pan,
-            p,
-        ) {
+        // the TOPMOST item at the press wins — the click belongs to what
+        // you see: a table raised over a sticky grabs the TABLE (its
+        // paint priority holds), a sticky over a table grabs the sticky.
+        // The old fixed sticky-first hit order clicked THROUGH a raised
+        // table to the sticky beneath it.
+        let top = {
+            let cur = self.cur();
+            dia::hit_topmost(&cur.diagram, cur.zoom, cur.pan, p, &cur.item_z)
+        };
+        if let Some(dia::PaintItem::Note(n)) = top {
             let (name, rect) = (n.name.clone(), n.rect);
-            // the pinned anchor: the OPPOSITE corner, in cells
-            let anchor = match corner {
-                crate::app::StickyCorner::TopLeft => (
-                    rect.0 as f32 + rect.2 as f32,
-                    rect.1 as f32 + rect.3 as f32,
-                ),
-                crate::app::StickyCorner::TopRight => {
-                    (rect.0 as f32, rect.1 as f32 + rect.3 as f32)
+            // a CORNER press (the note is topmost) resizes; a body press
+            // drags
+            let corner = crate::canvas::notes::note_corner_hit(
+                &self.cur().diagram,
+                self.cur().zoom,
+                self.cur().pan,
+                p,
+            )
+            .filter(|(h, _)| h.name == name)
+            .map(|(_, corner)| corner);
+            // raise at grab: the sticky paints last during the drag AND
+            // keeps that priority after the drop (the shared raise order)
+            let z = &mut self.cur_mut().item_z;
+            z.retain(|r| *r != RaisedItem::Note(name.clone()));
+            z.push(RaisedItem::Note(name.clone()));
+            match corner {
+                Some(corner) => {
+                    // the pinned anchor: the OPPOSITE corner, in cells
+                    let anchor = match corner {
+                        crate::app::StickyCorner::TopLeft => (
+                            rect.0 as f32 + rect.2 as f32,
+                            rect.1 as f32 + rect.3 as f32,
+                        ),
+                        crate::app::StickyCorner::TopRight => {
+                            (rect.0 as f32, rect.1 as f32 + rect.3 as f32)
+                        }
+                        crate::app::StickyCorner::BottomLeft => {
+                            (rect.0 as f32 + rect.2 as f32, rect.1 as f32)
+                        }
+                        crate::app::StickyCorner::BottomRight => {
+                            (rect.0 as f32, rect.1 as f32)
+                        }
+                    };
+                    self.drag = Drag::StickyResize {
+                        name,
+                        corner,
+                        anchor,
+                        orig: rect,
+                    };
                 }
-                crate::app::StickyCorner::BottomLeft => {
-                    (rect.0 as f32 + rect.2 as f32, rect.1 as f32)
+                None => {
+                    // any press on a sticky drags it; its release-click
+                    // (no movement) selects it and parks the editor on
+                    // the block
+                    let (cx, cy) = to_cell_f(p, self.cur().zoom, self.cur().pan);
+                    let grab = (cx - rect.0 as f32, cy - rect.1 as f32);
+                    self.drag = Drag::Sticky { name, grab };
                 }
-                crate::app::StickyCorner::BottomRight => (rect.0 as f32, rect.1 as f32),
-            };
-            self.drag = Drag::StickyResize {
-                name,
-                corner,
-                anchor,
-                orig: rect,
-            };
-            return;
-        }
-        if let Some(n) = crate::canvas::notes::note_hit(
-            &self.cur().diagram,
-            self.cur().zoom,
-            self.cur().pan,
-            p,
-        ) {
-            let name = n.name.clone();
-            // any press on a sticky drags it; its release-click (no
-            // movement) selects it and parks the editor on the block
-            let (cx, cy) = to_cell_f(p, self.cur().zoom, self.cur().pan);
-            self.drag = Drag::Sticky {
-                name,
-                grab: (cx - n.rect.0 as f32, cy - n.rect.1 as f32),
-            };
+            }
             return;
         }
         // the header-color palette glyph wins over everything on its
@@ -1880,9 +2067,9 @@ impl App {
         let on_group_band =
             crate::canvas::groups::group_label_hit(&self.cur().diagram, self.cur().zoom, self.cur().pan, p)
                 .is_some();
-        if dia::hit_test(&self.cur().diagram, self.cur().zoom, self.cur().pan, p).is_none()
-            && !on_group_band
-        {
+        // open space = nothing topmost under the press (a sticky covering
+        // a line must not resurrect the line's picker from underneath)
+        if top.is_none() && !on_group_band {
             if let Some(ei) =
                 dia::edge_hit(&self.cur().diagram, self.cur().zoom, self.cur().pan, p, 7.0)
             {
@@ -1918,6 +2105,9 @@ impl App {
                         .map(|b| (b.title.clone(), (b.x, b.y)))
                 })
                 .collect::<Vec<_>>();
+            // the group's move reflows the diagram: hold the auto-placed
+            // stickies where they are for the whole drag
+            self.pin_auto_notes();
             self.drag = Drag::Group {
                 name,
                 anchor: p,
@@ -1927,17 +2117,25 @@ impl App {
             return;
         }
         // clone the grab out of the borrow: the raise below mutates the
-        // tab (z_order) and cannot hold the hit-test borrow
-        let grabbed = hit_test(&self.cur().diagram, self.cur().zoom, self.cur().pan, p)
-            .map(|b| (b.title.clone(), b.x, b.y));
+        // tab (item_z) and cannot hold the hit-test borrow. The TOPMOST
+        // table wins — the raised one you see, not the doc-order hit.
+        let grabbed = match top {
+            Some(dia::PaintItem::Table(b)) => Some((b.title.clone(), b.x, b.y)),
+            _ => None,
+        };
         match grabbed {
             Some((title, bx, by)) => {
                 let (cx, cy) = to_cell_f(p, self.cur().zoom, self.cur().pan);
                 // raise at grab: the dragged table paints last during the
-                // drag AND keeps that priority after the drop
-                let z = &mut self.cur_mut().z_order;
-                z.retain(|t| *t != title);
-                z.push(title.clone());
+                // drag AND keeps that priority after the drop — over
+                // stickies too (the shared raise order)
+                let z = &mut self.cur_mut().item_z;
+                z.retain(|r| *r != RaisedItem::Table(title.clone()));
+                z.push(RaisedItem::Table(title.clone()));
+                // the table's move reflows the diagram extents: hold the
+                // auto-placed stickies where they are for the whole drag
+                // (a dragged table must pass them like it passes tables)
+                self.pin_auto_notes();
                 self.drag = Drag::Table {
                     title,
                     grab: (cx - bx as f32, cy - by as f32),
@@ -2005,58 +2203,110 @@ impl App {
     /// lights up every ref touching the hovered column).
     fn update_hover(&mut self, p: Point) {
         use crate::canvas::diagram as dia;
-        let mut active: Vec<usize> = Vec::new();
-        if let Some(ei) = dia::edge_hit(&self.cur().diagram, self.cur().zoom, self.cur().pan, p, 7.0) {
-            active.push(ei);
+        // the export dropdown floats over the canvas: the pointer inside
+        // its region belongs to the menu — nothing beneath may hover
+        // (the canvas still receives the moves and would light tables
+        // and lines under the menu)
+        if self.pointer_in_export_dropdown() {
+            self.cur_mut().hover_edges.clear();
+            self.field_card_key = None;
+            self.table_card_key = None;
+            self.group_card_key = None;
+            return;
         }
-        if let Some((b, row)) = dia::row_at(&self.cur().diagram, self.cur().zoom, self.cur().pan, p) {
-            for ei in self.cur().diagram.edges_touching(b.node, row) {
-                if !active.contains(&ei) {
-                    active.push(ei);
+        // hover chrome belongs to the TOPMOST item at the pointer — the
+        // same rule the press follows: a table under a sticky (or under
+        // a raised table) must not light up because the pointer crossed
+        // its hidden area, a covered line must not glow, and a group's
+        // card stays down while anything covers its band
+        let top = {
+            let cur = self.cur();
+            dia::hit_topmost(&cur.diagram, cur.zoom, cur.pan, p, &cur.item_z)
+        };
+        let mut active: Vec<usize> = Vec::new();
+        let mut key = None;
+        let mut table_key = None;
+        let mut group_key = None;
+        match top {
+            Some(dia::PaintItem::Note(_)) => {
+                // a sticky has no hover chrome of its own — and it hides
+                // everything beneath it
+            }
+            Some(dia::PaintItem::Table(b)) => {
+                let (node, title) = (b.node, b.title.clone());
+                let row = dia::row_at(&self.cur().diagram, self.cur().zoom, self.cur().pan, p)
+                    .filter(|(hb, _)| hb.node == node)
+                    .map(|(_, r)| r);
+                match row {
+                    Some(row) => {
+                        for ei in self.cur().diagram.edges_touching(node, row) {
+                            if !active.contains(&ei) {
+                                active.push(ei);
+                            }
+                        }
+                        key = Some((title.clone(), row));
+                    }
+                    None => {
+                        // the header band lights ALL of its
+                        // relationships, dbdiagram-style
+                        for ei in self.cur().diagram.edges_touching_table(node) {
+                            if !active.contains(&ei) {
+                                active.push(ei);
+                            }
+                        }
+                        // the table popup: hovered header + something to
+                        // show (note / custom properties)
+                        let hb = self
+                            .cur()
+                            .diagram
+                            .boxes
+                            .iter()
+                            .find(|b| b.node == node)
+                            .cloned();
+                        if let Some(b) = hb {
+                            let top_left =
+                                crate::canvas::diagram::to_px(b.x, b.y, self.cur().zoom, self.cur().pan);
+                            let s = crate::canvas::diagram::cell_size(self.cur().zoom);
+                            if (p.y - top_left.y) / s.height < 1.0
+                                && (!b.custom.is_empty() || b.note.is_some())
+                            {
+                                table_key = Some(title);
+                            }
+                        }
+                    }
                 }
             }
-        } else if let Some(b) =
-            dia::hit_test(&self.cur().diagram, self.cur().zoom, self.cur().pan, p)
-        {
-            // a hovered table with no row under the pointer (the header
-            // band) lights ALL of its relationships, dbdiagram-style
-            for ei in self.cur().diagram.edges_touching_table(b.node) {
-                if !active.contains(&ei) {
+            None => {
+                // open space: a relationship line lights (nothing covers
+                // it) and a group band may pop its card
+                if let Some(ei) =
+                    dia::edge_hit(&self.cur().diagram, self.cur().zoom, self.cur().pan, p, 7.0)
+                {
                     active.push(ei);
                 }
+                group_key = crate::canvas::groups::group_label_hit(
+                    &self.cur().diagram,
+                    self.cur().zoom,
+                    self.cur().pan,
+                    p,
+                )
+                .filter(|g| g.note.is_some() || !g.custom.is_empty())
+                .map(|g| g.name.clone());
             }
         }
         self.cur_mut().hover_edges = active;
         // the field card's scroll resets whenever the popup's row changes:
         // a new card always opens at its top
-        let key = dia::row_at(&self.cur().diagram, self.cur().zoom, self.cur().pan, p)
-            .map(|(b, r)| (b.title.clone(), r));
         if self.field_card_key != key {
             self.field_card_key = key;
             self.field_card_scroll = 0.0;
         }
         // the table/group popups' scrolls reset the same way: a new
         // popup always opens at its top
-        let table_key = dia::hit_test(&self.cur().diagram, self.cur().zoom, self.cur().pan, p)
-            .filter(|b| {
-                let top_left = crate::canvas::diagram::to_px(b.x, b.y, self.cur().zoom, self.cur().pan);
-                let s = crate::canvas::diagram::cell_size(self.cur().zoom);
-                (p.y - top_left.y) / s.height < 1.0
-                    && (!b.custom.is_empty() || b.note.is_some())
-            })
-            .map(|b| b.title.clone());
         if self.table_card_key != table_key {
             self.table_card_key = table_key;
             self.table_card_scroll = 0.0;
         }
-        let group_key = crate::canvas::groups::group_label_hit(
-            &self.cur().diagram,
-            self.cur().zoom,
-            self.cur().pan,
-            p,
-        )
-        .filter(|g| g.note.is_some() || !g.custom.is_empty())
-        .map(|g| g.name.clone());
         if self.group_card_key != group_key {
             self.group_card_key = group_key;
             self.group_card_scroll = 0.0;
@@ -2293,6 +2543,33 @@ impl App {
         self.update_hover(p);
     }
 
+    /// The pointer left the diagram section: drop every hover effect —
+    /// the table border, the row glow, the field/table/group cards, the
+    /// sticky's drag handle and the hovered relationships. A quick hop
+    /// to the editor used to leave them all painted, because the canvas
+    /// stopped receiving moves the moment the pointer crossed the seam.
+    /// The Highlight Relationships toggle is a click state (highlight_all)
+    /// and survives, as does the sticky selection.
+    fn canvas_left(&mut self) {
+        if self.canvas_cursor.is_none()
+            && self.cur().hover_edges.is_empty()
+            && self.field_card_key.is_none()
+            && self.table_card_key.is_none()
+            && self.group_card_key.is_none()
+        {
+            return;
+        }
+        self.canvas_cursor = None;
+        self.cur_mut().hover_edges.clear();
+        // a reopened popup always starts at its top (the row-change reset)
+        self.field_card_key = None;
+        self.table_card_key = None;
+        self.group_card_key = None;
+        self.field_card_scroll = 0.0;
+        self.table_card_scroll = 0.0;
+        self.group_card_scroll = 0.0;
+    }
+
     /// Zoom continuously, keeping the point under the cursor stationary.
     fn wheel(&mut self, notches: f32) {
         let old = self.cur().zoom;
@@ -2324,7 +2601,7 @@ impl App {
         self.cur_mut().hover_edges.clear();
         // the arrangement reshapes the whole diagram: re-fit the view
         self.zoom_to_fit();
-        self.set_message("auto-arranged");
+
     }
 
     /// Zoom to fit: scale + pan so the whole diagram (every box plus a
@@ -2548,6 +2825,7 @@ pub fn subscription(_app: &App) -> iced::Subscription<Message> {
             .last_editor_scroll
             .is_some_and(|t| t.elapsed().as_millis() < 1100)
         || crate::canvas::editor::block_cursor_blinking(_app)
+        || crate::canvas::editor::caret_blinking(_app)
     {
         iced::time::every(std::time::Duration::from_millis(16)).map(|_| Message::Tick)
     } else {
@@ -2591,6 +2869,7 @@ fn named_code(n: &iced::keyboard::key::Named) -> Option<KeyCode> {
         iced::keyboard::key::Named::Delete => KeyCode::Delete,
         iced::keyboard::key::Named::F1 => KeyCode::F1,
         iced::keyboard::key::Named::F2 => KeyCode::F2,
+        iced::keyboard::key::Named::F12 => KeyCode::F12,
         _ => return None,
     })
 }
@@ -2603,6 +2882,41 @@ fn window_resize() -> iced::Subscription<Message> {
 }
 
 /// Result of the native file-dialog subprocess.
+/// The kind of file an export writes: the save dialog's default name,
+/// filter and title follow from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportKind {
+    Svg,
+    Png,
+    Sql(dbml_ui::dbml::sql::Dialect),
+}
+
+impl ExportKind {
+    fn default_name(&self, stem: &str) -> String {
+        match self {
+            ExportKind::Svg => format!("{stem}.svg"),
+            ExportKind::Png => format!("{stem}.png"),
+            ExportKind::Sql(d) => format!("{stem}.{}.sql", d.file_token()),
+        }
+    }
+
+    fn filter(&self) -> (&'static str, &'static [&'static str]) {
+        match self {
+            ExportKind::Svg => ("SVG image", &["svg"]),
+            ExportKind::Png => ("PNG image", &["png"]),
+            ExportKind::Sql(_) => ("SQL", &["sql"]),
+        }
+    }
+
+    fn title(&self) -> &'static str {
+        match self {
+            ExportKind::Svg => "Export SVG",
+            ExportKind::Png => "Export PNG",
+            ExportKind::Sql(_) => "Export SQL",
+        }
+    }
+}
+
 enum PickOutcome {
     Chosen(String),
     Cancelled,
@@ -2610,77 +2924,54 @@ enum PickOutcome {
     NoDialog,
 }
 
-/// Spawn the blocking save-path picker off the UI thread; its outcome
-/// comes back as a `SaveAs` message (or a dismissal).
-fn save_as_picker_task() -> iced::Task<Message> {
+/// Spawn the native save dialog off the UI thread; the confirmed path
+/// comes back through `then` (a dismissal folds to `PickerDismissed`).
+fn save_dialog_task(
+    default_name: String,
+    filter_name: &'static str,
+    patterns: &'static [&'static str],
+    title: &'static str,
+    then: fn(String) -> Message,
+) -> iced::Task<Message> {
     let (tx, rx) = smol::channel::bounded(1);
     std::thread::spawn(move || {
-        let outcome = pick_save_path_blocking();
+        let outcome = pick_save_path_blocking(&default_name, filter_name, patterns, title);
         let _ = smol::block_on(tx.send(outcome));
     });
     iced::Task::future(async move {
         match rx.recv().await {
-            Ok(PickOutcome::Chosen(p)) => Message::SaveAs(p),
-            Ok(PickOutcome::NoDialog) => Message::PickerUnavailable,
+            Ok(PickOutcome::Chosen(p)) => then(p),
             _ => Message::PickerDismissed,
         }
     })
 }
 
-/// Blocking zenity/kdialog save dialog. Must run off the UI thread.
-fn pick_save_path_blocking() -> PickOutcome {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    let start = format!("{home}/diagram.dbml");
-    for (tool, args) in [
-        (
-            "zenity",
-            vec![
-                "--save",
-                "--confirm-overwrite",
-                "--filename",
-                &start,
-                "--title=Save DBML file",
-            ],
-        ),
-        ("kdialog", vec!["--getsavefilename", &start, "*.dbml"]),
-        (
-            "osascript",
-            vec![
-                "-e",
-                "POSIX path of (choose file name with prompt \"Save DBML file\")",
-            ],
-        ),
-        (
-            "powershell",
-            vec![
-                "-NoProfile",
-                "-WindowStyle",
-                "Hidden",
-                "-Command",
-                "Add-Type -AssemblyName System.Windows.Forms; \
-                 $f = New-Object System.Windows.Forms.SaveFileDialog; \
-                 $f.Filter = 'DBML (*.dbml)|*.dbml'; \
-                 if ($f.ShowDialog() -eq 'OK') { $f.FileName }",
-            ],
-        ),
-    ] {
-        let Ok(out) = std::process::Command::new(tool)
-            .args(&args)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .output()
-        else {
-            continue;
-        };
-        if out.status.success() {
-            let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !p.is_empty() {
-                return PickOutcome::Chosen(p);
-            }
-        }
-        return PickOutcome::Cancelled;
+/// The Save As picker: the native dialog with the DBML filter.
+fn save_as_picker_task(default_name: String) -> iced::Task<Message> {
+    save_dialog_task(
+        default_name,
+        "DBML",
+        &["dbml"],
+        "Save DBML file",
+        Message::SaveAs,
+    )
+}
+
+/// The native save dialog (rfd: GTK on Linux, native on Windows/macOS).
+/// Must run off the UI thread — the blocking API drives its own event loop.
+fn pick_save_path_blocking(default_name: &str, filter_name: &str, patterns: &[&str], title: &str) -> PickOutcome {
+    // the native dialog maps behind the app window (no transient parent):
+    // raise + focus it as soon as it maps
+    crate::platform::raise_dialog(title);
+    let picked = rfd::FileDialog::new()
+        .set_file_name(default_name)
+        .add_filter(filter_name, patterns)
+        .set_title(title)
+        .save_file();
+    match picked {
+        Some(p) => PickOutcome::Chosen(p.to_string_lossy().into_owned()),
+        None => PickOutcome::Cancelled,
     }
-    PickOutcome::NoDialog
 }
 
 /// Which filter set the file dialog opens with.
@@ -2754,6 +3045,7 @@ pub fn update(app: &mut App, message: Message) -> iced::Task<Message> {
     if matches!(message, Message::KeyPressed(..)) {
         app.clear_message();
     }
+    let mut delegated = iced::Task::none();
     match message {
         // native file dialog (zenity/kdialog subprocess off the render
         // loop; the GTK rfd crate broke iced's event loop entirely)
@@ -2786,10 +3078,10 @@ pub fn update(app: &mut App, message: Message) -> iced::Task<Message> {
         }
         Message::PickerDismissed => {}
         // Ctrl+O opens the picker from either editing mode
-        Message::SaveAsPrompt => return save_as_picker_task(),
+        Message::SaveAsPrompt => return save_as_picker_task(app.cur().save_as_default_name()),
         Message::SaveAs(path) => {
             if let Err(e) = app.save_as(&path) {
-                app.set_message(format!("save failed: {e}"));
+                app.set_message_kind(ToastKind::Error, format!("save failed: {e}"));
             }
         }
         Message::FormatNow => app.format_now(),
@@ -2802,15 +3094,18 @@ pub fn update(app: &mut App, message: Message) -> iced::Task<Message> {
                 "format on save: off".to_string()
             });
         }
-        m => handle_message(app, m),
+        m => delegated = handle_message(app, m),
     }
     // ctrl+S on an unpacked buffer chains the Save As picker (the flag is
     // set inside key_pressed, which cannot return a task itself)
     if app.chain_save_as {
         app.chain_save_as = false;
-        return save_as_picker_task();
+        return save_as_picker_task(app.cur().save_as_default_name());
     }
-    handle_message_finish(app)
+    if app.should_quit {
+        return handle_message_finish(app);
+    }
+    delegated
 }
 
 fn handle_message_finish(app: &mut App) -> iced::Task<Message> {
@@ -3022,10 +3317,11 @@ fn remove_headercolor(inner: &str) -> String {
     out
 }
 
-fn handle_message(app: &mut App, message: Message) {
+fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
     match message {
         Message::CanvasPressed(p) => app.canvas_pressed(p),
         Message::CanvasMoved(p) => app.canvas_moved(p),
+        Message::CanvasLeft => app.canvas_left(),
         Message::CanvasReleased(p) => {
             app.canvas_released(p);
             app.consume_pending_jump();
@@ -3043,12 +3339,8 @@ fn handle_message(app: &mut App, message: Message) {
             app.group_card_scroll = (app.group_card_scroll + d).max(0.0);
         }
         Message::FindToggle => app.editor_mut().toggle_find(),
-        Message::FindNext => {
-            app.editor_mut().buf.search_forward(false);
-        }
-        Message::FindPrev => {
-            app.editor_mut().buf.search_back(false);
-        }
+        Message::FindNext => app.find_step(true),
+        Message::FindPrev => app.find_step(false),
         Message::FindClose => app.editor_mut().close_find(),
         Message::AutoArrange => app.auto_arrange(),
         Message::ZoomToFit => app.zoom_to_fit(),
@@ -3067,7 +3359,15 @@ fn handle_message(app: &mut App, message: Message) {
             app.diagnostics_selected_fix = f;
             app.diagnostics_fix_menu = false;
         }
-        Message::DiagnosticToggleFixMenu => app.diagnostics_fix_menu = !app.diagnostics_fix_menu,
+        Message::DiagnosticToggleFixMenu => {
+            app.diagnostics_fix_menu = !app.diagnostics_fix_menu;
+            app.diagnostics_fix_menu_since =
+                app.diagnostics_fix_menu.then(std::time::Instant::now);
+        }
+        Message::DiagnosticDismissFixMenu => {
+            app.diagnostics_fix_menu = false;
+            app.diagnostics_fix_menu_since = None;
+        }
         Message::ToggleDiagnosticsGroup(g) => app.toggle_diagnostics_group(g),
         Message::ApplyDiagnosticFix(i, f) => app.apply_diagnostic_fix(i, f),
         Message::PollFiles => app.poll_files(),
@@ -3111,6 +3411,28 @@ fn handle_message(app: &mut App, message: Message) {
             // ONE physical press. The stripped copy carries the restored
             // ctrl and fires the chord; the flagged twin is dropped.
             // KeyCode-wide (not letters-only): ctrl+space is a chord too.
+            // The pair also covers the NAMED keys: one shift+right arrives
+            // as two echoes and the caret moved two cells (the find field
+            // highlighted two chars per press). Key repeat never lands
+            // inside 80ms of the press (winit's delay is 250ms+), so a
+            // same-code+mods echo inside that window is the twin.
+            if !matches!(code, KeyCode::Char(_)) {
+                let twin = app
+                    .last_named_echo
+                    .as_ref()
+                    .is_some_and(|(c, m, t)| {
+                        *c == code && *m == mods
+                            && t.elapsed().as_millis() < 80
+                    });
+                app.last_named_echo =
+                    Some((code, mods, std::time::Instant::now()));
+                if twin {
+                    if app.key_debug {
+                        app.set_message("echo twin dropped");
+                    }
+                    return iced::Task::none();
+                }
+            }
             if stripped {
                 app.stripped_chord = Some((code, std::time::Instant::now()));
             } else if mods.contains(KeyModifiers::CONTROL) {
@@ -3122,7 +3444,7 @@ fn handle_message(app: &mut App, message: Message) {
                     if app.key_debug {
                         app.set_message("flagged twin dropped");
                     }
-                    return;
+                    return iced::Task::none();
                 }
                 app.stripped_chord = None;
             }
@@ -3160,7 +3482,7 @@ fn handle_message(app: &mut App, message: Message) {
             // another canvas captures the same CursorMoved (the race
             // that stuck tips on screen, following the mouse around)
             if app.toolbar_tip.is_some()
-                && !(y >= crate::view::STRIP_H && y <= crate::view::STRIP_H + 36.0)
+                && !(crate::view::STRIP_H..=crate::view::STRIP_H + 36.0).contains(&y)
             {
                 app.toolbar_tip = None;
             }
@@ -3183,7 +3505,7 @@ fn handle_message(app: &mut App, message: Message) {
             if app.drag == Drag::Divider {
                 const PAD: f32 = 0.0; // window content is flush, no outer padding
                 let usable = (app.window_size.0 - 2.0 * PAD).max(1.0);
-                app.split = ((x - PAD) / usable).clamp(SPLIT_MIN, SPLIT_MAX);
+                app.split = app.clamp_split((x - PAD) / usable);
             }
             // an active scrollbar drag follows the pointer WINDOW-wide:
             // leaving the pane must not stall or snap the thumb
@@ -3214,7 +3536,13 @@ fn handle_message(app: &mut App, message: Message) {
                 app.tab_anim[drag.from] = vx - drag.from as f32 * TAB_SLOT_W;
             }
         }
-        Message::WindowResized(w, h) => app.window_size = (w, h),
+        Message::WindowResized(w, h) => {
+            app.window_size = (w, h);
+            // the floors are relative to the window: a split legal on a
+            // 4000px monitor must not come back as a cramped editor
+            // after a resize down to the 940px minimum
+            app.split = app.clamp_split(app.split);
+        }
         Message::CompletionPicked(idx) => app.completion_accept(idx),
         Message::EditorHover(p) => app.editor_hover = p,
         Message::VimMenuOpen => {
@@ -3229,7 +3557,7 @@ fn handle_message(app: &mut App, message: Message) {
         }
         Message::OpenRecent(path) => {
             if let Err(e) = app.open_file(&path) {
-                app.set_message(format!("cannot open {path}: {e}"));
+                app.set_message_kind(ToastKind::Error, format!("cannot open {path}: {e}"));
             }
         }
         Message::OpenFilePicker(_) | Message::PickerDismissed => {} // handled in update
@@ -3239,7 +3567,7 @@ fn handle_message(app: &mut App, message: Message) {
         Message::PickerUnavailable => {
             // no zenity/kdialog and no cmdline to type a path into either:
             // the way in is the launcher (dbml-ui <file>)
-            app.set_message("no file dialog available — open via the launcher: dbml-ui <file>");
+            app.set_message_kind(ToastKind::Error, "no file dialog available — open via the launcher: dbml-ui <file>");
         }
         Message::NewDiagram => app.new_diagram(),
         Message::NewTab => app.new_tab(),
@@ -3281,7 +3609,7 @@ fn handle_message(app: &mut App, message: Message) {
         Message::CanvasRightPressed(p) => {
             // the raw right-press resolves to the semantic menu message
             if let Some(msg) = app.canvas_right_pressed(p) {
-                handle_message(app, msg);
+                return handle_message(app, msg);
             }
         }
         Message::TableHeaderColor(node, color) => app.apply_header_color(node, color),
@@ -3304,23 +3632,26 @@ fn handle_message(app: &mut App, message: Message) {
             if app.any_dirty() {
                 app.exit_confirm = true;
             } else {
-                app.should_quit = true;
-            }
-        }
-        Message::ExitSaveAll => {
-            if app.save_all() {
-                app.write_session_now(false);
+                // a manual exit leaves the clean record: which files were
+                // open, no buffers — the next start reopens them
+                let _ = crate::session::save(&app.clean_record());
                 app.should_quit = true;
             }
         }
         Message::ExitDiscard => {
-            // rewrite the session with saved content: the discarded edits
-            // must not resurrect on the next launch
-            app.write_session_now(true);
+            // a manual exit leaves the clean record: the files reopen on
+            // the next start, but the record holds no buffer text — the
+            // discarded edits cannot resurrect. The per-edit writes exist
+            // for the CRASH path only (the GPU-loss restart restores the
+            // live state).
+            let _ = crate::session::save(&app.clean_record());
             app.should_quit = true;
         }
         Message::ExitCancel => app.exit_confirm = false,
-        Message::ExportSvg => app.export_svg(),
+        Message::ToggleExportMenu => app.export_menu_open = !app.export_menu_open,
+        Message::ToggleExportSqlMenu => app.export_menu_sql_open = !app.export_menu_sql_open,
+        Message::ExportSqlMenuOpen(open) => app.export_menu_sql_open = open,
+        Message::PanelSwallowed => {}
         Message::AddStickyNote => app.add_sticky_note(),
         Message::ToggleEdgeHighlight => {
             let on = !app.cur().highlight_all;
@@ -3331,21 +3662,75 @@ fn handle_message(app: &mut App, message: Message) {
                 "highlight off"
             });
         }
-        Message::ExportSql => app.export_sql(),
+        Message::ExportSql(dialect) => {
+            app.export_menu_open = false;
+            app.export_menu_sql_open = false;
+            let kind = ExportKind::Sql(dialect);
+            let default_name = kind.default_name(&app.export_stem());
+            let (filter_name, patterns) = kind.filter();
+            let title = kind.title();
+            let (tx, rx) = smol::channel::bounded(1);
+            std::thread::spawn(move || {
+                let outcome =
+                    pick_save_path_blocking(&default_name, filter_name, patterns, title);
+                let _ = smol::block_on(tx.send(outcome));
+            });
+            return iced::Task::future(async move {
+                match rx.recv().await {
+                    Ok(PickOutcome::Chosen(p)) => Message::ExportTo(ExportKind::Sql(dialect), p),
+                    _ => Message::PickerDismissed,
+                }
+            });
+        }
+        Message::ExportAs(kind) => {
+            app.export_menu_open = false;
+            app.export_menu_sql_open = false;
+            let default_name = kind.default_name(&app.export_stem());
+            let (filter_name, patterns) = kind.filter();
+            let title = kind.title();
+            let (tx, rx) = smol::channel::bounded(1);
+            std::thread::spawn(move || {
+                let outcome =
+                    pick_save_path_blocking(&default_name, filter_name, patterns, title);
+                let _ = smol::block_on(tx.send(outcome));
+            });
+            return iced::Task::future(async move {
+                match rx.recv().await {
+                    Ok(PickOutcome::Chosen(p)) => Message::ExportTo(kind, p),
+                    _ => Message::PickerDismissed,
+                }
+            });
+        }
+        Message::ExportTo(kind, path) => {
+            let result = match kind {
+                ExportKind::Svg | ExportKind::Png => app.export_diagram(&path),
+                ExportKind::Sql(dialect) => app.export_sql_to(&path, dialect),
+            };
+            match result {
+                Ok(msg) => app.set_message_kind(ToastKind::Success, msg),
+                Err(e) => {
+                    app.set_message_kind(ToastKind::Error, format!("export failed: {e}"))
+                }
+            }
+        }
         Message::TabCloseSave => {
             if let Some(idx) = app.tab_close_confirm {
                 if app.tabs[idx].file.is_none() {
-                    // nowhere to save: same refusal as exit's save-all
-                    app.set_message("untitled tab — use Save as first");
-                } else {
-                    let active = app.active;
-                    app.active = idx;
-                    let saved = app.save_file(None).is_ok();
-                    app.active = active;
-                    if saved {
-                        app.tab_close_confirm = None;
-                        app.close_tab(idx);
-                    }
+                    // an untitled tab has nowhere to save: "Save & close"
+                    // is just CLOSE — the modal already warned about the
+                    // unsaved changes, and the clean-slate model discards
+                    // them by design
+                    app.close_tab(idx);
+                    app.tab_close_confirm = None;
+                    return iced::Task::none();
+                }
+                let active = app.active;
+                app.active = idx;
+                let saved = app.save_file(None).is_ok();
+                app.active = active;
+                if saved {
+                    app.tab_close_confirm = None;
+                    app.close_tab(idx);
                 }
             }
         }
@@ -3393,7 +3778,10 @@ fn handle_message(app: &mut App, message: Message) {
                     app.editor_mut().yank_flash = None;
                 }
             }
-            let hovered: Vec<usize> = if app.cur().highlight_all {
+            let hovered: Vec<usize> = if app.modal_open() {
+                // a modal covers the canvas: nothing beneath stays lit
+                Vec::new()
+            } else if app.cur().highlight_all {
                 (0..app.cur().diagram.edges.len()).collect()
             } else {
                 app.cur().hover_edges.clone()
@@ -3405,7 +3793,7 @@ fn handle_message(app: &mut App, message: Message) {
                 *t = if hovered.contains(&i) { 1.0 } else { 0.0 };
             }
             let Some(anim) = app.cur().scroll_anim.clone() else {
-                return;
+                return iced::Task::none();
             };
             let y = (anim.started.elapsed().as_secs_f32() / anim.duration).min(1.0);
             let frac = scroll_progress(y);
@@ -3455,6 +3843,13 @@ fn handle_message(app: &mut App, message: Message) {
             app.follow_cursor_horizontal();
         }
     }
+    // ctrl+S on an unpacked buffer chains the Save As picker (the flag is
+    // set inside key_pressed, which cannot return a task itself)
+    if app.chain_save_as {
+        app.chain_save_as = false;
+        return save_as_picker_task(app.cur().save_as_default_name());
+    }
+    handle_message_finish(app)
 }
 
 /// Common tail of a restored tab: vim mode, cursor (clamped into the
@@ -3490,6 +3885,7 @@ impl App {
         let tpl = "Project untitled {\n  database_type: 'PostgreSQL'\n}\n";
         self.cur_mut().table_pos.clear();
         self.cur_mut().note_pos.clear();
+        self.cur_mut().item_z.clear();
         self.cur_mut().file = None;
         self.cur_mut().saved_text = tpl.to_string();
         self.editor_mut().set_text(tpl);
@@ -3498,7 +3894,7 @@ impl App {
         self.cur_mut().editor_hscroll = 0.0;
         self.cur_mut().doc_open = true;
         self.focus = Focus::Editor;
-        self.set_message("new diagram");
+
     }
 
     /// True when editing is notepad-style (no modal operators).
@@ -3511,15 +3907,13 @@ impl App {
     pub fn toggle_vim(&mut self) {
         self.config.vim = !self.config.vim;
         self.config.save();
-        self.editor_mut().mode = editor::Mode::Normal;
-        self.editor_mut().visual_linewise = false;
-        self.editor_mut().buf.cancel_selection();
+        // the mode is a GLOBAL preference: every tab switches with it
+        for tab in &mut self.tabs {
+            tab.editor.mode = editor::Mode::Normal;
+            tab.editor.visual_linewise = false;
+            tab.editor.buf.cancel_selection();
+        }
         self.completion = None;
-        self.set_message(if self.config.vim {
-            "vim mode".to_string()
-        } else {
-            "regular mode".to_string()
-        });
     }
 
     /// Regular-mode editor keys: notepad behavior — typing inserts (a
@@ -3615,6 +4009,23 @@ impl App {
                     self.editor_mut().buf.delete_char();
                 }
                 self.after_edit(editor::Action::Changed);
+            }
+            // alt+arrows: word-wise SELECTION (a click + alt+right
+            // highlights to the word's end, like every text field); the
+            // caret lands PAST the word's last char (the insertion
+            // boundary — the exclusive band stops there)
+            KeyCode::Left if m.contains(KeyModifiers::ALT) => {
+                if !sel {
+                    self.editor_mut().buf.start_selection();
+                }
+                self.editor_mut().buf.move_cursor(editor::buffer::Move::WordBack);
+            }
+            KeyCode::Right if m.contains(KeyModifiers::ALT) => {
+                if !sel {
+                    self.editor_mut().buf.start_selection();
+                }
+                self.editor_mut().buf.move_cursor(editor::buffer::Move::WordEnd);
+                self.editor_mut().buf.move_cursor(editor::buffer::Move::Forward);
             }
             KeyCode::Left => mv(
                 self,
@@ -3750,24 +4161,20 @@ impl App {
                         self.tabs[idx].disk_hash = Some(h);
                         continue;
                     }
-                    let name = file
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default();
                     let modified = self.tabs[idx].is_modified();
                     if !modified {
                         // pristine: auto-reload, no question asked
                         self.reload_tab_from(idx, &text);
                         self.tabs[idx].disk_hash = Some(h);
                         if was == FileLiveness::InSync {
-                            self.set_message(format!("\"{name}\" reloaded"));
+
                         }
                     } else {
                         self.tabs[idx].liveness = FileLiveness::Conflict { theirs: text };
                         self.tabs[idx].disk_hash = Some(h);
-                        if !matches!(was, FileLiveness::Conflict { .. }) {
-                            self.set_message(format!("\"{name}\" changed on disk"));
-                        }
+                        // silent: the conflict is the moment signal — the
+                        // liveness pill (reload / keep mine) renders until
+                        // resolved, so a toast adds nothing
                     }
                 }
                 Err(e) => {
@@ -3794,7 +4201,7 @@ impl App {
                                 self.tabs[idx].liveness = FileLiveness::InSync;
                                 self.config.push_recent(&to.to_string_lossy());
                                 self.config.save();
-                                self.set_message(format!("now editing: {}", to.display()));
+        
                             }
                             continue;
                         }
@@ -3810,7 +4217,7 @@ impl App {
                             .file_name()
                             .map(|n| n.to_string_lossy().to_string())
                             .unwrap_or_default();
-                        self.set_message(format!("\"{name}\" is gone from disk"));
+                        self.set_message_kind(ToastKind::Error, format!("\"{name}\" is gone from disk"));
                     }
                 }
             }
@@ -3860,7 +4267,7 @@ impl App {
         let h = Self::hash_text(&theirs);
         self.cur_mut().disk_hash = Some(h);
         self.cur_mut().liveness = FileLiveness::InSync;
-        self.set_message("reloaded from disk");
+
     }
 
     /// Pill action: accept the foreign disk change as acknowledged and
@@ -3868,14 +4275,14 @@ impl App {
     pub fn file_keep_mine(&mut self) {
         if matches!(self.cur().liveness, FileLiveness::Conflict { .. }) {
             self.cur_mut().liveness = FileLiveness::InSync;
-            self.set_message("keeping your edits");
+
         }
     }
 
     /// Pill action: write the orphaned buffer back to its path.
     pub fn file_recreate(&mut self) {
         if let Err(e) = self.save_file(None) {
-            self.set_message(format!("could not recreate: {e}"));
+            self.set_message_kind(ToastKind::Error, format!("could not recreate: {e}"));
         }
     }
 
@@ -3887,7 +4294,7 @@ impl App {
             self.cur_mut().liveness = FileLiveness::InSync;
             self.config.push_recent(&to.to_string_lossy());
             self.config.save();
-            self.set_message(format!("now editing: {}", to.display()));
+    
         }
     }
 
@@ -3941,6 +4348,7 @@ impl App {
         // a different entry expands: its fix selector starts over
         self.diagnostics_selected_fix = 0;
         self.diagnostics_fix_menu = false;
+        self.diagnostics_fix_menu_since = None;
     }
 
     /// A quick-fix button was pressed: replace the fix's source span with
@@ -3963,18 +4371,23 @@ impl App {
             .map(|s| s.chars().count())
             .unwrap_or(0);
         let text = fix.new_text.clone();
-        self.editor_mut()
-            .buf
-            .move_cursor(crate::editor::buffer::Move::Jump(row, col));
-        if del_chars > 0 {
-            self.editor_mut().buf.delete_str(del_chars);
-        }
-        self.editor_mut().buf.insert_str(&text);
+        // the caret stays where the entry click left it: the splice is
+        // ONE undo step whose snapshot holds this caret, and the live
+        // cursor returns to the suggestion line after the edit (a fix can
+        // land on a far-away ref line, often behind the open panel)
+        let saved = self.editor().buf.pos();
+        let buf = &mut self.editor_mut().buf;
+        buf.cancel_selection();
+        buf.replace_span(row, col, del_chars, &text);
+        let rest_row = saved.row.min(buf.lines().len().saturating_sub(1));
+        let rest_col = saved.col.min(buf.line(rest_row).chars().count());
+        buf.move_cursor(crate::editor::buffer::Move::Jump(rest_row, rest_col));
         self.after_edit(Action::Changed);
         // the fix likely dissolved this diagnostic; fold the accordion
         self.diagnostics_expanded = None;
         self.diagnostics_selected_fix = 0;
         self.diagnostics_fix_menu = false;
+        self.diagnostics_fix_menu_since = None;
     }
 
     /// Header-color menu pick: splice `headercolor:` into (or out of, for
@@ -4023,7 +4436,7 @@ impl App {
         ));
         self.editor_mut().set_text(&new_src);
         self.after_edit(Action::Changed);
-        self.set_message(format!("sticky note{n} added — edit it in the source"));
+
     }
 
     /// A relationship's `[color:]` splice: the edge's top-level Ref
@@ -4280,11 +4693,28 @@ impl App {
     /// while a pane is maximized (the seam is not on screen), and it
     /// works in every editor mode: the chord is consumed globally, before
     /// any mode sees it.
+    /// Clamp a raw split fraction to the pane pixel floors
+    /// (EDITOR_MIN_PX / DIAGRAM_MIN_PX) on the current window, under the
+    /// SPLIT_MIN/MAX ratios. Every split write funnels through here:
+    /// divider drag, ctrl-arrow nudge, session restore, window resize.
+    /// A window too narrow for both floors (under 500+340 = 840px, below
+    /// the app's 940px minimum) favors the editor's: the diagram lives
+    /// with the SPLIT_MAX-capped remainder.
+    fn clamp_split(&self, split: f32) -> f32 {
+        let w = self.window_size.0.max(1.0);
+        let lo = SPLIT_MIN.max(EDITOR_MIN_PX / w + PORTION_SLACK);
+        let hi = SPLIT_MAX.min(1.0 - DIAGRAM_MIN_PX / w - PORTION_SLACK);
+        if lo > hi {
+            return lo.min(SPLIT_MAX); // floors conflict: the editor's wins
+        }
+        split.clamp(lo, hi)
+    }
+
     fn nudge_split(&mut self, delta: f32) {
         if !self.doc_open() || self.maximized != Maximized::None {
             return;
         }
-        self.split = (self.split + delta).clamp(SPLIT_MIN, SPLIT_MAX);
+        self.split = self.clamp_split(self.split + delta);
     }
 
     /// Maximize the editor over the diagram (F1 / the toolbar button);
@@ -4331,13 +4761,9 @@ impl App {
 
     pub fn open_file(&mut self, path: &str) -> std::io::Result<()> {
         self.mark_session_dirty();
-        // opening over a file-backed tab refuses to clobber unsaved edits
-        // (the picker and recent list share this path); the startup
-        // sample tab has no file, so replacing it is fine
-        if self.doc_open() && self.cur().file.is_some() && self.cur().is_modified() {
-            self.set_message("unsaved edits — Ctrl-s first");
-            return Ok(());
-        }
+        // every UI path to open_file starts from the splash screen (the
+        // ctrl+o chord is a no-op once a document is open), so this always
+        // replaces the blank/start tab — no unsaved edits to clobber
         let mut content = std::fs::read_to_string(path)?;
         // a .sql import produces an UNTITLED DBML buffer (see below)
         let mut imported = false;
@@ -4351,7 +4777,7 @@ impl App {
             content = dbml::sqldump::import(&content, dialect).map_err(|e| {
                 std::io::Error::new(std::io::ErrorKind::InvalidData, format!("import: {e}"))
             })?;
-            self.set_message(format!(
+            self.set_message_kind(ToastKind::Warning, format!(
                 "imported as {} — Save As to keep the DBML",
                 dialect.label()
             ));
@@ -4363,6 +4789,7 @@ impl App {
         }
         self.cur_mut().table_pos.clear();
         self.cur_mut().note_pos.clear();
+        self.cur_mut().item_z.clear();
         if imported {
             self.cur_mut().file = None;
             self.cur_mut().saved_text = content.clone();
@@ -4386,11 +4813,7 @@ impl App {
         self.cur_mut().editor_scroll = 0.0;
         self.cur_mut().editor_hscroll = 0.0;
         if !imported {
-            self.set_message(format!(
-                "\"{path}\" {}L, {}B",
-                content.lines().count(),
-                content.len()
-            ));
+            // silent: the opened file is its own feedback
         }
         self.cur_mut().doc_open = true;
         self.config.push_recent(path);
@@ -4423,10 +4846,10 @@ impl App {
                 self.editor_mut().jump(row, col);
                 self.follow_cursor_horizontal();
                 self.keep_cursor_visible();
-                self.set_message("formatted");
+        
             }
-            Some(_) => self.set_message("already formatted"),
-            None => self.set_message("format skipped: parse errors"),
+            Some(_) => self.set_message_kind(ToastKind::Info, "already formatted"),
+            None => self.set_message_kind(ToastKind::Warning, "format skipped: parse errors"),
         }
     }
 
@@ -4512,7 +4935,7 @@ impl App {
         self.cur_mut().liveness = FileLiveness::InSync;
         self.config.push_recent(&target.to_string_lossy());
         self.config.save();
-        self.set_message(format!(
+        self.set_message_kind(ToastKind::Success, format!(
             "\"{}\" written, {}B",
             target.display(),
             self.cur().saved_text.len()
@@ -4527,27 +4950,34 @@ impl App {
     /// untitled tab this is the FIRST save: the tab rebinds to the new
     /// path, like every editor's initial Save As.
     pub fn save_as(&mut self, path: &str) -> std::io::Result<()> {
+        // the dialog confirms overwrites natively (GTK's save chooser asks
+        // when the name exists): whether the write REPLACED a file or
+        // CREATED a new one is decided before the write. The toasts stay
+        // the regular save wording either way — only the tab behavior
+        // differs (replaced rebinds in place, created opens the copy tab).
+        let replaced = std::path::Path::new(path).exists();
         if self.cur().file.is_none() {
             return self.save_file(Some(path));
         }
-        // the copy's content: the current buffer, formatted when
-        // format-on-save is on (the copy gets the canonical form; the
-        // original buffer is NOT touched)
+        // REPLACED: no copy tab. The current tab rebinds to the target and
+        // saves in place — a copy tab would leave two buffers bound to one
+        // file, fighting over it (the file poll would flag the loser).
+        // (Same-file Save As folds to a plain save: already bound there.)
+        let same_file = self.cur().file.as_deref() == Some(std::path::Path::new(path));
+        if replaced || same_file {
+            return self.save_file(Some(path));
+        }
+        // CREATED: the copy-tab flow — the buffer keeps working in a new
+        // tab at the new location (the original stays on its own file)
         let text = self.cur().editor.text();
         let text = if self.config.fmt_on_save {
             dbml::fmt::format_source(&text).unwrap_or(text)
         } else {
             text
         };
-        // write through the same pipeline contract (recent list + toast
-        // happen below)
         std::fs::write(path, &text)?;
         let target = std::path::PathBuf::from(path);
 
-        // the copy opens as a new tab (the full new-tab animation), then
-        // the original takes the screen back — Word keeps it active
-        let original = self.active;
-        let original_dirty = self.cur().is_modified();
         self.new_tab();
         let copy = self.active;
         {
@@ -4560,53 +4990,14 @@ impl App {
             tab.disk_hash = Some(App::hash_text(&text));
             tab.liveness = FileLiveness::InSync;
         }
-        self.activate_tab(original);
-        let _ = original_dirty; // the original's dirty state is untouched
         self.config.push_recent(&target.to_string_lossy());
         self.config.save();
         self.mark_session_dirty();
-        self.set_message(format!(
-            "copy saved to \"{}\" — editing {}",
-            target.display(),
-            self.cur()
-                .file
-                .as_ref()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|| "the original".to_string())
-        ));
+        self.set_message_kind(ToastKind::Success, format!("copy saved to \"{path}\""));
         Ok(())
     }
 
     /// Export SVG next to the open file (the floating diagram button).
-    pub fn export_svg(&mut self) {
-        let path = self.export_default_path("svg");
-        match self.export_diagram(&path) {
-            Ok(msg) => self.set_message(msg),
-            Err(e) => self.set_message(format!("export failed: {e}")),
-        }
-    }
-
-    /// Export DDL (Postgres) next to the open file.
-    /// The records grid's Download CSV (dbdiagram's download button):
-    /// the header row of the record's columns, then every row's raw
-    /// values (nulls empty, strings quoted, inner quotes doubled) —
-    /// `<stem>.<table>.csv` beside the source file.
-    pub fn export_sql(&mut self) {
-        match dbml::sql::export(&self.editor_mut().text(), dbml::sql::Dialect::Postgres) {
-            Ok(sql) => {
-                let path = format!("{}.postgres.sql", self.export_stem());
-                match std::fs::write(&path, sql) {
-                    Ok(()) => self.set_message(format!(
-                        "\"{path}\" written ({}B)",
-                        std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
-                    )),
-                    Err(e) => self.set_message(format!("export failed: {e}")),
-                }
-            }
-            Err(e) => self.set_message(format!("export failed: {e}")),
-        }
-    }
-
     /// File stem for export paths ("diagram" without a backing file).
     fn export_stem(&self) -> String {
         self.cur()
@@ -4614,11 +5005,19 @@ impl App {
             .as_ref()
             .and_then(|p| p.file_stem())
             .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "diagram".into())
+            .unwrap_or_else(|| "Untitled".into())
     }
 
-    fn export_default_path(&self, ext: &str) -> String {
-        format!("{}.{}", self.export_stem(), ext)
+    /// Write the Postgres/MySQL/… DDL to `path`.
+    pub fn export_sql_to(
+        &mut self,
+        path: &str,
+        dialect: dbml::sql::Dialect,
+    ) -> anyhow::Result<String> {
+        let sql = dbml::sql::export(&self.editor_mut().text(), dialect)
+            .map_err(|e| anyhow::anyhow!(e))?;
+        std::fs::write(path, sql)?;
+        Ok(format!("exported {path}"))
     }
 
     /// Export the diagram to `.svg` or `.png` (2x scale).
@@ -4758,6 +5157,13 @@ impl App {
         if mods.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Char('s') => {
+                    // inert on the start screen (F12's precedent): the
+                    // splash tab is unpacked, so without this guard the
+                    // chord chained the Save As picker — the native
+                    // dialog popping over the Open/New buttons
+                    if !self.cur().doc_open {
+                        return;
+                    }
                     // an unpacked buffer has nowhere to save: ctrl+S IS
                     // the first save — chain the Save As picker, and the
                     // pick rebinds this tab (no error like the old
@@ -4767,7 +5173,7 @@ impl App {
                         return;
                     }
                     if let Err(e) = self.save_file(None) {
-                        self.set_message(format!("save failed: {e}"));
+                        self.set_message_kind(ToastKind::Error, format!("save failed: {e}"));
                     }
                     return;
                 }
@@ -4789,6 +5195,14 @@ impl App {
                 // ctrl+c copies the selection (any mode); with none it is
                 // a no-op — it never force-quits the app
                 KeyCode::Char('c') => {
+                    // the find field owns the chord while it is open: its
+                    // selection copies, not the buffer's
+                    if self.editor().find.is_some() {
+                        if let Some(text) = self.editor_mut().find_selection_text() {
+                            let _ = self.copy_to_system(&text);
+                        }
+                        return;
+                    }
                     if self.editor().buf.selection_anchor().is_some() {
                         self.copy_selection();
                         if self.editor().mode == editor::Mode::Visual {
@@ -4799,8 +5213,15 @@ impl App {
                     }
                     return;
                 }
-                // ctrl+x cuts the selection (any mode)
+                // ctrl+x cuts the selection (any mode) — the find
+                // field's cut while it is open
                 KeyCode::Char('x') => {
+                    if self.editor().find.is_some() {
+                        if let Some(text) = self.editor_mut().find_cut() {
+                            let _ = self.copy_to_system(&text);
+                        }
+                        return;
+                    }
                     if self.editor().buf.selection_anchor().is_some() {
                         self.cut_selection();
                         if self.editor().mode == editor::Mode::Visual {
@@ -4824,18 +5245,6 @@ impl App {
                 _ => {}
             }
         }
-        // '?' toggles the help overlay (unless typing text)
-        let typing = self.focus == Focus::Editor
-            && (self.editor_mut().mode == editor::Mode::Insert || self.editor_mut().find.is_some());
-        if key.code == KeyCode::Char('?') && !typing {
-            self.show_help = !self.show_help;
-            return;
-        }
-        if self.show_help {
-            // any other key closes the overlay first
-            self.show_help = false;
-            return;
-        }
         // F1/F2 maximize the panes (the editor toolbar button and the
         // diagram's floating button do the same)
         match key.code {
@@ -4845,6 +5254,12 @@ impl App {
             }
             KeyCode::F2 => {
                 self.toggle_maximize_diagram();
+                return;
+            }
+            // F12 is Save As: the picker opens for any document-backed
+            // buffer — inert on the start screen (nothing to save)
+            KeyCode::F12 if self.cur().doc_open => {
+                self.chain_save_as = true;
                 return;
             }
             _ => {}
@@ -4858,8 +5273,37 @@ impl App {
         }
         // the cmdline is reachable from either pane
         if self.editor_mut().find.is_some() {
+            // the find field is a mini text input: the clipboard and
+            // select-all chords belong to IT, not the editor buffer
+            let ctrl = mods.contains(KeyModifiers::CONTROL);
+            if ctrl && code == KeyCode::Char('a') {
+                self.editor_mut().find_select_all();
+                return;
+            }
+            if ctrl && code == KeyCode::Char('c') {
+                if let Some(text) = self.editor_mut().find_selection_text() {
+                    let _ = self.copy_to_system(&text);
+                }
+                return;
+            }
+            if ctrl && code == KeyCode::Char('x') {
+                if let Some(text) = self.editor_mut().find_cut() {
+                    let _ = self.copy_to_system(&text);
+                }
+                return;
+            }
+            if ctrl && code == KeyCode::Char('v') {
+                if let Some(text) = self.clipboard_text() {
+                    self.editor_mut().find_paste(&text);
+                }
+                return;
+            }
             let action = self.editor_mut().handle_key(key);
             self.after_edit(action);
+            // typing and Enter park the caret on matches: keep it on
+            // screen (this early path skips the tail below)
+            self.follow_cursor_horizontal();
+            self.keep_cursor_visible();
             return;
         }
         // vim p/P pulls in externally-copied text first (see the adopt
@@ -5326,7 +5770,7 @@ impl App {
         // a toast, never a panic)
         if let Some(text) = self.editor_mut().take_system_yank() {
             if let Err(e) = self.copy_to_system(&text) {
-                self.set_message(format!("clipboard: {e}"));
+                self.set_message_kind(ToastKind::Error, format!("clipboard: {e}"));
             }
         }
         match action {
@@ -5340,10 +5784,43 @@ impl App {
         }
     }
 
-    /// The word under the caret (gd): the cell at the cursor, or the one
-    /// just before it when the cursor sits on the insert column.
-    fn word_under_caret(&self) -> Option<String> {
-        let (row, col) = self.editor().buf.cursor();
+
+
+    /// Span of a word's definition: table by name or alias, then enum —
+    /// the same lookup order as the hover docs.
+    fn definition_span_of(&self, word: &str) -> Option<Span> {
+        let d = &self.cur().diagram;
+        d.boxes
+            .iter()
+            .find(|b| b.title == word)
+            .or_else(|| d.boxes.iter().find(|b| b.alias.as_deref() == Some(word)))
+            .and_then(|b| b.name_span.clone())
+            .or_else(|| {
+                d.enums
+                    .iter()
+                    .find(|e| e.name == word)
+                    .and_then(|e| e.name_span.clone())
+            })
+    }
+
+    /// Span of a dot-bound column reference's definition: the qualifier
+    /// (`users` in `users.id`, an alias works too) names the table; the
+    /// column resolves inside it.
+    fn column_definition_span(&self, qualifier: &str, col: &str) -> Option<Span> {
+        self.cur()
+            .diagram
+            .boxes
+            .iter()
+            .find(|b| b.title == qualifier || b.alias.as_deref() == Some(qualifier))
+            .and_then(|b| b.rows.iter().find(|r| r.name == col))
+            .map(|r| r.name_span.clone())
+    }
+
+    /// The definition span under a buffer position: a table / alias / enum
+    /// name, or the column of a dot-bound reference (`users.id` — the
+    /// referenced column resolves through the qualifier). Also answers the
+    /// right-click menu's has-definition probe.
+    fn definition_span_at(&self, row: usize, col: usize) -> Option<Span> {
         let line = self.editor().buf.line(row);
         let is_word = |c: char| c.is_alphanumeric() || c == '_';
         let chars: Vec<char> = line.chars().collect();
@@ -5363,47 +5840,75 @@ impl App {
         while e < chars.len() && is_word(chars[e]) {
             e += 1;
         }
-        Some(chars[s..e].iter().collect())
+        let word: String = chars[s..e].iter().collect();
+        self.definition_span_of(&word).or_else(|| {
+            // the dot-bound column reference: the qualifier left of the
+            // dot names the table (or alias); the word is the column
+            if s == 0 || chars.get(s - 1) != Some(&'.') {
+                return None;
+            }
+            let mut qs = s - 1;
+            while qs > 0 && is_word(chars[qs - 1]) {
+                qs -= 1;
+            }
+            let qualifier: String = chars[qs..s - 1].iter().collect();
+            if qualifier.is_empty() {
+                return None;
+            }
+            self.column_definition_span(&qualifier, &word)
+        })
     }
 
-    /// Span of a word's definition: table by name or alias, then enum —
-    /// the same lookup order as the hover docs.
-    fn definition_span_of(&self, word: &str) -> Option<Span> {
-        let d = &self.cur().diagram;
-        d.boxes
-            .iter()
-            .find(|b| b.title == word)
-            .or_else(|| d.boxes.iter().find(|b| b.alias.as_deref() == Some(word)))
-            .and_then(|b| b.name_span.clone())
-            .or_else(|| {
-                d.enums
-                    .iter()
-                    .find(|e| e.name == word)
-                    .and_then(|e| e.name_span.clone())
-            })
-    }
-
-    /// Go to definition: the word under `at` (canvas-local, right-click
-    /// menu) or under the caret (`gd`). Records the jump origin first so
-    /// Ctrl+O returns.
+    /// Go to definition: under `at` (canvas-local, the right-click menu)
+    /// or under the caret (`gd`). Records the jump origin first so Ctrl+O
+    /// returns.
     fn goto_definition(&mut self, at: Option<Point>) {
-        let word = match at {
-            Some(p) => crate::canvas::editor::word_at(self, p),
-            None => self.word_under_caret(),
+        let (row, col) = match at {
+            Some(p) => {
+                let pos = crate::canvas::editor::px_to_pos(self, p);
+                (pos.row, pos.col)
+            }
+            None => {
+                let (r, c) = self.editor().buf.cursor();
+                (r, c)
+            }
         };
-        let Some(word) = word else {
-            return;
-        };
-        let Some(span) = self.definition_span_of(&word) else {
-            self.set_message(format!("no definition under '{word}'"));
-            return;
-        };
-        self.editor_mut().record_jump();
-        let (row, col) = dbml::parser::line_col_at(self.source(), span.start);
-        self.editor_mut().jump(row, col);
-        self.editor_hover = None;
-        self.keep_cursor_visible();
-        self.follow_cursor_horizontal();
+        match self.definition_span_at(row, col) {
+            Some(span) => {
+                self.editor_mut().record_jump();
+                let (row, col) = dbml::parser::line_col_at(self.source(), span.start);
+                self.editor_mut().jump(row, col);
+                self.editor_hover = None;
+                self.keep_cursor_visible();
+                self.follow_cursor_horizontal();
+            }
+            None => {
+                // the message names what was under the position when one
+                // exists, so a failed gd reads as feedback, not silence
+                let line = self.editor().buf.line(row);
+                let is_word = |c: char| c.is_alphanumeric() || c == '_';
+                let chars: Vec<char> = line.chars().collect();
+                let col = col.min(chars.len());
+                let word = if chars.get(col).is_some_and(|c| is_word(*c))
+                    || (col > 0 && chars.get(col - 1).is_some_and(|c| is_word(*c)))
+                {
+                    let mut s = col;
+                    while s > 0 && is_word(chars[s - 1]) {
+                        s -= 1;
+                    }
+                    let mut e = col;
+                    while e < chars.len() && is_word(chars[e]) {
+                        e += 1;
+                    }
+                    chars[s..e].iter().collect::<String>()
+                } else {
+                    String::new()
+                };
+                if !word.is_empty() {
+                    self.set_message_kind(ToastKind::Info, format!("no definition under '{word}'"));
+                }
+            }
+        }
     }
 
     /// Visible editor lines from the window size: the editor canvas gets
@@ -5594,6 +6099,51 @@ impl App {
     /// jump instantly — gg, G, search hits and click-to-jump land in
     /// place; the only animated scrolls are the explicit neoscroll ones
     /// (Ctrl-d / Ctrl-u / Ctrl-f / Ctrl-b and the page keys).
+    /// A modal dialog is up (records preview / unsaved-changes confirm):
+    /// the canvas beneath is inert — its hover chrome suspends.
+    pub fn modal_open(&self) -> bool {
+        self.record_view.is_some() || self.exit_confirm || self.tab_close_confirm.is_some()
+    }
+
+    /// Whether the pointer (canvas-local) sits inside the export
+    /// dropdown's region: the 112px trigger (always — it is an opaque
+    /// button over the canvas in both states) + the open menu card (+ the
+    /// dialect card when unfolded) — all fixed geometry, so the region
+    /// is exact arithmetic. The canvas hover must stay dark beneath it:
+    /// the dropdown is a widget layer above the canvas, but the canvas
+    /// still receives the pointer moves (they land inside its bounds)
+    /// and would light tables and lines under the menu.
+    pub fn pointer_in_export_dropdown(&self) -> bool {
+        let Some(p) = self.canvas_cursor else {
+            return false;
+        };
+        let pane_w = (self.window_size.0 - self.seam_x()).max(220.0);
+        let (max_x, max_y) = if self.export_menu_open {
+            (
+                pane_w / 2.0 + if self.export_menu_sql_open { 174.0 } else { 56.0 },
+                if self.export_menu_sql_open { 240.0 } else { 128.0 },
+            )
+        } else {
+            // closed: the trigger slot only
+            (pane_w / 2.0 + 56.0, 38.0)
+        };
+        p.x >= pane_w / 2.0 - 56.0 && p.x <= max_x && p.y >= 8.0 && p.y <= max_y
+    }
+
+    /// The find bar's next/prev buttons (and any non-key find step): the
+    /// same engine Enter drives, PLUS the cursor follow — the button path
+    /// bypasses key_pressed's scroll-follow, so a match off screen moved
+    /// the caret invisibly (the counter ticked, nothing else changed).
+    fn find_step(&mut self, forward: bool) {
+        if forward {
+            self.editor_mut().buf.search_forward(false);
+        } else {
+            self.editor_mut().buf.search_back(false);
+        }
+        self.follow_cursor_horizontal();
+        self.keep_cursor_visible();
+    }
+
     fn keep_cursor_visible(&mut self) {
         let row = self.editor_mut().buf.pos().row as f32;
         let page = self.page_lines();
@@ -5727,22 +6277,27 @@ mod tests {
     fn grabbing_a_table_raises_it_in_z_order() {
         let src: String = (0..40)
             .map(|i| format!("Table t{i} {{\n  id integer [pk]\n}}\n"))
-            .collect();
+            .collect::<Vec<_>>()
+            .join("");
         let mut app = App::with_source(src);
         // press t5: it moves to the end of the raise list
         let b = app.diagram().boxes.iter().find(|b| b.title == "t5").unwrap();
         let s = crate::canvas::diagram::cell_size(app.cur().zoom);
         let tl = crate::canvas::diagram::to_px(b.x, b.y, app.cur().zoom, app.cur().pan);
         let _ = update(&mut app, Message::CanvasPressed(Point::new(tl.x + s.width, tl.y + s.height * 0.5)));
-        let z = &app.cur().z_order;
-        assert_eq!(z.last().map(|t| t.as_str()), Some("t5"), "{z:?}");
-        assert!(!z.iter().any(|t| t == "t5" && t != z.last().unwrap()), "no duplicates: {z:?}");
+        let z = &app.cur().item_z;
+        assert_eq!(
+            z.last(),
+            Some(&RaisedItem::Table("t5".into())),
+            "{z:?}"
+        );
+        assert_eq!(z.iter().filter(|r| **r == RaisedItem::Table("t5".into())).count(), 1, "no duplicates: {z:?}");
         // a second grab of another table re-raises it above
         let b = app.diagram().boxes.iter().find(|b| b.title == "t2").unwrap();
         let tl = crate::canvas::diagram::to_px(b.x, b.y, app.cur().zoom, app.cur().pan);
         let _ = update(&mut app, Message::CanvasPressed(Point::new(tl.x + s.width, tl.y + s.height * 0.5)));
-        assert_eq!(app.cur().z_order.last().map(|t| t.as_str()), Some("t2"));
-        assert_eq!(app.cur().z_order.len(), 2, "one entry per raised table");
+        assert_eq!(app.cur().item_z.last(), Some(&RaisedItem::Table("t2".into())));
+        assert_eq!(app.cur().item_z.len(), 2, "one entry per raised table");
     }
 
     #[test]
@@ -5782,6 +6337,411 @@ mod tests {
         let _ = update(&mut app, Message::EdgeColor(0, None));
         assert!(app.source().contains("[ref: > a.id]"), "{:?}", app.source());
         assert!(app.cur().diagram.edges[0].color.is_none());
+    }
+
+    /// The find bar's arrows: step the match AND follow the cursor —
+    /// the button path bypasses key_pressed's scroll-follow, so a match
+    /// off screen used to move the caret invisibly (the counter ticked,
+    /// nothing else changed). Next past the last result wraps to the
+    /// first, prev past the first wraps to the last.
+    #[test]
+    fn find_bar_arrows_step_scroll_and_cycle() {
+        let src = String::from("x\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nalpha\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\nalpha\n");
+        let mut app = App::with_source(src);
+        // a short page: the second match starts off screen
+        app.window_size = (400.0, 300.0);
+        let _ = update(&mut app, Message::FindToggle);
+        for c in "alpha".chars() {
+            let _ = update(&mut app, Message::KeyPressed(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        assert_eq!(app.editor().buf.cursor(), (12, 0), "live search rides the first match");
+        let scroll_live = app.cur().editor_scroll;
+
+        // next: row 23 — the caret moves AND the view follows it
+        let _ = update(&mut app, Message::FindNext);
+        assert_eq!(app.editor().buf.cursor(), (23, 0), "the arrow stepped to the next match");
+        assert!(
+            app.cur().editor_scroll > scroll_live,
+            "the view followed the caret down"
+        );
+
+        // next past the last: wraps to the FIRST result
+        let _ = update(&mut app, Message::FindNext);
+        assert_eq!(app.editor().buf.cursor(), (12, 0), "next cycles back to the first");
+        // prev past the first: wraps to the last
+        let _ = update(&mut app, Message::FindPrev);
+        assert_eq!(app.editor().buf.cursor(), (23, 0), "prev cycles to the last");
+
+        // Enter drives the same engine: next from the caret
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.editor().buf.cursor(), (12, 0), "Enter wraps to the first again");
+    }
+
+    /// Hover chrome respects the raise order: a sticky parked over a
+    /// table's row hides that row's relationship glow and its field card
+    /// — hovering the table's EXPOSED part still lights them.
+    #[test]
+    fn hover_stays_under_the_topmost_item() {
+        let src = String::from(
+            "Table a { id integer [pk] }\nTable b { a_id integer }\nRef: a.id > b.a_id\nNote n { '''x''' }\n",
+        );
+        let mut app = App::with_source(src);
+        // pin the sticky over a's id row (the same maps drags fill)
+        let src_pinned = {
+            let mut t = app.source().to_string();
+            let _ = &mut t;
+            app.cur_mut().table_pos.insert("a".to_string(), (10, 5));
+            app.cur_mut().note_pos.insert("n".to_string(), (12, 6, 14, 5));
+            app.source().to_string()
+        };
+        app.cur_mut().set_source(&src_pinned);
+        let (zoom, pan) = (app.cur().zoom, app.cur().pan);
+        let s = crate::canvas::diagram::cell_size(zoom);
+        // a's id row sits at cell y 6: the sticky (12..26, 6..11) covers
+        // its right part; x 11 is exposed, x 14 is under the sticky
+        let exposed = {
+            let tl = crate::canvas::diagram::to_px(10, 5, zoom, pan);
+            Point::new(tl.x + 1.5 * s.width, tl.y + 1.5 * s.height)
+        };
+        let covered = {
+            let tl = crate::canvas::diagram::to_px(12, 6, zoom, pan);
+            Point::new(tl.x + 2.0 * s.width, tl.y + 0.5 * s.height)
+        };
+        // exposed: the relationship lights + the field card arms
+        let _ = update(&mut app, Message::CanvasMoved(exposed));
+        assert!(
+            !app.cur().hover_edges.is_empty(),
+            "the exposed row's relationship lights"
+        );
+        assert!(app.field_card_key.is_some());
+        // covered: everything stays dark
+        let _ = update(&mut app, Message::CanvasMoved(covered));
+        assert!(
+            app.cur().hover_edges.is_empty(),
+            "the covered row's relationship stays dark"
+        );
+        assert!(app.field_card_key.is_none(), "no field card through the sticky");
+    }
+
+    /// Enter in the find bar: the same step the arrows drive — the
+    /// caret jumps to the next match AND the view follows it.
+    #[test]
+    fn find_bar_enter_steps_and_the_view_follows() {
+        let src = String::from("x\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nalpha\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\nalpha\n");
+        let mut app = App::with_source(src);
+        app.window_size = (400.0, 300.0);
+        let _ = update(&mut app, Message::FindToggle);
+        for c in "alpha".chars() {
+            let _ = update(&mut app, Message::KeyPressed(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        assert_eq!(app.editor().buf.cursor(), (12, 0));
+        let scroll_live = app.cur().editor_scroll;
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(
+            app.editor().buf.cursor(),
+            (23, 0),
+            "Enter steps to the next match"
+        );
+        assert!(
+            app.cur().editor_scroll > scroll_live,
+            "the view followed the caret down"
+        );
+    }
+
+    /// Regular mode: alt+arrows select word-wise (a click + alt+right
+    /// highlights to the word's end), like every text field.
+    #[test]
+    fn alt_arrows_select_words_in_regular_mode() {
+        let mut app = App::with_source("Table posts { id integer }".into());
+        app.config.vim = false;
+        app.focus = crate::app::Focus::Editor;
+        app.editor_mut()
+            .buf
+            .move_cursor(editor::buffer::Move::Jump(0, 0));
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Right, KeyModifiers::ALT),
+        );
+        assert_eq!(
+            app.editor().buf.selection_draw_range_exclusive(),
+            Some((
+                editor::buffer::Pos { row: 0, col: 0 },
+                editor::buffer::Pos { row: 0, col: 5 }
+            )),
+            "alt+right highlighted the word `Table`"
+        );
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyCode::Left, KeyModifiers::ALT),
+        );
+        assert_eq!(
+            app.editor().buf.pos(),
+            editor::buffer::Pos { row: 0, col: 0 },
+            "alt+left walked back to the word's start"
+        );
+    }
+
+    /// Hovering the export dropdown keeps the diagram dark beneath it:
+    /// the pointer inside the dropdown's region suspends the canvas
+    /// hover (table border, row glow, field card), while the same point
+    /// outside the region — or with the menu closed — lights things up
+    /// normally.
+    #[test]
+    fn the_export_dropdown_suspends_the_hover_under_it() {
+        let src = String::from(
+            "Table a { id integer [pk] }\nTable b { a_id integer }\nRef: a.id > b.a_id\n",
+        )
+        .to_string();
+        let mut app = App::with_source(src.clone());
+        // a table sits under the dropdown region (centered at pane_w/2)
+        app.cur_mut().table_pos.insert("a".to_string(), (33, 2));
+        app.cur_mut().set_source(&src);
+        // open the menu: the pointer lands in the dropdown region (over
+        // the trigger/menu card, which overlays the table)
+        let _ = update(&mut app, Message::ToggleExportMenu);
+        let pane_w = app.window_size.0 - app.seam_x();
+        let in_region = Point::new(pane_w / 2.0, 60.0); // canvas-local: inside the card
+        let _ = update(&mut app, Message::CanvasMoved(in_region));
+        assert!(
+            app.pointer_in_export_dropdown(),
+            "the pointer is inside the dropdown region"
+        );
+        assert!(
+            app.cur().hover_edges.is_empty() && app.field_card_key.is_none(),
+            "nothing hovers under the menu"
+        );
+
+        // close the menu: the same point (menu-card depth) now hovers
+        // the diagram — the card region is gone
+        let _ = update(&mut app, Message::ToggleExportMenu);
+        let _ = update(&mut app, Message::CanvasMoved(in_region));
+        assert!(
+            !app.pointer_in_export_dropdown(),
+            "the card region is gone with the menu closed"
+        );
+        assert!(
+            !app.cur().hover_edges.is_empty() || app.field_card_key.is_some(),
+            "the same point lights the diagram once the menu is closed"
+        );
+
+        // the TRIGGER slot suspends in both states: hovering it with the
+        // menu closed must not light the table beneath (the button is
+        // opaque there)
+        let on_trigger = Point::new(pane_w / 2.0, 20.0); // canvas-local y 8..38
+        let _ = update(&mut app, Message::CanvasMoved(on_trigger));
+        assert!(
+            app.pointer_in_export_dropdown(),
+            "the closed trigger still owns its slot"
+        );
+        assert!(
+            app.cur().hover_edges.is_empty() && app.field_card_key.is_none(),
+            "nothing hovers under the closed trigger"
+        );
+        // and away from the trigger the diagram lights again
+        let _ = update(&mut app, Message::CanvasMoved(in_region));
+        assert!(
+            !app.pointer_in_export_dropdown(),
+            "away from the trigger the canvas owns the pointer"
+        );
+    }
+
+    /// The find field is a mini text input: ctrl+a selects the whole
+    /// query and typing replaces it; the clipboard chords round-trip
+    /// through the system clipboard; alt+arrows select by word.
+    #[test]
+    fn find_field_edits_like_a_text_input() {
+        use crate::clipboard::FakeClipboard;
+        let mut app = App::with_source("Table a { id int }".into());
+        app.clipboard = Some(Box::new(FakeClipboard::with_text("P")));
+        let _ = update(&mut app, Message::FindToggle);
+        for c in "needle".chars() {
+            let _ = update(&mut app, Message::KeyPressed(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        // ctrl+a: the whole query selected; typing replaces it
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert_eq!(
+            app.editor().find_selection_text().as_deref(),
+            Some("needle"),
+            "ctrl+a selects the whole query"
+        );
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('x'), KeyModifiers::NONE));
+        let f = app.editor().find.as_ref().unwrap();
+        assert_eq!(f.input, "x");
+        assert_eq!(f.caret, 1);
+        assert!(f.anchor.is_none());
+
+        // type it back, then the clipboard round trip
+        for c in "hello world".chars() {
+            let _ = update(&mut app, Message::KeyPressed(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        // the query is "xhello world" (the 'x' from the replace above)
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert_eq!(
+            app.clipboard_text().as_deref(),
+            Some("xhello world"),
+            "ctrl+c copied the whole query"
+        );
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        let f = app.editor().find.as_ref().unwrap();
+        assert_eq!(f.input, "", "ctrl+x cut the query");
+        assert_eq!(f.caret, 0);
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('v'), KeyModifiers::CONTROL));
+        let f = app.editor().find.as_ref().unwrap();
+        assert_eq!(f.input, "xhello world", "ctrl+v pasted");
+        assert_eq!(f.caret, 12);
+    }
+
+    #[test]
+    fn find_field_arrows_move_and_select() {
+        let mut app = App::with_source("Table a { id int }".into());
+        let _ = update(&mut app, Message::FindToggle);
+        for c in "one two".chars() {
+            let _ = update(&mut app, Message::KeyPressed(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        // plain Left moves the caret without a selection
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Left, KeyModifiers::NONE));
+        let f = app.editor().find.as_ref().unwrap();
+        assert_eq!(f.caret, 6);
+        assert!(f.anchor.is_none());
+        // alt+arrows are INERT: no move, no selection change (the
+        // user's contract — alt was never a find-field binding)
+        let caret_before = app.editor().find.as_ref().unwrap().caret;
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Right, KeyModifiers::ALT));
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Left, KeyModifiers::ALT));
+        let f = app.editor().find.as_ref().unwrap();
+        assert_eq!(f.caret, caret_before, "alt+arrows move nothing");
+        assert!(f.anchor.is_none(), "alt+arrows select nothing");
+
+        // ONE physical shift+right arrives as a DE echo pair: the twin
+        // is dropped, so the selection grows one char per press — not two
+        let _ = update(&mut app, Message::KeyEcho {
+            raw: "echo".into(),
+            code: KeyCode::Right,
+            mods: KeyModifiers::SHIFT,
+            stripped: false,
+        });
+        let f = app.editor().find.as_ref().unwrap();
+        assert_eq!(
+            &f.input[f.caret - 1..f.caret],
+            "o",
+            "the first press selected one char"
+        );
+        let sel_start = f.caret - 1;
+        let _ = update(&mut app, Message::KeyEcho {
+            raw: "echo twin".into(),
+            code: KeyCode::Right,
+            mods: KeyModifiers::SHIFT,
+            stripped: false,
+        });
+        let f = app.editor().find.as_ref().unwrap();
+        assert_eq!(f.caret, sel_start + 1, "the twin echo was dropped");
+        assert_eq!(
+            &f.input[f.anchor.unwrap()..f.caret],
+            "o",
+            "the selection stayed one char"
+        );
+        // ctrl+a + Left collapses the selection to the start
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Left, KeyModifiers::NONE));
+        let f = app.editor().find.as_ref().unwrap();
+        assert_eq!(f.caret, 0);
+        // shift+right selects by char
+        let _ = update(&mut app, Message::KeyPressed(
+            KeyCode::Right,
+            KeyModifiers::SHIFT,
+        ));
+        assert_eq!(
+            app.editor().find_selection_text().as_deref(),
+            Some("o"),
+            "shift+right selects one char"
+        );
+        // backspace empties the SELECTION, not the last char
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Backspace, KeyModifiers::NONE));
+        let f = app.editor().find.as_ref().unwrap();
+        assert_eq!(f.input, "ne two", "backspace removed the selection");
+    }
+
+    /// The DE echo pair hits the EDITOR's shift+arrows too: regular-mode
+    /// shift+right must select one char per press, not two.
+    #[test]
+    fn editor_shift_arrow_dedupes_the_de_pair() {
+        let mut app = App::with_source("line one\nline two".into());
+        app.config.vim = false;
+        app.focus = crate::app::Focus::Editor;
+        app.editor_mut()
+            .buf
+            .move_cursor(editor::buffer::Move::Jump(0, 0));
+        let echo = |mods| Message::KeyEcho {
+            raw: "echo".into(),
+            code: KeyCode::Right,
+            mods,
+            stripped: false,
+        };
+        let _ = update(&mut app, echo(KeyModifiers::SHIFT));
+        assert_eq!(
+            app.editor().buf.selection_draw_range_exclusive(),
+            Some((
+                editor::buffer::Pos { row: 0, col: 0 },
+                editor::buffer::Pos { row: 0, col: 1 }
+            )),
+            "the first press selected one char"
+        );
+        let _ = update(&mut app, echo(KeyModifiers::SHIFT));
+        assert_eq!(
+            app.editor().buf.selection_draw_range_exclusive(),
+            Some((
+                editor::buffer::Pos { row: 0, col: 0 },
+                editor::buffer::Pos { row: 0, col: 1 }
+            )),
+            "the twin echo was dropped — the selection stayed one char"
+        );
+    }
+
+    /// A hop to the editor drops every diagram hover effect: the canvas
+    /// reports the pointer's departure (CanvasLeft) and the row glow,
+    /// edge highlights and popup identity all reset. The Highlight
+    /// Relationships toggle is a click state and survives the leave.
+    #[test]
+    fn leaving_the_diagram_drops_every_hover() {
+        let src = String::from("Table a { id integer [pk] }\nTable b { a_id integer }\nRef: a.id > b.a_id\n");
+        let mut app = App::with_source(src);
+        let (zoom, pan) = (app.cur().zoom, app.cur().pan);
+
+        // hover a column row of a: its relationship lights + the field
+        // card's identity arms
+        let a = app.cur().diagram.boxes.iter().find(|b| b.title == "a").unwrap();
+        let s = crate::canvas::diagram::cell_size(zoom);
+        let tl = crate::canvas::diagram::to_px(a.x, a.y, zoom, pan);
+        let over_row = Point::new(tl.x + 2.0 * s.width, tl.y + 1.5 * s.height);
+        let _ = update(&mut app, Message::CanvasMoved(over_row));
+        assert!(app.canvas_cursor.is_some(), "the pointer is over the pane");
+        assert!(
+            !app.cur().hover_edges.is_empty(),
+            "the hovered row's relationship is lit"
+        );
+        assert!(app.field_card_key.is_some(), "the field card identity armed");
+
+        // the pointer crosses into the editor: the canvas sees the move
+        // land outside its bounds and reports the leave
+        let _ = update(&mut app, Message::CanvasLeft);
+        assert!(app.canvas_cursor.is_none(), "border/glow/handle drop");
+        assert!(app.cur().hover_edges.is_empty(), "edge highlights drop");
+        assert!(app.field_card_key.is_none(), "the field card drops");
+        assert!(app.table_card_key.is_none(), "the table card drops");
+        assert!(app.group_card_key.is_none(), "the group card drops");
+        assert_eq!(app.field_card_scroll, 0.0);
+
+        // a second leave is inert (no state to drop)
+        let _ = update(&mut app, Message::CanvasLeft);
+        assert!(app.canvas_cursor.is_none());
+
+        // the Highlight Relationships toggle is a CLICK state: it is on
+        // through leaves, and its edges stay lit while hover_edges is empty
+        let _ = update(&mut app, Message::ToggleEdgeHighlight);
+        assert!(app.cur().highlight_all);
+        let _ = update(&mut app, Message::CanvasLeft);
+        assert!(app.cur().highlight_all, "the toggle survives the leave");
     }
 
     #[test]
@@ -6049,7 +7009,8 @@ mod tests {
     fn auto_arrange_zooms_to_fit() {
         let src: String = (0..40)
             .map(|i| format!("Table t{i} {{\n  id integer [pk]\n}}\n"))
-            .collect();
+            .collect::<Vec<_>>()
+            .join("");
         let mut app = App::with_source(src);
         let before = app.cur().zoom;
         let _ = update(&mut app, Message::AutoArrange);
@@ -6062,14 +7023,13 @@ mod tests {
     }
 
     #[test]
-    fn auto_arrange_fills_table_pos_relayouts_and_toasts() {
+    fn auto_arrange_fills_table_pos_and_relayouts() {
         let mut app = app();
         // a stale dragged position and stale highlight state get replaced
         app.cur_mut().table_pos.insert("users".to_string(), (500, 500));
         app.cur_mut().edge_anim = vec![0.5; app.diagram().edges.len()];
         app.cur_mut().hover_edges.push(0);
         let _ = update(&mut app, Message::AutoArrange);
-        assert_eq!(app.message.as_deref(), Some("auto-arranged"));
         // every table gets an override, and the re-layout applied it
         assert_eq!(app.cur().table_pos.len(), app.diagram().boxes.len());
         for b in &app.diagram().boxes {
@@ -6148,11 +7108,15 @@ TableGroup g { a c }
     #[test]
     fn toast_survives_ticks_until_its_ttl_then_clears() {
         let mut app = app();
-        let _ = update(&mut app, Message::AutoArrange);
-        assert_eq!(app.message.as_deref(), Some("auto-arranged"));
+        let tmp = std::env::temp_dir().join("dbml_ui_ttl.svg");
+        let _ = update(
+            &mut app,
+            Message::ExportTo(crate::app::ExportKind::Svg, tmp.to_string_lossy().into_owned()),
+        );
+        assert!(app.message.is_some());
         // ticks inside the TTL leave the toast up
         let _ = update(&mut app, Message::Tick);
-        assert_eq!(app.message.as_deref(), Some("auto-arranged"));
+        assert!(app.message.is_some());
         // aged past the TTL, a tick clears it (the subscription's tick gate
         // stays hot while a toast is up, so these ticks do arrive)
         app.message_since =
@@ -6160,18 +7124,25 @@ TableGroup g { a c }
         let _ = update(&mut app, Message::Tick);
         assert!(app.message.is_none());
         assert!(app.message_since.is_none(), "the gate drops with the toast");
+        let _ = std::fs::remove_file(&tmp);
     }
 
     #[test]
     fn a_keypress_supersedes_the_toast() {
         let mut app = app();
-        let _ = update(&mut app, Message::AutoArrange);
+        // a real remaining toast: the export result
+        let tmp = std::env::temp_dir().join("dbml_ui_supersede.svg");
+        let _ = update(
+            &mut app,
+            Message::ExportTo(crate::app::ExportKind::Svg, tmp.to_string_lossy().into_owned()),
+        );
         assert!(app.message.is_some());
         let _ = update(
             &mut app,
             Message::KeyPressed(KeyCode::Char('x'), KeyModifiers::NONE),
         );
         assert!(app.message.is_none(), "feedback yields to input");
+        let _ = std::fs::remove_file(&tmp);
     }
 
     #[test]
@@ -6235,7 +7206,6 @@ TableGroup g { a c }
         assert_eq!((app.cur().zoom, app.cur().pan), before, "nothing to fit");
         let _ = update(&mut app, Message::AutoArrange);
         assert!(app.cur().table_pos.is_empty());
-        assert_eq!(app.message.as_deref(), Some("auto-arranged"));
     }
 
     #[test]
@@ -6477,14 +7447,13 @@ Ref: posts.user_id > users.id
         // Escape closes
         let _ = update(&mut app, Message::KeyPressed(KeyCode::Esc, KeyModifiers::NONE));
         assert!(app.record_view.is_none());
-        // while open, other keys are swallowed ('?' must not open help)
+        // while open, other keys are swallowed (no editing underneath)
         let _ = update(&mut app, Message::OpenRecords(users));
         let _ = update(
             &mut app,
             Message::KeyPressed(KeyCode::Char('?'), KeyModifiers::NONE),
         );
         assert!(app.record_view.is_some(), "still open");
-        assert!(!app.show_help, "help did not open underneath");
         // switching tabs drops the overlay (it indexes the old schema)
         app.new_tab();
         assert!(app.record_view.is_none());
@@ -6535,7 +7504,7 @@ mod file_watch_tests {
         assert!(matches!(app.cur().liveness, FileLiveness::InSync));
         assert!(app.source().contains("name varchar"), "reloaded");
         assert!(!app.cur().is_modified(), "pristine stays pristine");
-        assert!(app.message.as_deref().unwrap().contains("reloaded"));
+        assert!(app.message.is_none(), "an auto-reload is silent");
     }
 
     #[test]
@@ -6640,24 +7609,19 @@ mod file_watch_tests {
     }
 
     #[test]
-    fn opening_refuses_to_clobber_unsaved_edits() {
-        // config writes (open/save flows persist recents) must serialize
-        // with the other config-touching tests
+    fn opening_replaces_the_current_tab() {
+        // every UI path to open_file starts from the splash screen, so an
+        // open REPLACES the blank/start tab — there is no unsaved-edit
+        // guard to hit
         let _g = crate::config::CONFIG_ENV_LOCK
             .lock();
         let dir = TempDir::new("clobber");
-        let a = dir.path("a.dbml");
         let b = dir.path("b.dbml");
-        std::fs::write(&a, "Table a {\n  id integer [pk]\n}\n").unwrap();
         std::fs::write(&b, "Table b {\n  id integer [pk]\n}\n").unwrap();
-        let mut app = open_at(&a);
-        // the realistic edit path: buffer change + re-synced source field
-        app.editor_mut().buf.insert_str("  x integer\n");
-        app.after_edit(Action::Changed);
+        let mut app = App::blank_start();
         app.open_file(b.to_str().unwrap()).unwrap();
-        assert_eq!(app.cur().file.as_deref(), Some(a.as_path()), "blocked");
-        assert!(app.source().contains("x integer"), "edits intact");
-        assert!(app.message.as_deref().unwrap().contains("unsaved"));
+        assert_eq!(app.cur().file.as_deref(), Some(b.as_path()), "b opened");
+        assert!(app.source().contains("Table b"));
     }
 }
 
@@ -7063,6 +8027,30 @@ mod completion_tests {
 
 
     #[test]
+    fn the_import_toast_is_a_warning() {
+        // the import succeeded but carries an obligation (Save As to keep
+        // the DBML): the toast severity is WARNING, and the kind travels
+        // with the message for the pill's accent
+        let _g = crate::config::CONFIG_ENV_LOCK
+            .lock();
+        let dir = std::env::temp_dir().join(format!("dbml-ui-imp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("DBML_UI_CONFIG", dir.join("config"));
+        std::env::set_var("DBML_UI_SESSION", dir.join("session"));
+        let dump = dir.join("schema.sql");
+        std::fs::write(&dump, "CREATE TABLE users (\n  id INTEGER PRIMARY KEY\n);\n").unwrap();
+
+        let mut app = App::blank_start();
+        app.open_file(dump.to_str().unwrap()).unwrap();
+        assert_eq!(app.message_kind, crate::app::ToastKind::Warning);
+
+        std::env::remove_var("DBML_UI_CONFIG");
+        std::env::remove_var("DBML_UI_SESSION");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn sql_import_lands_in_an_untitled_buffer() {
         // the contract: a .sql import NEVER backs the buffer with the dump
         // file — ctrl-s must not overwrite the user's dump with DBML; Save
@@ -7179,8 +8167,10 @@ mod completion_tests {
 
     #[test]
     fn format_now_keeps_the_cursor_in_place() {
-        let mut app = App::default();
-        app.window_size = (1400.0, 900.0);
+        let mut app = App {
+            window_size: (1400.0, 900.0),
+            ..App::default()
+        };
         // messy indentation: formatting re-indents every column line
         let mut messy = String::new();
         for i in 0..40 {
@@ -8414,6 +9404,9 @@ mod maximize_tests {
     #[test]
     fn split_nudge_clamps_at_the_divider_bounds() {
         let mut app = app();
+        // 4000px: wide enough that the pane px floors sit inside the
+        // ratio bounds, so this pins the pure SPLIT_MIN/MAX limits
+        app.window_size = (4000.0, 900.0);
         for _ in 0..100 {
             let _ = update(
                 &mut app,
@@ -8428,6 +9421,70 @@ mod maximize_tests {
             );
         }
         assert_eq!(app.split, SPLIT_MAX);
+    }
+
+    /// The pane pixel floors survive a divider drag: pinning the seam
+    /// against either window edge still leaves the editor readable and
+    /// the diagram's export dropdown reachable. Widths come from
+    /// editor_pane_width — the same FillPortion estimate view.rs lays
+    /// the panes out with (1px tolerance for the ratio rounding).
+    #[test]
+    fn divider_drag_respects_the_pane_pixel_floors() {
+        let mut app = app();
+        app.window_size = (1400.0, 900.0);
+        let _ = update(&mut app, Message::DividerPressed);
+
+        // seam jammed hard left: the editor never drops under its floor
+        let _ = update(&mut app, Message::MouseMovedWindow(100.0, 450.0));
+        assert!(
+            app.seam_x() >= EDITOR_MIN_PX - 1.0,
+            "editor pane pinned to {}px < {}-1px floor",
+            app.seam_x(),
+            EDITOR_MIN_PX
+        );
+
+        // seam jammed hard right: the diagram keeps its export dropdown
+        let _ = update(&mut app, Message::MouseMovedWindow(1300.0, 450.0));
+        let diagram = app.window_size.0 - app.seam_x();
+        assert!(
+            diagram >= DIAGRAM_MIN_PX - 1.0,
+            "diagram pane pinned to {diagram}px < {}-1px floor",
+            DIAGRAM_MIN_PX
+        );
+    }
+
+    /// The floors hold without a drag too: shrinking the window re-clamps
+    /// the stored split, so a split legal on a wide monitor cannot come
+    /// back as a cramped editor on the 940px minimum. There both floors
+    /// still fit; below 840px the clamp_split conflict guard favors the
+    /// editor's floor and the diagram knowingly takes the remainder.
+    #[test]
+    fn split_floors_hold_when_the_window_shrinks() {
+        let mut app = app();
+        app.split = 0.15; // legal at 4000px, not at the 940px minimum
+        let _ = update(&mut app, Message::WindowResized(940.0, 900.0));
+        assert!(
+            app.seam_x() >= EDITOR_MIN_PX * 0.99,
+            "resize re-clamps: editor at {}px < its floor",
+            app.seam_x()
+        );
+        assert!(
+            app.window_size.0 - app.seam_x() >= DIAGRAM_MIN_PX * 0.99,
+            "both floors still fit at 940px: the diagram keeps its own"
+        );
+
+        // 800px < 500+340: the floors conflict — the editor wins its
+        // floor and the diagram drops below its own (the fallback)
+        let _ = update(&mut app, Message::WindowResized(800.0, 900.0));
+        assert!(
+            app.seam_x() >= EDITOR_MIN_PX - 1.0,
+            "conflict fallback floors the editor at {}px",
+            app.seam_x()
+        );
+        assert!(
+            app.window_size.0 - app.seam_x() < DIAGRAM_MIN_PX,
+            "conflict fallback: the diagram takes the remainder"
+        );
     }
 
     #[test]
@@ -8588,6 +9645,244 @@ mod goto_definition_tests {
 
     fn caret_on(app: &mut App, row: usize, col: usize) {
         app.editor_mut().jump(row, col);
+    }
+
+    /// The referenced column of a dot-bound ref (`users.id` in the
+    /// inline ref) resolves through the qualifier: gd lands on the
+    /// COLUMN's definition line, not the table's.
+    #[test]
+    fn gd_on_referenced_column_jumps_to_the_column_line() {
+        let mut app = app();
+        // the caret on "id" of `users.id` in the inline ref (row 4)
+        let ref_row = app
+            .editor()
+            .buf
+            .lines()
+            .iter()
+            .position(|l| l.contains("ref: > users.id"))
+            .unwrap();
+        let line = app.editor().buf.lines()[ref_row].clone();
+        let id_col = line.find("users.id").unwrap() + 8; // the "id" token
+        caret_on(&mut app, ref_row, id_col);
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('g'), KeyModifiers::NONE));
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('d'), KeyModifiers::NONE));
+        // the users table's `id` column definition (row 1)
+        assert_eq!(app.editor().buf.cursor().0, 1, "on the column line");
+    }
+
+    /// The right-click menu's Go to Definition works on the referenced
+    /// column: the menu probe and the jump both resolve the qualifier.
+    #[test]
+    fn right_click_go_to_definition_on_column_reference() {
+        let mut app = app();
+        let ref_row = app
+            .editor()
+            .buf
+            .lines()
+            .iter()
+            .position(|l| l.contains("ref: > users.id"))
+            .unwrap();
+        let line = app.editor().buf.lines()[ref_row].clone();
+        let id_col = line.find("users.id").unwrap() + 8;
+        caret_on(&mut app, ref_row, id_col);
+        // the right click: the menu opens at the column's position (the
+        // canvas-local point converted the same way the canvas does)
+        let local = local_px(crate::editor::buffer::Pos { row: ref_row, col: id_col });
+        let _ = update(&mut app, Message::EditorMenu(local));
+        let menu = app.editor_menu.clone().expect("the menu opens");
+        assert!(menu.has_definition, "the column ref has a definition");
+        let _ = update(&mut app, Message::EditorMenuGotoDefinition);
+        assert_eq!(app.editor().buf.cursor().0, 1);
+    }
+
+    /// Applying a quick fix keeps the caret on the line the suggestion
+    /// click navigated to, and ONE undo reverts the whole fix.
+    #[test]
+    fn applying_a_fix_keeps_the_cursor_and_one_undo_reverts() {
+        let src = "Table a { id integer [pk] }\nTable b { a_id integer [null] }\nRef: b.a_id > a.id\n";
+        let mut app = App::with_source(src.into());
+        app.focus = crate::app::Focus::Editor;
+        let _ = update(&mut app, Message::DiagnosticGoto(0));
+        let _ = update(&mut app, Message::ApplyDiagnosticFix(0, 0));
+        assert!(
+            app.editor().text().contains("Ref: b.a_id >? a.id"),
+            "the fix rewrote the operator: {:?}",
+            app.editor().text()
+        );
+        assert_eq!(app.editor().buf.cursor().0, 1, "the caret stays");
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('u'), KeyModifiers::NONE));
+        assert_eq!(app.editor().text(), src, "one undo reverts the whole fix");
+        assert_eq!(app.editor().buf.cursor().0, 1, "the caret returns");
+    }
+
+    /// The physical F12 key maps to KeyCode::F12 (the shortcut's entry
+    /// point) — the named-key table had no F12 arm and silently dropped it.
+    #[test]
+    fn f12_key_maps_through_named_code() {
+        let (code, mods) = map_key_event(
+            &iced::keyboard::Key::Named(iced::keyboard::key::Named::F12),
+            &iced::keyboard::Key::Named(iced::keyboard::key::Named::F12),
+            false,
+            false,
+            false,
+        )
+        .expect("F12 maps");
+        assert_eq!(code, KeyCode::F12);
+        assert_eq!(mods, KeyModifiers::NONE);
+    }
+
+    /// Save As behavior by target: REPLACING an existing name rebinds the
+    /// current tab in place (no copy tab — two buffers on one file would
+    /// fight) with the regular written toast; a CREATED name opens the
+    /// copy tab with the regular copy-saved toast.
+    #[test]
+    fn save_as_replace_rebinds_created_opens_copy() {
+        let _g = crate::config::CONFIG_ENV_LOCK
+            .lock();
+        let src = "Table t { x integer }\n";
+        let other = std::env::temp_dir().join("dbml_ui_sa_rep_target.dbml");
+        std::fs::write(&other, "Table b { y integer }\n").unwrap();
+        let fresh = std::env::temp_dir().join("dbml_ui_sa_fresh.dbml");
+        let _ = std::fs::remove_file(&fresh);
+
+        // the unpacked buffer: Save As onto the EXISTING other.dbml —
+        // rebinds in place, the regular written toast
+        let mut app = App::with_source(src.into());
+        app.focus = crate::app::Focus::Editor;
+        let _ = update(&mut app, Message::SaveAs(other.to_str().unwrap().to_string()));
+        assert_eq!(
+            app.cur().file.as_deref(),
+            Some(other.as_path()),
+            "the tab rebinds to the target"
+        );
+        assert!(
+            app.message.as_deref().is_some_and(|m| m.contains("written")),
+            "the regular written toast: {:?}",
+            app.message
+        );
+        // the same tab, dirty again, Save As onto a FRESH path: the copy
+        // tab opens (the created contract) with the copy-saved toast
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('i'), KeyModifiers::NONE));
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('z'), KeyModifiers::NONE));
+        let _ = update(&mut app, Message::SaveAs(fresh.to_str().unwrap().to_string()));
+        assert_eq!(app.tabs.len(), 2, "created: the copy tab opens");
+        assert_eq!(app.tabs[1].file.as_deref(), Some(fresh.as_path()));
+        assert!(
+            app.message.as_deref().is_some_and(|m| m.starts_with("copy saved to")),
+            "{:?}",
+            app.message
+        );
+        let _ = std::fs::remove_file(&other);
+        let _ = std::fs::remove_file(&fresh);
+    }
+
+    /// F12 opens the Save As picker on any buffer (packed or not).
+    #[test]
+    fn f12_opens_the_save_as_picker() {
+        let _g = crate::config::CONFIG_ENV_LOCK
+            .lock();
+        // the START screen: F12 is inert (nothing to save) — the chain
+        // flag stays down and no picker task runs
+        let mut app = App::blank_start();
+        app.focus = crate::app::Focus::Editor;
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::F12, KeyModifiers::NONE));
+        assert!(!app.chain_save_as, "the start screen leaves F12 inert");
+        // a document-backed buffer: F12 opens the picker
+        let mut app = App::with_source("Table t { x integer }\n".into());
+        app.focus = crate::app::Focus::Editor;
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::F12, KeyModifiers::NONE));
+        assert!(
+            !app.message.as_deref().is_some_and(|m| m.contains("no file name")),
+            "F12 never refuses: it is Save As"
+        );
+        assert!(app.cur().file.is_none(), "the pick lands async");
+        // the packed-buffer ctrl+S keeps saving directly (unchanged)
+        let mut packed = App::with_source("Table t { x integer }\n".into());
+        packed.focus = crate::app::Focus::Editor;
+        let path = std::env::temp_dir().join("dbml_ui_f12_packed.dbml");
+        let _ = std::fs::remove_file(&path);
+        packed.cur_mut().file = Some(path.clone());
+        let _ = update(
+            &mut packed,
+            Message::KeyPressed(KeyCode::Char('s'), KeyModifiers::CONTROL),
+        );
+        assert!(path.exists(), "ctrl+S on a packed buffer saves directly");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// ctrl+S on the start screen is inert (F12's precedent): the splash
+    /// has no document, so the chord must not chain the Save As picker,
+    /// toast, write, or touch anything. Vim mode routes the same global
+    /// chord arm — same inertness there.
+    /// The export canvas covers dragged/resized stickies: a note pinned
+    /// beyond the layout extent (the old svg_size ended above it) must be
+    /// fully inside the exported PNG — yellow pixels present in the
+    /// bottom region.
+    #[test]
+    fn export_covers_a_sticky_dragged_beyond_the_extent() {
+        let src = "Table t { id int }\nNote a { '''reminder''' }\n".to_string();
+        let mut app = App::with_source(src.clone());
+        // drag the sticky far below/right of the content (user drag path)
+        {
+            app.cur_mut()
+                .note_pos
+                .insert("a".to_string(), (40, 30, 14, 5));
+            app.cur_mut().set_source(&src);
+        }
+        let path = std::env::temp_dir().join("dbml_ui_export_cut_test.png");
+        let msg = app.export_diagram(path.to_str().unwrap()).unwrap();
+        assert!(msg.starts_with("exported"));
+        let img = image::open(&path).unwrap();
+        // the sticky's cell rect maps into the 2x-scaled raster; its
+        // bottom edge must sit INSIDE the image, and yellow pixels must
+        // exist in the bottom quarter (the note body)
+        let note_top_px = (30.0 + 1.0) * 20.0 * 2.0;
+        assert!(
+            (note_top_px as u32) < img.height(),
+            "note top {} inside height {}",
+            note_top_px,
+            img.height()
+        );
+        let yellow = img
+            .to_rgba8()
+            .pixels()
+            .filter(|p| p[0] > 230 && p[1] > 220 && p[2] < 200)
+            .count();
+        assert!(yellow > 500, "the sticky body rendered: {yellow} yellow px");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn ctrl_s_on_the_start_screen_is_inert() {
+        let _g = crate::config::CONFIG_ENV_LOCK
+            .lock();
+        // regular editing (vim off): the blank splash tab is unpacked,
+        // so before the guard this chord chained the Save As picker
+        let mut app = App::blank_start();
+        app.config.vim = false;
+        app.focus = crate::app::Focus::Editor;
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        assert!(!app.chain_save_as, "no Save As chain on the splash");
+        assert!(app.message.is_none(), "no toast: {:?}", app.message);
+        assert!(!app.cur().doc_open, "the splash stays the splash");
+        assert!(app.cur().file.is_none(), "no file binds");
+        assert!(app.editor().text().is_empty(), "nothing types through");
+        assert_eq!(app.tabs.len(), 1, "no tabs appear");
+        // update drains the chain flag by design ("the flag drained into
+        // the task"), so the drained assert above is blind to the chord
+        // itself: probe key_pressed directly — the flag must never rise
+        app.key_pressed(KeyCode::Char('s'), KeyModifiers::CONTROL);
+        assert!(!app.chain_save_as, "the chord itself leaves the flag down");
+        // vim mode dispatches chords through the same global arm
+        let mut app = App::blank_start();
+        app.config.vim = true;
+        app.focus = crate::app::Focus::Editor;
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        assert!(!app.chain_save_as, "vim mode leaves the splash inert too");
+        assert!(app.message.is_none(), "no toast: {:?}", app.message);
+        assert!(app.editor().text().is_empty(), "nothing types through");
+        app.key_pressed(KeyCode::Char('s'), KeyModifiers::CONTROL);
+        assert!(!app.chain_save_as, "the vim chord itself leaves the flag down");
     }
 
     #[test]
@@ -9271,20 +10566,20 @@ mod tab_tests {
     #[test]
     fn switching_tabs_swaps_buffer_editor_and_view_state() {
         let mut app = two_tab_app();
-        // per-tab cursor, vim mode, scroll and zoom (tab 0 is the sample)
+        // per-tab cursor, scroll and zoom (tab 0 is the sample). The
+        // editing MODE is the global config preference: it does not
+        // switch with the tab
         let _ = update(&mut app, Message::TabPressed(0));
         app.editor_mut().jump(1, 3);
-        let _ = update(&mut app, key(KeyModifiers::NONE, 'i')); // insert mode
         app.cur_mut().editor_scroll = 7.0;
         app.cur_mut().zoom = 55.0;
         let _ = update(&mut app, Message::TabPressed(1));
         assert_eq!(app.source(), "Table other { id integer }");
-        assert_eq!(app.editor().mode, editor::Mode::Normal, "vim state is per tab");
+        assert_eq!(app.editor().mode, editor::Mode::Normal, "vim state is global");
         assert_eq!(app.cur().editor_scroll, 0.0);
         assert_eq!(app.cur().zoom, crate::view::BASE_ZOOM);
         let _ = update(&mut app, Message::TabPressed(0));
         assert_eq!(app.source(), SAMPLE_DBML);
-        assert_eq!(app.editor().mode, editor::Mode::Insert, "mode survives the round trip");
         assert_eq!(app.editor().buf.cursor(), (1, 3), "cursor survives");
         assert_eq!(app.cur().editor_scroll, 7.0);
         assert_eq!(app.cur().zoom, 55.0);
@@ -9302,13 +10597,8 @@ mod tab_tests {
         let _ = update(&mut app, Message::TabPressed(0));
         let _ = update(&mut app, Message::TabPressed(1));
         assert!(app.source().ends_with("integer }!"), "{}", app.source());
-        assert_eq!(
-            app.editor().mode,
-            editor::Mode::Insert,
-            "insert mode is per tab and came back with it"
-        );
-        // leave insert, then one u undoes the edit: history is per buffer
-        let _ = update(&mut app, Message::KeyPressed(KeyCode::Esc, KeyModifiers::NONE));
+        // the mode follows the global config (Normal), not the tab — but
+        // undo history is per buffer: one u undoes the edit
         let _ = update(&mut app, key(KeyModifiers::NONE, 'u'));
         assert_eq!(app.source(), "Table other { id integer }");
         assert!(!app.cur().is_modified());
@@ -9874,6 +11164,46 @@ mod tab_tests {
         assert_eq!((n.rect.0, n.rect.1), (n0.0 + 3, n0.1 + 3), "position survives re-parses");
     }
 
+    /// A table dragged past a sticky note must not move the note: the
+    /// grab pins the auto-placed stickies at their laid-out rects (the
+    /// same hold-still behavior tables get when a drag passes over
+    /// them), instead of sliding the notes' auto row down with the
+    /// growing extents.
+    #[test]
+    fn table_drag_leaves_auto_stickies_in_place() {
+        let src = "Table t { id integer }\nNote todo { '''stuff''' }\n";
+        let mut app = App::with_source(src.into());
+        let (zoom, pan) = (app.cur().zoom, app.cur().pan);
+        let before = app.cur().diagram.notes[0].rect;
+
+        // grab the table and drag it BELOW the sticky's auto row: the
+        // extents grow, which used to slide the note down with them
+        let b = app.cur().diagram.boxes[0].clone();
+        let from = crate::canvas::diagram::to_px(b.x + 2, b.y + 1, zoom, pan);
+        let drop_y = before.1 + before.3 + 25; // well past the note's bottom
+        let to = crate::canvas::diagram::to_px(b.x + 2, drop_y, zoom, pan);
+        let _ = update(&mut app, Message::CanvasPressed(from));
+        assert!(
+            matches!(app.drag, Drag::Table { .. }),
+            "the table is grabbed"
+        );
+        let _ = update(&mut app, Message::CanvasMoved(to));
+        let _ = update(&mut app, Message::CanvasReleased(to));
+
+        assert!(
+            app.cur().note_pos.contains_key("todo"),
+            "the sticky was pinned at grab"
+        );
+        assert_eq!(
+            app.cur().diagram.notes[0].rect, before,
+            "the note held still while the table passed it"
+        );
+        assert!(
+            app.cur().diagram.boxes[0].y > before.1,
+            "the table actually moved below the note row"
+        );
+    }
+
     #[test]
     fn vim_p_adopts_externally_copied_text() {
         use crate::clipboard::FakeClipboard;
@@ -10188,7 +11518,7 @@ mod clipboard_menu_tests {
         select_hello(&mut app);
         let _ = update(&mut app, key(KeyModifiers::CONTROL, 'c'));
         assert_eq!(app.clipboard_text().as_deref(), Some("hello"));
-        assert_eq!(app.message.as_deref(), Some("copied 5 chars"));
+        assert!(app.message.is_none(), "a successful copy is silent");
         assert_eq!(
             app.editor().buf.selection_text().as_deref(),
             Some("hello"),
@@ -10252,10 +11582,10 @@ mod clipboard_menu_tests {
         let _ = update(&mut app, key(KeyModifiers::CONTROL, 'v'));
         assert_eq!(app.editor().buf.line(0), "reg texthello world");
 
-        // nothing anywhere: a toast, no panic
+        // nothing anywhere: silent, no panic
         app.editor_mut().set_register(Vec::new());
         let _ = update(&mut app, key(KeyModifiers::CONTROL, 'v'));
-        assert_eq!(app.message.as_deref(), Some("nothing to paste"));
+        assert!(app.message.is_none(), "an empty clipboard is silent");
     }
 
     #[test]
@@ -10633,21 +11963,18 @@ mod clipboard_menu_tests {
         let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('z'), KeyModifiers::NONE));
         let _ = update(&mut app, Message::SaveAs(copy.to_str().unwrap().to_string()));
 
-        // the original is still active, still bound to ITS file, still dirty
-        assert_eq!(app.active, 0, "the original keeps the screen");
-        assert_eq!(
-            app.cur().file.as_deref(),
-            Some(orig.as_path()),
-            "the original tab is unchanged"
-        );
-        assert!(app.cur().is_modified(), "its edits are still unsaved");
+        // Save As switches to the copy: the new tab takes the screen,
+        // bound to the new path, clean, with the saved text
         assert_eq!(app.tabs.len(), 2, "the copy is a new tab");
-
-        // the copy tab: bound to the new path, clean, with the saved text
+        assert_eq!(app.active, 1, "the copy takes the screen");
         let c = &app.tabs[1];
         assert_eq!(c.file.as_deref(), Some(copy.as_path()));
         assert!(!c.is_modified(), "the copy is saved-clean");
         assert!(c.editor.text().starts_with("z"), "the copy holds the edit");
+
+        // the original stays in the background, still bound to ITS file
+        let orig_tab = &app.tabs[0];
+        assert_eq!(orig_tab.file.as_deref(), Some(orig.as_path()));
 
         // the written file matches the copy buffer; the original file is
         // untouched on disk
@@ -10752,10 +12079,11 @@ mod clipboard_menu_tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// An untitled dirty tab cannot be saved: Save & close refuses and
-    /// the confirm stays up (Close without saving is the way out).
+    /// An untitled dirty tab has nowhere to save: "Save & close" is just
+    /// CLOSE — the modal already warned, and the clean-slate model
+    /// discards the edits by design (the confirm resolves).
     #[test]
-    fn save_and_close_refuses_untitled_dirty_tabs() {
+    fn save_and_close_on_an_untitled_tab_just_closes() {
         // config writes (open/save flows persist recents) must serialize
         // with the other config-touching tests
         let _g = crate::config::CONFIG_ENV_LOCK
@@ -10766,15 +12094,19 @@ mod clipboard_menu_tests {
         let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('z'), KeyModifiers::NONE));
         let _ = update(&mut app, Message::CloseTab(0));
         let _ = update(&mut app, Message::TabCloseSave);
-        assert_eq!(app.tab_close_confirm, Some(0), "still up");
-        assert!(app.message.is_some(), "the refusal is explained");
-        assert!(app.cur().is_modified(), "nothing was lost");
+        assert!(app.tab_close_confirm.is_none(), "the confirm resolved");
     }
 
     #[test]
     fn window_close_with_dirty_buffers_asks_and_cancel_keeps_alive() {
         let _g = crate::config::CONFIG_ENV_LOCK
-            .lock();
+        .lock();
+        // the clean-exit branch writes the session record — redirect it
+        // away from the real restore state
+        let dir = std::env::temp_dir().join(format!("dbml-ui-close-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("DBML_UI_SESSION", dir.join("session"));
         let path = std::env::temp_dir().join("dbml_ui_exit_test.dbml");
         std::fs::write(&path, "Table t { x integer }\n").unwrap();
         let mut app = App::blank_start();
@@ -10799,15 +12131,27 @@ mod clipboard_menu_tests {
         assert!(!app.any_dirty());
         let _ = update(&mut app, Message::WindowCloseRequested);
         assert!(app.should_quit, "clean exit is immediate");
+        assert!(
+            crate::session::load().map(|s| s.clean).unwrap_or(false),
+            "the clean exit left the reopen record"
+        );
+        std::env::remove_var("DBML_UI_SESSION");
+        let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_file(&path);
     }
 
-    /// Discard-and-exit rewrites the session with the SAVED content, so
-    /// the discarded edits never resurrect on the next launch.
+    /// Discard-and-exit leaves the CLEAN record: the file reopens on the
+    /// next start, but the record carries no buffer text — the discarded
+    /// edits cannot resurrect. The session path redirects to a temp file
+    /// so the real restore state is never touched by a test.
     #[test]
-    fn discard_exit_clears_unsaved_edits_from_the_session() {
+    fn discard_exit_leaves_a_clean_record() {
         let _g = crate::config::CONFIG_ENV_LOCK
-            .lock();
+        .lock();
+        let dir = std::env::temp_dir().join(format!("dbml-ui-exit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("DBML_UI_SESSION", dir.join("session"));
         let path = std::env::temp_dir().join("dbml_ui_discard_test.dbml");
         std::fs::write(&path, "Table t { x integer }\n").unwrap();
         let mut app = App::blank_start();
@@ -10817,59 +12161,101 @@ mod clipboard_menu_tests {
         let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('z'), KeyModifiers::NONE));
         assert!(app.any_dirty());
 
+        // the edit flushes to the session on the next tick (the crash net)
+        let _ = update(&mut app, Message::SessionTick);
+        assert!(
+            crate::session::load().map(|s| !s.clean).unwrap_or(false),
+            "the crash net holds the state (dirty)"
+        );
+
         let _ = update(&mut app, Message::ExitDiscard);
         assert!(app.should_quit, "discard exits");
-        // the session that would be written holds the SAVED text
-        let snap = app.session_snapshot();
-        assert!(!snap.tabs.is_empty());
-        // emulate write_session_now's discard mapping
-        let mut session = snap;
-        for (i, t) in app.tabs.iter().enumerate() {
-            if t.is_modified() {
-                session.tabs[i].text = t.saved_text.clone();
-            }
-        }
-        assert_eq!(session.tabs[0].text, "Table t { x integer }\n");
-        assert!(!session.tabs[0].text.contains('z'), "the edit is gone");
+        // the clean record survives: the file reopens, the edits do not
+        let s = crate::session::load().expect("the clean record is on disk");
+        assert!(s.clean, "the record is a clean-exit record");
+        assert_eq!(s.tabs.len(), 1, "the open file is remembered");
+        assert_eq!(s.tabs[0].file.as_deref(), Some(path.to_str().unwrap()));
+        assert!(s.tabs[0].text.is_empty(), "no buffer text rides along");
+
+        std::env::remove_var("DBML_UI_SESSION");
+        let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_file(&path);
     }
 
-    /// Save all & exit writes every dirty file-backed tab, then quits.
+    /// A clean record reopens its files from DISK (no snapshot text
+    /// exists): content is fresh, tabs read unmodified, and paths that
+    /// cannot be read — moved, renamed, deleted — skip silently. Nothing
+    /// restorable keeps the boot splash.
     #[test]
-    fn save_all_exit_writes_dirty_tabs_and_exits() {
-        let _g = crate::config::CONFIG_ENV_LOCK
-            .lock();
-        let a = std::env::temp_dir().join("dbml_ui_exit_a.dbml");
-        let b = std::env::temp_dir().join("dbml_ui_exit_b.dbml");
-        std::fs::write(&a, "Table a { x integer }\n").unwrap();
-        std::fs::write(&b, "Table b { y integer }\n").unwrap();
+    fn clean_record_reopens_files_and_skips_missing() {
+        let dir = std::env::temp_dir().join(format!("dbml-ui-reopen-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.dbml");
+        std::fs::write(&a, "Table a { id integer }\n").unwrap();
+        let gone = dir.join("gone.dbml");
+        let tab_for = |p: &std::path::Path| crate::session::SessionTab {
+            file: Some(p.to_string_lossy().into_owned()),
+            text: String::new(),
+            cursor: (0, 0),
+            mode: 0,
+            scroll: 0.0,
+            hscroll: 0.0,
+            doc_open: true,
+        };
+        let record = crate::session::Session {
+            active: 1, // the alive file, second in the list
+            split: 0.5,
+            clean: true,
+            tabs: vec![tab_for(&gone), tab_for(&a)],
+        };
+
         let mut app = App::blank_start();
-        app.open_file(a.to_str().unwrap()).unwrap();
-        app.new_tab();
-        app.open_file(b.to_str().unwrap()).unwrap();
-        // edit tab b, then switch back and edit tab a
-        let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('i'), KeyModifiers::NONE));
-        let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('q'), KeyModifiers::NONE));
-        let _ = update(&mut app, Message::TabPressed(0));
-        let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('i'), KeyModifiers::NONE));
-        let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('q'), KeyModifiers::NONE));
-        assert!(app.any_dirty());
-        app.mark_session_dirty();
-        let _ = update(&mut app, Message::WindowCloseRequested);
-        assert!(app.exit_confirm);
-        let _ = update(&mut app, Message::ExitSaveAll);
-        assert!(app.should_quit, "exits after saving");
-        assert!(
-            std::fs::read_to_string(&a).unwrap().starts_with("q"),
-            "tab a saved with its edit"
-        );
-        assert!(
-            std::fs::read_to_string(&b).unwrap().starts_with("q"),
-            "tab b saved with its edit"
-        );
-        let _ = std::fs::remove_file(&a);
-        let _ = std::fs::remove_file(&b);
+        app.restore_open_files(record);
+        assert_eq!(app.tabs.len(), 1, "the vanished path skipped silently");
+        assert_eq!(app.cur().file.as_deref(), Some(a.as_path()));
+        // the content came from disk, and reads unmodified against it
+        assert_eq!(app.editor().text(), "Table a { id integer }\n");
+        assert!(!app.cur().is_modified());
+        assert!(!app.any_dirty());
+
+        // every path failed: the splash stays, nothing restored
+        let dead = crate::session::Session {
+            active: 0,
+            split: 0.5,
+            clean: true,
+            tabs: vec![tab_for(&gone)],
+        };
+        let mut app2 = App::blank_start();
+        app2.restore_open_files(dead);
+        assert_eq!(app2.tabs.len(), 1, "the single splash tab remains");
+        assert!(!app2.cur().doc_open, "still the start screen");
+        let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// The clean record remembers only file-backed tabs: untitled
+    /// diagrams drop out (no path to reopen), and the active index maps
+    /// into the surviving order (an untitled active tab falls back to the
+    /// first file tab).
+    #[test]
+    fn clean_record_drops_untitled_tabs() {
+        let mut app = App::shell(vec![
+            Tab::with_source("Table a {}".into()),
+            Tab::with_source("Table b {}".into()),
+        ]);
+        app.tabs[0].file = None;
+        app.tabs[1].file = Some(std::path::PathBuf::from("/tmp/b.dbml"));
+        app.tabs[1].saved_text = "Table b {}".into();
+        app.active = 0; // the untitled tab is active
+
+        let record = app.clean_record();
+        assert!(record.clean);
+        assert_eq!(record.tabs.len(), 1, "the untitled tab dropped");
+        assert_eq!(record.tabs[0].file.as_deref(), Some("/tmp/b.dbml"));
+        assert_eq!(record.active, 0, "active maps onto the surviving tab");
+        assert!(record.tabs[0].text.is_empty());
+    }
+
 
     #[test]
     fn session_snapshot_and_restore_preserve_unsaved_edits() {
@@ -10900,14 +12286,17 @@ mod clipboard_menu_tests {
             fresh.source()
         );
         assert!(fresh.cur().is_modified(), "still dirty after restore");
-        assert_eq!(fresh.editor().mode, editor::Mode::Insert, "mode restored");
+        // the mode comes from the CONFIG (the global preference), not the
+        // crashed tab's transient insert state: vim default = Normal
+        assert_eq!(fresh.editor().mode, editor::Mode::Normal, "mode from config");
         assert_eq!(fresh.editor().buf.cursor(), (0, 1), "cursor restored");
         assert!(!fresh.session_dirty, "restore leaves a clean snapshot");
-        // and the restored tab keeps editing normally
+        // and the restored tab keeps editing normally — in the CONFIG's
+        // mode (Normal): 'w' moves to the next word instead of typing
         let _ = update(&mut fresh, Message::KeyPressed(KeyCode::Char('w'), KeyModifiers::NONE));
         assert!(
-            fresh.source().starts_with("zwTable"),
-            "typing continues at the restored cursor: {:?}",
+            fresh.source() == "zTable users {\n  id integer [pk]\n}\n",
+            "normal-mode w moves, does not type: {:?}",
             fresh.source()
         );
         let _ = std::fs::remove_file(&path);
