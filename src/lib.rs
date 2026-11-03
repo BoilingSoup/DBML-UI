@@ -1,15 +1,19 @@
 //! dbml-ui — a desktop DBML diagram editor (iced).
 //!
 //! Core logic lives in the library so it stays unit-testable headlessly:
-//! the DBML parser, the schema model, the auto-layout engine, ex-command
-//! parsing, and the SVG/PNG exporters.
+//! the DBML parser, the schema model, the auto-layout engine, and the
+//! SVG/PNG exporters.
 
 #![forbid(unsafe_code)] // the whole editor is written in safe Rust
-pub mod commands;
 pub mod dbml;
 pub mod layout;
 pub mod model;
 pub mod render;
+
+/// The embedded editor mono face (DejaVu Sans Mono, Bitstream-Vera
+/// licensed): the web build's only font — text rendering (cosmic-text)
+/// and the SVG rasterizer both draw exclusively with it there.
+pub const MONO_TTF: &[u8] = include_bytes!("../fonts/DejaVuSansMono.ttf");
 
 /// Startup document for a fresh session.
 pub const SAMPLE_DBML: &str = r#"Project blog {

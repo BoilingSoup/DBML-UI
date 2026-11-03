@@ -26,6 +26,9 @@ struct Fail {
 type R<T> = Result<T, Fail>;
 
 fn offset(input: &str, base: usize) -> usize {
+    // pointer differences against `base`: every input handed here must be
+    // a slice of the parsed source (the skip helpers above keep their
+    // exhausted-state slices inside it — a foreign "" would underflow)
     input.as_ptr() as usize - base
 }
 
@@ -68,14 +71,17 @@ fn ws(input: &mut &str) {
         if let Some(rest) = input.strip_prefix("//") {
             *input = match rest.find('\n') {
                 Some(i) => &rest[i..],
-                None => "",
+                // an empty slice OF the source: the offset math derives
+                // spans from pointer differences, so a foreign "" would
+                // underflow (and did, on web)
+                None => &rest[rest.len()..],
             };
             continue;
         }
         if let Some(rest) = input.strip_prefix("/*") {
             *input = match rest.find("*/") {
                 Some(i) => &rest[i + 2..],
-                None => "",
+                None => &rest[rest.len()..],
             };
             continue;
         }
@@ -131,7 +137,7 @@ fn peek_kw_then(input: &str, kw: &str, next: char) -> bool {
 fn skip_line(input: &mut &str) {
     match input.find('\n') {
         Some(i) => *input = &input[i + 1..],
-        None => *input = "",
+        None => *input = &input[input.len()..],
     }
 }
 
@@ -196,6 +202,32 @@ fn sq_string(input: &mut &str, base: usize) -> R<String> {
     }
 }
 
+/// Dedent a triple-quoted note body: strip one leading newline, a
+/// whitespace-only tail after the last line, and the common leading
+/// indent of the non-empty lines (dbdiagram's indented `'''` blocks read
+/// back as clean lines — the diagram and the GUI editor see the same
+/// text the author meant).
+fn dedent_note_body(raw: &str) -> String {
+    let t = raw.strip_prefix('\n').unwrap_or(raw);
+    // trim_end: the closing ''' line's indent + any empty trailing lines
+    // are structure, not content (a single strip_suffix left one behind)
+    let t = t.trim_end();
+    let min_indent = t
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.len() - l.trim_start().len())
+        .min()
+        .unwrap_or(0);
+    let mut out = String::new();
+    for (i, l) in t.lines().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        out.push_str(l.get(min_indent..).unwrap_or(l.trim_start()));
+    }
+    out
+}
+
 /// Note value: `'''triple quoted'''` or a normal single-quoted string.
 fn note_value(input: &mut &str, base: usize) -> R<String> {
     if input.starts_with('"') {
@@ -206,7 +238,7 @@ fn note_value(input: &mut &str, base: usize) -> R<String> {
             offset: offset(input, base),
             message: "unterminated triple-quoted note",
         })?;
-        let v = input[..end].to_string();
+        let v = dedent_note_body(&input[..end]);
         *input = &input[end + 3..];
         Ok(v)
     } else {
@@ -296,19 +328,37 @@ fn value(input: &mut &str, base: usize) -> R<String> {
     Ok(v)
 }
 
-fn cardinality(input: &mut &str, base: usize) -> R<Cardinality> {
-    if eat(input, "<>") {
-        Ok(Cardinality::ManyToMany)
-    } else if eat(input, ">") {
-        Ok(Cardinality::ManyToOne)
-    } else if eat(input, "<") {
-        Ok(Cardinality::OneToMany)
-    } else if eat(input, "-") {
-        Ok(Cardinality::OneToOne)
-    } else {
-        fail(offset(input, base), "expected relationship (<, >, -, <>)")
+/// `(kind, left_optional, right_optional)` — the full 16-form operator
+/// set (`?>`, `>?`, `?<>`, `-?`, …): the `?` on a side drops that side's
+/// min cardinality to zero (the reference is optional).
+fn cardinality_full(input: &mut &str, base: usize) -> R<(Cardinality, bool, bool)> {
+    let table: &[(&str, Cardinality, bool, bool)] = &[
+        // the longest forms first so a trailing `?` wins over a bare match
+        ("?>?", Cardinality::ManyToOne, true, true),
+        ("?>", Cardinality::ManyToOne, true, false),
+        (">?", Cardinality::ManyToOne, false, true),
+        (">", Cardinality::ManyToOne, false, false),
+        ("?<?", Cardinality::OneToMany, true, true),
+        ("?<", Cardinality::OneToMany, true, false),
+        ("<?", Cardinality::OneToMany, false, true),
+        ("?<>?", Cardinality::ManyToMany, true, true),
+        ("?<>", Cardinality::ManyToMany, true, false),
+        ("<>?", Cardinality::ManyToMany, false, true),
+        ("<>", Cardinality::ManyToMany, false, false),
+        ("<", Cardinality::OneToMany, false, false),
+        ("?-?", Cardinality::OneToOne, true, true),
+        ("?-", Cardinality::OneToOne, true, false),
+        ("-?", Cardinality::OneToOne, false, true),
+        ("-", Cardinality::OneToOne, false, false),
+    ];
+    for (tok, kind, l, r) in table {
+        if eat(input, tok) {
+            return Ok((*kind, *l, *r));
+        }
     }
+    fail(offset(input, base), "expected relationship (<, >, -, <>, with optional ? marks)")
 }
+
 
 /// `[schema.]name` — either part may be quoted (`"Schema Name".users`).
 fn qualified_name(input: &mut &str, base: usize) -> R<(Option<String>, String)> {
@@ -425,7 +475,7 @@ fn endpoint(input: &mut &str, base: usize) -> R<Endpoint> {
 
 enum SettingVal {
     Str(String),
-    Ref(Cardinality, Endpoint),
+    Ref(Cardinality, bool, bool, Endpoint, usize, Option<String>),
 }
 
 /// `[key, key: value, ref: > t.c, ...]` — parsed generically; callers
@@ -455,10 +505,25 @@ fn settings_list(input: &mut &str, base: usize) -> R<Vec<(String, Option<Setting
         if eat(input, ":") {
             sp(input);
             if key == "ref" {
-                let card = cardinality(input, base)?;
+                let op_offset = offset(input, base);
+                let (card, l_opt, r_opt) = cardinality_full(input, base)?;
                 ws(input);
                 let to = endpoint(input, base)?;
-                out.push((key, Some(SettingVal::Ref(card, to))));
+                // endpoint settings bracket: `ref: > t.c [color: …]` —
+                // the relationship's color lives there (only `color` is
+                // interpreted; other keys ride along unused)
+                ws(input);
+                let mut color = None;
+                if peek_is(input, "[") {
+                    if let Ok(kvs) = settings_list(input, base) {
+                        for (k, v) in kvs {
+                            if let (Some(SettingVal::Str(sv)), "color") = (&v, k.as_str()) {
+                                color = Some(sv.clone());
+                            }
+                        }
+                    }
+                }
+                out.push((key, Some(SettingVal::Ref(card, l_opt, r_opt, to, op_offset, color))));
             } else if key == "default" {
                 // verbatim: quoted strings keep their quotes so exporters
                 // can distinguish literals from bare tokens
@@ -556,11 +621,12 @@ fn column_settings_from(kvs: Vec<(String, Option<SettingVal>)>) -> ColumnSetting
                 // `check: \`expr\`` — value() strips the backticks; keep
                 // them so the formatter can re-emit verbatim
                 "check" => s.check = Some(format!("`{v}`")),
-                _ => {}
+                // any other key:value is a dbdiagram custom property
+                _ => s.custom.push((key, v)),
             },
-            Some(SettingVal::Ref(card, to)) => {
+            Some(SettingVal::Ref(card, l_opt, r_opt, to, op_offset, color)) => {
                 if s.inline_ref.is_none() {
-                    s.inline_ref = Some(InlineRef { card, to });
+                    s.inline_ref = Some(InlineRef { card, left_optional: l_opt, right_optional: r_opt, to, op_offset, color });
                 }
             }
         }
@@ -660,6 +726,7 @@ fn index(input: &mut &str, base: usize) -> R<Index> {
         columns.push(index_ident(input, base)?);
     }
     sp(input);
+    let mut comma_form = false;
     let mut idx = Index {
         columns,
         unique: false,
@@ -667,6 +734,7 @@ fn index(input: &mut &str, base: usize) -> R<Index> {
         name: None,
         index_type: None,
         span: start..0,
+        comma_form: false,
     };
     if peek_is(input, "[") {
         let kvs = settings_list(input, base)?;
@@ -686,7 +754,12 @@ fn index(input: &mut &str, base: usize) -> R<Index> {
             }
         }
     } else if eat(input, ",") {
-        // bare comma form used by some importers: `(cols), pk, name: 'x'`
+        // bare comma form used by some importers: `(cols), pk, name: 'x'`.
+        // dbdiagram's grammar rejects it (settings belong in [..]) — keep
+        // the lenient parse (the diagram renders, the formatter
+        // canonicalizes it away) and flag it for the validator, whose
+        // quick fix rewrites the line into brackets.
+        comma_form = true;
         let end = input.find(['\n', '}']).unwrap_or(input.len());
         let line = input[..end].trim();
         for kv in line.split(',') {
@@ -706,6 +779,7 @@ fn index(input: &mut &str, base: usize) -> R<Index> {
         }
         *input = &input[end..];
     }
+    idx.comma_form = comma_form;
     idx.span = start..offset(input, base);
     Ok(idx)
 }
@@ -789,13 +863,15 @@ fn number_len(input: &str) -> usize {
 
 /// One value in a records row. An empty field (nothing before the next
 /// comma / end of line) is a literal null.
-fn record_value(input: &mut &str, base: usize) -> R<RecordValue> {
+fn record_value(input: &mut &str, base: usize) -> R<(RecordValue, Span)> {
     sp(input);
+    let start = offset(input, base);
     if input.is_empty() || input.starts_with(['\n', '\r']) || peek_is(input, "//") {
-        return Ok(RecordValue::Null);
+        return Ok((RecordValue::Null, start..start));
     }
     if input.starts_with('\'') {
-        return record_string(input, base).map(RecordValue::Text);
+        return record_string(input, base)
+            .map(|v| (RecordValue::Text(v), start..offset(input, base)));
     }
     if input.starts_with('`') {
         let end = input[1..]
@@ -807,13 +883,13 @@ fn record_value(input: &mut &str, base: usize) -> R<RecordValue> {
             + 1;
         let v = input[1..end].to_string();
         *input = &input[end + 1..];
-        return Ok(RecordValue::Expr(v));
+        return Ok((RecordValue::Expr(v), start..offset(input, base)));
     }
     let n = number_len(input);
     if n > 0 {
         let v = input[..n].to_string();
         *input = &input[n..];
-        return Ok(RecordValue::Number(v));
+        return Ok((RecordValue::Number(v), start..offset(input, base)));
     }
     for (kw, v) in [
         ("null", RecordValue::Null),
@@ -822,10 +898,10 @@ fn record_value(input: &mut &str, base: usize) -> R<RecordValue> {
     ] {
         if peek_kw(input, kw) {
             let _ = eat(input, kw);
-            return Ok(v);
+            return Ok((v, start..offset(input, base)));
         }
     }
-    ident(input, base).map(RecordValue::Ident)
+    ident(input, base).map(|i| (RecordValue::Ident(i), start..offset(input, base)))
 }
 
 /// Same-line whitespace plus a trailing `//` comment (a comment runs to
@@ -835,7 +911,7 @@ fn sp_comment(input: &mut &str) {
     if input.starts_with("//") {
         *input = match input.find('\n') {
             Some(i) => &input[i..],
-            None => "",
+            None => &input[input.len()..],
         };
     }
 }
@@ -843,11 +919,17 @@ fn sp_comment(input: &mut &str) {
 /// One comma-separated records row (the caller has positioned us at its
 /// first value). Rows end at a newline, `}`, or EOF; when `ncols` is
 /// known the count must match — a mismatch fails the row, not the block.
-fn record_row(input: &mut &str, base: usize, ncols: Option<usize>) -> R<Vec<RecordValue>> {
+fn record_row(
+    input: &mut &str,
+    base: usize,
+    ncols: Option<usize>,
+) -> R<(Vec<RecordValue>, Vec<Span>)> {
     let mut row = Vec::new();
+    let mut spans = Vec::new();
     loop {
-        let v = record_value(input, base)?;
+        let (v, span) = record_value(input, base)?;
         row.push(v);
+        spans.push(span);
         sp_comment(input);
         if !eat(input, ",") {
             break;
@@ -855,7 +937,9 @@ fn record_row(input: &mut &str, base: usize, ncols: Option<usize>) -> R<Vec<Reco
         sp_comment(input);
         if input.is_empty() || input.starts_with(['\n', '\r']) {
             // trailing comma: an empty final field
+            let end = offset(input, base);
             row.push(RecordValue::Null);
+            spans.push(end..end);
             break;
         }
     }
@@ -867,7 +951,7 @@ fn record_row(input: &mut &str, base: usize, ncols: Option<usize>) -> R<Vec<Reco
             );
         }
     }
-    Ok(row)
+    Ok((row, spans))
 }
 
 /// Skip the rest of the damaged line — unless the block's closing brace
@@ -876,7 +960,7 @@ fn record_row(input: &mut &str, base: usize, ncols: Option<usize>) -> R<Vec<Reco
 fn skip_damaged_line(input: &mut &str) {
     let rest = match input.find('\n') {
         Some(i) => &input[i + 1..],
-        None => "",
+        None => &input[input.len()..],
     };
     if rest.trim_start().starts_with('}') {
         return;
@@ -945,6 +1029,7 @@ fn records_block(
     let mut rec = TableRecords {
         columns,
         rows: Vec::new(),
+        value_spans: Vec::new(),
         example,
     };
     loop {
@@ -962,10 +1047,22 @@ fn records_block(
             Some(rec.columns.len())
         };
         match record_row(input, base, ncols) {
-            Ok(row) => rec.rows.push(row),
+            Ok((row, spans)) => {
+                rec.rows.push(row);
+                rec.value_spans.push(spans);
+            }
             Err(e) => {
                 errs.push(err_at(e.offset, e.message));
+                let before = input.len();
                 skip_damaged_line(input);
+                if input.len() == before {
+                    // no progress: record_row consumed nothing and the
+                    // brace-guard declined to eat the damaged line (the
+                    // closing brace starts the NEXT one) — skip the line
+                    // here so the loop always advances; the next line's
+                    // `}` still lands on the block loop's own eat
+                    skip_line(input);
+                }
             }
         }
     }
@@ -980,6 +1077,7 @@ enum Item {
     Ref(Ref),
     Enm(Enum),
     Grp(TableGroup),
+    Note(StickyNote),
 }
 
 fn top_item(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Item> {
@@ -993,12 +1091,47 @@ fn top_item(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Item
         ref_stmt(input, base).map(Item::Ref)
     } else if peek_kw(input, "Enum") {
         enum_def(input, base, errs).map(Item::Enm)
+    } else if peek_kw(input, "Note") {
+        sticky_note(input, base, errs).map(Item::Note)
     } else {
         fail(
             offset(input, base),
-            "expected Project, Table, Ref, Enum, or TableGroup",
+            "expected Project, Table, Ref, Enum, Note, or TableGroup",
         )
     }
+}
+
+/// A top-level sticky note: `Note name { '''text''' }` — dbdiagram's
+/// canvas sticky. The body is one note value (triple- or single-quoted).
+fn sticky_note(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<StickyNote> {
+    let start = offset(input, base);
+    let _ = eat(input, "Note");
+    ws(input);
+    let name = ident(input, base)?;
+    ws(input);
+    if !eat(input, "{") {
+        return fail(offset(input, base), "expected '{' after note name");
+    }
+    ws(input);
+    let text = match note_value(input, base) {
+        Ok(t) => t,
+        Err(e) => {
+            errs.push(err_at(e.offset, e.message));
+            skip_line(input);
+            String::new()
+        }
+    };
+    ws(input);
+    if !eat(input, "}") {
+        // recover to the line end so the top loop can resync
+        errs.push(err_at(offset(input, base), "expected '}' after note body"));
+        skip_line(input);
+    }
+    Ok(StickyNote {
+        name,
+        span: start..offset(input, base),
+        text,
+    })
 }
 
 fn table(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Table> {
@@ -1023,6 +1156,7 @@ fn table(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Table> 
         indexes: Vec::new(),
         checks: None,
         records: None,
+        custom: Vec::new(),
     };
     if peek_kw(input, "as") {
         let _ = eat(input, "as");
@@ -1037,7 +1171,8 @@ fn table(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Table> 
                 match key.as_str() {
                     "note" => t.note = Some(v),
                     "headercolor" => t.header_color = Some(v),
-                    _ => {}
+                    // any other key:value is a dbdiagram custom property
+                    _ => t.custom.push((key, v)),
                 }
             }
         }
@@ -1161,22 +1296,27 @@ fn ref_stmt(input: &mut &str, base: usize) -> R<Ref> {
         ws(input);
         let from = endpoint(input, base)?;
         ws(input);
-        let card = cardinality(input, base)?;
+        let op_offset = offset(input, base);
+        let (card, l_opt, r_opt) = cardinality_full(input, base)?;
         ws(input);
         let to = endpoint(input, base)?;
         ws(input);
         if !eat(input, "}") {
             return fail(offset(input, base), "expected '}' after ref body");
         }
-        let (on_delete, on_update) = ref_settings(input, base);
+        let (on_delete, on_update, color) = ref_settings(input, base);
         return Ok(Ref {
             name,
             span: start..offset(input, base),
             from,
             to,
             card,
+            op_offset,
+            left_optional: l_opt,
+            right_optional: r_opt,
             on_delete,
             on_update,
+            color,
         });
     }
     if !eat(input, ":") {
@@ -1185,26 +1325,43 @@ fn ref_stmt(input: &mut &str, base: usize) -> R<Ref> {
     ws(input);
     let from = endpoint(input, base)?;
     ws(input);
-    let card = cardinality(input, base)?;
+    let op_offset = offset(input, base);
+    let (card, l_opt, r_opt) = cardinality_full(input, base)?;
     ws(input);
     let to = endpoint(input, base)?;
-    let (on_delete, on_update) = ref_settings(input, base);
+    let (on_delete, on_update, color) = ref_settings(input, base);
     Ok(Ref {
         name,
         span: start..offset(input, base),
         from,
         to,
         card,
+        op_offset,
+        left_optional: l_opt,
+        right_optional: r_opt,
         on_delete,
         on_update,
+        color,
     })
 }
 
-/// Optional `[delete: cascade, update: no action]` referential actions.
-fn ref_settings(input: &mut &str, base: usize) -> (Option<String>, Option<String>) {
-    let mut out = (None, None);
+/// Optional `[delete: cascade, update: no action, color: #aabbcc]`
+/// referential actions + the relationship color.
+fn ref_settings(
+    input: &mut &str,
+    base: usize,
+) -> (Option<String>, Option<String>, Option<String>) {
+    let mut out = (None, None, None);
+    // `ws` before the peek eats blank lines and comments too; when no
+    // bracket follows, rewind — ref_stmt takes the Ref's span right
+    // after this call, and a span that overshoots to the next item made
+    // app.rs's line-color splice rewrite bystander lines (the
+    // settings-less `Ref: …` on showcase.dbml appended the color to the
+    // FOLLOWING comment and glued `Table likes` onto it)
+    let before_ws = *input;
     ws(input);
     if !peek_is(input, "[") {
+        *input = before_ws;
         return out;
     }
     if let Ok(kvs) = settings_list(input, base) {
@@ -1213,6 +1370,8 @@ fn ref_settings(input: &mut &str, base: usize) -> (Option<String>, Option<String
                 match k.as_str() {
                     "delete" | "on_delete" => out.0 = Some(v.to_ascii_uppercase()),
                     "update" | "on_update" => out.1 = Some(v.to_ascii_uppercase()),
+                    // `[color: #aabbcc]` — dbdiagram's relationship color
+                    "color" => out.2 = Some(v),
                     _ => {}
                 }
             }
@@ -1302,6 +1461,22 @@ fn table_group(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<T
     ws(input);
     let name = ident(input, base)?;
     ws(input);
+    // optional settings before the body: `[color: #1E69FD]` plus any
+    // other `key: "value"` pairs — dbdiagram custom properties, in order
+    let mut color = None;
+    let mut custom: Vec<(String, String)> = Vec::new();
+    if peek_is(input, "[") {
+        if let Ok(kvs) = settings_list(input, base) {
+            for (k, v) in kvs {
+                if let (Some(SettingVal::Str(sv)), "color") = (&v, k.as_str()) {
+                    color = Some(sv.clone());
+                } else if let Some(SettingVal::Str(sv)) = &v {
+                    custom.push((k, sv.clone()));
+                }
+            }
+        }
+        ws(input);
+    }
     if !eat(input, "{") {
         return fail(offset(input, base), "expected '{' after group name");
     }
@@ -1309,6 +1484,9 @@ fn table_group(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<T
         name,
         span: start..0,
         tables: Vec::new(),
+        color,
+        note: None,
+        custom,
     };
     loop {
         ws(input);
@@ -1319,10 +1497,32 @@ fn table_group(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<T
         if eat(input, "}") {
             break;
         }
+        // `Note: '''...'''` — the group's note (label-hover tooltip)
+        if peek_kw_then(input, "Note", ':') {
+            let _ = eat(input, "Note");
+            ws(input);
+            let _ = eat(input, ":");
+            ws(input);
+            match note_value(input, base) {
+                Ok(n) => g.note = Some(n),
+                Err(e) => {
+                    errs.push(err_at(e.offset, e.message));
+                    skip_line(input);
+                }
+            }
+            continue;
+        }
         match qualified_name(input, base) {
             Ok((sc, n)) => g.tables.push(sc.map_or(n.clone(), |s| format!("{s}.{n}"))),
             Err(e) => {
-                errs.push(err_at(e.offset, e.message));
+                // dbdiagram's phrasing for a member that is not a table
+                // reference (a comma, a setting, stray punctuation...)
+                let msg = if e.message.contains("identifier") {
+                    "A TableGroup field must be of the form <table> or <schema>.<table>"
+                } else {
+                    e.message
+                };
+                errs.push(err_at(e.offset, msg));
                 skip_line(input);
             }
         }
@@ -1450,6 +1650,7 @@ pub fn parse(src: &str) -> ParseOutput {
                     Item::Ref(r) => out.doc.refs.push(r),
                     Item::Enm(e) => out.doc.enums.push(e),
                     Item::Grp(g) => out.doc.table_groups.push(g),
+                    Item::Note(n) => out.doc.notes.push(n),
                 }
             }
             Err(e) => {
@@ -1491,10 +1692,90 @@ pub fn line_col_at(src: &str, offset: usize) -> (usize, usize) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn inline_ref_endpoint_color_parses() {
+        // `ref: > t.c [color: …]` — the endpoint settings bracket carries
+        // the relationship's color (the picker writes it)
+        let out = parse("Table a { id integer [pk] }\nTable b { user_id integer [ref: > a.id [color: #ff0000]] }\n");
+        assert!(out.errors.is_empty(), "{:?}", out.errors);
+        let col = &out.doc.tables[1].columns[0];
+        let ir = col.settings.inline_ref.as_ref().expect("inline ref");
+        assert_eq!(ir.color.as_deref(), Some("#ff0000"));
+        assert_eq!(ir.to.table, "a");
+        // and a bracket-less inline ref keeps color None
+        let out = parse("Table a { id integer [pk] }\nTable b { user_id integer [ref: > a.id] }\n");
+        let ir = &out.doc.tables[1].columns[0].settings.inline_ref;
+        assert!(ir.as_ref().unwrap().color.is_none());
+    }
+
+    #[test]
+    fn custom_properties_parse_on_tables_and_columns() {
+        // the user's live-verified dbdiagram block: any `key: "value"`
+        // pair inside the settings brackets are custom properties
+        let src = "Table users [owner: \"data-team\", sla_hours: \"24\", pii: \"true\"] {\n  id int [pk, masking: \"partial\"]\n  email varchar [classification: \"confidential\"]\n}\n";
+        let out = parse(src);
+        assert!(out.errors.is_empty(), "{:?}", out.errors);
+        let t = &out.doc.tables[0];
+        assert_eq!(
+            t.custom,
+            vec![
+                ("owner".to_string(), "data-team".to_string()),
+                ("sla_hours".to_string(), "24".to_string()),
+                ("pii".to_string(), "true".to_string()),
+            ]
+        );
+        assert_eq!(
+            t.columns[0].settings.custom,
+            vec![("masking".to_string(), "partial".to_string())]
+        );
+        assert_eq!(
+            t.columns[1].settings.custom,
+            vec![("classification".to_string(), "confidential".to_string())]
+        );
+        // known settings still take their own fields, not custom
+        assert!(t.columns[0].settings.pk);
+        // single-quoted custom values work too
+        let out = parse("Table t [tier: 'gold'] { a int [zone: 'a1'] }\n");
+        assert_eq!(
+            out.doc.tables[0].custom,
+            vec![("tier".to_string(), "gold".to_string())]
+        );
+        assert_eq!(
+            out.doc.tables[0].columns[0].settings.custom,
+            vec![("zone".to_string(), "a1".to_string())]
+        );
+    }
+
+
     use super::*;
 
     fn tables(out: &ParseOutput) -> &[Table] {
         &out.doc.tables
+    }
+
+    #[test]
+    fn bare_comma_index_settings_parse_but_flag_comma_form() {
+        // the form some importers emit; dbdiagram's grammar rejects it.
+        // The parse recovers and marks the index, the validator turns the
+        // flag into a quick-fixable diagnostic (non-blocking: still formats)
+        let src = "Table t {\n  id integer\n  indexes {\n    (id), unique, name: 'x'\n  }\n}\n";
+        let out = parse(src);
+        assert!(out.errors.is_empty(), "{:?}", out.errors);
+        let ix = &out.doc.tables[0].indexes[0];
+        assert!(ix.comma_form);
+        assert!(ix.unique);
+        assert_eq!(ix.name.as_deref(), Some("x"));
+        // non-blocking: the doc still formats (the fixture runner and
+        // :format depend on that)
+        assert!(super::super::fmt::format_source(src).is_some());
+    }
+
+    #[test]
+    fn bracketed_index_settings_stay_silent() {
+        let src = "Table t {\n  id integer\n  indexes {\n    (id) [unique, name: 'x']\n  }\n}\n";
+        let out = parse(src);
+        assert!(out.errors.is_empty());
+        assert!(!out.doc.tables[0].indexes[0].comma_form);
     }
 
     #[test]

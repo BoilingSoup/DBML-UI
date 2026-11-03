@@ -20,6 +20,8 @@ mod editor;
 mod session;
 mod theme;
 mod view;
+#[cfg(target_arch = "wasm32")]
+mod web;
 
 fn main() -> Result<(), iced::Error> {
     let run = || -> Result<(), iced::Error> {
@@ -66,7 +68,7 @@ fn main() -> Result<(), iced::Error> {
             .theme(|_| theme::app())
             // the editor/diagram mono font, embedded for the web build
             // (theme::mono() names it there; desktop resolves MONOSPACE)
-            .font(include_bytes!("../fonts/DejaVuSansMono.ttf").as_slice())
+            .font(dbml_ui::MONO_TTF)
             .subscription(app::subscription)
             // canvas strokes (dash flow, markers, glow) are triangle meshes;
             // without MSAA every moving stroke rasterizes hard-edged
@@ -94,7 +96,13 @@ fn main() -> Result<(), iced::Error> {
                     id.map(iced::window::gain_focus)
                         .unwrap_or_else(iced::Task::none)
                 });
-                (app, focus)
+                // the web session restores from IndexedDB (the last
+                // autosave); the desktop boots as-is
+                #[cfg(target_arch = "wasm32")]
+                let restore = web::load_state().map(crate::app::Message::WebRestored);
+                #[cfg(not(target_arch = "wasm32"))]
+                let restore = iced::Task::none();
+                (app, iced::Task::batch([restore, focus]))
             })
     };
     // wgpu 0.19 PANICS (no error path) when the GPU device dies under a

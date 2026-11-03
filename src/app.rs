@@ -8,8 +8,10 @@ use dbml_ui::{dbml, model};
 use iced::{Point, Vector};
 
 // The web build stubs every dialog task, so the path-bearing messages
-// the dialogs resolve to are never constructed there.
+// the dialogs resolve to are never constructed there; the web messages
+// are the mirror image (never constructed on the desktop).
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Message {
     CanvasPressed(Point),
@@ -104,6 +106,11 @@ pub enum Message {
     PickerUnavailable,
     /// Toolbar/button save-as request.
     SaveAsPrompt,
+    /// The web build's idb autosave record arrived at boot (None = a
+    /// fresh browser: the splash stays).
+    WebRestored(Option<crate::session::Session>),
+    /// The web tab lost focus: flush the autosave right away.
+    WebFlush,
     /// The native save dialog produced a target path.
     SaveAs(String),
     /// Run the canonical formatter over the whole buffer.
@@ -748,6 +755,12 @@ impl Tab {
 
     /// Unsaved changes: the buffer differs from the last save/open.
     pub fn is_modified(&self) -> bool {
+        // the web build does not track unsaved changes: a download's
+        // success on the user's disk is unknowable, so "dirty" would be
+        // a lie (the autosave in IndexedDB already holds everything)
+        if cfg!(target_arch = "wasm32") {
+            return false;
+        }
         self.editor.text() != self.saved_text
     }
 
@@ -2730,6 +2743,10 @@ pub fn subscription(_app: &App) -> iced::Subscription<Message> {
         iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
             Some(Message::MouseReleased)
         }
+        // the web tab losing focus flushes the autosave right away (a
+        // switch-away is often followed by a refresh)
+        #[cfg(target_arch = "wasm32")]
+        iced::Event::Window(iced::window::Event::Unfocused) => Some(Message::WebFlush),
         _ => None,
     });
     // Full keyboard events, not on_key_press: the logical key it hands out
@@ -3154,6 +3171,15 @@ pub fn update(app: &mut App, message: Message) -> iced::Task<Message> {
         }
         Message::PickerDismissed => {}
         // Ctrl+O opens the picker from either editing mode
+        #[cfg(target_arch = "wasm32")]
+        Message::SaveAsPrompt => {
+            // the web save is a download with the default name (no
+            // dialogs, no success tracking)
+            let name = app.cur().save_as_default_name();
+            let text = app.editor().text().to_string();
+            crate::web::download(&name, "text/plain", text.as_bytes());
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         Message::SaveAsPrompt => return save_as_picker_task(app.cur().save_as_default_name()),
         Message::SaveAs(path) => {
             if let Err(e) = app.save_as(&path) {
@@ -3395,6 +3421,21 @@ fn remove_headercolor(inner: &str) -> String {
 
 fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
     match message {
+        Message::WebRestored(s) => {
+            // the idb record IS the web session: restore with buffers
+            // (unsaved edits included — there is no "unsaved" there)
+            if let Some(s) = s {
+                app.restore_session(s);
+            }
+        }
+        Message::WebFlush => {
+            #[cfg(target_arch = "wasm32")]
+            {
+                let snap = app.session_snapshot();
+                crate::web::save_state(&snap);
+                app.session_dirty = false;
+            }
+        }
         Message::CanvasPressed(p) => app.canvas_pressed(p),
         Message::CanvasMoved(p) => app.canvas_moved(p),
         Message::CanvasLeft => app.canvas_left(),
@@ -3749,17 +3790,27 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
         Message::ExportSql(dialect) => {
             app.export_menu_open = false;
             app.export_menu_sql_open = false;
-            let kind = ExportKind::Sql(dialect);
-            let default_name = kind.default_name(&app.export_stem());
-            let (filter_name, patterns) = kind.filter();
-            return export_pick_task(kind, default_name, filter_name, patterns, kind.title());
+            #[cfg(target_arch = "wasm32")]
+            app.web_download(ExportKind::Sql(dialect));
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let kind = ExportKind::Sql(dialect);
+                let default_name = kind.default_name(&app.export_stem());
+                let (filter_name, patterns) = kind.filter();
+                return export_pick_task(kind, default_name, filter_name, patterns, kind.title());
+            }
         }
         Message::ExportAs(kind) => {
             app.export_menu_open = false;
             app.export_menu_sql_open = false;
-            let default_name = kind.default_name(&app.export_stem());
-            let (filter_name, patterns) = kind.filter();
-            return export_pick_task(kind, default_name, filter_name, patterns, kind.title());
+            #[cfg(target_arch = "wasm32")]
+            app.web_download(kind);
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let default_name = kind.default_name(&app.export_stem());
+                let (filter_name, patterns) = kind.filter();
+                return export_pick_task(kind, default_name, filter_name, patterns, kind.title());
+            }
         }
         Message::ExportTo(kind, path) => {
             let result = match kind {
@@ -3806,10 +3857,18 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
         }
         Message::TabCloseCancel => app.tab_close_confirm = None,
         Message::SessionTick => {
-            // flush the session snapshot when the editor state moved since
-            // the last write (crash / GPU-loss restart protection)
+            // flush the state snapshot when the editor state moved since
+            // the last write. Desktop: the file session (the GPU-loss
+            // restart restores it). Web: IndexedDB — the last known state
+            // IS the web session.
             if app.session_dirty {
                 let snap = app.session_snapshot();
+                #[cfg(target_arch = "wasm32")]
+                {
+                    crate::web::save_state(&snap);
+                    app.session_dirty = false;
+                }
+                #[cfg(not(target_arch = "wasm32"))]
                 if crate::session::save(&snap).is_ok() {
                     app.session_dirty = false;
                 }
@@ -5054,6 +5113,44 @@ impl App {
         self.mark_session_dirty();
         self.set_message_kind(ToastKind::Success, format!("copy saved to \"{path}\""));
         Ok(())
+    }
+
+    /// The web build's export: render the payload and hand it to the
+    /// browser as a download named after the default file name. No
+    /// success tracking — once the user confirms the download, its fate
+    /// on their disk is unknowable.
+    #[cfg(target_arch = "wasm32")]
+    pub fn web_download(&mut self, kind: ExportKind) {
+        let name = kind.default_name(&self.export_stem());
+        let render = match &kind {
+            ExportKind::Sql(dialect) => dbml::sql::export(&self.editor().text(), *dialect)
+                .map(|sql| (name, "text/plain", sql.into_bytes()))
+                .map_err(|e| e.to_string()),
+            ExportKind::Svg => Ok((
+                name,
+                "image/svg+xml",
+                dbml_ui::render::svg::build_svg(&self.cur().diagram).into_bytes(),
+            )),
+            ExportKind::Png => {
+                use dbml_ui::render::{raster, svg};
+                let doc = svg::build_svg(&self.cur().diagram);
+                let (sw, sh) = svg::svg_size(&self.cur().diagram);
+                let scale = 2.0;
+                raster::rasterize(&doc, (sw * scale) as u32, (sh * scale) as u32, scale, scale)
+                    .map_err(|e| e.to_string())
+                    .and_then(|img| {
+                        let mut bytes = Vec::new();
+                        img.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+                            .map_err(|e| e.to_string())?;
+                        Ok((name, "image/png", bytes))
+                    })
+            }
+        };
+        let result = render;
+        match result {
+            Ok((name, mime, bytes)) => crate::web::download(&name, mime, &bytes),
+            Err(e) => self.set_message_kind(ToastKind::Error, format!("export failed: {e}")),
+        }
     }
 
     /// Export SVG next to the open file (the floating diagram button).
