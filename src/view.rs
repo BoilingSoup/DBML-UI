@@ -2968,15 +2968,31 @@ fn start_screen(_app: &App) -> Element<'static, Message> {
         .font(theme::mono())
         .color(theme::TEXT);
 
-    let content = column![
-        masthead,
-        text("DBML DIAGRAM EDITOR".to_string())
-            .size(12.0)
-            .color(theme::DIM),
-        cards,
+    // the web build wears a small badge under the caption: a different
+    // home (browser tab, autosaved state, downloads) deserves a marker
+    #[cfg(target_arch = "wasm32")]
+    let caption: Element<'static, Message> = row![
+        text("DBML DIAGRAM EDITOR".to_string()).size(12.0).color(theme::DIM),
+        container(text("wasm").size(10).color(theme::DIM))
+            .padding([2, 9])
+            .style(|_t| container::Style {
+                background: Some(iced::Background::Color(theme::PANEL)),
+                border: iced::border::rounded(9).color(theme::BORDER),
+                ..Default::default()
+            }),
     ]
-    .spacing(22)
-    .align_x(iced::alignment::Horizontal::Center);
+    .spacing(10)
+    .align_y(iced::alignment::Vertical::Center)
+    .into();
+    #[cfg(not(target_arch = "wasm32"))]
+    let caption: Element<'static, Message> = text("DBML DIAGRAM EDITOR".to_string())
+        .size(12.0)
+        .color(theme::DIM)
+        .into();
+
+    let content = column![masthead, caption, cards]
+        .spacing(22)
+        .align_x(iced::alignment::Horizontal::Center);
 
     container(container(content).padding([24, 0]))
         .width(Fill)
