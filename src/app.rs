@@ -4128,7 +4128,59 @@ impl App {
     /// New, unsaved diagram: seed a minimal Project and open the editor.
     pub fn new_diagram(&mut self) {
         self.mark_session_dirty();
-        let tpl = "Project untitled {\n  database_type: 'PostgreSQL'\n}\n";
+        // the same starter dbdiagram.io seeds its Basic ERD sample with
+        // (lifted verbatim from their app bundle): no database_type —
+        // the diagram stays dialect-neutral until the user picks one
+        let tpl = concat!(
+            "// Use DBML to define your database structure\n",
+            "// Docs: https://dbml.dbdiagram.io/docs\n",
+            "\n",
+            "Table follows {\n",
+            "  following_user_id integer [not null]\n",
+            "  followed_user_id integer [not null]\n",
+            "  created_at timestamp\n",
+            "}\n",
+            "\n",
+            "Table users {\n",
+            "  id integer [primary key]\n",
+            "  username varchar\n",
+            "  role varchar\n",
+            "  created_at timestamp\n",
+            "}\n",
+            "\n",
+            "Table posts {\n",
+            "  id integer [primary key]\n",
+            "  title varchar\n",
+            "  body text [note: 'Content of the post']\n",
+            "  user_id integer [not null]\n",
+            "  status varchar\n",
+            "  created_at timestamp\n",
+            "}\n",
+            "\n",
+            "Ref user_posts: posts.user_id ?> users.id // many-to-one\n",
+            "\n",
+            "Ref: users.id <? follows.following_user_id\n",
+            "\n",
+            "Ref: users.id <? follows.followed_user_id\n",
+            "\n",
+            "Records users(id, username, role) {\n",
+            "  0, 'Alice', 'admin'\n",
+            "  1, 'Bob', 'moderator'\n",
+            "  2, 'Candice', 'moderator'\n",
+            "  3, 'David', 'member'\n",
+            "}\n",
+            "\n",
+            "Records follows(following_user_id, followed_user_id, created_at) {\n",
+            "  1, 0, '2026-01-01'\n",
+            "  3, 2, '2026-02-28'\n",
+            "}\n",
+            "\n",
+            "Records posts(id, title, user_id) {\n",
+            "  0, 'Welcome to the forum!', 0\n",
+            "  1, 'Guidelines', 1\n",
+            "  2, 'Hello all!', 3\n",
+            "}\n",
+        );
         self.cur_mut().table_pos.clear();
         self.cur_mut().note_pos.clear();
         self.cur_mut().item_z.clear();
@@ -8636,7 +8688,9 @@ mod completion_tests {
         // New diagram opens the editor pane
         let _ = update(&mut app, Message::NewDiagram);
         assert!(app.doc_open());
-        assert!(app.source().contains("Project"));
+        // the starter is dbdiagram's Basic ERD sample
+        assert!(app.source().contains("Table users {"));
+        assert!(app.source().contains("Ref:"));
         assert_eq!(app.focus, Focus::Editor);
     }
 
