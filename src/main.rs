@@ -66,9 +66,14 @@ fn main() -> Result<(), iced::Error> {
         // the window title follows the active tab's file
         iced::application(|app: &app::App| app.window_title(), app::update, view::root)
             .theme(|_| theme::app())
-            // the editor/diagram mono font, embedded for the web build
-            // (theme::mono() names it there; desktop resolves MONOSPACE)
+            // the web build's embedded faces: no system fonts exist there.
+            // The regular weights come from iced's fira-sans feature; the
+            // bold/semibold weights of both families ride along so weight
+            // selects don't render blank
             .font(dbml_ui::MONO_TTF)
+            .font(dbml_ui::MONO_TTF_BOLD)
+            .font(dbml_ui::FIRA_SANS_BOLD)
+            .font(dbml_ui::FIRA_SANS_SEMIBOLD)
             .subscription(app::subscription)
             // canvas strokes (dash flow, markers, glow) are triangle meshes;
             // without MSAA every moving stroke rasterizes hard-edged

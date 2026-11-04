@@ -15,6 +15,15 @@ pub mod render;
 /// and the SVG rasterizer both draw exclusively with it there.
 pub const MONO_TTF: &[u8] = include_bytes!("../fonts/DejaVuSansMono.ttf");
 
+/// The bold mono face (doc-tooltip titles on the web).
+pub const MONO_TTF_BOLD: &[u8] = include_bytes!("../fonts/DejaVuSansMono-Bold.ttf");
+
+/// Fira Sans bold + semibold: the UI text's weight selects (card titles,
+/// section headers) need matching faces on the web, where no system
+/// fonts back the family up.
+pub const FIRA_SANS_BOLD: &[u8] = include_bytes!("../fonts/FiraSans-Bold.ttf");
+pub const FIRA_SANS_SEMIBOLD: &[u8] = include_bytes!("../fonts/FiraSans-SemiBold.ttf");
+
 /// Startup document for a fresh session.
 pub const SAMPLE_DBML: &str = r#"Project blog {
   database_type: 'PostgreSQL'
