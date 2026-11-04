@@ -1232,45 +1232,7 @@ fn paint_edge(
         one_tick(frame, pts[n - 1], pts[n - 2], zoom, core);
     }
 
-    // a named ref (`Ref name: ...`) shows its name at the route midpoint
-    // in the line's highlight color while hovered (dbdiagram does this
-    // for named refs only)
-    if t > 0.0 {
-        if let Some(name) = &edge.name {
-            frame.fill_text(Text {
-                content: name.clone(),
-                position: polyline_midpoint(&pts),
-                color: hover_color,
-                size: (0.6 * zoom).into(),
-                font: theme::mono(),
-                horizontal_alignment: iced::alignment::Horizontal::Center,
-                vertical_alignment: iced::alignment::Vertical::Center,
-                ..Default::default()
-            });
-        }
-    }
 }
-
-/// Arclength midpoint of the route polyline (corner fillets shift it by at
-/// most their radius — close enough for a hover label anchor).
-fn polyline_midpoint(pts: &[Point]) -> Point {
-    let dist = |a: Point, b: Point| (b.x - a.x).hypot(b.y - a.y);
-    let total: f32 = pts.windows(2).map(|w| dist(w[0], w[1])).sum();
-    let mut walked = 0.0;
-    for w in pts.windows(2) {
-        let seg = dist(w[0], w[1]);
-        if walked + seg >= total / 2.0 {
-            let f = if seg > 0.0 { (total / 2.0 - walked) / seg } else { 0.0 };
-            return Point::new(
-                w[0].x + (w[1].x - w[0].x) * f,
-                w[0].y + (w[1].y - w[0].y) * f,
-            );
-        }
-        walked += seg;
-    }
-    pts.last().copied().unwrap_or(Point::ORIGIN)
-}
-
 fn hs_clock(clock: f32) -> f32 {
     // their createAnimation: dashOffset = time_ms / 30 → ~33.3 px/s at 1:1
     clock * 1000.0 / 30.0
@@ -3856,11 +3818,13 @@ fn draw_field_popup(
 fn draw_table_popup(
     frame: &mut canvas::Frame,
     b: &TableBox,
-    zoom: f32,
+    view_zoom: f32,
     pan: Vector,
     bounds: Rectangle,
     scroll: f32,
 ) {
+    // static size (see draw_field_popup)
+    let zoom = 20.0;
     let k = zoom / 20.0;
     let wrap_cols = ((POPUP_MAX_W - 2.0 * POPUP_PAD_X) / (6.6 * k)) as usize;
     let mut sections: Vec<PopupSection> = Vec::new();
@@ -3874,12 +3838,12 @@ fn draw_table_popup(
         + 6.0 * k
         + semibold_px(&b.title, 14.0 * k)
         + 2.0 * POPUP_PAD_X * k;
-    let s = cell_size(zoom);
-    let box_left = to_px(b.x, b.y, zoom, pan).x;
-    let header_top = to_px(b.x, b.y, zoom, pan).y;
+    let s = cell_size(view_zoom);
+    let box_left = to_px(b.x, b.y, view_zoom, pan).x;
+    let header_top = to_px(b.x, b.y, view_zoom, pan).y;
     let anchor = PopupAnchor {
         left: box_left,
-        right: to_px(b.x + b.w, b.y, zoom, pan).x,
+        right: to_px(b.x + b.w, b.y, view_zoom, pan).x,
         top: header_top,
         bottom: header_top + s.height,
     };
@@ -3891,11 +3855,13 @@ fn draw_table_popup(
 fn draw_group_popup(
     frame: &mut canvas::Frame,
     g: &dbml_ui::layout::GroupRegion,
-    zoom: f32,
+    view_zoom: f32,
     pan: Vector,
     bounds: Rectangle,
     scroll: f32,
 ) {
+    // static size (see draw_field_popup)
+    let zoom = 20.0;
     let k = zoom / 20.0;
     let wrap_cols = ((POPUP_MAX_W - 2.0 * POPUP_PAD_X) / (6.6 * k)) as usize;
     let mut sections: Vec<PopupSection> = Vec::new();
@@ -3910,8 +3876,8 @@ fn draw_group_popup(
         + semibold_px(&g.name, 14.0 * k)
         + 2.0 * POPUP_PAD_X * k;
     let s = cell_size(zoom);
-    let band_left = to_px(g.rect.0, g.rect.1, zoom, pan).x;
-    let band_top = to_px(g.rect.0, g.rect.1, zoom, pan).y;
+    let band_left = to_px(g.rect.0, g.rect.1, view_zoom, pan).x;
+    let band_top = to_px(g.rect.0, g.rect.1, view_zoom, pan).y;
     let anchor = PopupAnchor {
         left: band_left,
         right: band_left + g.rect.2 as f32 * s.width,
@@ -3934,9 +3900,11 @@ fn draw_tooltip_pill(
     frame: &mut canvas::Frame,
     lines: &[String],
     p: Point,
-    zoom: f32,
+    _view_zoom: f32,
     bounds: Rectangle,
 ) {
+    // static size (see draw_field_popup)
+    let zoom = 20.0;
     let k = zoom / 20.0;
     let widest = lines
         .iter()
