@@ -3022,8 +3022,8 @@ fn start_screen(_app: &App) -> Element<'static, Message> {
         )
         .height(Length::Fixed(34.0))
         .padding([0, 18])
-        .center_y(Length::Fill)
-        .center_x(Length::Fill)
+        .align_y(iced::alignment::Vertical::Center)
+        .align_x(iced::alignment::Horizontal::Center)
         .style(|_t| container::Style {
             background: Some(iced::Background::Color(Color::from_rgb8(
                 0x6f, 0xb1, 0xe8,
