@@ -176,7 +176,7 @@ pub fn save_state_task(s: &Session) -> iced::Task<bool> {
     // wasm-bindgen's FnMut bound rejects)
     let tx = Rc::new(RefCell::new(Some(tx)));
     let started = (|| {
-        let (open, on_upgrade) = db_request()?;
+        let (open, _on_upgrade) = db_request()?;
         let open2 = open.clone();
         let tx2 = tx.clone();
         let on_fail = Closure::<dyn FnMut(web_sys::Event)>::new(move |_e: web_sys::Event| {

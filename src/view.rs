@@ -11,6 +11,7 @@ use crate::app::{
 use crate::canvas::diagram::{Diagram, DiagramOverlay};
 use crate::canvas::editor::{EditorOverlay, EditorView};
 use dbml_ui::dbml::ast::RecordValue;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::editor::{KeyCode, KeyModifiers};
 use crate::theme;
 use iced::widget::{
@@ -2402,6 +2403,7 @@ fn brighten(c: Color) -> Color {
 // bundle (save / edit / search) and the FA6 free set (undo / redo /
 // format wand / maximize expand + compress), rendered as inline SVGs
 // with the fill baked in (iced SVGs can't recolor currentColor).
+#[cfg(not(target_arch = "wasm32"))]
 const ICON_SAVE: (&str, &str) = ("M433.941 129.941l-83.882-83.882A48 48 0 0 0 316.118 32H48C21.49 32 0 53.49 0 80v352c0 26.51 21.49 48 48 48h352c26.51 0 48-21.49 48-48V163.882a48 48 0 0 0-14.059-33.941zM272 80v80H144V80h128zm122 352H54a6 6 0 0 1-6-6V86a6 6 0 0 1 6-6h42v104c0 13.255 10.745 24 24 24h176c13.255 0 24-10.745 24-24V83.882l78.243 78.243a6 6 0 0 1 1.757 4.243V426a6 6 0 0 1-6 6zM224 232c-48.523 0-88 39.477-88 88s39.477 88 88 88 88-39.477 88-88-39.477-88-88-88zm0 128c-22.056 0-40-17.944-40-40s17.944-40 40-40 40 17.944 40 40-17.944 40-40 40z", "0 0 448 512");
 const ICON_SAVE_AS: (&str, &str) = ("M433.941 129.941l-83.882-83.882A48 48 0 0 0 316.118 32H48C21.49 32 0 53.49 0 80v352c0 26.51 21.49 48 48 48h352c26.51 0 48-21.49 48-48V163.882a48 48 0 0 0-14.059-33.941zM272 80v80H144V80h128zm122 352H54a6 6 0 0 1-6-6V86a6 6 0 0 1 6-6h42v104c0 13.255 10.745 24 24 24h176c13.255 0 24-10.745 24-24V83.882l78.243 78.243a6 6 0 0 1 1.757 4.243V426a6 6 0 0 1-6 6zM224 232c-48.523 0-88 39.477-88 88s39.477 88 88 88 88-39.477 88-88-39.477-88-88-88zm0 128c-22.056 0-40-17.944-40-40s17.944-40 40-40 40 17.944 40 40-17.944 40-40 40z|M438.6 278.6c12.5-12.5 12.5-32.8 0-45.3l-160-160c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L338.8 224 32 224c-17.7 0-32 14.3-32 32s14.3 32 32 32l306.7 0L233.4 393.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0l160-160z", "0 0 448 512");
 const ICON_SEARCH: (&str, &str) = ("M505 442.7L405.3 343c-4.5-4.5-10.6-7-17-7H372c27.6-35.3 44-79.7 44-128C416 93.1 322.9 0 208 0S0 93.1 0 208s93.1 208 208 208c48.3 0 92.7-16.4 128-44v16.3c0 6.4 2.5 12.5 7 17l99.7 99.7c9.4 9.4 24.6 9.4 33.9 0l28.3-28.3c9.4-9.4 9.4-24.6.1-34zM208 336c-70.7 0-128-57.2-128-128 0-70.7 57.2-128 128-128 70.7 0 128 57.2 128 128 0 70.7-57.2 128-128 128z", "0 0 512 512");
@@ -2585,10 +2587,10 @@ fn editor_toolbar(app: &App) -> Element<'static, Message> {
     // the swap never shifts the toolbar row
     #[cfg(target_arch = "wasm32")]
     let save_slot: Element<'static, Message> = {
-        let SPIN_GLYPHS = ['|', '/', '-', '\\'];
+        let spin_glyphs = ['|', '/', '-', '\\'];
         let content: Element<'static, Message> = if app.web_saving {
-            let glyph = SPIN_GLYPHS
-                [(app.anim_clock * 8.0) as usize % SPIN_GLYPHS.len()];
+            let glyph = spin_glyphs
+                [(app.anim_clock * 8.0) as usize % spin_glyphs.len()];
             container(
                 text(glyph.to_string())
                     .size(12.0)
@@ -2615,8 +2617,8 @@ fn editor_toolbar(app: &App) -> Element<'static, Message> {
         };
         container(content)
             .width(Length::Fixed(96.0))
-            .height(Fill)
-            .center_y(Length::Fill)
+            .padding([8, 0])
+            .align_y(iced::alignment::Vertical::Center)
             .into()
     };
     #[cfg(not(target_arch = "wasm32"))]
@@ -3069,6 +3071,7 @@ fn start_screen(_app: &App) -> Element<'static, Message> {
 /// The tab-close confirmation, same contract as the exit one but scoped
 /// to one tab: Save & close / Close without saving / Cancel.
 fn tab_close_overlay(app: &App, idx: usize) -> Element<'static, Message> {
+    #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
     let title = app
         .tabs
         .get(idx)
