@@ -165,6 +165,10 @@ fn load_inner(tx: oneshot::Sender<(Option<String>, Option<String>)>) -> Result<(
 /// the user's next keystroke would not rebuild.
 pub fn save_state(s: &Session) {
     let raw = session::encode(s);
+    // the pagehide/visibilitychange flush reads this stash: an event
+    // handler cannot reach the app, so the latest encoded snapshot waits
+    // here for it
+    stash(raw.clone());
     if let Ok((open, on_upgrade)) = db_request() {
         let open2 = open.clone();
         let on_success = Closure::<dyn FnMut(web_sys::Event)>::new(move |_e| {
@@ -414,7 +418,7 @@ pub fn copy_text(text: &str) {
     });
     // the write result is logged either way: a denied permission leaves
     // the internal register as the fallback (never a panic)
-    promise.then2(&on_err, &on_err);
+    let _ = promise.then2(&on_err, &on_err);
     on_err.forget();
 }
 
@@ -481,8 +485,14 @@ pub fn download(name: &str, mime: &str, bytes: &[u8]) {
     let arr = js_sys::Uint8Array::from(bytes);
     let seq = js_sys::Array::new();
     seq.push(&arr);
-    let mut bag = web_sys::BlobPropertyBag::new();
-    bag.set_type(mime);
+        let bag = {
+        // set_type is deprecated in favor of a builder-style method that
+        // takes self by value... but the deprecated one takes &self, so
+        // bind the bag first
+        let bag = web_sys::BlobPropertyBag::new();
+        bag.set_type(mime);
+        bag
+    };
     let Ok(blob) = web_sys::Blob::new_with_u8_array_sequence_and_options(&seq, &bag) else {
         return;
     };

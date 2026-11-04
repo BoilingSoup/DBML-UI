@@ -2942,6 +2942,7 @@ impl ExportKind {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn filter(&self) -> (&'static str, &'static [&'static str]) {
         match self {
             ExportKind::Svg => ("SVG image", &["svg"]),
@@ -2950,6 +2951,7 @@ impl ExportKind {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn title(&self) -> &'static str {
         match self {
             ExportKind::Svg => "Export SVG",
@@ -2977,11 +2979,6 @@ enum PickOutcome {
 
 /// The web placeholder for every dialog task: no file system, no native
 /// dialogs (a browser file input is a later milestone).
-#[cfg(target_arch = "wasm32")]
-fn picker_unavailable_task() -> iced::Task<Message> {
-    iced::Task::future(async { Message::PickerUnavailable })
-}
-
 /// Spawn the native save dialog off the UI thread; the confirmed path
 /// comes back through `then` (a dismissal folds to `PickerDismissed`).
 #[cfg(not(target_arch = "wasm32"))]
@@ -3015,11 +3012,6 @@ fn save_as_picker_task(default_name: String) -> iced::Task<Message> {
         "Save DBML file",
         Message::SaveAs,
     )
-}
-
-#[cfg(target_arch = "wasm32")]
-fn save_as_picker_task(_default_name: String) -> iced::Task<Message> {
-    picker_unavailable_task()
 }
 
 /// The native save dialog (rfd: GTK on Linux, native on Windows/macOS).
@@ -3161,17 +3153,6 @@ fn export_pick_task(
     })
 }
 
-#[cfg(target_arch = "wasm32")]
-fn export_pick_task(
-    _kind: ExportKind,
-    _default_name: String,
-    _filter_name: &'static str,
-    _patterns: &'static [&'static str],
-    _title: &'static str,
-) -> iced::Task<Message> {
-    picker_unavailable_task()
-}
-
 pub fn update(app: &mut App, message: Message) -> iced::Task<Message> {
         // any keypress supersedes the toast: feedback yields to input
     if matches!(message, Message::KeyPressed(..)) {
@@ -3229,9 +3210,18 @@ pub fn update(app: &mut App, message: Message) -> iced::Task<Message> {
         m => delegated = handle_message(app, m),
     }
     // ctrl+S on an unpacked buffer chains the Save As picker (the flag is
-    // set inside key_pressed, which cannot return a task itself)
+    // set inside key_pressed, which cannot return a task itself). The web
+    // build's Save As is a download instead.
     if app.chain_save_as {
         app.chain_save_as = false;
+        #[cfg(target_arch = "wasm32")]
+        {
+            let name = app.cur().save_as_default_name();
+            let text = app.editor().text().to_string();
+            crate::web::download(&name, "text/plain", text.as_bytes());
+            return iced::Task::none();
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         return save_as_picker_task(app.cur().save_as_default_name());
     }
     if app.should_quit {
@@ -4029,9 +4019,18 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
         }
     }
     // ctrl+S on an unpacked buffer chains the Save As picker (the flag is
-    // set inside key_pressed, which cannot return a task itself)
+    // set inside key_pressed, which cannot return a task itself). The web
+    // build's Save As is a download instead.
     if app.chain_save_as {
         app.chain_save_as = false;
+        #[cfg(target_arch = "wasm32")]
+        {
+            let name = app.cur().save_as_default_name();
+            let text = app.editor().text().to_string();
+            crate::web::download(&name, "text/plain", text.as_bytes());
+            return iced::Task::none();
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         return save_as_picker_task(app.cur().save_as_default_name());
     }
     handle_message_finish(app)
@@ -5425,9 +5424,20 @@ impl App {
                     // an unpacked buffer has nowhere to save: ctrl+S IS
                     // the first save — chain the Save As picker, and the
                     // pick rebinds this tab (no error like the old
-                    // save_file refusal)
+                    // save_file refusal). The web build saves to its
+                    // IndexedDB record instead: the state IS the session
+                    // there, no file involved.
                     if self.cur().file.is_none() {
-                        self.chain_save_as = true;
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            let snap = self.session_snapshot();
+                            crate::web::save_state(&snap);
+                            self.session_dirty = false;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            self.chain_save_as = true;
+                        }
                         return;
                     }
                     if let Err(e) = self.save_file(None) {

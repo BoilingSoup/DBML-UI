@@ -123,6 +123,7 @@ impl Config {
 
     pub fn load() -> Config {
         let _g = CONFIG_ENV_LOCK.lock();
+        #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
         let mut c = Config::default();
         // the web build has no file system: its config rides the
         // IndexedDB record (see web.rs)
