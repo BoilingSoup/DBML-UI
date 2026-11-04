@@ -163,28 +163,79 @@ fn load_inner(tx: oneshot::Sender<(Option<String>, Option<String>)>) -> Result<(
 /// Autosave: write the encoded snapshot. Fire and forget — the next
 /// successful save overwrites it, and a failed write loses nothing that
 /// the user's next keystroke would not rebuild.
-pub fn save_state(s: &Session) {
+pub fn save_state_task(s: &Session) -> iced::Task<bool> {
     let raw = session::encode(s);
     // the pagehide/visibilitychange flush reads this stash: an event
     // handler cannot reach the app, so the latest encoded snapshot waits
     // here for it
     stash(raw.clone());
-    if let Ok((open, on_upgrade)) = db_request() {
+    let (tx, rx) = oneshot::channel::<bool>();
+    // the sender rides a shared cell: the open's success starts the
+    // write, the put's completion resolves the task — two callbacks, one
+    // channel (a moved capture would turn a closure into a FnOnce, which
+    // wasm-bindgen's FnMut bound rejects)
+    let tx = Rc::new(RefCell::new(Some(tx)));
+    let started = (|| {
+        let (open, on_upgrade) = db_request()?;
         let open2 = open.clone();
-        let on_success = Closure::<dyn FnMut(web_sys::Event)>::new(move |_e| {
-            if let Ok(db) = open2.result().map(|r| r.unchecked_into::<web_sys::IdbDatabase>()) {
-                if let Ok(t) = db.transaction_with_str_and_mode(STORE, web_sys::IdbTransactionMode::Readwrite) {
-                    if let Ok(store) = t.object_store(STORE) {
-                        // IDBObjectStore.put(value, key): the value first, the key second
-store.put_with_key(&JsValue::from_str(&raw), &JsValue::from_str(KEY)).ok();
-                    }
-                }
+        let tx2 = tx.clone();
+        let on_fail = Closure::<dyn FnMut(web_sys::Event)>::new(move |_e: web_sys::Event| {
+            if let Some(tx) = tx2.borrow_mut().take() {
+                let _ = tx.send(false);
             }
         });
-        open.set_onsuccess(Some(on_success.as_ref().unchecked_ref()));
-        on_upgrade.forget();
-        on_success.forget();
+        open.set_onerror(Some(on_fail.as_ref().unchecked_ref()));
+        on_fail.forget();
+        let on_open = Closure::<dyn FnMut(web_sys::Event)>::new(move |_e: web_sys::Event| {
+            let Ok(db) = open2.result().map(|r| r.unchecked_into::<web_sys::IdbDatabase>())
+            else {
+                if let Some(tx) = tx.borrow_mut().take() {
+                    let _ = tx.send(false);
+                }
+                return;
+            };
+            let put = db
+                .transaction_with_str_and_mode(STORE, web_sys::IdbTransactionMode::Readwrite)
+                .and_then(|t| t.object_store(STORE))
+                .and_then(|store| {
+                    // IDBObjectStore.put(value, key): the value first, the
+                    // key second
+                    store.put_with_key(&JsValue::from_str(&raw), &JsValue::from_str(KEY))
+                });
+            if let Ok(put) = put {
+                let put: web_sys::IdbRequest = put.unchecked_into();
+                let put2 = put.clone();
+                let tx3 = tx.clone();
+                let on_put = Closure::<dyn FnMut(web_sys::Event)>::new(move |_e: web_sys::Event| {
+                    let ok = put2.result().is_ok();
+                    if let Some(tx) = tx3.borrow_mut().take() {
+                        let _ = tx.send(ok);
+                    }
+                });
+                put.set_onsuccess(Some(on_put.as_ref().unchecked_ref()));
+                put.set_onerror(Some(on_put.as_ref().unchecked_ref()));
+                on_put.forget();
+            } else if let Some(tx) = tx.borrow_mut().take() {
+                let _ = tx.send(false);
+            }
+        });
+        open.set_onsuccess(Some(on_open.as_ref().unchecked_ref()));
+        on_open.forget();
+        Ok::<(), JsValue>(())
+    })();
+    if started.is_err() {
+        // no idb (private mode): report the failure — the toolbar shows
+        // the state honestly instead of a spinner forever
+        return iced::Task::perform(async { false }, |ok| ok);
     }
+    iced::Task::perform(async move { rx.await.unwrap_or(false) }, |ok| ok)
+}
+
+/// The local wall clock as "hh:mm" (JS Date: local timezone, matching
+/// the browser's own download timestamps).
+pub fn clock_hh_mm() -> String {
+    let d = js_sys::Date::new_0();
+    format!("{:02}:{:02}", d.get_hours(), d.get_minutes())
 }
 
 /// Open the browser's file chooser filtered to `accept` (e.g. ".dbml").

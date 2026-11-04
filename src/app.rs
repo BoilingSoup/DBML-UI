@@ -114,6 +114,8 @@ pub enum Message {
     /// A web file pick or drop resolved: (file name, text content), or
     /// None for a dismissed chooser.
     WebFilePicked(Option<(String, String)>),
+    /// A web autosave put finished (true = landed in IndexedDB).
+    WebSaved(bool),
     /// The browser delivered a paste (the DOM paste event carries the
     /// clipboard text).
     WebPaste(String),
@@ -958,6 +960,17 @@ pub struct App {
     /// The tab-close confirmation modal is up for this tab (dirty buffer +
     /// a tab close): Save & close / Close without saving / Cancel.
     pub tab_close_confirm: Option<usize>,
+    /// Web build: an IndexedDB save is in flight (the toolbar's
+    /// Saved-at slot shows a spinner until it lands).
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub web_saving: bool,
+    /// Web build: when the last autosave landed, formatted "hh:mm".
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub saved_at: Option<String>,
+    /// Web build: Ctrl+S requested an immediate flush (set in
+    /// key_pressed, consumed by update's tail task).
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub web_save_now: bool,
     /// Editor state changed since the last session snapshot (the
     /// SessionTick autosave flushes it; the GPU-loss restart restores).
     pub session_dirty: bool,
@@ -1025,6 +1038,9 @@ impl App {
             config: crate::config::Config::default(),
             anim_clock: 0.0,
             chain_save_as: false,
+            web_saving: false,
+            saved_at: None,
+            web_save_now: false,
             diagnostics_selected_fix: 0,
             diagnostics_fix_menu: false,
             diagnostics_fix_menu_since: None,
@@ -1389,8 +1405,16 @@ impl App {
             return;
         }
         // a dirty tab asks first — same contract as app exit, scoped to
-        // the tab (the confirm re-enters here after its decision)
-        if self.tabs[idx].is_modified() && self.tab_close_confirm != Some(idx) {
+        // the tab (the confirm re-enters here after its decision). The
+        // web build asks for EVERY open document: its buffer lives only
+        // in the IndexedDB record, and closing clears it from there —
+        // there is no file to reopen.
+        let needs_confirm = if cfg!(target_arch = "wasm32") {
+            self.tabs[idx].doc_open
+        } else {
+            self.tabs[idx].is_modified()
+        };
+        if needs_confirm && self.tab_close_confirm != Some(idx) {
             self.tab_close_confirm = Some(idx);
             return;
         }
@@ -3154,7 +3178,7 @@ fn export_pick_task(
 }
 
 pub fn update(app: &mut App, message: Message) -> iced::Task<Message> {
-        // any keypress supersedes the toast: feedback yields to input
+    // any keypress supersedes the toast: feedback yields to input
     if matches!(message, Message::KeyPressed(..)) {
         app.clear_message();
     }
@@ -3211,7 +3235,17 @@ pub fn update(app: &mut App, message: Message) -> iced::Task<Message> {
     }
     // ctrl+S on an unpacked buffer chains the Save As picker (the flag is
     // set inside key_pressed, which cannot return a task itself). The web
-    // build's Save As is a download instead.
+    // build's Save As is a download instead, and its ctrl+S is an
+    // immediate IndexedDB flush.
+    if app.web_save_now {
+        app.web_save_now = false;
+        #[cfg(target_arch = "wasm32")]
+        {
+            app.web_saving = true;
+            return crate::web::save_state_task(&app.session_snapshot())
+                .map(crate::app::Message::WebSaved);
+        }
+    }
     if app.chain_save_as {
         app.chain_save_as = false;
         #[cfg(target_arch = "wasm32")]
@@ -3464,10 +3498,26 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
         Message::WebFlush => {
             #[cfg(target_arch = "wasm32")]
             {
-                let snap = app.session_snapshot();
-                crate::web::save_state(&snap);
-                app.session_dirty = false;
+                app.web_saving = true;
+                return crate::web::save_state_task(&app.session_snapshot())
+                    .map(crate::app::Message::WebSaved);
             }
+        }
+        Message::WebSaved(ok) => {
+            #[cfg(target_arch = "wasm32")]
+            {
+                app.web_saving = false;
+                if ok {
+                    app.saved_at = Some(crate::web::clock_hh_mm());
+                } else {
+                    app.set_message_kind(
+                        ToastKind::Error,
+                        "autosave failed — the browser may be blocking storage",
+                    );
+                }
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            let _ = ok;
         }
         Message::WebPaste(text) => {
             #[cfg(target_arch = "wasm32")]
@@ -3921,8 +3971,10 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
                 let snap = app.session_snapshot();
                 #[cfg(target_arch = "wasm32")]
                 {
-                    crate::web::save_state(&snap);
+                    app.web_saving = true;
                     app.session_dirty = false;
+                    return crate::web::save_state_task(&snap)
+                        .map(crate::app::Message::WebSaved);
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 if crate::session::save(&snap).is_ok() {
@@ -4020,7 +4072,17 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
     }
     // ctrl+S on an unpacked buffer chains the Save As picker (the flag is
     // set inside key_pressed, which cannot return a task itself). The web
-    // build's Save As is a download instead.
+    // build's Save As is a download instead, and its ctrl+S is an
+    // immediate IndexedDB flush.
+    if app.web_save_now {
+        app.web_save_now = false;
+        #[cfg(target_arch = "wasm32")]
+        {
+            app.web_saving = true;
+            return crate::web::save_state_task(&app.session_snapshot())
+                .map(crate::app::Message::WebSaved);
+        }
+    }
     if app.chain_save_as {
         app.chain_save_as = false;
         #[cfg(target_arch = "wasm32")]
@@ -5430,9 +5492,10 @@ impl App {
                     if self.cur().file.is_none() {
                         #[cfg(target_arch = "wasm32")]
                         {
-                            let snap = self.session_snapshot();
-                            crate::web::save_state(&snap);
-                            self.session_dirty = false;
+                            // the manual save = an immediate IndexedDB
+                            // flush; key_pressed cannot return tasks, so
+                            // update's tail picks the flag up
+                            self.web_save_now = true;
                         }
                         #[cfg(not(target_arch = "wasm32"))]
                         {

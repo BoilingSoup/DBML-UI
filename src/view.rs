@@ -2579,14 +2579,57 @@ fn editor_toolbar(app: &App) -> Element<'static, Message> {
     // left-aligned to the editor's line-number gutter (56px), so the
     // toolbar reads as part of the editor column
     let maximized = app.maximized == Maximized::Editor;
+    // the save slot: desktop keeps the floppy button; the web build
+    // swaps it for the autosave indicator ("Saved at hh:mm", a spinner
+    // while the IndexedDB write is in flight) in a FIXED-width box, so
+    // the swap never shifts the toolbar row
+    #[cfg(target_arch = "wasm32")]
+    let save_slot: Element<'static, Message> = {
+        let SPIN_GLYPHS = ['|', '/', '-', '\\'];
+        let content: Element<'static, Message> = if app.web_saving {
+            let glyph = SPIN_GLYPHS
+                [(app.anim_clock * 8.0) as usize % SPIN_GLYPHS.len()];
+            container(
+                text(glyph.to_string())
+                    .size(12.0)
+                    .font(theme::mono())
+                    .color(theme::DIM),
+            )
+            .width(Fill)
+            .center_x(Length::Fill)
+            .into()
+        } else if let Some(at) = &app.saved_at {
+            container(
+                text(format!("Saved at {at}"))
+                    .size(11.0)
+                    .font(theme::mono())
+                    .color(theme::DIM),
+            )
+            .width(Fill)
+            .center_x(Length::Fill)
+            .into()
+        } else {
+            // nothing autosaved yet: the slot stays (invisibly) so the
+            // first appearance never shifts anything
+            container(text("")).width(Fill).into()
+        };
+        container(content)
+            .width(Length::Fixed(96.0))
+            .height(Fill)
+            .center_y(Length::Fill)
+            .into()
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let save_slot: Element<'static, Message> = icon_btn(
+        ICON_SAVE,
+        "Save (Ctrl+S)",
+        Message::KeyPressed(KeyCode::Char('s'), KeyModifiers::CONTROL),
+        true,
+        false,
+    )
+    .into();
     let row = row![
-        icon_btn(
-            ICON_SAVE,
-            "Save (Ctrl+S)",
-            Message::KeyPressed(KeyCode::Char('s'), KeyModifiers::CONTROL),
-            true,
-            false
-        ),
+        save_slot,
         icon_btn(ICON_SAVE_AS, "Save As (F12)", Message::SaveAsPrompt, true, false),
         icon_btn(
             ICON_UNDO,
@@ -3011,6 +3054,20 @@ fn tab_close_overlay(app: &App, idx: usize) -> Element<'static, Message> {
         .get(idx)
         .map(|t| t.title())
         .unwrap_or_else(|| "This tab".to_string());
+    // the web build's tabs have no backing file: their contents live only
+    // in the autosave record, so closing is destructive there (and there
+    // is no "save" to offer — the autosave already holds everything)
+    #[cfg(target_arch = "wasm32")]
+    return confirm_modal(
+        Box::leak(format!("Close \"{title}\"?").into_boxed_str()),
+        "Its contents live only in this browser's autosave — closing clears them from it.",
+        &[
+            ("Close", Message::TabCloseDiscard, true),
+            ("Cancel", Message::TabCloseCancel, false),
+        ],
+        Message::TabCloseCancel,
+    );
+    #[cfg(not(target_arch = "wasm32"))]
     confirm_modal(
         Box::leak(format!("\"{title}\" has unsaved changes").into_boxed_str()),
         "Close it anyway?",
