@@ -3006,28 +3006,48 @@ fn start_screen(_app: &App) -> Element<'static, Message> {
     ]
     .spacing(10);
 
-    let masthead = text(WORD_ART.to_string())
-        .size(13.0)
-        .font(theme::mono())
-        .color(theme::TEXT);
-
-    // the web build wears a small badge under the caption: a different
-    // home (browser tab, autosaved state, downloads) deserves a marker
+    // the web build wears a wasm badge to the right of the word art: a
+    // different home (browser tab, autosaved state, downloads) deserves
+    // a marker. The pill is about a third of the art's height.
     #[cfg(target_arch = "wasm32")]
-    let caption: Element<'static, Message> = row![
-        text("DBML DIAGRAM EDITOR".to_string()).size(12.0).color(theme::DIM),
-        container(text("wasm").size(10).color(theme::DIM))
-            .padding([2, 9])
-            .style(|_t| container::Style {
-                background: Some(iced::Background::Color(theme::PANEL)),
-                border: iced::border::rounded(9).color(theme::BORDER),
-                ..Default::default()
-            }),
+    let masthead: Element<'static, Message> = row![
+        text(WORD_ART.to_string())
+            .size(13.0)
+            .font(theme::mono())
+            .color(theme::TEXT),
+        container(
+            text("wasm")
+                .size(14.0)
+                .color(Color::from_rgb8(0xff, 0xff, 0xff)),
+        )
+        .height(Length::Fixed(34.0))
+        .padding([0, 18])
+        .center_y(Length::Fill)
+        .center_x(Length::Fill)
+        .style(|_t| container::Style {
+            background: Some(iced::Background::Color(Color::from_rgb8(
+                0x6f, 0xb1, 0xe8,
+            ))),
+            border: iced::border::rounded(17.0),
+            ..Default::default()
+        }),
     ]
-    .spacing(10)
+    .spacing(18)
     .align_y(iced::alignment::Vertical::Center)
     .into();
     #[cfg(not(target_arch = "wasm32"))]
+    let masthead: Element<'static, Message> = text(WORD_ART.to_string())
+        .size(13.0)
+        .font(theme::mono())
+        .color(theme::TEXT)
+        .into();
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let caption: Element<'static, Message> = text("DBML DIAGRAM EDITOR".to_string())
+        .size(12.0)
+        .color(theme::DIM)
+        .into();
+    #[cfg(target_arch = "wasm32")]
     let caption: Element<'static, Message> = text("DBML DIAGRAM EDITOR".to_string())
         .size(12.0)
         .color(theme::DIM)
