@@ -3202,11 +3202,12 @@ pub fn update(app: &mut App, message: Message) -> iced::Task<Message> {
         #[cfg(target_arch = "wasm32")]
         Message::SaveAsPrompt => {
             // the web save is a download with the default name (no
-            // dialogs, no success tracking)
+            // dialogs, no success tracking, no toast: the browser's own
+            // download UI may be cancelled, and none of that is visible
+            // to the app)
             let name = app.cur().save_as_default_name();
             let text = app.editor().text().to_string();
             crate::web::download(&name, "text/plain", text.as_bytes());
-            app.set_message_kind(ToastKind::Success, format!("{name} downloads"));
         }
         #[cfg(not(target_arch = "wasm32"))]
         Message::SaveAsPrompt => return save_as_picker_task(app.cur().save_as_default_name()),
@@ -5249,10 +5250,7 @@ impl App {
         };
         let result = render;
         match result {
-            Ok((name, mime, bytes)) => {
-                crate::web::download(&name, mime, &bytes);
-                self.set_message_kind(ToastKind::Success, format!("{name} downloads"));
-            }
+            Ok((name, mime, bytes)) => crate::web::download(&name, mime, &bytes),
             Err(e) => self.set_message_kind(ToastKind::Error, format!("export failed: {e}")),
         }
     }
