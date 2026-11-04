@@ -155,7 +155,17 @@ impl Renderer {
                 }
 
                 for group in &layer.primitives {
-                    let Some(new_clip_bounds) = (group.clip_bounds()
+                    // The group's clip bounds are frame-LOCAL (a canvas
+                    // Frame's clip rect starts at (0, 0)): the widget's
+                    // position lives in the group's transformation (Canvas
+                    // draws under `with_translation(bounds.x, bounds.y)`).
+                    // Transform them before using them as a screen-space
+                    // rect — untransformed, the mask lands shifted by the
+                    // widget's position and every primitive crossing a
+                    // damage boundary repaints into the wrong rect (parts
+                    // of the scene go stale / overflow their pane).
+                    let Some(new_clip_bounds) = ((group.clip_bounds()
+                        * group.transformation())
                         * scale_factor)
                         .intersection(&clip_bounds)
                     else {
@@ -164,6 +174,11 @@ impl Renderer {
 
                     engine::adjust_clip_mask(clip_mask, new_clip_bounds);
 
+                    // the group clip bounds the primitives too (the wgpu
+                    // backend scissors every mesh to
+                    // `mesh.clip_bounds() * transformation` ∩ layer): a
+                    // primitive fully inside the damage region but outside
+                    // its frame's clip must not paint unmasked
                     for primitive in group.as_slice() {
                         self.engine.draw_primitive(
                             primitive,
@@ -171,7 +186,7 @@ impl Renderer {
                                 * Transformation::scale(scale_factor),
                             pixels,
                             clip_mask,
-                            clip_bounds,
+                            new_clip_bounds,
                         );
                     }
 

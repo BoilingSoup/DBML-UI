@@ -592,10 +592,13 @@ impl canvas::Program<crate::app::Message> for Diagram<'_> {
     ) -> Vec<canvas::Geometry> {
         let mut frame = canvas::Frame::new(renderer, bounds.size());
         frame.fill_rectangle(Point::ORIGIN, bounds.size(), theme::CANVAS);
-        // NOTE: canvas geometry is not clipped to the widget by default, but
-        // the pane container uses .clip(true) (view.rs) so boxes dragged to
-        // negative diagram coords never paint over the editor pane. Don't
-        // use Frame::with_clip here — its draft/paste misplaces mesh
+        // NOTE: canvas geometry IS clipped to this widget's bounds at
+        // render time — the geometry's frame clip bounds intersect the
+        // scissor/mask in both backends (iced_wgpu scissors to
+        // `mesh.clip_bounds() * transformation`; the vendored tiny-skia
+        // compositor masks the same way) — so boxes dragged past the pane
+        // seam never paint over the editor pane. Don't use
+        // Frame::with_clip here — its draft/paste misplaces mesh
         // geometry on the wgpu backend in 0.13.
         paint(
             &mut frame,
@@ -3732,11 +3735,17 @@ fn draw_field_popup(
     layout: &Layout,
     b: &TableBox,
     r: usize,
-    zoom: f32,
+    view_zoom: f32,
     pan: Vector,
     bounds: Rectangle,
     scroll: f32,
 ) {
+    // static size: dbdiagram's popovers are DOM nodes OUTSIDE the zoomed
+    // canvas (their CanvasPopover anchors a position:fixed reference div
+    // to the hovered element's screen rect, so zoom never scales them) —
+    // drawn in-canvas, that translates to computing every size at 1:1 px
+    // (zoom pinned to 20) and letting the view zoom move only the anchor
+    let zoom = 20.0;
     let k = zoom / 20.0;
     let row = &b.rows[r];
     let wrap_cols = ((POPUP_MAX_W - 2.0 * POPUP_PAD_X) / (6.6 * k)) as usize;
@@ -3801,13 +3810,13 @@ fn draw_field_popup(
         + 6.0 * k
         + mono_px(&row.ty, 14.0 * k)
         + 2.0 * POPUP_PAD_X * k;
-    let s = cell_size(zoom);
-    let box_left = to_px(b.x, b.y, zoom, pan).x;
+    let s = cell_size(view_zoom);
+    let box_left = to_px(b.x, b.y, view_zoom, pan).x;
     let anchor = PopupAnchor {
         left: box_left,
-        right: to_px(b.x + b.w, b.y, zoom, pan).x,
-        top: to_px(b.x, b.y + r as i32 + 1, zoom, pan).y,
-        bottom: to_px(b.x, b.y + r as i32 + 1, zoom, pan).y + s.height,
+        right: to_px(b.x + b.w, b.y, view_zoom, pan).x,
+        top: to_px(b.x, b.y + r as i32 + 1, view_zoom, pan).y,
+        bottom: to_px(b.x, b.y + r as i32 + 1, view_zoom, pan).y + s.height,
     };
     let g = popup_layout(&sections, header_w, anchor, zoom, bounds, scroll);
     let type_color = if row.ty_enum { ENUM_VALUE_BLUE } else { TYPE_ORANGE };
