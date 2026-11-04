@@ -51,6 +51,12 @@
       display: block;
       width: 100vw;
       height: 100vh;
+      /* the canvas takes programmatic focus at boot: the browser's blue
+         focus ring would frame the whole app like a border */
+      outline: none;
+    }
+    canvas:focus, canvas:focus-visible {
+      outline: none;
     }
   </style>
   <link data-trunk rel="rust" data-type="main" data-bin="dbml-ui" />
