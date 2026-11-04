@@ -1728,8 +1728,32 @@ impl Editor {
         let (row, _) = self.buf.cursor();
         let lines = self.buf.lines();
         let end = (row + n.max(1)).min(lines.len());
-        let total: usize = lines[row..end].iter().map(|l| l.chars().count() + 1).sum();
-        self.buf.move_cursor(CursorMove::Jump(row, 0));
+        // vim: deleting through the END of the buffer. A trailing-newline
+        // document stores that newline as an empty last line — the file's
+        // EOL marker, not a line: the range then stops short of it (dd on
+        // the last line keeps the file's trailing newline; dd with the
+        // cursor ON the marker deletes the last content line, the marker
+        // surviving as its terminator; dG from the first line empties the
+        // buffer). Without a marker, the newline ending the previous line
+        // goes with the range so the last line is removed outright.
+        let (start_row, start_col, total) = if end == lines.len()
+            && lines.len() > 1
+            && lines[lines.len() - 1].is_empty()
+        {
+            let first = row.min(lines.len() - 2);
+            let sum: usize = lines[first..lines.len() - 1]
+                .iter()
+                .map(|l| l.chars().count() + 1)
+                .sum();
+            (first, 0, sum + usize::from(first == 0))
+        } else if end == lines.len() && row > 0 {
+            let sum: usize =
+                lines[row..end].iter().map(|l| l.chars().count() + 1).sum();
+            (row - 1, lines[row - 1].chars().count(), sum)
+        } else {
+            (row, 0, lines[row..end].iter().map(|l| l.chars().count() + 1).sum())
+        };
+        self.buf.move_cursor(CursorMove::Jump(start_row, start_col));
         self.buf.delete_str(total);
     }
 
@@ -1982,6 +2006,41 @@ mod tests {
         // vim dd+p swaps the line below the cursor position
         e.handle_key(key('p'));
         assert_eq!(e.text(), "one\nthree\nwo");
+    }
+
+    #[test]
+    fn dd_removes_the_last_line_entirely() {
+        // vim dd on the buffer's last line takes the line away — no
+        // phantom empty line left behind
+        let mut e = editor("one\ntwo\nthree");
+        e.handle_key(key('j'));
+        e.handle_key(key('j'));
+        e.handle_key(key('d'));
+        e.handle_key(key('d'));
+        assert_eq!(e.text(), "one\ntwo");
+
+        // a [count]dd reaching the end eats every line to the end
+        let mut e = editor("one\ntwo\nthree");
+        e.handle_key(key('j'));
+        e.handle_key(key('2'));
+        e.handle_key(key('d'));
+        e.handle_key(key('d'));
+        assert_eq!(e.text(), "one");
+
+        // a lone line collapses to one empty line, never zero
+        let mut e = editor("solo");
+        e.handle_key(key('d'));
+        e.handle_key(key('d'));
+        assert_eq!(e.text(), "");
+
+        // a trailing-newline buffer's empty last line is the file's EOL,
+        // not a line: dd on it removes the last CONTENT line and the
+        // trailing newline survives
+        let mut e = editor("one\ntwo\nthree\n");
+        e.handle_key(key('G'));
+        e.handle_key(key('d'));
+        e.handle_key(key('d'));
+        assert_eq!(e.text(), "one\ntwo\n");
     }
 
     #[test]
@@ -2393,7 +2452,7 @@ mod tests {
         assert_eq!(t, "");
         // dG from the middle keeps everything before the cursor
         let (_, t) = typed("one\ntwo\nthree", "jdG");
-        assert_eq!(t, "one\n");
+        assert_eq!(t, "one");
         // dgg deletes whole lines up to and including the cursor line
         let (_, t) = typed("one\ntwo\nthree", "jdgg");
         assert_eq!(t, "three");
