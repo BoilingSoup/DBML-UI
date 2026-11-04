@@ -3059,8 +3059,8 @@ fn tab_close_overlay(app: &App, idx: usize) -> Element<'static, Message> {
     // is no "save" to offer — the autosave already holds everything)
     #[cfg(target_arch = "wasm32")]
     return confirm_modal(
-        Box::leak(format!("Close \"{title}\"?").into_boxed_str()),
-        "Its contents live only in this browser's autosave — closing clears them from it.",
+        Box::leak("Are you sure?".to_string().into_boxed_str()),
+        "The content will be cleared from the browser's cache.",
         &[
             ("Close", Message::TabCloseDiscard, true),
             ("Cancel", Message::TabCloseCancel, false),
