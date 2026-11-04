@@ -29,6 +29,24 @@ fn main() -> Result<(), iced::Error> {
         #[cfg(target_arch = "wasm32")]
         {
             std::panic::set_hook(Box::new(console_error_panic_hook::hook));
+            // iced/wgpu log their boot diagnostics (adapter selection,
+            // backend failures) through the `log` crate: without a
+            // logger those go nowhere on the web, and the adapter chain
+            // is exactly what a dead canvas needs diagnosed
+            struct ConsoleLog;
+            impl log::Log for ConsoleLog {
+                fn enabled(&self, meta: &log::Metadata) -> bool {
+                    meta.level() <= log::Level::Info
+                }
+                fn log(&self, record: &log::Record) {
+                    let line = format!("[{}] {}", record.level(), record.args());
+                    web_sys::console::log_1(&line.into());
+                }
+                fn flush(&self) {}
+            }
+            let _ = log::set_logger(&ConsoleLog).map(|_| {
+                log::set_max_level(log::LevelFilter::Info)
+            });
             // the pagehide/visibilitychange autosave flush: the gap
             // closer between the 2s tick and a refresh
             web::install_flush_hook();

@@ -10,15 +10,26 @@ edition = "2021"
 [patch.crates-io]
 iced_tiny_skia = { path = "vendor/iced_tiny_skia" }
 iced_graphics = { path = "vendor/iced_graphics" }
+# The web adapter chain: wgpu's Instance commits to a WebGPU-only context
+# whenever navigator.gpu exists (even with no adapter — Electron, Chrome
+# on Linux), so the GL/WebGL2 backend never runs and the boot falls
+# straight to software. The vendored compositor retries the adapter
+# request without BROWSER_WEBGPU before giving up.
+iced_wgpu = { path = "vendor/iced_wgpu" }
+iced_glyphon = { path = "vendor/iced_glyphon" }
 
 [dependencies]
 anyhow = "1.0.104"
 # The renderer is per-target: the desktop keeps wgpu (added below), the
-# web build renders with tiny-skia (software) — wgpu 0.19's WebGPU backend
-# deadlocks against modern browsers' navigator.gpu, and WebGL2-only isn't
-# selectable through iced 0.13's settings. Software rendering is
-# requirement-free for GitHub Pages. `fira-sans` embeds the default UI
-# font (the web has no system-font scan).
+# web build renders with tiny-skia (software). The wgpu-WebGL2 groundwork
+# is DONE and kept ready (see the vendored iced_wgpu/iced_glyphon and the
+# wgpu dep below) — but iced 0.13 cannot ship it: canvas-geometry TEXT
+# inside a `with_layer` layer does not render on the WebGL2 backend (the
+# diagram's popups/pills are canvas text in the pane stack's layered
+# children; on the desktop's native wgpu the same code renders fine).
+# Flipping the wasm `iced` feature to "wgpu" re-enables the GPU chain
+# once upstream fixes text-in-layers on WebGL2. `fira-sans` embeds the
+# default UI font (the web has no system-font scan).
 iced = { version = "=0.13.1", default-features = false, features = [
     "canvas",
     "smol",
@@ -72,11 +83,13 @@ wasm-bindgen = "0.2"
 # wasm panics write to a stderr nobody reads: route them to the browser
 # console (the iced web examples do the same)
 console_error_panic_hook = "0.1"
-# Chrome on Linux advertises navigator.gpu but requestAdapter() resolves
-# null (no WebGPU there) — wgpu 0.19's WebGPU path stalls the boot instead
-# of failing over. Compiling the WebGL2 backend in gives the adapter
-# request a real answer (iced#2978).
+# The web build's wgpu groundwork: compiling the WebGL2 (GL) backend in
+# gives navigator.gpu's null-adapter answer a real fallback (Chrome on
+# Linux without WebGPU) instead of stalling the boot (iced#2978). Inert
+# until the wasm `iced` feature flips to "wgpu" (see above).
 wgpu = { version = "0.19", features = ["webgl"] }
+# the boot's adapter-selection diagnostics route to the browser console
+log = "0.4"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # System-clipboard text (copy/paste) on X11/Wayland/Windows/macOS. Text

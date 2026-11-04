@@ -2660,10 +2660,9 @@ impl App {
 
     /// Zoom to fit: scale + pan so the whole diagram (every box plus a
     /// uniform margin) sits inside the visible diagram canvas. The scale
-    /// clamps to the wheel's range; the pan puts the content's top-left
-    /// corner at the margin — the same composition `to_px` and the
-    /// wheel's cursor-anchored zoom use (screen = (cell + margin) * size
-    /// + pan).
+    /// clamps to the wheel's range; the pan centers the content in the
+    /// canvas — the same composition `to_px` and the wheel's
+    /// cursor-anchored zoom use (screen = (cell + margin) * size + pan).
     fn zoom_to_fit(&mut self) {
         let boxes = &self.cur().diagram.boxes;
         let Some(first) = boxes.first() else {
@@ -2704,9 +2703,16 @@ impl App {
         let scale = (avail_w / content_w)
             .min(avail_h / content_h)
             .clamp(ZOOM_MIN, ZOOM_MAX);
+        // the fitted content CENTERs in the canvas (dbdiagram's arrange/fit
+        // keeps the diagram centered, even when a clamped scale crops the
+        // edges evenly) — the pan puts the content's center at the canvas
+        // center; the same composition `to_px` and the wheel's
+        // cursor-anchored zoom use (screen = (cell + margin) * size + pan)
         let pan = Vector::new(
-            FIT_MARGIN_PX - (min_x as f32 + MARGIN_CELLS) * CELL_ASPECT * scale,
-            FIT_MARGIN_PX - (min_y as f32 + MARGIN_CELLS) * scale,
+            (cw - content_w * scale) / 2.0
+                - (min_x as f32 + MARGIN_CELLS) * CELL_ASPECT * scale,
+            (ch - content_h * scale) / 2.0
+                - (min_y as f32 + MARGIN_CELLS) * scale,
         );
         self.cur_mut().zoom = scale;
         self.cur_mut().pan = pan;
@@ -3881,13 +3887,7 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
         Message::PanelSwallowed => {}
         Message::AddStickyNote => app.add_sticky_note(),
         Message::ToggleEdgeHighlight => {
-            let on = !app.cur().highlight_all;
-            app.cur_mut().highlight_all = on;
-            app.set_message(if on {
-                "highlighting all relationships"
-            } else {
-                "highlight off"
-            });
+            app.cur_mut().highlight_all = !app.cur().highlight_all;
         }
         Message::ExportSql(dialect) => {
             app.export_menu_open = false;
@@ -4190,6 +4190,10 @@ impl App {
         self.cur_mut().set_source(tpl);
         self.cur_mut().editor_scroll = 0.0;
         self.cur_mut().editor_hscroll = 0.0;
+        // the starter sample opens ARRANGED (dbdiagram's left-right ELK
+        // layout), fitted and centered in the viewport — not piled at the
+        // layout defaults
+        self.auto_arrange();
         self.cur_mut().doc_open = true;
         self.focus = Focus::Editor;
     }
@@ -7577,11 +7581,16 @@ TableGroup g { a c }
             .min((ch - 2.0 * FIT_MARGIN_PX) / (max_b - min_y) as f32))
         .clamp(ZOOM_MIN, ZOOM_MAX);
         assert!((zoom - exp).abs() < 1e-4, "zoom {zoom} vs {exp}");
-        // the content's top-left corner sits at the margin
+        // the content's center sits at the canvas center
         let tl = crate::canvas::diagram::to_px(min_x, min_y, zoom, pan);
+        let s = crate::canvas::diagram::cell_size(zoom);
+        let cx = tl.x + (max_r - min_x) as f32 * s.width / 2.0;
+        let cy = tl.y + (max_b - min_y) as f32 * s.height / 2.0;
         assert!(
-            (tl.x - FIT_MARGIN_PX).abs() < 1e-3 && (tl.y - FIT_MARGIN_PX).abs() < 1e-3,
-            "top-left {tl:?}"
+            (cx - cw / 2.0).abs() < 1e-3 && (cy - ch / 2.0).abs() < 1e-3,
+            "content center ({cx},{cy}) vs canvas center ({},{})",
+            cw / 2.0,
+            ch / 2.0
         );
         // and the whole content is inside the canvas
         let s = crate::canvas::diagram::cell_size(zoom);

@@ -924,6 +924,7 @@ dependencies = [
  "iced",
  "image",
  "js-sys",
+ "log",
  "regex",
  "resvg 0.45.1",
  "rfd",
@@ -1806,11 +1807,10 @@ dependencies = [
 [[package]]
 name = "iced_glyphon"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41c3bb56f1820ca252bc1d0994ece33d233a55657c0c263ea7cb16895adbde82"
 dependencies = [
  "cosmic-text",
  "etagere",
+ "log",
  "lru",
  "rustc-hash 2.1.3",
  "wgpu",
@@ -1879,8 +1879,6 @@ dependencies = [
 [[package]]
 name = "iced_wgpu"
 version = "0.13.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15708887133671d2bcc6c1d01d1f176f43a64d6cdc3b2bf893396c3ee498295f"
 dependencies = [
  "bitflags 2.13.2",
  "bytemuck",
