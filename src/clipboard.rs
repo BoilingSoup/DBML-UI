@@ -56,26 +56,32 @@ pub fn system_backend() -> Result<SystemClipboard, String> {
         .map_err(|e| e.to_string())
 }
 
-/// The web stand-in: creation always fails upstream, so this type never
-/// operates — it exists to keep the factory signature uniform.
+/// The web clipboard: writes go through navigator.clipboard (the copy
+/// paths run inside key handlers, which satisfy the user-gesture
+/// requirement). Reads are not offered — the browser delivers pastes as
+/// DOM events (see web::paste_events and Message::WebPaste), which no
+/// synchronous `get_text` can model — so the internal register remains
+/// the paste fallback.
 #[cfg(target_arch = "wasm32")]
 #[derive(Debug)]
 pub struct SystemClipboard;
 
 #[cfg(target_arch = "wasm32")]
 impl ClipboardBackend for SystemClipboard {
-    fn set_text(&mut self, _text: String) -> Result<(), String> {
-        Err("the clipboard isn't available in the web build yet".to_string())
+    fn set_text(&mut self, text: String) -> Result<(), String> {
+        crate::web::copy_text(&text);
+        Ok(())
     }
 
     fn get_text(&mut self) -> Result<String, String> {
-        Err("the clipboard isn't available in the web build yet".to_string())
+        // paste flows through the DOM paste event instead
+        Err("paste arrives as a DOM paste event on the web".to_string())
     }
 }
 
 #[cfg(target_arch = "wasm32")]
 pub fn system_backend() -> Result<SystemClipboard, String> {
-    Err("the clipboard isn't available in the web build yet".to_string())
+    Ok(SystemClipboard)
 }
 
 /// In-memory stand-in for the OS clipboard, shared by the interaction

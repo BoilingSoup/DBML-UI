@@ -41,7 +41,34 @@ web-time = "1"
 # wasm32-unknown-unknown backend, rfd drives GTK, arboard drives the
 # system clipboard. The web build cfg-gates every use site.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-web-sys = { version = "0.3", features = ["console"] }
+web-sys = { version = "0.3", features = [
+    "console",
+    "Blob",
+    "BlobPropertyBag",
+    "Document",
+    "Element",
+    "HtmlAnchorElement",
+    "HtmlElement",
+    "IdbDatabase",
+    "IdbFactory",
+    "IdbObjectStore",
+    "IdbOpenDbRequest",
+    "IdbRequest",
+    "IdbTransaction",
+    "IdbTransactionMode",
+    "Url",
+    "Window",
+    "Clipboard",
+    "ClipboardEvent",
+    "DataTransfer",
+    "DragEvent",
+    "File",
+    "FileList",
+    "FileReader",
+    "HtmlInputElement",
+] }
+js-sys = "0.3"
+wasm-bindgen = "0.2"
 # wasm panics write to a stderr nobody reads: route them to the browser
 # console (the iced web examples do the same)
 console_error_panic_hook = "0.1"

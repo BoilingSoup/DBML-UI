@@ -106,11 +106,17 @@ pub enum Message {
     PickerUnavailable,
     /// Toolbar/button save-as request.
     SaveAsPrompt,
-    /// The web build's idb autosave record arrived at boot (None = a
-    /// fresh browser: the splash stays).
-    WebRestored(Option<crate::session::Session>),
+    /// The web build's idb boot record arrived: the persisted settings
+    /// text plus the last autosaved state (None parts = fresh browser).
+    WebRestored(Option<String>, Option<crate::session::Session>),
     /// The web tab lost focus: flush the autosave right away.
     WebFlush,
+    /// A web file pick or drop resolved: (file name, text content), or
+    /// None for a dismissed chooser.
+    WebFilePicked(Option<(String, String)>),
+    /// The browser delivered a paste (the DOM paste event carries the
+    /// clipboard text).
+    WebPaste(String),
     /// The native save dialog produced a target path.
     SaveAs(String),
     /// Run the canonical formatter over the whole buffer.
@@ -1759,21 +1765,29 @@ impl App {
     }
 
     fn paste_from_system(&mut self) {
-        let text = match self.clipboard_text() {
-            Some(t) => t,
-            None => {
-                let reg = self.editor().register_lines();
-                if reg.is_empty() {
-                    // silent: an empty clipboard is a normal state, not an event
-                    return;
+        // the web build: pastes arrive as DOM paste events (the browser
+        // fires one for every Ctrl+V); handling them here would double
+        // every insert
+        #[cfg(target_arch = "wasm32")]
+        return;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let text = match self.clipboard_text() {
+                Some(t) => t,
+                None => {
+                    let reg = self.editor().register_lines();
+                    if reg.is_empty() {
+                        // silent: an empty clipboard is a normal state, not an event
+                        return;
+                    }
+                    reg.join("\n")
                 }
-                reg.join("\n")
-            }
-        };
-        self.paste_text(&text);
-        self.after_edit(editor::Action::Changed);
-        self.follow_cursor_horizontal();
-        self.keep_cursor_visible();
+            };
+            self.paste_text(&text);
+            self.after_edit(editor::Action::Changed);
+            self.follow_cursor_horizontal();
+            self.keep_cursor_visible();
+        }
     }
 
     /// Insert `text` at the cursor as a multi-line paste: '\n' becomes
@@ -2868,6 +2882,14 @@ pub fn subscription(_app: &App) -> iced::Subscription<Message> {
         // the session autosave: a couple of seconds after the last edit,
         // the snapshot lands on disk (crash / GPU-loss restart protection)
         iced::time::every(std::time::Duration::from_secs(2)).map(|_| Message::SessionTick),
+        // dropped files stream in as in-memory opens (web)
+        #[cfg(target_arch = "wasm32")]
+        crate::web::dropped_files().map(|(name, content)| {
+            Message::WebFilePicked(Some((name, content)))
+        }),
+        // the browser's paste event delivers the clipboard text (web)
+        #[cfg(target_arch = "wasm32")]
+        crate::web::paste_events().map(Message::WebPaste),
     ])
 }
 
@@ -3090,6 +3112,7 @@ fn pick_file_blocking(kind: PickerKind) -> PickOutcome {
 /// UI thread (a missing tool folds to `PickerUnavailable`); the web build
 /// has no dialog yet.
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_arch = "wasm32"))]
 fn open_file_picker_task(kind: PickerKind) -> iced::Task<Message> {
     let (tx, rx) = smol::channel::bounded(1);
     std::thread::spawn(move || {
@@ -3106,8 +3129,13 @@ fn open_file_picker_task(kind: PickerKind) -> iced::Task<Message> {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn open_file_picker_task(_kind: PickerKind) -> iced::Task<Message> {
-    picker_unavailable_task()
+fn open_file_picker_task(kind: PickerKind) -> iced::Task<Message> {
+    let accept = match kind {
+        PickerKind::Dbml => ".dbml",
+        PickerKind::Sql => ".sql,.ddl",
+        PickerKind::DiagramAndSql => ".dbml,.sql,.ddl",
+    };
+    crate::web::pick_file(accept).map(Message::WebFilePicked)
 }
 
 /// The export save-dialog task: desktop asks for a destination path; the
@@ -3178,6 +3206,7 @@ pub fn update(app: &mut App, message: Message) -> iced::Task<Message> {
             let name = app.cur().save_as_default_name();
             let text = app.editor().text().to_string();
             crate::web::download(&name, "text/plain", text.as_bytes());
+            app.set_message_kind(ToastKind::Success, format!("{name} downloads"));
         }
         #[cfg(not(target_arch = "wasm32"))]
         Message::SaveAsPrompt => return save_as_picker_task(app.cur().save_as_default_name()),
@@ -3421,11 +3450,24 @@ fn remove_headercolor(inner: &str) -> String {
 
 fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
     match message {
-        Message::WebRestored(s) => {
-            // the idb record IS the web session: restore with buffers
-            // (unsaved edits included — there is no "unsaved" there)
-            if let Some(s) = s {
-                app.restore_session(s);
+        Message::WebRestored(config_text, session) => {
+            // the persisted settings land first (the editing mode is a
+            // global preference: the restored tabs follow it), then the
+            // idb session — buffers, unsaved edits included (there is no
+            // "unsaved" on the web)
+            if let Some(text) = &config_text {
+                app.config = crate::config::Config::from_text(text);
+                let mode = if app.config.vim {
+                    editor::Mode::Normal
+                } else {
+                    editor::Mode::Insert
+                };
+                for t in &mut app.tabs {
+                    t.editor.mode = mode;
+                }
+            }
+            if let Some(session) = session {
+                app.restore_session(session);
             }
         }
         Message::WebFlush => {
@@ -3435,6 +3477,25 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
                 crate::web::save_state(&snap);
                 app.session_dirty = false;
             }
+        }
+        Message::WebPaste(text) => {
+            #[cfg(target_arch = "wasm32")]
+            {
+                app.paste_text(&text);
+                app.after_edit(editor::Action::Changed);
+                app.follow_cursor_horizontal();
+                app.keep_cursor_visible();
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            let _ = text;
+        }
+        Message::WebFilePicked(picked) => {
+            #[cfg(target_arch = "wasm32")]
+            if let Some((name, content)) = picked {
+                app.open_from_memory(&name, &content);
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            let _ = picked;
         }
         Message::CanvasPressed(p) => app.canvas_pressed(p),
         Message::CanvasMoved(p) => app.canvas_moved(p),
@@ -3857,6 +3918,10 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
         }
         Message::TabCloseCancel => app.tab_close_confirm = None,
         Message::SessionTick => {
+            // the browser tab's title follows the active tab's file (the
+            // desktop window title's web twin); refreshed every tick
+            #[cfg(target_arch = "wasm32")]
+            crate::web::set_title(&app.window_title());
             // flush the state snapshot when the editor state moved since
             // the last write. Desktop: the file session (the GPU-loss
             // restart restores it). Web: IndexedDB — the last known state
@@ -4899,22 +4964,14 @@ impl App {
                 "imported as {} — Save As to keep the DBML",
                 dialect.label()
             ));
+            imported = true;
+        }
+        if imported {
             // the import lands in an UNTITLED buffer: no backing file, so
             // a Ctrl-S can never overwrite the user's dump with DBML —
             // Save As chooses where the converted diagram lives (like
             // New diagram)
-            imported = true;
-        }
-        self.cur_mut().table_pos.clear();
-        self.cur_mut().note_pos.clear();
-        self.cur_mut().item_z.clear();
-        if imported {
-            self.cur_mut().file = None;
-            self.cur_mut().saved_text = content.clone();
-            // no backing file: the external-change tracker is inert
-            self.cur_mut().disk_hash = None;
-            self.cur_mut().disk_stat = None;
-            self.cur_mut().liveness = FileLiveness::InSync;
+            self.load_into_current(&content);
         } else {
             self.cur_mut().file = Some(std::path::PathBuf::from(path));
             self.cur_mut().saved_text = content.clone();
@@ -4925,18 +4982,62 @@ impl App {
                 .ok()
                 .and_then(|m| Some((m.modified().ok()?, m.len())));
             self.cur_mut().liveness = FileLiveness::InSync;
+            self.editor_mut().set_text(&content);
+            self.cur_mut().set_source(&content);
+            self.cur_mut().editor_scroll = 0.0;
+            self.cur_mut().editor_hscroll = 0.0;
+            self.cur_mut().doc_open = true;
+            self.config.push_recent(path);
+            self.config.save();
         }
-        self.editor_mut().set_text(&content);
-        self.cur_mut().set_source(&content);
+        Ok(())
+    }
+
+    /// Fill the current tab with DBML content that has NO backing file:
+    /// the shared tail of the web's in-memory opens (a picked or dropped
+    /// file lives only in the browser). The external-change trackers stay
+    /// inert and the recent list untouched.
+    fn load_into_current(&mut self, content: &str) {
+        self.cur_mut().table_pos.clear();
+        self.cur_mut().note_pos.clear();
+        self.cur_mut().item_z.clear();
+        self.cur_mut().file = None;
+        self.cur_mut().saved_text = content.to_string();
+        self.cur_mut().disk_hash = None;
+        self.cur_mut().disk_stat = None;
+        self.cur_mut().liveness = FileLiveness::InSync;
+        self.editor_mut().set_text(content);
+        self.cur_mut().set_source(content);
         self.cur_mut().editor_scroll = 0.0;
         self.cur_mut().editor_hscroll = 0.0;
-        if !imported {
-            // silent: the opened file is its own feedback
-        }
         self.cur_mut().doc_open = true;
-        self.config.push_recent(path);
-        self.config.save();
-        Ok(())
+    }
+
+    /// The web build's in-memory open: `name` only decides the SQL
+    /// import (`.sql`/`.ddl` dumps convert to DBML, with an untitled
+    /// buffer either way — the browser holds the state from here on).
+    #[cfg(target_arch = "wasm32")]
+    pub fn open_from_memory(&mut self, name: &str, content: &str) {
+        self.mark_session_dirty();
+        if name.to_ascii_lowercase().ends_with(".sql")
+            || name.to_ascii_lowercase().ends_with(".ddl")
+        {
+            let dialect = dbml::sqldump::detect_dialect(content);
+            let converted = dbml::sqldump::import(content, dialect)
+                .map_err(|e| format!("import: {e}"));
+            match converted {
+                Ok(dbml_text) => {
+                    self.load_into_current(&dbml_text);
+                    self.set_message_kind(
+                        ToastKind::Warning,
+                        format!("imported as {} — Save As to keep the DBML", dialect.label()),
+                    );
+                }
+                Err(e) => self.set_message_kind(ToastKind::Error, e),
+            }
+        } else {
+            self.load_into_current(content);
+        }
     }
 
     /// Format the whole buffer canonically (comments are preserved by the
@@ -5148,7 +5249,10 @@ impl App {
         };
         let result = render;
         match result {
-            Ok((name, mime, bytes)) => crate::web::download(&name, mime, &bytes),
+            Ok((name, mime, bytes)) => {
+                crate::web::download(&name, mime, &bytes);
+                self.set_message_kind(ToastKind::Success, format!("{name} downloads"));
+            }
             Err(e) => self.set_message_kind(ToastKind::Error, format!("export failed: {e}")),
         }
     }
@@ -5486,6 +5590,18 @@ impl App {
                 KeyCode::Char('/') => self.editor_key(key),
                 _ => {}
             }
+            return;
+        }
+        // the completion popup's navigation and filtering are
+        // mode-independent UI: with a popup live in insert mode, Regular
+        // mode routes through the editor's popup handler too (the vim
+        // arms inside are inert there)
+        if self.regular_mode()
+            && self.focus == Focus::Editor
+            && self.completion.is_some()
+            && self.editor().mode == editor::Mode::Insert
+        {
+            self.editor_key(key);
             return;
         }
         // everywhere else the editor owns the keyboard, period
@@ -6332,6 +6448,17 @@ impl App {
     }
 }
 
+/// A fresh app forced into vim modal editing (the shipped default is
+/// Regular; the vim tests opt in explicitly).
+#[cfg(test)]
+fn vim(mut app: App) -> App {
+    app.config.vim = true;
+    for t in &mut app.tabs {
+        t.editor.mode = editor::Mode::Normal;
+    }
+    app
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6356,7 +6483,7 @@ mod tests {
         let src =
             "// a deliberately long first comment line to anchor the ghost column\nTable t { id integer }\n"
                 .to_string();
-        let mut app = App::with_source(src);
+        let mut app = super::vim(App::with_source(src));
         app.window_size = (1400.0, 900.0);
         app.focus = Focus::Editor;
         let ghost_col = app.editor().buf.line(0).chars().count();
@@ -7827,7 +7954,7 @@ mod completion_tests {
     use crate::editor::completion::ItemKind;
 
     fn insert_app() -> App {
-        let mut app = App::default();
+        let mut app = super::vim(App::default());
         let _ = update(
             &mut app,
             Message::KeyPressed(KeyCode::Char('i'), KeyModifiers::NONE),
@@ -7881,7 +8008,7 @@ mod completion_tests {
     fn popup_window_scrolls_only_past_the_edges() {
         // the selection works its way DOWN to the bottom row of the
         // visible menu first; the window only follows after
-        let mut app = App::with_source("Table users {\n  id integer [pk]\n}\n".into());
+        let mut app = super::vim(App::with_source("Table users {\n  id integer [pk]\n}\n".into()));
         app.editor_mut().mode = editor::Mode::Insert;
         app.toggle_completion();
         let c = app.completion.as_mut().unwrap();
@@ -7978,7 +8105,7 @@ mod completion_tests {
     fn ctrl_n_cycles_and_never_reaches_save_as() {
         // Ctrl+N is completion cycling (a legacy Ctrl+N => save-dialog
         // intercept at the top of update() used to hijack it)
-        let mut app = App::with_source("Table users {\n  id integer [pk]\n}\n".into());
+        let mut app = super::vim(App::with_source("Table users {\n  id integer [pk]\n}\n".into()));
         app.editor_mut().mode = editor::Mode::Insert;
         app.toggle_completion();
         assert!(app.completion.is_some());
@@ -8041,7 +8168,7 @@ mod completion_tests {
 
     #[test]
     fn dot_completes_columns_and_accept() {
-        let mut app = App::with_source("Table users { id integer [pk] }\nRef: users\n".into());
+        let mut app = super::vim(App::with_source("Table users { id integer [pk] }\nRef: users\n".into()));
         let _ = update(
             &mut app,
             Message::KeyPressed(KeyCode::Char('i'), KeyModifiers::NONE),
@@ -8154,7 +8281,7 @@ mod completion_tests {
         let dir = std::env::temp_dir().join(format!("dbml-ui-tgl-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::env::set_var("DBML_UI_CONFIG", dir.join("config"));
-        let mut app = App::default();
+        let mut app = super::vim(App::default());
         assert!(!app.regular_mode(), "vim by default");
         let _ = update(&mut app, Message::VimMode(false));
         assert!(app.regular_mode());
@@ -8278,7 +8405,7 @@ mod completion_tests {
         let dir = std::env::temp_dir().join(format!("dbml-ui-fmt-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::env::set_var("DBML_UI_CONFIG", dir.join("config"));
-        let mut app = App::default();
+        let mut app = super::vim(App::default());
         let messy = "Table   users {\nid integer [pk,increment]\n}\n";
         app.editor_mut().set_text(messy);
         app.cur_mut().set_source(messy);
@@ -8458,7 +8585,7 @@ mod completion_tests {
 
     #[test]
     fn k_hovers_the_word_at_the_caret() {
-        let mut app = App::default();
+        let mut app = super::vim(App::default());
         // caret on "users" in its "Table users {" row, col 6
         let row = app
             .editor()
@@ -8497,10 +8624,10 @@ mod completion_tests {
 
     #[test]
     fn horizontal_follow_when_pane_too_narrow() {
-        let mut app = App {
+        let mut app = super::vim(App {
             window_size: (500.0, 900.0), // pane ~188px: ~15 chars of text
             ..App::default()
-        };
+        });
         let cw = crate::canvas::editor::char_width();
         // cursor at the end of the longest SAMPLE_DBML line
         let (row, len) = app
@@ -8630,7 +8757,7 @@ mod completion_tests {
         // the auto-trigger fired for the entering keypress itself — the
         // popup then ate the first Esc, needing two Escapes to leave insert
         for enter in ['i', 'a', 'o'] {
-            let mut app = App::default();
+            let mut app = super::vim(App::default());
             let _ = update(
                 &mut app,
                 Message::KeyPressed(KeyCode::Char(enter), KeyModifiers::NONE),
@@ -8717,7 +8844,7 @@ mod scroll_tests {
         for i in 0..lines {
             src.push_str(&format!("Table t{i} {{\n  id integer [pk]\n}}\n"));
         }
-        App::with_source(src)
+        super::vim(App::with_source(src))
     }
 
     fn force_finish(app: &mut App) {
@@ -9787,7 +9914,7 @@ mod goto_definition_tests {
 
     fn app() -> App {
         let src = "Table users {\n  id integer [pk]\n}\nTable posts {\n  user_id integer [ref: > users.id]\n}\nEnum st { a b }\nTable other {\n  s st\n}\n";
-        App::with_source(src.to_string())
+        super::vim(App::with_source(src.to_string()))
     }
 
     /// Canvas-local px of a (row, col).
@@ -9856,7 +9983,7 @@ mod goto_definition_tests {
     #[test]
     fn applying_a_fix_keeps_the_cursor_and_one_undo_reverts() {
         let src = "Table a { id integer [pk] }\nTable b { a_id integer [null] }\nRef: b.a_id > a.id\n";
-        let mut app = App::with_source(src.into());
+        let mut app = super::vim(App::with_source(src.into()));
         app.focus = crate::app::Focus::Editor;
         let _ = update(&mut app, Message::DiagnosticGoto(0));
         let _ = update(&mut app, Message::ApplyDiagnosticFix(0, 0));
@@ -10162,7 +10289,7 @@ mod physical_ctrl_tests {
 
     #[test]
     fn flagged_ctrl_r_redoes_instead_of_typing() {
-        let mut app = App::with_source("abc\n".into());
+        let mut app = super::vim(App::with_source("abc\n".into()));
         app.editor_mut().handle_key(KeyEvent::new(
             KeyCode::Char('x'),
             KeyModifiers::NONE,
@@ -10181,7 +10308,7 @@ mod physical_ctrl_tests {
     #[test]
     fn flagged_ctrl_o_jumps_back_and_never_opens_a_line() {
         let src = "Table a { id integer }\nTable b { x integer }\nRef: b.x > a.id\n";
-        let mut app = App::with_source(src.to_string());
+        let mut app = super::vim(App::with_source(src.to_string()));
         let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('G'), KeyModifiers::NONE));
         assert_eq!(app.editor().buf.cursor().0, 2, "G moved to the last line");
         // flagged ctrl+o: jump back — and the bare 'o' NEVER opens a line
@@ -10194,7 +10321,7 @@ mod physical_ctrl_tests {
 
     #[test]
     fn plain_letters_type_when_ctrl_is_not_held() {
-        let mut app = App::with_source("abc\n".into());
+        let mut app = super::vim(App::with_source("abc\n".into()));
         // a flagged event syncs the switch on; the release (CtrlPhysical
         // false) turns it off — then plain letters type again
         flagged(&mut app, 'd');
@@ -10221,7 +10348,7 @@ mod left_ctrl_pair_tests {
     /// restored state.
     #[test]
     fn the_pair_undoes_the_stripped_letter_and_fires_the_chord() {
-        let mut app = App::with_source("Table t {\n  id integer [pk]\n}\n".into());
+        let mut app = super::vim(App::with_source("Table t {\n  id integer [pk]\n}\n".into()));
         app.focus = crate::app::Focus::Editor;
         let _ = update(
             &mut app,
@@ -10263,7 +10390,7 @@ mod left_ctrl_pair_tests {
     /// flagged twin's salvage undo a REAL edit sitting on the undo stack.
     #[test]
     fn the_salvage_skips_the_undo_when_the_copy_did_not_edit() {
-        let mut app = App::with_source("Table t {\n  id integer [pk]\n}\n".into());
+        let mut app = super::vim(App::with_source("Table t {\n  id integer [pk]\n}\n".into()));
         app.focus = crate::app::Focus::Editor;
         // a real edit first: x deletes a char
         let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('x'), KeyModifiers::NONE));
@@ -10287,7 +10414,7 @@ mod left_ctrl_pair_tests {
     /// removes it before the paste fires — no stray 'v' precedes the paste.
     #[test]
     fn the_pair_undoes_the_stray_v_before_ctrl_v_pastes() {
-        let mut app = App::with_source("Table t {\n  id integer [pk]\n}\n".into());
+        let mut app = super::vim(App::with_source("Table t {\n  id integer [pk]\n}\n".into()));
         app.focus = crate::app::Focus::Editor;
         let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('i'), KeyModifiers::NONE));
         // the stripped 'v' types
@@ -10311,7 +10438,7 @@ mod left_ctrl_pair_tests {
     #[test]
     fn ctrl_d_is_inert_in_insert_and_the_stripped_d_is_undone() {
         // no 'd' anywhere in the source, so the absence check is exact
-        let mut app = App::with_source("Table z {\n  ix integer [pk]\n}\n".into());
+        let mut app = super::vim(App::with_source("Table z {\n  ix integer [pk]\n}\n".into()));
         app.focus = crate::app::Focus::Editor;
         let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('i'), KeyModifiers::NONE));
         // the stripped 'd' types
@@ -10693,7 +10820,7 @@ mod tab_tests {
 
     fn two_tab_app() -> App {
         // tab 0: the sample; tab 1: another document
-        let mut app = App::with_source(SAMPLE_DBML.to_string());
+        let mut app = super::vim(App::with_source(SAMPLE_DBML.to_string()));
         let _ = update(&mut app, Message::NewTab);
         app.cur_mut().doc_open = true; // the start tab becomes a document
         app.cur_mut().editor.set_text("Table other { id integer }");
@@ -10858,7 +10985,7 @@ mod tab_tests {
 
     #[test]
     fn ctrl_t_and_ctrl_w_new_and_close_tabs() {
-        let mut app = App::with_source(SAMPLE_DBML.to_string());
+        let mut app = super::vim(App::with_source(SAMPLE_DBML.to_string()));
         let _ = update(&mut app, key(KeyModifiers::CONTROL, 't'));
         let _ = update(&mut app, key(KeyModifiers::CONTROL, 't'));
         assert_eq!(app.tabs.len(), 3);
@@ -11232,7 +11359,7 @@ mod tab_tests {
     #[test]
     fn sticky_click_selects_and_edits_through_the_editor() {
         let src = "Table t { id integer }\nNote todo {\n  '''hello'''\n}\n";
-        let mut app = App::with_source(src.into());
+        let mut app = super::vim(App::with_source(src.into()));
         app.focus = crate::app::Focus::Editor;
         let (zoom, pan) = (app.cur().zoom, app.cur().pan);
         let r = app.cur().diagram.notes[0].rect;
@@ -11363,7 +11490,7 @@ mod tab_tests {
     #[test]
     fn vim_p_adopts_externally_copied_text() {
         use crate::clipboard::FakeClipboard;
-        let mut app = App::with_source("Table t {\n  id integer\n}\n".into());
+        let mut app = super::vim(App::with_source("Table t {\n  id integer\n}\n".into()));
         app.focus = crate::app::Focus::Editor;
         app.clipboard = Some(Box::new(FakeClipboard::with_text("external text")));
 
@@ -11404,7 +11531,7 @@ mod tab_tests {
 
         // a linewise external copy (trailing newline) pastes BELOW the
         // cursor line
-        let mut app = App::with_source("Table t {\n  id integer\n}\n".into());
+        let mut app = super::vim(App::with_source("Table t {\n  id integer\n}\n".into()));
         app.focus = crate::app::Focus::Editor;
         app.clipboard = Some(Box::new(FakeClipboard::with_text("one\ntwo\n")));
         let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('p'), KeyModifiers::NONE));
@@ -11754,10 +11881,10 @@ mod clipboard_menu_tests {
 
     #[test]
     fn insert_mode_ctrl_v_pastes_from_system() {
-        let mut app = App {
+        let mut app = super::vim(App {
             clipboard: Some(Box::new(FakeClipboard::with_text("INS"))),
             ..App::default()
-        }; // vim mode
+        }); // vim mode
         let _ = update(&mut app, key(KeyModifiers::NONE, 'i'));
         let _ = update(&mut app, key(KeyModifiers::CONTROL, 'v'));
         assert!(app.source().starts_with("INS"));
@@ -11766,10 +11893,10 @@ mod clipboard_menu_tests {
     #[test]
     fn vim_yank_reaches_the_system_clipboard() {
         // the sample: line 0 "Project blog {"
-        let mut app = App {
+        let mut app = super::vim(App {
             clipboard: Some(Box::new(FakeClipboard::default())),
             ..App::default()
-        };
+        });
         // yy
         let _ = update(&mut app, key(KeyModifiers::NONE, 'y'));
         let _ = update(&mut app, key(KeyModifiers::NONE, 'y'));
@@ -11785,10 +11912,11 @@ mod clipboard_menu_tests {
 
     #[test]
     fn vim_delete_leaves_the_system_clipboard_alone() {
-        let mut app = App {
+        let mut app = super::vim(App {
             clipboard: Some(Box::new(FakeClipboard::with_text("keepme"))),
+            focus: crate::app::Focus::Editor,
             ..App::default()
-        };
+        });
         let _ = update(&mut app, key(KeyModifiers::NONE, 'd'));
         let _ = update(&mut app, key(KeyModifiers::NONE, 'd'));
         assert_eq!(
@@ -11811,7 +11939,7 @@ mod clipboard_menu_tests {
     /// app-level ctrl binding to intercept it first.
     #[test]
     fn visual_y_with_a_stale_ctrl_flag_still_yanks() {
-        let mut app = App::with_source("Table z {\n  ix integer [pk]\n}\n".into());
+        let mut app = super::vim(App::with_source("Table z {\n  ix integer [pk]\n}\n".into()));
         app.focus = crate::app::Focus::Editor;
         // v + movement makes the highlight
         let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('v'), KeyModifiers::NONE));
@@ -11834,7 +11962,7 @@ mod clipboard_menu_tests {
 
         // the mouse path with the same stale flag: drag enters visual, the
         // flagged y yanks the highlight
-        let mut app = App::with_source("Table z {\n  ix integer [pk]\n}\n".into());
+        let mut app = super::vim(App::with_source("Table z {\n  ix integer [pk]\n}\n".into()));
         app.focus = crate::app::Focus::Editor;
         let _ = update(&mut app, Message::EditorPressed(local_px(Pos { row: 0, col: 0 })));
         let to = window_px(Pos { row: 0, col: 3 });
@@ -12111,7 +12239,7 @@ mod clipboard_menu_tests {
         let copy = std::env::temp_dir().join("dbml_ui_sa_copy.dbml");
         std::fs::write(&orig, "Table t { x integer }\n").unwrap();
         let _ = std::fs::remove_file(&copy);
-        let mut app = App::blank_start();
+        let mut app = super::vim(App::blank_start());
         app.open_file(orig.to_str().unwrap()).unwrap();
         app.focus = crate::app::Focus::Editor;
         // an unsaved edit, then Save As a copy
@@ -12219,7 +12347,7 @@ mod clipboard_menu_tests {
             .lock();
         let path = std::env::temp_dir().join("dbml_ui_tabsave_test.dbml");
         std::fs::write(&path, "Table t { x integer }\n").unwrap();
-        let mut app = App::blank_start();
+        let mut app = super::vim(App::blank_start());
         app.open_file(path.to_str().unwrap()).unwrap();
         app.focus = crate::app::Focus::Editor;
         let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('i'), KeyModifiers::NONE));
@@ -12265,7 +12393,7 @@ mod clipboard_menu_tests {
         std::env::set_var("DBML_UI_SESSION", dir.join("session"));
         let path = std::env::temp_dir().join("dbml_ui_exit_test.dbml");
         std::fs::write(&path, "Table t { x integer }\n").unwrap();
-        let mut app = App::blank_start();
+        let mut app = super::vim(App::blank_start());
         app.open_file(path.to_str().unwrap()).unwrap();
         app.focus = crate::app::Focus::Editor;
         // an unsaved edit
@@ -12422,7 +12550,7 @@ mod clipboard_menu_tests {
         // a FILE-backed tab with unsaved edits (the real restart scenario)
         let path = std::env::temp_dir().join("dbml_ui_session_test.dbml");
         std::fs::write(&path, "Table users {\n  id integer [pk]\n}\n").unwrap();
-        let mut app = App::blank_start();
+        let mut app = super::vim(App::blank_start());
         app.open_file(path.to_str().unwrap()).unwrap();
         app.focus = crate::app::Focus::Editor;
         // type into insert mode: an unsaved edit + cursor + insert mode
@@ -12433,7 +12561,7 @@ mod clipboard_menu_tests {
 
         // restore into a brand-new app (the restart path)
         let snap = app.session_snapshot();
-        let mut fresh = App::blank_start();
+        let mut fresh = super::vim(App::blank_start());
         fresh.restore_session(snap);
         assert!(fresh.doc_open(), "restored tab opens a document");
         assert!(
@@ -12460,7 +12588,7 @@ mod clipboard_menu_tests {
 
     #[test]
     fn mouse_drag_enters_visual_and_y_yanks_the_highlight() {
-        let mut app = App::with_source("Table z {\n  ix integer [pk]\n}\n".into());
+        let mut app = super::vim(App::with_source("Table z {\n  ix integer [pk]\n}\n".into()));
         app.focus = crate::app::Focus::Editor;
         let _ = update(&mut app, Message::EditorPressed(local_px(Pos { row: 0, col: 0 })));
         let to = window_px(Pos { row: 0, col: 3 });
@@ -12725,7 +12853,7 @@ mod undo_redo_tests {
     }
 
     fn vim_app(source: &str) -> App {
-        let mut app = App::default();
+        let mut app = super::vim(App::default());
         app.editor_mut().set_text(source);
         app.cur_mut().set_source(source);
         app
@@ -12872,7 +13000,7 @@ mod undo_redo_tests {
 
     #[test]
     fn undo_dismisses_the_completion_popup() {
-        let mut app = App::default(); // SAMPLE_DBML: completion has items
+        let mut app = super::vim(App::default()); // SAMPLE_DBML: completion has items
         let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('i'), KeyModifiers::NONE));
         let _ = update(
             &mut app,
@@ -12907,7 +13035,7 @@ mod yank_flash_tests {
 
     #[test]
     fn the_flash_expires_on_ticks() {
-        let mut app = App::with_source("Table t { id integer }\n".into());
+        let mut app = super::vim(App::with_source("Table t { id integer }\n".into()));
         let _ = update(
             &mut app,
             Message::KeyPressed(KeyCode::Char('y'), KeyModifiers::NONE),
@@ -12932,7 +13060,7 @@ mod debug_yy_app {
 
     #[test]
     fn debug_yy_app_flow() {
-        let mut app = App::with_source("Table t {\n  id integer [pk]\n}\n".into());
+        let mut app = super::vim(App::with_source("Table t {\n  id integer [pk]\n}\n".into()));
         let _ = update(
             &mut app,
             Message::KeyPressed(KeyCode::Char('y'), KeyModifiers::NONE),

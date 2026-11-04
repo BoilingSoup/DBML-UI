@@ -37,6 +37,8 @@ jobs:
             ~/.cargo/git/
             target/
           key: wasm-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: Install binaryen (wasm-opt)
+        run: sudo apt-get update && sudo apt-get install -y binaryen
       - name: Install trunk
         run: cargo install trunk --locked
       - name: Build web bundle

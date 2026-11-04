@@ -69,7 +69,9 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            vim: true,
+            // first run opens as the Regular notepad-style editor; vim is
+            // one toolbar toggle away and persists once chosen
+            vim: false,
             fmt_on_save: true,
             recent: Vec::new(),
         }
@@ -100,36 +102,61 @@ impl Config {
         dir.join("dbml-ui").join("config")
     }
 
-    pub fn load() -> Config {
-        let _g = CONFIG_ENV_LOCK.lock();
-        #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+    /// Parse the key=value store text (shared by the desktop file and
+    /// the web build's IndexedDB record).
+    pub fn from_text(text: &str) -> Config {
         let mut c = Config::default();
-        // the web build has no file system: defaults only (a
-        // localStorage mirror is a later milestone)
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let Ok(text) = std::fs::read_to_string(Self::path()) else {
-                return c;
-            };
-            for line in text.lines() {
-                if let Some(v) = line.strip_prefix("vim=") {
-                    c.vim = v.trim() != "0";
-                } else if let Some(v) = line.strip_prefix("fmt_on_save=") {
-                    c.fmt_on_save = v.trim() != "0";
-                } else if let Some(p) = line.strip_prefix("recent=") {
-                    let p = p.trim();
-                    if !p.is_empty() && !c.recent.iter().any(|r| r == p) {
-                        c.recent.push(p.to_string());
-                    }
+        for line in text.lines() {
+            if let Some(v) = line.strip_prefix("vim=") {
+                c.vim = v.trim() != "0";
+            } else if let Some(v) = line.strip_prefix("fmt_on_save=") {
+                c.fmt_on_save = v.trim() != "0";
+            } else if let Some(p) = line.strip_prefix("recent=") {
+                let p = p.trim();
+                if !p.is_empty() && !c.recent.iter().any(|r| r == p) {
+                    c.recent.push(p.to_string());
                 }
             }
         }
         c
     }
 
+    pub fn load() -> Config {
+        let _g = CONFIG_ENV_LOCK.lock();
+        let mut c = Config::default();
+        // the web build has no file system: its config rides the
+        // IndexedDB record (see web.rs)
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let Ok(text) = std::fs::read_to_string(Self::path()) else {
+                return c;
+            };
+            c = Self::from_text(&text);
+        }
+        c
+    }
+
+    /// The key=value store text (the web build persists this string; the
+    /// desktop writes it to the config file).
+    pub fn to_text(&self) -> String {
+        let mut out = format!(
+            "vim={}\nfmt_on_save={}\n",
+            if self.vim { 1 } else { 0 },
+            if self.fmt_on_save { 1 } else { 0 }
+        );
+        for r in &self.recent {
+            out.push_str("recent=");
+            out.push_str(r);
+            out.push('\n');
+        }
+        out
+    }
+
     pub fn save(&self) {
-        // the web build has no file system: the config lives for the
-        // session only
+        // the web build persists the settings text in its IndexedDB
+        // record (alongside the autosaved state)
+        #[cfg(target_arch = "wasm32")]
+        crate::web::save_config(&self.to_text());
         #[cfg(not(target_arch = "wasm32"))]
         {
             let _g = CONFIG_ENV_LOCK.lock();
@@ -137,17 +164,7 @@ impl Config {
             if let Some(dir) = p.parent() {
                 let _ = std::fs::create_dir_all(dir);
             }
-            let mut out = format!(
-                "vim={}\nfmt_on_save={}\n",
-                if self.vim { 1 } else { 0 },
-                if self.fmt_on_save { 1 } else { 0 }
-            );
-            for r in &self.recent {
-                out.push_str("recent=");
-                out.push_str(r);
-                out.push('\n');
-            }
-            let _ = std::fs::write(p, out);
+            let _ = std::fs::write(p, self.to_text());
         }
     }
 

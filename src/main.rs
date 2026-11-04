@@ -27,7 +27,12 @@ fn main() -> Result<(), iced::Error> {
     let run = || -> Result<(), iced::Error> {
         // dbml-ui [FILE]
         #[cfg(target_arch = "wasm32")]
-        std::panic::set_hook(Box::new(console_error_panic_hook::hook));
+        {
+            std::panic::set_hook(Box::new(console_error_panic_hook::hook));
+            // the pagehide/visibilitychange autosave flush: the gap
+            // closer between the 2s tick and a refresh
+            web::install_flush_hook();
+        }
         let restarted = std::env::var_os("DBML_UI_RESTARTED").is_some();
         let arg_file = std::env::args().nth(1);
         // an explicit file argument opens as-is; everything else starts
@@ -104,7 +109,9 @@ fn main() -> Result<(), iced::Error> {
                 // the web session restores from IndexedDB (the last
                 // autosave); the desktop boots as-is
                 #[cfg(target_arch = "wasm32")]
-                let restore = web::load_state().map(crate::app::Message::WebRestored);
+                let restore = web::load_boot().map(
+                    |boot| crate::app::Message::WebRestored(boot.config, boot.session),
+                );
                 #[cfg(not(target_arch = "wasm32"))]
                 let restore = iced::Task::none();
                 (app, iced::Task::batch([restore, focus]))
