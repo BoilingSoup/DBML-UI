@@ -23,6 +23,22 @@ mod view;
 #[cfg(target_arch = "wasm32")]
 mod web;
 
+/// The window/taskbar icon: icons/app-icon-128.png (the favicon mark)
+/// decoded at boot. The web build skips it — the browser tab carries the
+/// favicon instead.
+#[cfg(not(target_arch = "wasm32"))]
+fn window_icon() -> Option<iced::window::Icon> {
+    let png = include_bytes!("../icons/app-icon-128.png");
+    let img = image::load_from_memory(png).ok()?.into_rgba8();
+    let (width, height) = (img.width(), img.height());
+    iced::window::icon::from_rgba(img.into_raw(), width, height).ok()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn window_icon() -> Option<iced::window::Icon> {
+    None
+}
+
 fn main() -> Result<(), iced::Error> {
     let run = || -> Result<(), iced::Error> {
         // dbml-ui [FILE]
@@ -114,6 +130,10 @@ fn main() -> Result<(), iced::Error> {
                 // call replaces the whole struct and silently re-enables
                 // the auto-close (the dialog vanished once that way)
                 exit_on_close_request: false,
+                // the favicon mark as the window/taskbar icon: the 128px
+                // PNG decoded at boot (the web build has no window icon —
+                // the browser tab carries the favicon instead)
+                icon: window_icon(),
                 ..Default::default()
             })
             .run_with(|| {

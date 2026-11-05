@@ -34,21 +34,42 @@ software-rendered).
   completion popup, goto-definition (`gd`, `Ctrl-o` back), sticky
   notes, per-table header colors, a diagnostics panel with quick fixes
 
-## Running
+## Installation
 
-Desktop (rustc 1.84+):
+Prebuilt binaries for Linux (tar.gz, .deb), Windows (zip) and macOS
+(.app, Apple silicon + Intel) are on the
+[Releases](../../releases) page — grab the archive for your OS and run
+`dbml-ui`. The Linux tar.gz also ships a `.desktop` launcher and hicolor
+icons; the `.deb` installs both system-wide
+(`sudo dpkg -i dbml-ui_<version>_amd64.deb`).
+
+Build from source instead (rustc 1.84+):
+
+```
+cargo install --path .
+```
+
+The window icon embeds at build time on Windows and ships in the bundles
+elsewhere; the icon set renders from `icons/app-icon.svg` via
+`cargo run --release --example render-icon` if you ever need to
+regenerate it.
+
+## Running for development
+
+Desktop:
 
 ```
 cargo run --release
 ```
 
 Web (trunk, bundle in `dist/` — see `.github/workflows/pages.yml` for
-the GitHub Pages build):
+the GitHub Pages build; the wasm build renders through the GPU WebGL2
+chain with a software fallback):
 
 ```
 trunk serve          # dev server
 trunk build --release
-```
+````
 
 ## License
 

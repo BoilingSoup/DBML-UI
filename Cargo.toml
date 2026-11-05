@@ -99,6 +99,11 @@ wgpu = { version = "0.19", features = ["webgl"] }
 # the boot's adapter-selection diagnostics route to the browser console
 log = "0.4"
 
+[build-dependencies]
+# embeds icons/app-icon.ico into the exe (build.rs gates on the target —
+# winresource only compiles for windows hosts' cross builds of it)
+winresource = "=0.1.17"
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # System-clipboard text (copy/paste) on X11/Wayland/Windows/macOS. Text
 # only: no image-data feature. Unreachable clipboards (headless CI, SSH)

@@ -1,0 +1,180 @@
+# Release builds for all three desktop OSes, attached to a GitHub Release.
+#
+# Triggered by version tags (v*). Each target bundles its platform's
+# distribution format around the release binary:
+# - Linux:   tar.gz with the binary, .desktop launcher and icons
+# - Windows: zip with the exe (app-icon.ico embedded at build time)
+# - macOS:   .app bundle (zipped), ad-hoc signed
+#
+# The icon PNG set renders from icons/app-icon.svg via the repo's own
+# resvg dependency (examples/render-icon.rs) before the target builds.
+name: Desktop release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  BIN_NAME: dbml-ui
+  APP_NAME: dbml-ui
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            bundle: linux
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            bundle: windows
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            bundle: macos
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            bundle: macos
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/
+            ~/.cargo/git/
+            target/
+          key: release-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Render icon PNG set
+        run: cargo run --release --example render-icon
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Install icnsutils (Linux icon packing for macOS)
+        if: matrix.bundle == 'macos'
+        run: sudo apt-get update && sudo apt-get install -y icnsutils
+
+      - name: Bundle Linux (tar.gz + .deb)
+        if: matrix.bundle == 'linux'
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          OUT="dbml-ui-${VERSION}-x86_64-linux"
+          mkdir -p "dist/$OUT/icons/hicolor/{16x16,32x32,48x48,128x128,256x256}/apps" usr/bin
+          cp "target/x86_64-unknown-linux-gnu/release/$BIN_NAME" "dist/$OUT/$BIN_NAME"
+          cp icons/app-icon-16.png "dist/$OUT/icons/hicolor/16x16/apps/dbml-ui.png"
+          cp icons/app-icon-32.png "dist/$OUT/icons/hicolor/32x32/apps/dbml-ui.png"
+          cp icons/app-icon-48.png "dist/$OUT/icons/hicolor/48x48/apps/dbml-ui.png"
+          cp icons/app-icon-128.png "dist/$OUT/icons/hicolor/128x128/apps/dbml-ui.png"
+          cp icons/app-icon-256.png "dist/$OUT/icons/hicolor/256x256/apps/dbml-ui.png"
+          mkdir -p "dist/$OUT/usr/share/icons/hicolor/{16x16,32x32,48x48,128x128,256x256}/apps"
+          cp -r "dist/$OUT/icons/hicolor/." "dist/$OUT/usr/share/icons/hicolor/"
+          cat > "dist/$OUT/dbml-ui.desktop" <<DESKTOP
+          [Desktop Entry]
+          Type=Application
+          Name=dbml-ui
+          Comment=DBML diagram editor
+          Exec=dbml-ui
+          Icon=dbml-ui
+          Categories=Development;Database;
+          DESKTOP
+          tar -czf "dist/dbml-ui-${VERSION}-x86_64-linux.tar.gz" -C "dist/$OUT" .
+          # .deb: the same payload as a package
+          mkdir -p "dist/deb/DEBIAN" "dist/deb/usr/bin" "dist/deb/usr/share/applications"
+          mkdir -p "dist/deb/usr/share/icons/hicolor/{16x16,32x32,48x48,128x128,256x256}/apps"
+          cp "target/x86_64-unknown-linux-gnu/release/$BIN_NAME" "dist/deb/usr/bin/"
+          cp "dist/$OUT/dbml-ui.desktop" "dist/deb/usr/share/applications/"
+          cp icons/app-icon-16.png "dist/deb/usr/share/icons/hicolor/16x16/apps/dbml-ui.png"
+          cp icons/app-icon-32.png "dist/deb/usr/share/icons/hicolor/32x32/apps/dbml-ui.png"
+          cp icons/app-icon-48.png "dist/deb/usr/share/icons/hicolor/48x48/apps/dbml-ui.png"
+          cp icons/app-icon-128.png "dist/deb/usr/share/icons/hicolor/128x128/apps/dbml-ui.png"
+          cp icons/app-icon-256.png "dist/deb/usr/share/icons/hicolor/256x256/apps/dbml-ui.png"
+          cat > "dist/deb/DEBIAN/control" <<CONTROL
+          Package: dbml-ui
+          Version: $VERSION
+          Section: devel
+          Priority: optional
+          Maintainer: BoilingSoup <boilingsoup@protonmail.com>
+          Architecture: amd64
+          Depends: libxkbcommon0, libx11-6, libwayland-client0
+          Description: DBML diagram editor
+           Vim-style editing on the left, a live ER diagram on the right.
+          CONTROL
+          dpkg-deb --build --root-owner-group "dist/deb" "dist/dbml-ui_${VERSION}_amd64.deb"
+
+      - name: Bundle Windows (zip)
+        if: matrix.bundle == 'windows'
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v',''
+          $out = "dbml-ui-$version-x86_64-windows"
+          New-Item -ItemType Directory -Path "dist/$out" -Force | Out-Null
+          Copy-Item "target/x86_64-pc-windows-msvc/release/dbml-ui.exe" "dist/$out/"
+          Compress-Archive -Path "dist/$out" -DestinationPath "dist/dbml-ui-$version-x86_64-windows.zip"
+
+      - name: Bundle macOS (.app zip)
+        if: matrix.bundle == 'macos'
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          ARCH="${{ contains(matrix.target, 'aarch64') && 'aarch64' || 'x86_64' }}"
+          OUT="dbml-ui-$VERSION-$ARCH-macos"
+          APP="dist/dbml-ui.app"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          cp "target/${{ matrix.target }}/release/$BIN_NAME" "$APP/Contents/MacOS/$BIN_NAME"
+          # png2icns comes from icnsutils (installed above); skip gracefully
+          # if a future runner drops it — the app runs without an icon
+          if command -v png2icns >/dev/null 2>&1; then
+            png2icns icons/app-icon-256.png > "$APP/Contents/Resources/dbml-ui.icns" || true
+          fi
+          cat > "$APP/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>dbml-ui</string>
+            <key>CFBundleDisplayName</key><string>dbml-ui</string>
+            <key>CFBundleIdentifier</key><string>io.github.dbml-ui</string>
+            <key>CFBundleVersion</key><string>$VERSION</string>
+            <key>CFBundleShortVersionString</key><string>$VERSION</string>
+            <key>CFBundleExecutable</key><string>$BIN_NAME</string>
+            <key>CFBundleIconFile</key><string>dbml-ui.icns</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>LSMinimumSystemVersion</key><string>10.13</string>
+          </dict>
+          </plist>
+          PLIST
+          # ad-hoc sign: unsigned binaries are killed by Gatekeeper's
+          # taskgated even for local runs on arm64
+          codesign --force --deep -s - "$APP" || true
+          ditto -c -k "$APP" "dist/$OUT.app.zip"
+
+      - name: Upload bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.target }}
+          path: dist/dbml-ui-*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/dbml-ui-*
