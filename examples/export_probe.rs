@@ -1,19 +1,11 @@
-// Probe: export a DBML file to DDL.
-// usage: cargo run --example export_probe -- <dialect> <file.dbml>
+//! Export showcase.dbml to /tmp/export_probe.png (2x) for pixel checks.
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() != 3 {
-        eprintln!("usage: export_probe <dialect> <file.dbml>");
-        std::process::exit(2);
-    }
-    let dialect = dbml_ui::dbml::sql::Dialect::from_name(&args[1])
-        .unwrap_or_else(|| panic!("unknown dialect {}", args[1]));
-    let src = std::fs::read_to_string(&args[2]).unwrap();
-    match dbml_ui::dbml::sql::export(&src, dialect) {
-        Ok(out) => println!("{out}"),
-        Err(e) => {
-            eprintln!("ERR {e}");
-            std::process::exit(1);
-        }
-    }
+    let src = std::fs::read_to_string("showcase.dbml").unwrap();
+    let schema = dbml_ui::model::build(&dbml_ui::dbml::parser::parse(&src).doc);
+    let l = dbml_ui::layout::layout(&schema);
+    let doc = dbml_ui::render::svg::build_svg(&l);
+    let (sw, sh) = dbml_ui::render::svg::svg_size(&l);
+    let img = dbml_ui::render::raster::rasterize(&doc, (sw * 2.0) as u32, (sh * 2.0) as u32, 2.0, 2.0).unwrap();
+    img.save("/tmp/export_probe.png").unwrap();
+    println!("exported {}x{}", img.width(), img.height());
 }

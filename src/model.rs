@@ -22,6 +22,13 @@ pub struct ColumnInfo {
     pub not_null: Option<bool>,
     pub unique: bool,
     pub note: Option<String>,
+    /// `default:` verbatim (quotes kept, like the formatter's contract).
+    pub default: Option<String>,
+    pub custom: Vec<(String, String)>,
+    /// `[increment]` — the records grid renders the row number for cells
+    /// the record leaves unset on an increment column (dbdiagram's `_`
+    /// value chain).
+    pub increment: bool,
 }
 
 /// A table's `records` block, resolved against the node: `columns` are
@@ -50,6 +57,10 @@ pub struct Node {
     pub name_span: Option<Span>,
     /// `records` sample rows (tables only).
     pub records: Option<NodeRecords>,
+    /// dbdiagram custom properties on the table (`[owner: "data-team"]`).
+    pub custom: Vec<(String, String)>,
+    /// `Note: '...'` inside the block — the table's own note.
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +70,14 @@ pub struct Edge {
     pub to: usize,
     pub to_col: usize,
     pub card: Cardinality,
+    /// `Ref name: ...` — for the hover name label at the route midpoint.
+    pub name: Option<String>,
+    /// `[color: #aabbcc]` — the relationship's color (line + markers).
+    pub color: Option<String>,
+    /// The top-level `Ref` line this edge came from (index into the
+    /// parsed doc): the click-to-pick splice target. None for inline
+    /// `ref:` column settings (no line to splice).
+    pub ref_index: Option<usize>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -67,6 +86,31 @@ pub struct Schema {
     pub edges: Vec<Edge>,
     /// Refs that point at tables that don't exist (yet).
     pub dangling: usize,
+    /// TableGroups resolved to node indices, for the diagram regions.
+    pub groups: Vec<GroupInfo>,
+    /// Top-level sticky notes, for the canvas.
+    pub notes: Vec<NoteInfo>,
+}
+
+/// A TableGroup resolved against the schema's nodes.
+#[derive(Debug, Clone)]
+pub struct GroupInfo {
+    pub name: String,
+    /// `[color: #1E69FD]`.
+    pub color: Option<String>,
+    /// `Note: '''...'''` inside the block.
+    pub note: Option<String>,
+    /// Header custom properties (`[owner: "team"]`), in order.
+    pub custom: Vec<(String, String)>,
+    /// Group member node indices (matched by table name or alias).
+    pub members: Vec<usize>,
+}
+
+/// A top-level sticky note.
+#[derive(Debug, Clone)]
+pub struct NoteInfo {
+    pub name: String,
+    pub text: String,
 }
 
 struct EdgeSpec {
@@ -75,6 +119,12 @@ struct EdgeSpec {
     card: Cardinality,
     to_table: String,
     to_column: String,
+    /// `Ref name: ...` — named refs only (inline refs are anonymous).
+    name: Option<String>,
+    /// The source Ref line's index (None for inline refs).
+    ref_index: Option<usize>,
+    /// `[color: ...]` from the ref line.
+    color: Option<String>,
 }
 
 /// Build the semantic model from a parsed document. Tables first, then enums,
@@ -100,11 +150,16 @@ pub fn build(doc: &Document) -> Schema {
                     not_null: c.settings.not_null,
                     unique: c.settings.unique,
                     note: c.settings.note.clone(),
+                    default: c.settings.default.clone(),
+                    custom: c.settings.custom.clone(),
+                    increment: c.settings.increment,
                 })
                 .collect(),
             header_color: t.header_color.clone(),
             name_span: Some(t.name_span.clone()),
             records: None,
+            custom: t.custom.clone(),
+            note: t.note.clone(),
         });
     }
     for e in &doc.enums {
@@ -124,11 +179,16 @@ pub fn build(doc: &Document) -> Schema {
                     not_null: None,
                     unique: false,
                     note: v.note.clone(),
+                    default: None,
+                    custom: Vec::new(),
+                    increment: false,
                 })
                 .collect(),
             header_color: None,
             name_span: Some(e.name_span.clone()),
             records: None,
+            custom: Vec::new(),
+            note: None,
         });
     }
 
@@ -155,12 +215,15 @@ pub fn build(doc: &Document) -> Schema {
                         card: r.card,
                         to_table: r.to.table.clone(),
                         to_column: col.clone(),
+                        name: None,
+                        color: r.color.clone(),
+                        ref_index: None,
                     });
                 }
             }
         }
     }
-    for r in &doc.refs {
+    for (ri, r) in doc.refs.iter().enumerate() {
         for (fc, tc) in r.from.columns.iter().zip(r.to.columns.iter()) {
             specs.push(EdgeSpec {
                 table: r.from.table.clone(),
@@ -168,6 +231,9 @@ pub fn build(doc: &Document) -> Schema {
                 card: r.card,
                 to_table: r.to.table.clone(),
                 to_column: tc.clone(),
+                name: r.name.clone(),
+                color: r.color.clone(),
+                ref_index: Some(ri),
             });
         }
     }
@@ -200,6 +266,32 @@ pub fn build(doc: &Document) -> Schema {
             to,
             to_col,
             card: s.card,
+            name: s.name,
+            color: s.color,
+            ref_index: s.ref_index,
+        });
+    }
+
+    // table groups -> resolved member node indices (name or alias)
+    for g in &doc.table_groups {
+        let members = g
+            .tables
+            .iter()
+            .filter_map(|t| find(t, &schema.nodes))
+            .collect::<Vec<_>>();
+        schema.groups.push(GroupInfo {
+            name: g.name.clone(),
+            color: g.color.clone(),
+            note: g.note.clone(),
+            custom: g.custom.clone(),
+            members,
+        });
+    }
+    // top-level sticky notes
+    for n in &doc.notes {
+        schema.notes.push(NoteInfo {
+            name: n.name.clone(),
+            text: n.text.clone(),
         });
     }
 

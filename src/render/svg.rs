@@ -1,8 +1,7 @@
 //! Diagram -> SVG. One terminal cell maps to CELL_W x CELL_H SVG units; the
 //! rasterizer scales to the actual font metrics times zoom.
 
-use crate::layout::{many_ends, EdgeRoute, Layout, TableBox};
-use unicode_width::UnicodeWidthStr;
+use crate::layout::{many_ends, row_icon_path, wrap_chars, EdgeRoute, Layout, NoteBox, RowIcon, TableBox};
 
 pub const CELL_W: f32 = 10.0;
 pub const CELL_H: f32 = 20.0;
@@ -37,19 +36,63 @@ pub fn parse_hex(s: &str) -> Option<(u8, u8, u8)> {
 }
 
 fn header_rgb(b: &TableBox) -> (u8, u8, u8) {
-    b.header_color
+    let (r, g, bl) = b
+        .header_color
         .as_deref()
         .and_then(parse_hex)
         // dbdiagram's dark theme uses one near-black header band for both
         // tables and enums; a DBML headercolor override still wins
-        .unwrap_or((0x1f, 0x21, 0x28))
+        .unwrap_or((0x1f, 0x21, 0x28));
+    // the canvas clamps bright bands until the white chrome reads — the
+    // export matches it (the same theme::readable_band transform)
+    let band = crate::layout::readable_band(iced::Color::from_rgb8(r, g, bl));
+    (
+        (band.r * 255.0).round() as u8,
+        (band.g * 255.0).round() as u8,
+        (band.b * 255.0).round() as u8,
+    )
 }
 
-/// Total SVG size in units, derived from the layout extent.
+/// The true content bounds in CELLS: every box, note and group rect,
+/// floored at the origin. `layout.extent` only tracks the max side and
+/// its note row only counts AUTO-placed stickies — a dragged/resized
+/// note below or right of it (and any content at negative cells) sat
+/// OUTSIDE the extent, and the export canvas cut it off. Including 0
+/// keeps positive-only layouts byte-identical to the old output.
+fn content_bounds(layout: &Layout) -> (i32, i32, i32, i32) {
+    let mut min_x = 0i32;
+    let mut min_y = 0i32;
+    let mut max_x = layout.extent.0;
+    let mut max_y = layout.extent.1;
+    for b in &layout.boxes {
+        min_x = min_x.min(b.x);
+        min_y = min_y.min(b.y);
+        max_x = max_x.max(b.x + b.w);
+        max_y = max_y.max(b.y + b.h);
+    }
+    for n in &layout.notes {
+        min_x = min_x.min(n.rect.0);
+        min_y = min_y.min(n.rect.1);
+        max_x = max_x.max(n.rect.0 + n.rect.2);
+        max_y = max_y.max(n.rect.1 + n.rect.3);
+    }
+    for g in &layout.groups {
+        min_x = min_x.min(g.rect.0);
+        min_y = min_y.min(g.rect.1);
+        max_x = max_x.max(g.rect.0 + g.rect.2);
+        max_y = max_y.max(g.rect.1 + g.rect.3);
+    }
+    (min_x, min_y, max_x, max_y)
+}
+
+/// Total SVG size in units, derived from the TRUE content bounds (the
+/// layout extent alone misses dragged/resized stickies and anything at
+/// negative cells — the export used to cut them off).
 pub fn svg_size(layout: &Layout) -> (f32, f32) {
+    let (min_x, min_y, max_x, max_y) = content_bounds(layout);
     (
-        (layout.extent.0 as f32 + MARGIN_CELLS * 2.0) * CELL_W,
-        (layout.extent.1 as f32 + MARGIN_CELLS * 2.0) * CELL_H,
+        ((max_x - min_x) as f32 + MARGIN_CELLS * 2.0) * CELL_W,
+        ((max_y - min_y) as f32 + MARGIN_CELLS * 2.0) * CELL_H,
     )
 }
 
@@ -69,14 +112,136 @@ pub fn build_svg_with(layout: &Layout, show_text: bool) -> String {
         r##"<rect width="100%" height="100%" fill="{}"/>"##,
         BG_COLOR
     ));
+    // content shifted so negative-cell items land inside the canvas: the
+    // offset is 0 for positive-only layouts (identical output), and grows
+    // the origin side otherwise
+    let (min_x, min_y, _, _) = content_bounds(layout);
+    s.push_str(&format!(
+        r##"<g transform="translate({:.1} {:.1})">"##,
+        -min_x as f32 * CELL_W,
+        -min_y as f32 * CELL_H
+    ));
+    // TableGroup regions render BEHIND everything (the canvas's
+    // draw_groups): translucent tinted body, the group-color header band
+    // with the label, then a 2px border
+    for g in &layout.groups {
+        push_group(&mut s, g);
+    }
     for r in &layout.edges {
         push_edge(&mut s, r);
     }
     for b in &layout.boxes {
         push_table(&mut s, b, show_text);
     }
+    // sticky notes float ABOVE the tables (the canvas draws them last)
+    for n in &layout.notes {
+        push_note(&mut s, n, show_text);
+    }
+    s.push_str("</g>");
     s.push_str("</svg>");
     s
+}
+
+/// A sticky note: soft-shadowed yellow rounded rectangle with the wrapped
+/// text in dark gray — the canvas's draw_notes, mirrored (no name label).
+fn push_note(s: &mut String, n: &NoteBox, show_text: bool) {
+    let nx = (n.rect.0 as f32 + MARGIN_CELLS) * CELL_W;
+    let ny = (n.rect.1 as f32 + MARGIN_CELLS) * CELL_H;
+    let nw = n.rect.2 as f32 * CELL_W;
+    let nh = n.rect.3 as f32 * CELL_H;
+    let k = CELL_W / 10.0;
+    let rad = 6.0 * k;
+    // soft drop shadow: a translucent rounded rect offset down-right
+    s.push_str(&format!(
+        r##"<rect x="{:.1}" y="{:.1}" width="{nw:.1}" height="{nh:.1}" rx="{rad:.1}" fill="#000" fill-opacity="0.35"/>"##,
+        nx + 2.0 * k,
+        ny + 2.0 * k
+    ));
+    // the sticky itself: plain yellow, no border
+    s.push_str(&format!(
+        r##"<rect x="{nx:.1}" y="{ny:.1}" width="{nw:.1}" height="{nh:.1}" rx="{rad:.1}" fill="rgb(255,243,176)"/>"##
+    ));
+    if !show_text {
+        return;
+    }
+    // the wrapped text: the canvas's exact wrap/slot geometry — pad in
+    // width cells, one line per 16k slot, capped with a trailing ellipsis
+    let pad = 0.4 * CELL_W;
+    let line_h = 16.0 * k;
+    let wrap_cols = (((nw - 2.0 * pad) / (0.6 * CELL_W)).floor() as usize).max(4);
+    let max_lines = ((nh / line_h).floor() as usize).max(1);
+    let mut lines = wrap_chars(&n.text, wrap_cols);
+    if lines.len() > max_lines {
+        lines.truncate(max_lines);
+        if let Some(last) = lines.last_mut() {
+            last.push('\u{2026}');
+        }
+    }
+    for (i, line) in lines.iter().enumerate() {
+        let cy = ny + pad + (i as f32 + 0.5) * line_h;
+        // baseline optically centered in the line slot (cap-height half
+        // below the slot's center, the pills' convention)
+        s.push_str(&format!(
+            r##"<text x="{:.1}" y="{:.1}" font-family="sans-serif" font-size="{:.1}" fill="#333333">{}</text>"##,
+            nx + pad,
+            cy + 0.354 * 0.6 * CELL_H,
+            0.6 * CELL_H,
+            escape(line)
+        ));
+    }
+}
+
+/// The group's rgb triple: its `[color: …]` parsed, the TABLE header
+/// near-black otherwise (groups.rs parity — `DEFAULT_GROUP` there is
+/// `theme::HEADER_BG`, the same default `header_rgb` uses).
+fn group_rgb(color: &Option<String>) -> (u8, u8, u8) {
+    let default = (0x1f, 0x21, 0x28);
+    let Some(hex) = color else { return default };
+    let h = hex.trim_start_matches('#');
+    if h.len() != 6 {
+        return default;
+    }
+    let v = |r: std::ops::Range<usize>| u8::from_str_radix(&h[r], 16).unwrap_or(0);
+    (v(0..2), v(2..4), v(4..6))
+}
+
+fn push_group(s: &mut String, g: &crate::layout::GroupRegion) {
+    let gx = (g.rect.0 as f32 + MARGIN_CELLS) * CELL_W;
+    let gy = (g.rect.1 as f32 + MARGIN_CELLS) * CELL_H;
+    let gw = g.rect.2 as f32 * CELL_W;
+    let gh = g.rect.3 as f32 * CELL_H;
+    let (r, gc, b) = group_rgb(&g.color);
+    let rgb = format!("rgb({r},{gc},{b})");
+    // radius matches the canvas: one cell width, on the top corners of
+    // the band and all four of the body
+    let rad = CELL_W;
+    // translucent tinted body
+    s.push_str(&format!(
+        r##"<rect x="{gx:.1}" y="{gy:.1}" width="{gw:.1}" height="{gh:.1}" rx="{rad:.1}" fill="{rgb}" fill-opacity="0.12"/>"##
+    ));
+    // header band: one cell tall, rounded top corners only (a rounded
+    // rect squared off below its midline), carrying the group name
+    let band_h = CELL_H;
+    s.push_str(&format!(
+        r##"<rect x="{gx:.1}" y="{gy:.1}" width="{gw:.1}" height="{band_h:.1}" rx="{rad:.1}" fill="{rgb}"/>"##
+    ));
+    s.push_str(&format!(
+        r##"<rect x="{gx:.1}" y="{mid:.1}" width="{gw:.1}" height="{bh:.1}" fill="{rgb}"/>"##,
+        mid = gy + band_h / 2.0,
+        bh = band_h / 2.0,
+    ));
+    s.push_str(&format!(
+        r##"<text x="{:.1}" y="{:.1}" font-family="sans-serif" font-size="{:.1}" font-weight="bold" fill="#ffffff">{}</text>"##,
+        gx + 0.6 * CELL_W,
+        gy + CELL_H * 0.70,
+        CELL_H * 0.55,
+        escape(&g.name)
+    ));
+    // 2px border over everything
+    s.push_str(&format!(
+        r##"<rect x="{gx:.1}" y="{gy:.1}" width="{gw:.1}" height="{gh:.1}" rx="{rad:.1}" fill="none" stroke="{rgb}" stroke-width="{sw:.1}"/>"##,
+        sw = 2.0 * (CELL_W / 10.0),
+    ));
 }
 
 /// Route point in SVG units.
@@ -86,10 +251,6 @@ fn pt_px(x: f32, y: f32) -> (f32, f32) {
 
 /// Unit direction `a -> b` and its perpendicular, in SVG units.
 /// dbdiagram's row icon paths (10.5-grid), shared with the canvas.
-const PK_ICON: &str = "M 6.5625 0.9844 C 8.1935 0.9844 9.5156 2.3065 9.5156 3.9375 C 9.5156 5.5685 8.1935 6.8906 6.5625 6.8906 C 6.1735 6.8906 5.8022 6.8153 5.462 6.6786 L 4.5938 7.5469 H 3.9375 V 8.5313 H 2.9531 V 9.5156 H 0.9844 V 7.5469 L 3.736 4.7952 C 3.6518 4.5171 3.6092 4.2281 3.6094 3.9375 C 3.6094 2.3065 4.9315 0.9844 6.5625 0.9844 Z M 6.5625 0 C 4.388 0 2.625 1.7627 2.625 3.9375 C 2.625 4.1186 2.6373 4.2989 2.6619 4.4772 L 0.1441 6.995 C 0.0519 7.0873 0 7.2125 0 7.343 L 0 10.0078 C 0 10.2797 0.2204 10.5 0.4922 10.5 H 3.4453 C 3.7171 10.5 3.9375 10.2797 3.9375 10.0078 V 9.5156 H 4.4297 C 4.7015 9.5156 4.9219 9.2953 4.9219 9.0234 V 8.6133 L 5.7432 7.7895 C 6.011 7.8464 6.2848 7.875 6.5625 7.875 C 8.737 7.875 10.5 6.1123 10.5 3.9375 C 10.5 1.763 8.7373 0 6.5625 0 Z";
-const FK_ICON: &str = "M 4.6244 6.6258 c -0.2002 0 -0.3885 -0.078 -0.5304 -0.2197 c -1.1204 -1.1205 -1.1204 -2.9437 0 -4.0641 l 1.5016 -1.5016 c 0.5419 -0.542 1.2635 -0.8405 2.032 -0.8405 s 1.4901 0.2985 2.032 0.8405 c 1.1204 1.1204 1.1204 2.9436 0 4.0641 l -1.001 1.001 c -0.1416 0.1417 -0.3299 0.2197 -0.5304 0.2198 c -0.2002 0 -0.3885 -0.078 -0.5304 -0.2197 c -0.1416 -0.1417 -0.2198 -0.3301 -0.2198 -0.5305 c 0 -0.2004 0.0781 -0.3888 0.2198 -0.5305 l 1.001 -1.001 c 0.5355 -0.5355 0.5355 -1.4068 0 -1.9423 c -0.2588 -0.2588 -0.6039 -0.4015 -0.9712 -0.4015 s -0.7123 0.1426 -0.9712 0.4015 l -1.5016 1.5016 c -0.5355 0.5355 -0.5355 1.4068 0 1.9422 c 0.2925 0.2925 0.2925 0.7684 0 1.0609 c -0.1419 0.1417 -0.3302 0.2197 -0.5304 0.2197 z M 2.8725 10.5 c -0.7685 0 -1.4901 -0.2985 -2.032 -0.8405 c -1.1204 -1.1204 -1.1204 -2.9436 0 -4.0641 l 0.7509 -0.7509 c 0.1416 -0.1416 0.3302 -0.2197 0.5304 -0.2197 c 0.2002 0 0.3888 0.0781 0.5304 0.2198 c 0.1416 0.1416 0.2198 0.33 0.2198 0.5304 c 0 0.2004 -0.0781 0.3888 -0.2198 0.5305 l -0.7509 0.7508 c -0.5355 0.5354 -0.5355 1.4067 0 1.9422 c 0.2588 0.2588 0.6039 0.4015 0.9712 0.4015 s 0.7123 -0.1425 0.9712 -0.4015 l 1.5016 -1.5016 c 0.5355 -0.5355 0.5355 -1.4068 0 -1.9422 c -0.1416 -0.1417 -0.2198 -0.3301 -0.2198 -0.5305 s 0.0781 -0.3888 0.2198 -0.5305 c 0.1416 -0.1417 0.3302 -0.2197 0.5304 -0.2197 s 0.3888 0.078 0.5304 0.2196 c 1.1204 1.1205 1.1204 2.9437 0 4.0641 l -1.5016 1.5016 c -0.5419 0.542 -1.2635 0.8405 -2.032 0.8405 z";
-const NOTE_ICON: &str = "M 9 1.125 C 9.2063 1.125 9.375 1.2938 9.375 1.5 V 6.75 H 7.5 C 7.0852 6.75 6.75 7.0852 6.75 7.5 V 9.375 H 1.5 C 1.2938 9.375 1.125 9.2063 1.125 9 V 1.5 C 1.125 1.2938 1.2938 1.125 1.5 1.125 H 9 Z M 1.5 10.5 H 6.75 H 6.8789 C 7.2773 10.5 7.6594 10.343 7.9406 10.0617 L 10.0617 7.9406 C 10.343 7.6594 10.5 7.2773 10.5 6.8789 V 6.75 V 1.5 C 10.5 0.6727 9.8273 0 9 0 H 1.5 C 0.6727 0 0 0.6727 0 1.5 V 9 C 0 9.8273 0.6727 10.5 1.5 10.5 Z M 3 7.6875 C 3 7.5383 2.9407 7.3952 2.8352 7.2897 C 2.7298 7.1843 2.5867 7.125 2.4375 7.125 C 2.2883 7.125 2.1452 7.1843 2.0398 7.2897 C 1.9343 7.3952 1.875 7.5383 1.875 7.6875 C 1.875 7.8367 1.9343 7.9798 2.0398 8.0853 C 2.1452 8.1907 2.2883 8.25 2.4375 8.25 C 2.5867 8.25 2.7298 8.1907 2.8352 8.0853 C 2.9407 7.9798 3 7.8367 3 7.6875 Z M 2.4375 2.25 C 2.2883 2.25 2.1452 2.3093 2.0398 2.4148 C 1.9343 2.5202 1.875 2.6633 1.875 2.8125 C 1.875 2.9617 1.9343 3.1048 2.0398 3.2102 C 2.1452 3.3157 2.2883 3.375 2.4375 3.375 C 2.5867 3.375 2.7298 3.3157 2.8352 3.2102 C 2.9407 3.1048 3 2.9617 3 2.8125 C 3 2.6633 2.9407 2.5202 2.8352 2.4148 C 2.7298 2.3093 2.5867 2.25 2.4375 2.25 Z M 3 5.25 C 3 5.1008 2.9407 4.9577 2.8352 4.8522 C 2.7298 4.7468 2.5867 4.6875 2.4375 4.6875 C 2.2883 4.6875 2.1452 4.7468 2.0398 4.8522 C 1.9343 4.9577 1.875 5.1008 1.875 5.25 C 1.875 5.3992 1.9343 5.5423 2.0398 5.6478 C 2.1452 5.7532 2.2883 5.8125 2.4375 5.8125 C 2.5867 5.8125 2.7298 5.7532 2.8352 5.6478 C 2.9407 5.5423 3 5.3992 3 5.25 Z";
-
 fn dir_normal(a: (f32, f32), b: (f32, f32)) -> ((f32, f32), (f32, f32)) {
     let (dx, dy) = (b.0 - a.0, b.1 - a.1);
     let len = (dx * dx + dy * dy).sqrt();
@@ -171,8 +332,15 @@ fn rounded_edge_path(pts: &[(f32, f32)], r: f32) -> String {
 fn push_edge(s: &mut String, r: &EdgeRoute) {
     let units: Vec<(f32, f32)> = r.pts.iter().map(|&(x, y)| pt_px(x, y)).collect();
     let d = rounded_edge_path(&units, 8.0);
+    // the line's color mirrors the canvas: explicit `[color:]`, else the
+    // referenced table's header color (`inherited`), else the gray default
+    let stroke = r
+        .color
+        .as_deref()
+        .or(r.inherited.as_deref())
+        .unwrap_or("#7f838d");
     s.push_str(&format!(
-        r##"<path d="{d}" fill="none" stroke="#7f838d" stroke-width="1.5"/>"##
+        r##"<path d="{d}" fill="none" stroke="{stroke}" stroke-width="1.5"/>"##
     ));
     // cardinality end markers along the (horizontal) end segments
     let first = units[0];
@@ -228,24 +396,11 @@ fn push_table(s: &mut String, b: &TableBox, show_text: bool) {
 
     let title_size = CELL_H * 0.55;
     if show_text {
-        // a tiny table glyph before the title, then the bold white title
-        let g = CELL_H * 0.5;
-        let gx = x + 0.9 * CELL_W;
-        let gy = y + (CELL_H - g) / 2.0;
-        let r = g * 0.2;
-        s.push_str(&format!(
-            r##"<path d="M {gxr:.1} {gy:.1} L {gxe:.1} {gy:.1} L {gxw:.1} {gyr:.1} L {gxw:.1} {gyb:.1} L {gx:.1} {gyb:.1} L {gx:.1} {gyr:.1} Z M {gx:.1} {h1:.1} L {gxw:.1} {h1:.1} M {gx:.1} {h2:.1} L {gxw:.1} {h2:.1}" fill="none" stroke="#e8eaed" stroke-width="1"/>"##,
-            gxr = gx + r,
-            gxe = gx + g - r,
-            gxw = gx + g,
-            gyr = gy + r,
-            gyb = gy + g,
-            h1 = gy + g * 0.42,
-            h2 = gy + g * 0.71,
-        ));
+        // bold white title at the 0.6-cell inset (the canvas removed the
+        // pictogram that used to live left of it)
         s.push_str(&format!(
             r##"<text x="{:.1}" y="{:.1}" font-family="sans-serif" font-size="{title_size}" font-weight="bold" fill="#ffffff">{}</text>"##,
-            gx + g + 0.5 * CELL_W,
+            x + 0.6 * CELL_W,
             y + CELL_H * 0.70,
             escape(&b.title)
         ));
@@ -253,84 +408,110 @@ fn push_table(s: &mut String, b: &TableBox, show_text: bool) {
     // column rows: name at the left, gray marker right after it, type
     // right-aligned (matches the on-screen canvas)
     let row_size = CELL_H * 0.55;
-    let char_w = 0.6 * row_size;
     for (i, row) in b.rows.iter().enumerate() {
         if !show_text {
             continue;
         }
         let ry = y + (i as f32 + 1.0) * CELL_H + CELL_H * 0.70;
+        // the row's VISUAL center: the canvas centers the text, glyphs and
+        // pills on y_of — the cell's midpoint, 0.20*CELL_H above the text
+        // baseline (the text's own visual center lands there via its cap
+        // height). Anchoring the chrome to the baseline sagged it 4px.
+        let cy = ry - CELL_H * 0.20;
         let name_x = x + 1.0 * CELL_W;
         s.push_str(&format!(
             r##"<text x="{name_x:.1}" y="{ry:.1}" font-family="sans-serif" font-size="{row_size}" fill="#e8eaed">{}</text>"##,
             escape(&row.name)
         ));
-        // dbdiagram's left icon cluster: pk, fk, unique, note — 10.5px
-        // glyphs with a 4px gap, at 40% opacity
+        // dbdiagram's left icon cluster, the canvas's exact set: pk, fk,
+        // unique (the fingerprint glyph), note — note rides ANY custom
+        // property, and the estimator keeps the icons hugging the name
         let k = CELL_W / 10.0;
-        let mut ux = name_x + row.name.width() as f32 * char_w + 8.0 * k;
-        let icons = [
-            row.pk.then_some(PK_ICON),
-            row.fk.then_some(FK_ICON),
-            row.note.is_some().then_some(NOTE_ICON),
-        ];
-        for d in icons.into_iter().flatten() {
+        let mut ux = name_x + crate::layout::Row::est_width(&row.name) * CELL_W + 8.0 * k;
+        let has_info = row.note.is_some() || !row.custom.is_empty();
+        let mut icon_specs = Vec::new();
+        if row.pk {
+            icon_specs.push(RowIcon::Pk);
+        }
+        if row.fk {
+            icon_specs.push(RowIcon::Fk);
+        }
+        if row.unique {
+            icon_specs.push(RowIcon::Unique);
+        }
+        if has_info {
+            icon_specs.push(RowIcon::Note);
+        }
+        // the glyphs are drawn from their grid origin: lift half a glyph
+        // so the 10.5px square centers on the row's VISUAL center (the
+        // canvas centers them on y_of, not on the text baseline)
+        let icon_y = cy - 5.25 * k;
+        for icon in icon_specs {
             s.push_str(&format!(
-                r##"<path d="{d}" transform="translate({ux:.1} {ry:.1}) scale({:.3})" fill="#8b909c" fill-opacity="0.7"/>"##,
+                r##"<path d="{}" transform="translate({ux:.1} {icon_y:.1}) scale({:.3})" fill="#8b909c" fill-opacity="0.7"/>"##,
+                row_icon_path(icon),
                 10.5 * k / 10.5
             ));
             ux += 14.5 * k;
         }
-        if row.unique {
-            let label = "Unique";
-            let tw = label.chars().count() as f32 * 0.456 * CELL_W;
-            let pad = 0.30 * CELL_W;
-            s.push_str(&format!(
-                r##"<rect x="{:.1}" y="{:.1}" width="{:.1}" height="{:.1}" rx="{:.1}" fill="#8b909c" fill-opacity="0.14"/>"##,
-                ux,
-                ry - 0.30 * CELL_H,
-                tw + 2.0 * pad,
-                0.60 * CELL_H,
-                0.12 * CELL_H
-            ));
-            s.push_str(&format!(
-                r##"<text x="{:.1}" y="{:.1}" font-family="sans-serif" font-size="{:.1}" fill="#8b909c">{}</text>"##,
-                ux + pad,
-                ry + row_size * 0.02,
-                0.38 * CELL_H,
-                escape(label)
-            ));
-        }
-        // right side: type, then the "Not Null" pill flush right; the
-        // type's right edge shifts left of the pill (their renderType)
+        // right side: type, then the "Enum" / "Not Null" pills flush
+        // right; the type's right edge shifts left of both pills
+        let en_w = if row.ty_enum {
+            0.6 * CELL_W + 4.0 * 0.42 * CELL_W
+        } else {
+            0.0
+        };
         let nn_w = if row.not_null == Some(true) {
-            0.8 * CELL_W + 8.0 * 0.456 * CELL_W
+            0.6 * CELL_W + 8.0 * 0.42 * CELL_W
         } else {
             0.0
         };
         if !row.ty.is_empty() {
-            let right = x + w - 0.5 * CELL_W - nn_w;
+            let right = x + w - 0.5 * CELL_W - en_w - nn_w;
             s.push_str(&format!(
                 r##"<text x="{right:.1}" y="{ry:.1}" font-family="sans-serif" font-size="{row_size}" fill="#8b909c" text-anchor="end">{}</text>"##,
                 escape(&row.ty)
             ));
         }
-        if row.not_null == Some(true) {
-            let label = "Not Null";
-            let tw = label.chars().count() as f32 * 0.456 * CELL_W;
-            let pad = 0.30 * CELL_W;
-            let px = x + w - 0.5 * CELL_W - tw - 2.0 * pad;
+        if row.ty_enum {
+            let label = "Enum";
+            let tw = label.chars().count() as f32 * 0.42 * CELL_W;
+            let pad = 0.24 * CELL_W;
+            let px = x + w - 0.5 * CELL_W - nn_w - tw - 2.0 * pad;
             s.push_str(&format!(
                 r##"<rect x="{px:.1}" y="{:.1}" width="{:.1}" height="{:.1}" rx="{:.1}" fill="#8b909c" fill-opacity="0.14"/>"##,
-                ry - 0.30 * CELL_H,
+                cy - 0.275 * CELL_H,
                 tw + 2.0 * pad,
-                0.60 * CELL_H,
+                0.55 * CELL_H,
                 0.12 * CELL_H
             ));
             s.push_str(&format!(
-                r##"<text x="{:.1}" y="{:.1}" font-family="sans-serif" font-size="{:.1}" fill="#8b909c">{}</text>"##,
-                px + pad,
-                ry + row_size * 0.02,
-                0.38 * CELL_H,
+                r##"<text x="{:.1}" y="{:.1}" font-family="sans-serif" font-size="{:.1}" fill="#8b909c" text-anchor="middle">{}</text>"##,
+                px + tw / 2.0 + pad,
+                // the pill's smaller font: the visual center sits 0.354 of
+                // ITS size above the baseline (the badge_pill convention)
+                cy + (0.35 * CELL_H) * 0.354,
+                0.35 * CELL_H,
+                escape(label)
+            ));
+        }
+        if row.not_null == Some(true) {
+            let label = "Not Null";
+            let tw = label.chars().count() as f32 * 0.42 * CELL_W;
+            let pad = 0.24 * CELL_W;
+            let px = x + w - 0.5 * CELL_W - tw - 2.0 * pad;
+            s.push_str(&format!(
+                r##"<rect x="{px:.1}" y="{:.1}" width="{:.1}" height="{:.1}" rx="{:.1}" fill="#8b909c" fill-opacity="0.14"/>"##,
+                cy - 0.275 * CELL_H,
+                tw + 2.0 * pad,
+                0.55 * CELL_H,
+                0.12 * CELL_H
+            ));
+            s.push_str(&format!(
+                r##"<text x="{:.1}" y="{:.1}" font-family="sans-serif" font-size="{:.1}" fill="#8b909c" text-anchor="middle">{}</text>"##,
+                px + tw / 2.0 + pad,
+                cy + (0.35 * CELL_H) * 0.354,
+                0.35 * CELL_H,
                 escape(label)
             ));
         }
@@ -364,6 +545,30 @@ mod tests {
     fn header_color_from_dbml() {
         let svg = svg_of("Table t [headercolor: #123456] { id integer }");
         assert!(svg.contains("fill=\"rgb(18,52,86)\""), "{svg}");
+    }
+
+    #[test]
+    fn sticky_notes_export_with_their_wrapped_text() {
+        // sticky notes used to be missing from the export entirely
+        let src = "Table t { id int }\n\nNote todo {\n  \'\'\'one two three\'\'\'\n}\n";
+        let out = svg_of(src);
+        assert!(out.contains("rgb(255,243,176)"), "the yellow sticky: {out}");
+        assert!(out.contains(">one two three<"), "the wrapped text: {out}");
+        // show_text=false keeps the sticky, omits the text
+        let l = layout(&build(&parser::parse(src).doc));
+        let bare = build_svg_with(&l, false);
+        assert!(bare.contains("rgb(255,243,176)"));
+        assert!(!bare.contains(">one two three<"));
+    }
+
+    #[test]
+    fn uncolored_group_renders_the_table_default() {
+        // no [color:] on the group: its band is the SAME near-black a
+        // table's header uses (group_rgb's default = header_rgb's
+        // default), not dbdiagram's old group blue
+        let svg = svg_of("Table a { id integer }\nTableGroup g { a }");
+        assert!(svg.contains("fill=\"rgb(31,33,40)\""), "group band: {svg}");
+        assert!(!svg.contains("rgb(30,105,253)"), "no group blue: {svg}");
     }
 
     #[test]
@@ -404,6 +609,65 @@ mod tests {
         // line + cardinality end markers share the line color: the tick on
         // the "one" end and the arrow + circle on the "many" end
         assert_eq!(svg.matches("stroke=\"#7f838d\"").count(), 4);
+    }
+
+    #[test]
+    fn a_dragged_note_beyond_the_extent_is_not_cut_off() {
+        // the regression: the sticky pinned/dragged BELOW the auto row sat
+        // outside the extent — the export canvas ended above it and the
+        // note was cut off
+        let src = "Table t { id int }\nNote a { '''x''' }\nNote b { '''y''' }\n";
+        let mut note_pos = std::collections::HashMap::new();
+        note_pos.insert("a".to_string(), (30, 40, 14, 5)); // beyond the extent
+        let l = crate::layout::layout_with_all_overrides(
+            &build(&parser::parse(src).doc),
+            &Default::default(),
+            &note_pos,
+        );
+        let svg = build_svg(&l);
+        let (w, h) = svg_size(&l);
+        // the note's right edge + bottom edge are inside the canvas
+        let note_x = (30.0 + 1.0) * CELL_W; // + margin
+        let note_bottom = (40.0 + 5.0 + 1.0) * CELL_H;
+        assert!(w >= note_x, "{w} covers note right {note_x}");
+        assert!(h >= note_bottom, "{h} covers note bottom {note_bottom}");
+        // and the note body is in the output (the y-attribute inside)
+        assert!(svg.contains("y=\""), "{svg}");
+        // the auto note stays at its classic slot
+        let svg_b = build_svg(&l);
+        assert!(svg_b.contains("243,176"), "yellow present");
+    }
+
+    #[test]
+    fn negative_cell_content_shifts_into_the_canvas() {
+        // tables can be dragged to negative cells (no clamping): the export
+        // must shift them inside rather than clip at x/y=0
+        let src = "Table t { id int }\n";
+        let mut pos = std::collections::HashMap::new();
+        pos.insert("t".to_string(), (-6, -8));
+        let l = crate::layout::layout_with_all_overrides(
+            &build(&parser::parse(src).doc),
+            &pos,
+            &Default::default(),
+        );
+        let svg = build_svg(&l);
+        // the whole content sits in a group shifted by -min * cell: the
+        // box at (-6,-8) lands inside the canvas (coordinates inside the
+        // group are relative to it)
+        assert!(
+            svg.contains("<g transform=\"translate(60.0 160.0)\">"),
+            "origin shifted: {}",
+            &svg[..220]
+        );
+        let (w, h) = svg_size(&l);
+        // after the shift the box's top-left lands at the origin margin
+        // and its right/bottom stay inside: derive from the real box
+        let b = &l.boxes[0];
+        let (min_x, min_y, _, _) = content_bounds(&l);
+        let shifted_right = (b.x + b.w - min_x + 1) as f32 * CELL_W;
+        let shifted_bottom = (b.y + b.h - min_y + 1) as f32 * CELL_H;
+        assert!(w >= shifted_right, "{w} covers the shifted box width {shifted_right}");
+        assert!(h >= shifted_bottom, "{h} covers the shifted box height {shifted_bottom}");
     }
 
     #[test]

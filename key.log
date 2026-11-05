@@ -1,0 +1,8 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.18s
+     Running `target/debug/dbml-ui showcase.dbml`
+[key] code=Char('G') mods=KeyModifiers(1) switch=false bridge=Some(false)
+[key] code=Char('g') mods=KeyModifiers(0) switch=false bridge=Some(false)
+[key] code=Char('g') mods=KeyModifiers(0) switch=false bridge=Some(false)
+[key] code=Char('o') mods=KeyModifiers(0) switch=false bridge=Some(false)
+[key] code=Char('o') mods=KeyModifiers(2) switch=true bridge=Some(false)
+[key] code=Char('i') mods=KeyModifiers(2) switch=true bridge=Some(false)

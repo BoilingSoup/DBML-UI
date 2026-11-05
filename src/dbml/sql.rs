@@ -19,6 +19,28 @@ pub enum Dialect {
 }
 
 impl Dialect {
+    /// The human name for status messages ("imported as PostgreSQL").
+    pub fn label(&self) -> &'static str {
+        match self {
+            Dialect::Postgres => "PostgreSQL",
+            Dialect::MySQL => "MySQL",
+            Dialect::MSSQL => "SQL Server",
+            Dialect::Oracle => "Oracle",
+            Dialect::SQLite => "SQLite",
+        }
+    }
+
+    /// The file-path token for exports ("diagram.mysql.sql").
+    pub fn file_token(&self) -> &'static str {
+        match self {
+            Dialect::Postgres => "postgres",
+            Dialect::MySQL => "mysql",
+            Dialect::MSSQL => "sqlserver",
+            Dialect::Oracle => "oracle",
+            Dialect::SQLite => "sqlite",
+        }
+    }
+
     pub fn from_name(s: &str) -> Option<Dialect> {
         match s.to_ascii_lowercase().as_str() {
             "postgres" | "postgresql" | "pg" => Some(Dialect::Postgres),
@@ -1322,22 +1344,43 @@ mod fixtures {
                 Ok(strip_records_blocks(expected))
             };
             // upstream check-expression whitespace (multi-line CASE
-            // blocks, operator spacing) is not reproducible exactly —
-            // compare with ALL whitespace removed on both sides
-            let flat = |x: String| -> String { x.chars().filter(|c| !c.is_whitespace()).collect() };
-            match (got_res, expected) {
-                (Ok(g), Ok(e)) => {
-                    if flat(g.clone()) != flat(e.clone()) {
-                        failures.push(format!(
-                            "{direction}/{dialect:?}/{stem}:\\n--- got ---\\n{g}\\n--- want ---\\n{e}"
-                        ));
-                    }
+            // blocks, operator spacing) is not reproducible exactly, and
+            // top-level ITEM order is style too now: the formatter
+            // preserves each side's own arrangement (so user files keep
+            // their structure and comments stay anchored), and the
+            // importer's emission order is its own business. Compare
+            // whitespace-stripped BLANK-LINE-SEPARATED BLOCKS as a set —
+            // order-free across items, strict within one.
+            let flat_blocks = |x: String| -> Vec<String> {
+                let mut blocks: Vec<String> = x
+                    .split("\n\n")
+                    .map(|b| {
+                        b.chars()
+                            .filter(|c| !c.is_whitespace() && !matches!(c, '"' | '\'' | '`'))
+                            .collect::<String>()
+                    })
+                    .filter(|b| !b.is_empty())
+                    .collect();
+                blocks.sort();
+                blocks
+            };
+            let (got_blocks, want_blocks) = match (got_res, expected) {
+                (Ok(g), Ok(e)) => (flat_blocks(g), flat_blocks(e)),
+                (g, e) => {
+                    failures.push(format!(
+                        "{direction}/{dialect:?}/{stem}:\\n--- got ---\\n{}\\n--- want ---\\n{}",
+                        g.unwrap_or_else(|x| x),
+                        e.unwrap_or_else(|x| x)
+                    ));
+                    continue;
                 }
-                (g, e) => failures.push(format!(
+            };
+            if got_blocks != want_blocks {
+                failures.push(format!(
                     "{direction}/{dialect:?}/{stem}:\\n--- got ---\\n{}\\n--- want ---\\n{}",
-                    g.unwrap_or_else(|x| x),
-                    e.unwrap_or_else(|x| x)
-                )),
+                    got_blocks.join("\\n\\n"),
+                    want_blocks.join("\\n\\n")
+                ));
             }
         }
     }

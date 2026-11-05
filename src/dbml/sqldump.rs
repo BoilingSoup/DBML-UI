@@ -241,6 +241,9 @@ struct ICol {
     fk: Option<(Option<String>, String, Vec<String>)>,
     /// Inline `CONSTRAINT name REFERENCES ...` — emitted as a named Ref.
     fk_name: Option<String>,
+    /// Inline REFERENCES' ON DELETE / ON UPDATE actions.
+    fk_delete: Option<String>,
+    fk_update: Option<String>,
     check: Option<String>,
 }
 
@@ -248,7 +251,7 @@ struct ICol {
 type IndexDef = (Vec<String>, Option<String>, bool, Option<String>, bool);
 
 /// One table-level foreign key: (name, fk_table, fk_cols, ref_schema,
-/// ref_table, ref_cols).
+/// ref_table, ref_cols, on_delete, on_update).
 type FkDef = (
     Option<String>,
     String,
@@ -256,6 +259,8 @@ type FkDef = (
     Option<String>,
     String,
     Vec<String>,
+    Option<String>,
+    Option<String>,
 );
 
 /// A queued PK/UNIQUE/KEY merge: (table, cols, is_pk, name, type,
@@ -291,6 +296,56 @@ struct Importer {
     fks: Vec<FkDef>,
     /// Uniques/PKs to merge (see PendingUnique)
     pending_uniques: Vec<PendingUnique>,
+}
+
+
+/// Score the file's head for dialect fingerprints and pick the winner:
+/// real dumps mark themselves (backticks/AUTO_INCREMENT/ENGINE= for
+/// MySQL, [brackets]/IDENTITY( for MSSQL, AUTOINCREMENT/PRAGMA for
+/// SQLite, CREATE TYPE ... AS ENUM/::/serial for Postgres, VARCHAR2/
+/// NUMBER(/NEXTVAL for Oracle). Vanilla ANSI DDL scores zero everywhere
+/// and defaults to Postgres — its syntax parses identically under every
+/// dialect, so the choice is immaterial there.
+pub fn detect_dialect(source: &str) -> Dialect {
+    let head = &source[..source.len().min(64 * 1024)].to_ascii_lowercase();
+    let hits = |marker: &str| head.matches(marker).count() as i32;
+    // (dialect, strong exclusive markers w3, weak markers w1)
+    let table: [(Dialect, &[&str], &[&str]); 5] = [
+        (
+            Dialect::MySQL,
+            &["`", "auto_increment", "engine=", "engine innoDB"],
+            &["unsigned", "mediumint", "tinyint(1)", "on update current_timestamp"],
+        ),
+        (
+            Dialect::MSSQL,
+            &["identity(", "]) ", "go\n", "datetime2", "nvarchar(max)"],
+            &["[dbo]", "nvarchar", "top (", "set quoted_identifier"],
+        ),
+        (
+            Dialect::SQLite,
+            &["autoincrement", "pragma ", "sqlite_"],
+            &["without rowid"],
+        ),
+        (
+            Dialect::Oracle,
+            &["varchar2", "nvarchar2", "nextval", "sysdate"],
+            &["number(", "sequence", "on delete cascade"],
+        ),
+        (
+            Dialect::Postgres,
+            &["::", " as enum", "bigserial", "smallserial", "comment on column"],
+            &["serial", "returning", "create type", "with (fillfactor", "regclass"],
+        ),
+    ];
+    let mut best = (Dialect::Postgres, 0);
+    for (dialect, strong, weak) in table {
+        let score = strong.iter().map(|m| 3 * hits(m)).sum::<i32>()
+            + weak.iter().map(|m| hits(m)).sum::<i32>();
+        if score > best.1 {
+            best = (dialect, score);
+        }
+    }
+    best.0
 }
 
 pub fn import(source: &str, dialect: Dialect) -> Result<String, String> {
@@ -673,6 +728,8 @@ impl Importer {
                                 rs,
                                 rt,
                                 rc,
+                                col.fk_delete.take(),
+                                col.fk_update.take(),
                             ));
                         }
                     }
@@ -807,6 +864,8 @@ impl Importer {
         let Some(t) = s.get(i) else { return 0 };
         let mut cols = Vec::new();
         let mut ref_schema: Option<String> = None;
+        let mut on_delete: Option<String> = None;
+        let mut on_update: Option<String> = None;
         let mut ref_table = String::new();
         let mut ref_cols = Vec::new();
         let mut consumed = 0;
@@ -947,12 +1006,44 @@ impl Importer {
                     Tok::P(',') | Tok::P(')') => break,
                     Tok::W(w, _) if w.eq_ignore_ascii_case("ON") => {
                         // ON DELETE|UPDATE <action>; SET NULL / NO ACTION
-                        // / SET DEFAULT are two words
+                        // / SET DEFAULT are two words. dbdiagram's importer
+                        // carries the actions onto the Ref line's settings
+                        // — capture instead of just skipping.
+                        let kind = s.get(i + 1).map(|t| match t {
+                            Tok::W(w, _) if w.eq_ignore_ascii_case("DELETE") => "delete",
+                            Tok::W(w, _) if w.eq_ignore_ascii_case("UPDATE") => "update",
+                            _ => "",
+                        });
                         i += 2;
-                        if s.get(i).is_some_and(|t| t.is_w("SET") || t.is_w("NO")) {
-                            i += 2;
-                        } else {
+                        let mut action = String::new();
+                        if let Some(Tok::W(a, _)) = s.get(i) {
+                            action.push_str(&a.to_ascii_uppercase());
                             i += 1;
+                        }
+                        // two-word actions: SET NULL / NO ACTION / SET DEFAULT
+                        if s.get(i - 1).is_some_and(|t| t.is_w("SET") || t.is_w("NO")) {
+                            if let Some(Tok::W(a2, _)) = s.get(i) {
+                                // the second word belongs to the action when
+                                // it is not the next clause keyword
+                                let next_kw = a2.eq_ignore_ascii_case("ON")
+                                    || a2.eq_ignore_ascii_case("DEFERRABLE")
+                                    || a2.eq_ignore_ascii_case("NOT")
+                                    || a2.eq_ignore_ascii_case("INITIALLY")
+                                    || a2.eq_ignore_ascii_case("ENABLE")
+                                    || a2.eq_ignore_ascii_case("DISABLE")
+                                    || a2.eq_ignore_ascii_case("RELY")
+                                    || a2.eq_ignore_ascii_case("NORELY");
+                                if !next_kw {
+                                    action.push(' ');
+                                    action.push_str(&a2.to_ascii_uppercase());
+                                    i += 1;
+                                }
+                            }
+                        }
+                        match kind {
+                            Some("delete") => on_delete = Some(action),
+                            Some("update") => on_update = Some(action),
+                            _ => {}
                         }
                     }
                     Tok::W(w, _)
@@ -987,6 +1078,8 @@ impl Importer {
                     ref_schema,
                     ref_table,
                     ref_cols,
+                    on_delete,
+                    on_update,
                 ));
             }
             consumed = i;
@@ -1330,7 +1423,14 @@ impl Importer {
                     }
                 }
             } else if t.is_w("ON") {
-                // ON UPDATE/CURRENT/DELETE actions after REFERENCES
+                // ON UPDATE/DELETE actions after REFERENCES — captured for
+                // the inline FK's Ref settings (ON UPDATE CURRENT_TIMESTAMP
+                // is a column default, not a ref action)
+                let kind = s.get(i + 1).map(|t| match t {
+                    Tok::W(w, _) if w.eq_ignore_ascii_case("DELETE") => "delete",
+                    Tok::W(w, _) if w.eq_ignore_ascii_case("UPDATE") => "update",
+                    _ => "",
+                });
                 i += 2;
                 if i < s.len() && s[i].is_w("CURRENT_TIMESTAMP") {
                     // with AUTO_INCREMENT the golden drops the default,
@@ -1340,6 +1440,26 @@ impl Importer {
                         col.default = Some("`CURRENT_TIMESTAMP`".into());
                     }
                     i += 1;
+                } else if col.fk.is_some() {
+                    let mut action = String::new();
+                    if let Some(Tok::W(a, _)) = s.get(i) {
+                        action.push_str(&a.to_ascii_uppercase());
+                        i += 1;
+                    }
+                    if s.get(i - 1).is_some_and(|t| t.is_w("SET") || t.is_w("NO")) {
+                        if let Some(Tok::W(a2, _)) = s.get(i) {
+                            action.push(' ');
+                            action.push_str(&a2.to_ascii_uppercase());
+                            i += 1;
+                        }
+                    }
+                    if !action.is_empty() {
+                        match kind {
+                            Some("delete") => col.fk_delete = Some(action),
+                            Some("update") => col.fk_update = Some(action),
+                            _ => {}
+                        }
+                    }
                 }
             } else {
                 i += 1;
@@ -1907,40 +2027,9 @@ impl Importer {
     fn emit(&self) -> String {
         let mut out = String::new();
         let q = |n: &str| format!("\"{n}\"");
-        // named FK constraints -> top-level Ref statements (golden style)
-        for (name, fk_table, fk_cols, ref_schema, ref_table, ref_cols) in &self.fks {
-            let fks = fk_cols.iter().map(|c| q(c)).collect::<Vec<_>>().join(", ");
-            let rcs = ref_cols.iter().map(|c| q(c)).collect::<Vec<_>>().join(", ");
-            let (f, r) = if fk_cols.len() == 1 {
-                (fks.clone(), rcs.clone())
-            } else {
-                (format!("({fks})"), format!("({rcs})"))
-            };
-            let ref_head = match ref_schema {
-                // mssql goldens drop schema qualifiers entirely
-                Some(sc) if !matches!(self.dialect, Dialect::MSSQL) => {
-                    format!("{}.{}", q(sc), q(ref_table))
-                }
-                _ => q(ref_table),
-            };
-            match name {
-                Some(n) => out.push_str(&format!(
-                    "Ref {}: {}.{} < {}.{}\n\n",
-                    q(n),
-                    ref_head,
-                    r,
-                    q(fk_table),
-                    f
-                )),
-                None => out.push_str(&format!(
-                    "Ref: {}.{} < {}.{}\n\n",
-                    ref_head,
-                    r,
-                    q(fk_table),
-                    f
-                )),
-            }
-        }
+        // upstream golden order: enums, then tables, then the top-level
+        // Ref statements LAST (the formatter preserves source order now,
+        // so this emission order IS the user-visible one)
         for (schema, name, values) in &self.enums {
             if let Some(s) = schema {
                 out.push_str(&format!("Enum {}.{} {{\n", q(s), q(name)));
@@ -2089,6 +2178,61 @@ impl Importer {
                 out.push_str(&format!("  note: {}\n", super::fmt::quote_note(n)));
             }
             out.push_str("}\n\n");
+        }
+        // named FK constraints -> top-level Ref statements, LAST (the
+        // golden convention; the formatter keeps this order now)
+        for (name, fk_table, fk_cols, ref_schema, ref_table, ref_cols, on_delete, on_update) in
+            &self.fks
+        {
+            let fks = fk_cols.iter().map(|c| q(c)).collect::<Vec<_>>().join(", ");
+            let rcs = ref_cols.iter().map(|c| q(c)).collect::<Vec<_>>().join(", ");
+            let (f, r) = if fk_cols.len() == 1 {
+                (fks.clone(), rcs.clone())
+            } else {
+                (format!("({fks})"), format!("({rcs})"))
+            };
+            let ref_head = match ref_schema {
+                // mssql goldens drop schema qualifiers entirely
+                Some(sc) if !matches!(self.dialect, Dialect::MSSQL) => {
+                    format!("{}.{}", q(sc), q(ref_table))
+                }
+                _ => q(ref_table),
+            };
+            // referential actions ride the Ref settings (upstream goldens
+            // — except Oracle's, which drop them entirely)
+            let mut st = Vec::new();
+            if self.dialect != Dialect::Oracle {
+                if let Some(d) = on_delete {
+                    st.push(format!("delete: {d}"));
+                }
+                if let Some(u) = on_update {
+                    st.push(format!("update: {u}"));
+                }
+            }
+            let settings = if st.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", st.join(", "))
+            };
+            match name {
+                Some(n) => out.push_str(&format!(
+                    "Ref {}: {}.{} < {}.{}{}\n\n",
+                    q(n),
+                    ref_head,
+                    r,
+                    q(fk_table),
+                    f,
+                    settings
+                )),
+                None => out.push_str(&format!(
+                    "Ref: {}.{} < {}.{}{}\n\n",
+                    ref_head,
+                    r,
+                    q(fk_table),
+                    f,
+                    settings
+                )),
+            }
         }
         out
     }
@@ -2677,4 +2821,53 @@ fn normalize_type(ty: &str, d: Dialect) -> String {
         }
     }
     t.trim().to_string()
+}
+
+#[cfg(test)]
+mod detect_dialect_tests {
+    use super::*;
+
+    #[test]
+    fn real_dumps_fingerprint_their_dialect() {
+        let mysql = "CREATE TABLE `users` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  \
+                     `name` varchar(80) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n) \
+                     ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;";
+        assert!(matches!(detect_dialect(mysql), Dialect::MySQL));
+
+        let mssql = "CREATE TABLE [dbo].[users] (\n  [id] INT IDENTITY(1,1) NOT NULL,\n  \
+                     [name] NVARCHAR(80) NULL\n);";
+        assert!(matches!(detect_dialect(mssql), Dialect::MSSQL));
+
+        let sqlite = "CREATE TABLE users (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  \
+                      name TEXT\n);\nPRAGMA foreign_keys=ON;";
+        assert!(matches!(detect_dialect(sqlite), Dialect::SQLite));
+
+        let oracle = "CREATE TABLE users (\n  id NUMBER(10) NOT NULL,\n  \
+                      name VARCHAR2(80)\n);\nCREATE SEQUENCE users_seq;";
+        assert!(matches!(detect_dialect(oracle), Dialect::Oracle));
+
+        let postgres = "CREATE TYPE user_role AS ENUM ('member', 'admin');\n\
+                        CREATE TABLE users (\n  id BIGSERIAL PRIMARY KEY,\n  \
+                        name TEXT\n);";
+        assert!(matches!(detect_dialect(postgres), Dialect::Postgres));
+    }
+
+    #[test]
+    fn vanilla_ansi_ddl_defaults_to_postgres() {
+        // no fingerprint anywhere — the default kicks in, and the parse
+        // is identical under every dialect for this syntax
+        let vanilla = "CREATE TABLE users (\n  id INTEGER PRIMARY KEY,\n  \
+                       name VARCHAR(50)\n);";
+        assert!(matches!(detect_dialect(vanilla), Dialect::Postgres));
+    }
+
+    #[test]
+    fn the_detected_dialect_imports_the_dump() {
+        // end-to-end through the importer: detection + parse in one call
+        let mysql = "CREATE TABLE `users` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  \
+                     `name` varchar(80),\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB;";
+        let dbml = import(mysql, detect_dialect(mysql)).expect("imports clean");
+        assert!(dbml.contains("Table") && dbml.contains("users"), "{dbml}");
+        assert!(dbml.contains("pk"), "{dbml}");
+    }
 }

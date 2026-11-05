@@ -2,3 +2,5 @@
 
 pub mod diagram;
 pub mod editor;
+pub mod groups;
+pub mod notes;

@@ -42,7 +42,7 @@ pub struct Token {
 /// Keyword vocabulary — keep in sync with `parser.rs`.
 const TOP_KWS: [&str; 5] = ["Project", "Table", "Ref", "Enum", "TableGroup"];
 const BLOCK_KWS: [&str; 2] = ["indexes", "records"];
-const SETTING_KWS: [&str; 13] = [
+const SETTING_KWS: [&str; 14] = [
     "pk",
     "primary",
     "key",
@@ -56,6 +56,7 @@ const SETTING_KWS: [&str; 13] = [
     "note",
     "ref",
     "headercolor",
+    "color",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -167,14 +168,15 @@ pub fn highlight(src: &str) -> Vec<Token> {
             }
             let kind = if type_mode { Kind::Type } else { Kind::Number };
             push(&mut out, start, i, kind);
-        } else if (bytes[i] as char).is_alphanumeric() || bytes[i] == b'_' {
+        } else if src[i..].chars().next().is_some_and(|ch| ch.is_alphanumeric() || ch == '_') {
             let start = i;
+            // decode by CHAR: byte-casting multibyte chars (`—` = 0xE2 0x80
+            // 0x94) made 0xE2 look like the letter 'â', walking i into the
+            // middle of the character and slicing a non-boundary (panic).
             while i < bytes.len() {
-                let ch = bytes[i] as char;
-                if ch.is_alphanumeric() || ch == '_' {
-                    i += 1;
-                } else {
-                    break;
+                match src[i..].chars().next() {
+                    Some(ch) if ch.is_alphanumeric() || ch == '_' => i += ch.len_utf8(),
+                    _ => break,
                 }
             }
             let word = &src[start..i];
@@ -189,10 +191,16 @@ pub fn highlight(src: &str) -> Vec<Token> {
                 rest,
             );
             // state updates
-            if TOP_KWS.iter().any(|kw| word.eq_ignore_ascii_case(kw)) {
+            if TOP_KWS.iter().any(|kw| word.eq_ignore_ascii_case(kw))
+                || is_sticky_note_kw(word, &blocks, rest)
+            {
                 if word.eq_ignore_ascii_case("Ref") {
                     name_mode = true;
                 } else {
+                    // a sticky `Note` behaves like Project/Enum: the next
+                    // word is its name, and its `{` opens a non-table body
+                    // (`opened` stays None → Block::Other), so no column/
+                    // type coloring kicks in around the '''text''' string
                     expect_name = true;
                     opened = None;
                 }
@@ -234,6 +242,27 @@ fn in_table_body(blocks: &[Block]) -> bool {
     matches!(blocks.last(), Some(Block::Table))
 }
 
+/// A top-level sticky-note keyword: `Note name { '''text''' }`.
+///
+/// Deliberately strict, so the word is only keyword-colored in true
+/// keyword position and a stray "Note" never falsely lights up:
+/// - nothing open (`blocks` empty) — top level only, like the parser's
+///   `top_item`; `Note:` inside a Table/Project/TableGroup body keeps its
+///   `key:` coloring below,
+/// - the next word on the SAME line starts a name (bare, `"quoted"` or
+///   backticked identifier, mirroring `parser::ident`) — which also rules
+///   out the `Note:` colon form, the note *assignment* handled by the
+///   colon rule,
+/// - ASCII case-insensitive, mirroring `peek_kw(input, "Note")` — the
+///   parser accepts `note`/`NOTE`/`TaBlE`-style spellings of every keyword.
+fn is_sticky_note_kw(word: &str, blocks: &[Block], rest: &str) -> bool {
+    word.eq_ignore_ascii_case("Note")
+        && blocks.is_empty()
+        && rest[word.len()..]
+            .trim_start_matches([' ', '\t'])
+            .starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '"' || c == '`')
+}
+
 /// Whether the text just before a definition name ends with one of `kws`
 /// (ASCII case-insensitive — `table users` must register a table body the
 /// same way `Table users` does).
@@ -241,7 +270,9 @@ fn prev_was(src: &str, name_start: usize, kws: &[&str]) -> bool {
     let before = &src[..name_start];
     let trimmed = before.trim_end_matches([' ', '\t']);
     kws.iter().any(|kw| {
-        trimmed.len() >= kw.len() && trimmed[trimmed.len() - kw.len()..].eq_ignore_ascii_case(kw)
+        trimmed.len() >= kw.len()
+            && trimmed.is_char_boundary(trimmed.len() - kw.len())
+            && trimmed[trimmed.len() - kw.len()..].eq_ignore_ascii_case(kw)
     })
 }
 
@@ -277,11 +308,20 @@ fn classify(
     }
     if TOP_KWS.iter().any(|kw| word.eq_ignore_ascii_case(kw))
         || BLOCK_KWS.iter().any(|kw| word.eq_ignore_ascii_case(kw))
+        || is_sticky_note_kw(word, blocks, rest)
     {
         return Kind::Keyword;
     }
     if in_settings {
         if SETTING_KWS.iter().any(|kw| word.eq_ignore_ascii_case(kw)) {
+            return Kind::Keyword;
+        }
+        // a `key:` inside [...] is a dbdiagram custom property — any key,
+        // not just the known ones (note:, default:, ...)
+        if rest[word.len()..]
+            .trim_start_matches([' ', '\t'])
+            .starts_with(':')
+        {
             return Kind::Keyword;
         }
         return Kind::Plain;
@@ -338,7 +378,65 @@ fn quoted_end(src: &str, open: usize, quote: u8) -> usize {
 }
 
 #[cfg(test)]
+mod multibyte_tests {
+    use super::highlight;
+
+    #[test]
+    fn multibyte_comments_never_panic() {
+        // the em-dash in a comment: byte-casting 0xE2 made it look like the
+        // letter 'â' and sliced mid-character (a real crash on
+        // showcase.dbml after an edit un-commented the line)
+        let src = "r/ dbml-ui feature showcase \u{2014} open this file\nTable t {\n  id integer [pk]\n}\n";
+        let _ = highlight(src); // must not panic
+        let src = "// showcase\u{2014}open\nTable t { id integer }\n";
+        let _ = highlight(src);
+        let src = "Table caf\u{e9} { x integer }\n";
+        let _ = highlight(src);
+    }
+
+    #[test]
+    fn multibyte_words_stay_one_token() {
+        let src = "Table caf\u{e9} { x integer }\n";
+        let toks = highlight(src);
+        let cafe = toks
+            .iter()
+            .find(|t| &src[t.start..t.end] == "caf\u{e9}")
+            .expect("the accented word is one token");
+        assert_eq!(src[cafe.start..cafe.end].len(), 5); // f + 2-byte é
+    }
+}
+#[cfg(test)]
 mod tests {
+    #[test]
+    fn custom_property_keys_color_as_settings_keywords() {
+        // any `key:` inside [...] is keyword-colored, not just the known
+        // ones — verified against dbdiagram's editor where owner/masking
+        // read like note/default do
+        let src = "Table users [owner: \"data-team\"] {\n  id int [pk, masking: \"partial\"]\n}\n";
+        let toks = highlight(src);
+        let kind_of = |w: &str| {
+            toks.iter()
+                .find(|t| &src[t.start..t.end] == w)
+                .map(|t| t.kind)
+        };
+        assert_eq!(kind_of("owner"), Some(Kind::Keyword));
+        assert_eq!(kind_of("masking"), Some(Kind::Keyword));
+        // known keys unchanged
+        assert_eq!(kind_of("pk"), Some(Kind::Keyword));
+        // the VALUES stay strings
+        let v = toks
+            .iter()
+            .find(|t| &src[t.start..t.end] == "\"data-team\"")
+            .unwrap();
+        assert_eq!(v.kind, Kind::String);
+        // and a plain identifier inside brackets without a colon stays plain
+        let src2 = "Table t { a int [pk, zzz] }\n";
+        let toks2 = highlight(src2);
+        let z = toks2.iter().find(|t| &src2[t.start..t.end] == "zzz").unwrap();
+        assert_eq!(z.kind, Kind::Plain);
+    }
+
+
     use super::*;
 
     fn kinds(src: &str) -> Vec<(String, Kind)> {
@@ -385,6 +483,8 @@ mod tests {
             "Table users { id integer [pk",
             "Table \"broken { id",
             "'''unterminated",
+            "Note todo { '''unterminated",
+            "Note \"todo\" {",
             "// comment\n/* unterminated",
             "'unclosed string\nTable x {",
             dbml_ui_sample(),
@@ -532,5 +632,84 @@ mod tests {
         assert!(ks.contains(&("decimal".into(), Kind::Type)));
         assert!(ks.contains(&("10".into(), Kind::Type)));
         assert!(ks.contains(&("2".into(), Kind::Type)));
+    }
+
+    // ---- sticky-note keyword (`Note name { '''text''' }`) ----
+
+    #[test]
+    fn sticky_note_keyword_and_name() {
+        let src = "Note todo { '''TODO 1: x\nTODO 2: y''' }\nTable t {\n  id integer\n}\n";
+        let ks = kinds(src);
+        assert!(ks.contains(&("Note".into(), Kind::Keyword)), "{ks:?}");
+        assert!(ks.contains(&("todo".into(), Kind::Name)), "{ks:?}");
+        assert!(
+            ks.iter()
+                .any(|(s, k)| *k == Kind::String && s.contains("TODO 1")),
+            "{ks:?}"
+        );
+        // the sticky body is not a table body: the table after it keeps
+        // coloring its columns and types normally
+        assert!(ks.contains(&("id".into(), Kind::Ident)), "{ks:?}");
+        assert!(ks.contains(&("integer".into(), Kind::Type)), "{ks:?}");
+        assert_cover(src);
+        // any case, like every keyword (parser: peek_kw)
+        let ks = kinds("note shopping { '''milk''' }");
+        assert!(ks.contains(&("note".into(), Kind::Keyword)), "{ks:?}");
+        assert!(ks.contains(&("shopping".into(), Kind::Name)), "{ks:?}");
+    }
+
+    #[test]
+    fn sticky_name_can_be_quoted() {
+        let ks = kinds("Note \"my note\" { '''x''' }");
+        assert!(ks.contains(&("Note".into(), Kind::Keyword)), "{ks:?}");
+        // the quoted identifier takes the Name color in name position
+        assert!(ks.contains(&("\"my note\"".into(), Kind::Name)), "{ks:?}");
+        assert_cover("Note \"my note\" { '''x''' }");
+    }
+
+    #[test]
+    fn note_colon_form_is_not_a_sticky_keyword() {
+        // `Note:` is the note ASSIGNMENT (the `key:` colon rule colors it);
+        // it must not arm the sticky name expectation, or everything after
+        // it would color as Name
+        let src = "Note: 'a'\nTable t {\n  id integer\n}\n";
+        let ks = kinds(src);
+        assert!(ks.contains(&("Note".into(), Kind::Keyword)), "{ks:?}");
+        assert!(ks.contains(&("Table".into(), Kind::Keyword)), "{ks:?}");
+        assert!(ks.contains(&("t".into(), Kind::Name)), "{ks:?}");
+        assert!(ks.contains(&("id".into(), Kind::Ident)), "{ks:?}");
+        assert!(ks.contains(&("integer".into(), Kind::Type)), "{ks:?}");
+        // same inside a table body (the table note assignment)
+        let ks = kinds("Table t {\n  Note: 'x'\n  id integer\n}\n");
+        assert!(ks.contains(&("Note".into(), Kind::Keyword)), "{ks:?}");
+        assert!(ks.contains(&("id".into(), Kind::Ident)), "{ks:?}");
+        assert!(ks.contains(&("integer".into(), Kind::Type)), "{ks:?}");
+    }
+
+    #[test]
+    fn note_stays_ident_outside_keyword_position() {
+        // a column named Note (first word in a table body)
+        let ks = kinds("Table t {\n  Note varchar\n  id integer\n}\n");
+        assert!(ks.contains(&("Note".into(), Kind::Ident)), "{ks:?}");
+        assert!(ks.contains(&("varchar".into(), Kind::Type)), "{ks:?}");
+        // `Note` in type position after another column (documented
+        // tradeoff, same ambiguity dbdiagram has)
+        let ks = kinds("Table t {\n  id Note\n}\n");
+        assert!(ks.contains(&("Note".into(), Kind::Type)), "{ks:?}");
+        // a bare `Note` with no name on the line is not a keyword yet
+        // (mid-edit safety: the user may be typing anything)
+        let ks = kinds("Note\nTable t {\n  id integer\n}\n");
+        assert!(ks.contains(&("Note".into(), Kind::Ident)), "{ks:?}");
+        assert!(ks.contains(&("Table".into(), Kind::Keyword)), "{ks:?}");
+    }
+
+    #[test]
+    fn project_and_tablegroup_notes_unchanged() {
+        // Project settings key (lowercase) and the group note assignment
+        // keep today's coloring — the sticky gate only fires at top level
+        let ks = kinds("Project p { note: 'x' }\nTableGroup g { t\n  Note: '''y''' }");
+        assert!(ks.contains(&("note".into(), Kind::Keyword)), "{ks:?}");
+        assert!(ks.contains(&("Note".into(), Kind::Keyword)), "{ks:?}");
+        assert!(ks.contains(&("p".into(), Kind::Name)), "{ks:?}");
     }
 }

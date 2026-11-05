@@ -1,14 +1,72 @@
 //! Deterministic layered layout, shared by the text and image renderers and
 //! by mouse hit-testing. Coordinates are in terminal cells.
 
-use unicode_width::UnicodeWidthStr;
 
 use crate::dbml::ast::Cardinality;
 use crate::dbml::ast::Span;
 use crate::model::{Edge, NodeKind, Schema};
+use iced::Color;
 
 pub const GAP_X: i32 = 5;
 pub const GAP_Y: i32 = 2;
+
+/// Bold text runs wider than the advance classes `Row::est_width` was
+/// calibrated on (regular row font) — headers multiply by this so glyphs
+/// placed after a bold label clear its last character. Deliberately
+/// generous: the estimator undershoots on real desktop fonts, and an
+/// overshoot is just a wider gap while an undershoot rides on the name.
+/// Lives HERE because the box-width computation reserves the header's
+/// glyph room with the same factor the canvas painter places glyphs with.
+pub const BOLD_TEXT: f32 = 1.4;
+
+/// WCAG relative-luminance contrast ratio between two colors (1.0..=21):
+/// the same measure web accessibility uses, so "readable" has a number.
+/// Lives HERE (not in the bin's theme) because the SVG exporter needs it
+/// too.
+pub fn contrast_ratio(a: Color, b: Color) -> f32 {
+    fn lum(c: Color) -> f32 {
+        fn lin(v: f32) -> f32 {
+            if v <= 0.03928 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        }
+        0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+    }
+    let (l1, l2) = (lum(a), lum(b));
+    let (hi, lo) = if l1 >= l2 { (l1, l2) } else { (l2, l1) };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+/// The near-white chrome ink the bands must carry — theme::TEXT's value,
+/// mirrored here because the lib cannot see the bin's theme module.
+const CHROME: Color = Color::from_rgb(0.902, 0.929, 0.953);
+
+/// The band color that carries the white chrome (title, glyphs): a
+/// header may carry ANY user hex, so bright picks are DARKENED —
+/// multiplicative RGB scaling keeps the hue — until the near-white
+/// chrome reads (WCAG 3.5, the large-text bar). Dark bands pass
+/// untouched; the color picker still shows the original hex, and lines
+/// inherit the original color (on the dark canvas a bright line is the
+/// VISIBLE one — only the band, where white chrome sits, adjusts).
+/// Lives HERE for the same reason as contrast_ratio: the exporter clamps
+/// its bands identically.
+pub fn readable_band(bg: Color) -> Color {
+    let mut c = bg;
+    for _ in 0..64 {
+        if contrast_ratio(CHROME, c) >= 3.5 {
+            return c;
+        }
+        c = Color {
+            r: c.r * 0.93,
+            g: c.g * 0.93,
+            b: c.b * 0.93,
+            a: c.a,
+        };
+    }
+    c
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
@@ -26,6 +84,13 @@ pub struct Row {
     pub not_null: Option<bool>,
     pub unique: bool,
     pub note: Option<String>,
+    /// `default:` verbatim (quotes kept).
+    pub default: Option<String>,
+    /// `[increment]` — the records grid renders the row number for unset
+    /// cells on this column (dbdiagram's value chain).
+    pub increment: bool,
+    /// dbdiagram custom properties, shown on the row's hover card.
+    pub custom: Vec<(String, String)>,
 }
 
 impl Row {
@@ -35,19 +100,51 @@ impl Row {
     /// in cells (their WN.PADDING_X = 4 at the 20px 1:1 cell).
     pub const ICON_CELL: f32 = (10.5 + 4.0) / 20.0;
     /// One text-pill badge: glyph run plus its padding/gap, in cells.
-    pub const BADGE_CELL: f32 = 0.456; // one badge-font char in cells
+    pub const BADGE_CELL: f32 = 0.42; // one badge-font char in cells
     pub fn badge_cell(text: &str) -> f32 {
-        0.8 + text.chars().count() as f32 * Self::BADGE_CELL
+        0.6 + text.chars().count() as f32 * Self::BADGE_CELL
     }
     /// Estimated cells per character of sans text at the row font:
     /// ~0.5em average advance with slack, mirroring the canvas painter's
     /// `char_px` so boxes hug their content like dbdiagram's measureText.
     pub const CHAR_CELL: f32 = 0.58;
 
+    /// Approximate rendered width of `text` in CELLS at the row font —
+    /// per-character advance classes instead of one uniform factor
+    /// (dbdiagram measures with the real font; "author_id" is much
+    /// narrower than the old 0.58/char estimate, which showed up as a
+    /// dead gap before the row's first icon). Slightly generous: the
+    /// canvas cannot measure text, so an undershoot would overlap glyphs.
+    pub fn est_width(text: &str) -> f32 {
+        const NARROW: f32 = 0.30;
+        const WIDE: f32 = 0.85;
+        const UPPER: f32 = 0.66;
+        const DIGIT: f32 = 0.55;
+        const LOWER: f32 = 0.55;
+        text.chars()
+            .map(|c| match c {
+                'i' | 'j' | 'l' | 'f' | 't' | 'r' | 'I' | '.' | ',' | ':' | ';' | '\'' | '!'
+                | '|' => NARROW,
+                'm' | 'w' | 'M' | 'W' => WIDE,
+                'A'..='Z' => UPPER,
+                '0'..='9' => DIGIT,
+                '_' => 0.50,
+                '-' | '/' | '(' | ')' | '[' | ']' => 0.36,
+                ' ' => NARROW,
+                c if c.is_lowercase() => LOWER,
+                c if c.is_alphanumeric() => 0.60,
+                _ => 0.50,
+            })
+            .sum()
+    }
+
     pub fn width(&self) -> i32 {
         // left: name inset, then dbdiagram's icon cluster (pk, fk, unique,
-        // note — each 10.5px glyph + 4px gap)
-        let mut w = 1.0 + self.name.width() as f32 * Self::CHAR_CELL + 0.25;
+        // note — each 10.5px glyph + 4px gap). The note icon rides ANY
+        // custom property, not just a `note` key: it is the
+        // "extra info on hover" affordance.
+        let has_info = self.note.is_some() || !self.custom.is_empty();
+        let mut w = 1.0 + Self::est_width(&self.name) + 0.25;
         if self.pk {
             w += Self::ICON_CELL;
         }
@@ -57,11 +154,11 @@ impl Row {
         if self.unique {
             w += Self::ICON_CELL;
         }
-        if self.note.is_some() {
+        if has_info {
             w += Self::ICON_CELL;
         }
         // right: type text, then the "Enum" / "Not Null" pills flush right
-        w += 0.6 + self.ty.width() as f32 * Self::CHAR_CELL;
+        w += 0.6 + Self::est_width(&self.ty);
         if self.ty_enum {
             w += Self::badge_cell("Enum");
         }
@@ -72,6 +169,81 @@ impl Row {
         (w.max(6.0)).ceil() as i32
     }
 }
+
+/// Char-wrap `text` to `max` columns (canvas text cannot wrap); long
+/// unbroken words hard-break so nothing escapes the card.
+pub fn wrap_chars(text: &str, max: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    for para in text.split('\n') {
+        let mut current = String::new();
+        for word in para.split_whitespace() {
+            if word.chars().count() > max {
+                if !current.is_empty() {
+                    lines.push(std::mem::take(&mut current));
+                }
+                let mut chunk = String::new();
+                for c in word.chars() {
+                    chunk.push(c);
+                    if chunk.chars().count() == max {
+                        lines.push(std::mem::take(&mut chunk));
+                    }
+                }
+                current = chunk;
+                continue;
+            }
+            let candidate = current.chars().count() + word.chars().count() + 1;
+            if !current.is_empty() && candidate > max {
+                lines.push(std::mem::take(&mut current));
+            }
+            if current.is_empty() {
+                current.push_str(word);
+            } else {
+                current.push(' ');
+                current.push_str(word);
+            }
+        }
+        lines.push(current);
+    }
+    lines
+}
+
+/// The left-cluster icons a column row can show (dbdiagram's pk /
+/// fk-link / unique fingerprint / note glyphs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowIcon {
+    Pk,
+    Fk,
+    Unique,
+    Note,
+}
+
+
+pub const PK_ICON: &str = "M 6.5625 0.9844 C 8.1935 0.9844 9.5156 2.3065 9.5156 3.9375 C 9.5156 5.5685 8.1935 6.8906 6.5625 6.8906 C 6.1735 6.8906 5.8022 6.8153 5.462 6.6786 L 4.5938 7.5469 H 3.9375 V 8.5313 H 2.9531 V 9.5156 H 0.9844 V 7.5469 L 3.736 4.7952 C 3.6518 4.5171 3.6092 4.2281 3.6094 3.9375 C 3.6094 2.3065 4.9315 0.9844 6.5625 0.9844 Z M 6.5625 0 C 4.388 0 2.625 1.7627 2.625 3.9375 C 2.625 4.1186 2.6373 4.2989 2.6619 4.4772 L 0.1441 6.995 C 0.0519 7.0873 0 7.2125 0 7.343 L 0 10.0078 C 0 10.2797 0.2204 10.5 0.4922 10.5 H 3.4453 C 3.7171 10.5 3.9375 10.2797 3.9375 10.0078 V 9.5156 H 4.4297 C 4.7015 9.5156 4.9219 9.2953 4.9219 9.0234 V 8.6133 L 5.7432 7.7895 C 6.011 7.8464 6.2848 7.875 6.5625 7.875 C 8.737 7.875 10.5 6.1123 10.5 3.9375 C 10.5 1.763 8.7373 0 6.5625 0 Z M 6.5625 2.9531 C 6.5625 3.4968 7.0032 3.9375 7.5469 3.9375 C 8.0905 3.9375 8.5313 3.4968 8.5313 2.9531 C 8.5313 2.4095 8.0905 1.9688 7.5469 1.9688 C 7.0032 1.9688 6.5625 2.4095 6.5625 2.9531 Z";
+pub const FK_ICON: &str = "M 4.6244 6.6258 c -0.2002 0 -0.3885 -0.078 -0.5304 -0.2197 c -1.1204 -1.1205 -1.1204 -2.9437 0 -4.0641 l 1.5016 -1.5016 c 0.5419 -0.542 1.2635 -0.8405 2.032 -0.8405 s 1.4901 0.2985 2.032 0.8405 c 1.1204 1.1204 1.1204 2.9436 0 4.0641 l -1.001 1.001 c -0.1416 0.1417 -0.3299 0.2197 -0.5304 0.2198 c -0.2002 0 -0.3885 -0.078 -0.5304 -0.2197 c -0.1416 -0.1417 -0.2198 -0.3301 -0.2198 -0.5305 c 0 -0.2004 0.0781 -0.3888 0.2198 -0.5305 l 1.001 -1.001 c 0.5355 -0.5355 0.5355 -1.4068 0 -1.9423 c -0.2588 -0.2588 -0.6039 -0.4015 -0.9712 -0.4015 s -0.7123 0.1426 -0.9712 0.4015 l -1.5016 1.5016 c -0.5355 0.5355 -0.5355 1.4068 0 1.9422 c 0.2925 0.2925 0.2925 0.7684 0 1.0609 c -0.1419 0.1417 -0.3302 0.2197 -0.5304 0.2197 z M 2.8725 10.5 c -0.7685 0 -1.4901 -0.2985 -2.032 -0.8405 c -1.1204 -1.1204 -1.1204 -2.9436 0 -4.0641 l 0.7509 -0.7509 c 0.1416 -0.1416 0.3302 -0.2197 0.5304 -0.2197 c 0.2002 0 0.3888 0.0781 0.5304 0.2198 c 0.1416 0.1416 0.2198 0.33 0.2198 0.5304 c 0 0.2004 -0.0781 0.3888 -0.2198 0.5305 l -0.7509 0.7508 c -0.5355 0.5354 -0.5355 1.4067 0 1.9422 c 0.2588 0.2588 0.6039 0.4015 0.9712 0.4015 s 0.7123 -0.1425 0.9712 -0.4015 l 1.5016 -1.5016 c 0.5355 -0.5355 0.5355 -1.4068 0 -1.9422 c -0.1416 -0.1417 -0.2198 -0.3301 -0.2198 -0.5305 s 0.0781 -0.3888 0.2198 -0.5305 c 0.1416 -0.1417 0.3302 -0.2197 0.5304 -0.2197 s 0.3888 0.078 0.5304 0.2196 c 1.1204 1.1205 1.1204 2.9437 0 4.0641 l -1.5016 1.5016 c -0.5419 0.542 -1.2635 0.8405 -2.032 0.8405 z";
+pub const UNIQUE_ICON: &str = "m6.179 10.5005c\
+    -.0797 0-.1606-.0181-.2367-.0562-.2613-.1309-.3669-.4489-.236-.7101.311-.6204.5644-1.2734.7533-1.9409.0796-.2812.3721-.4446.6532-.365.2812.0796.4446.372.365.6532-.207.7314-.4848 1.447-.8255 2.1268-.0928.1852-.2795.2922-.4734.2922z\
+    m-2.3451-.1445c\
+    -.0963 0-.1937-.0263-.2813-.0813-.2473-.1556-.3217-.4823-.1661-.7296.8998-1.4301 1.3753-3.0838 1.3753-4.7822 0-.2922.2369-.5291.5291-.5291s\
+    .5291.2369.5291.5291c0 1.8981-.5318 3.7467-1.5378 5.3457-.1005.1598-.2725.2474-.4483.2474zm\
+    -1.8201-1.0793c-.0927 0-.1865-.0244-.2718-.0755-.2506-.1504-.3318-.4754-.1814-.7259l.0286-.0476c\
+    .0019-.0032.0039-.0064.0059-.0096.6898-1.0958 1.053-2.3593 1.0504-3.6541-0-.7077.2752-1.372.7748-1.8717.4997-.4997 1.164-.7749 1.8706-.7749.7067 0 1.371.2752 1.8707.7749.4997.4996.7748 1.164.7748 1.8706 0 .5513-.0378 1.1093-.1122 1.6584-.0393.2896-.3059.4924-.5954.4532-.2896-.0393-.4925-.3058-.4532-.5954.0681-.5022.1026-1.0123.1026-1.5162 0-.424-.1651-.8226-.4649-1.1224-.2998-.2998-.6984-.4649-1.1224-.4649-.424 0-.8226.1651-1.1224.4649-.2998.2998-.4649.6984-.4649 1.1224.003 1.4923-.4154 2.9496-1.2099 4.2139l\
+    -.0259.0431c-.0992.1653-.2744.2569-.4542.2569zm6.9865-.2111c\
+    -.048 0-.0967-.0066-.1451-.0203-.281-.08-.444-.3727-.364-.6537.3342-1.174.5036-2.3949.5036-3.6287.0002-.6494-.1713-1.2899-.4959-1.8522-.3245-.5624-.7933-1.0312-1.3556-1.356-.5623-.3247-1.2027-.4964-1.852-.4964-.0001 0-.0002 0-.0003 0-.6492 0-1.2895.1716-1.8517.4962-.2531.1461-.5767.0594-.7228-.1937s\
+    -.0594-.5767.1937-.7228c.7229-.4174 1.5463-.638 2.381-.638h.0003c\
+    .8348 0 1.6582.2208 2.3812.6382.7229.4175 1.3257 1.0204 1.7429 1.7434.4173.7231.6378 1.5465.6376 2.3813 0 1.3317-.183 2.65-.544 3.9183-.0662.2326-.2781.3844-.5086.3844z\
+    m-8.4715-1.4646c\
+    -.0775 0-.1562-.0171-.2306-.0532-.2629-.1276-.3726-.4441-.245-.707.3159-.651.476-1.3501.476-2.078 0-.8363.2203-1.6596.6371-2.381.1462-.253.4698-.3397.7228-.1935.253.1462.3397.4698.1935.7228-.3239.5607-.4952 1.201-.4952 1.8517 0 .8893-.1959 1.7438-.5822 2.54-.0915.1885-.2801.2982-.4764.2982z";
+pub const NOTE_ICON: &str = "M 9 1.125 C 9.2063 1.125 9.375 1.2938 9.375 1.5 V 6.75 H 7.5 C 7.0852 6.75 6.75 7.0852 6.75 7.5 V 9.375 H 1.5 C 1.2938 9.375 1.125 9.2063 1.125 9 V 1.5 C 1.125 1.2938 1.2938 1.125 1.5 1.125 H 9 Z M 1.5 10.5 H 6.75 H 6.8789 C 7.2773 10.5 7.6594 10.343 7.9406 10.0617 L 10.0617 7.9406 C 10.343 7.6594 10.5 7.2773 10.5 6.8789 V 6.75 V 1.5 C 10.5 0.6727 9.8273 0 9 0 H 1.5 C 0.6727 0 0 0.6727 0 1.5 V 9 C 0 9.8273 0.6727 10.5 1.5 10.5 Z M 3 7.6875 C 3 7.5383 2.9407 7.3952 2.8352 7.2897 C 2.7298 7.1843 2.5867 7.125 2.4375 7.125 C 2.2883 7.125 2.1452 7.1843 2.0398 7.2897 C 1.9343 7.3952 1.875 7.5383 1.875 7.6875 C 1.875 7.8367 1.9343 7.9798 2.0398 8.0853 C 2.1452 8.1907 2.2883 8.25 2.4375 8.25 C 2.5867 8.25 2.7298 8.1907 2.8352 8.0853 C 2.9407 7.9798 3 7.8367 3 7.6875 Z M 2.4375 2.25 C 2.2883 2.25 2.1452 2.3093 2.0398 2.4148 C 1.9343 2.5202 1.875 2.6633 1.875 2.8125 C 1.875 2.9617 1.9343 3.1048 2.0398 3.2102 C 2.1452 3.3157 2.2883 3.375 2.4375 3.375 C 2.5867 3.375 2.7298 3.3157 2.8352 3.2102 C 2.9407 3.1048 3 2.9617 3 2.8125 C 3 2.6633 2.9407 2.5202 2.8352 2.4148 C 2.7298 2.3093 2.5867 2.25 2.4375 2.25 Z M 3 5.25 C 3 5.1008 2.9407 4.9577 2.8352 4.8522 C 2.7298 4.7468 2.5867 4.6875 2.4375 4.6875 C 2.2883 4.6875 2.1452 4.7468 2.0398 4.8522 C 1.9343 4.9577 1.875 5.1008 1.875 5.25 C 1.875 5.3992 1.9343 5.5423 2.0398 5.6478 C 2.1452 5.7532 2.2883 5.8125 2.4375 5.8125 C 2.5867 5.8125 2.7298 5.7532 2.8352 5.6478 C 2.9407 5.5423 3 5.3992 3 5.25 Z";
+
+pub fn row_icon_path(icon: RowIcon) -> &'static str {
+    match icon {
+        RowIcon::Pk => PK_ICON,
+        RowIcon::Fk => FK_ICON,
+        RowIcon::Unique => UNIQUE_ICON,
+        RowIcon::Note => NOTE_ICON,
+    }
+}
+
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableBox {
@@ -91,6 +263,11 @@ pub struct TableBox {
     pub records: Option<crate::model::NodeRecords>,
     /// Span of the table/enum name in the source (click-to-jump target).
     pub name_span: Option<Span>,
+    /// dbdiagram custom properties on the table, shown on the header's
+    /// hover card.
+    pub custom: Vec<(String, String)>,
+    /// `Note: '...'` inside the block — drives the header's note icon.
+    pub note: Option<String>,
 }
 
 impl TableBox {
@@ -124,6 +301,22 @@ pub struct EdgeRoute {
     pub ends: [(usize, usize); 2],
     /// Cardinality, for the crow's-foot / tick end markers.
     pub card: Cardinality,
+    /// `Ref name: ...`, for the hover name label at the midpoint.
+    pub name: Option<String>,
+    /// `[color: #aabbcc]` — the whole relationship renders in this color.
+    /// EXPLICIT only: the picker's current-color read and the hover
+    /// behavior (explicit lines keep their color; default lines ease
+    /// blue) key on this field alone. The render-time fallback lives in
+    /// `inherited`.
+    pub color: Option<String>,
+    /// The REFERENCED table's resolved header color — the render fallback
+    /// for a line without an explicit `[color:]` (dbdiagram pairs a line
+    /// with the header it points at: `likes.post_id > posts.id` renders
+    /// posts' purple). Always None when `color` is Some.
+    pub inherited: Option<String>,
+    /// The top-level Ref line index (the click-to-pick splice target);
+    /// None for inline `ref:` edges.
+    pub ref_index: Option<usize>,
 }
 
 /// A schema enum definition, for the "Enum" pill's tooltip and the
@@ -132,6 +325,35 @@ pub struct EdgeRoute {
 pub struct EnumInfo {
     pub name: String,
     pub values: Vec<String>,
+    /// Span of the enum's name token (the go-to-definition target).
+    pub name_span: Option<Span>,
+}
+
+/// A table group's rendered region: the bounding box of its member
+/// boxes plus padding (dbdiagram's labeled rounded frame).
+#[derive(Debug, Clone, PartialEq)]
+pub struct GroupRegion {
+    pub name: String,
+    /// `[color: #1E69FD]` — stroke + label color.
+    pub color: Option<String>,
+    /// `Note: '''...'''` — the label-hover tooltip.
+    pub note: Option<String>,
+    /// Header custom properties (`[owner: "team"]`), in order.
+    pub custom: Vec<(String, String)>,
+    /// Region rect in cells (x, y, w, h).
+    pub rect: (i32, i32, i32, i32),
+    /// Member node indices (for hover hit tests).
+    pub members: Vec<usize>,
+}
+
+/// A sticky note on the canvas (dbdiagram's yellow sticky), auto-placed
+/// below the diagram content, stacked left to right.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NoteBox {
+    pub name: String,
+    pub text: String,
+    /// Rect in cells (x, y, w, h).
+    pub rect: (i32, i32, i32, i32),
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -145,6 +367,10 @@ pub struct Layout {
     pub cols: Vec<(i32, i32)>,
     /// Diagram content extents (max right, max bottom).
     pub extent: (i32, i32),
+    /// Table group regions (drawn behind the boxes).
+    pub groups: Vec<GroupRegion>,
+    /// Sticky notes (drawn above the boxes).
+    pub notes: Vec<NoteBox>,
 }
 
 /// Longest-path layering over ref edges (cycles tolerated: Kahn order, with
@@ -225,6 +451,8 @@ fn ref_layers(schema: &Schema) -> Vec<usize> {
 ///   disconnected components (packed left to right, each centered on the
 ///   global center line)
 /// - mergeEdges: edge routing only — `EdgeRoute` already handles it
+/// - TableGroups: members place individually (groups are not units), and
+///   free-standing tables drop below any group frame they would overlap
 pub fn auto_arrange(
     boxes: &[TableBox],
     schema: &Schema,
@@ -404,6 +632,81 @@ pub fn auto_arrange(
         // Pack the next component to the right (componentComponent 80px).
         comp_x = max_right + ARRANGE_COMPONENT_GAP;
     }
+
+    // Free-standing tables must not sit under a TableGroup's frame: the
+    // layering above knows nothing of groups, so a member pair straddling
+    // a middle layer spans that layer's column and buries whatever parked
+    // there. Each region is the members' NEW union box (they were placed
+    // individually above) plus the 2-cell frame padding and 1-cell header
+    // band above — the same rect `layout_with_all_overrides` draws. Every
+    // non-member whose cell intersects one drops below it (the in-layer
+    // gap); the loop re-checks because a drop can land in a lower region
+    // or on another box, and each step moves strictly past an obstacle's
+    // bottom, so it terminates.
+    const GROUP_PAD: i32 = 2; // keep in sync with layout_with_all_overrides
+    let grouped: std::collections::HashSet<usize> = schema
+        .groups
+        .iter()
+        .flat_map(|g| g.members.iter())
+        .filter_map(|n| slot_of.get(n).copied())
+        .collect();
+    let regions: Vec<(i32, i32, i32, i32)> = schema // half-open (x0, y0, x1, y1)
+        .groups
+        .iter()
+        .filter_map(|g| {
+            let mut rect: Option<(i32, i32, i32, i32)> = None;
+            for n in &g.members {
+                let Some(&s) = slot_of.get(n) else {
+                    continue; // stale member, no box
+                };
+                let (x, y) = placed[s];
+                let (w, h) = size[s];
+                rect = Some(match rect {
+                    None => (x, y, x + w, y + h),
+                    Some((x0, y0, x1, y1)) => {
+                        (x0.min(x), y0.min(y), x1.max(x + w), y1.max(y + h))
+                    }
+                });
+            }
+            rect.map(|(x0, y0, x1, y1)| {
+                (
+                    x0 - GROUP_PAD,
+                    y0 - GROUP_PAD - 1,
+                    x1 + GROUP_PAD,
+                    y1 + GROUP_PAD,
+                )
+            })
+        })
+        .collect();
+    for i in 0..m {
+        if grouped.contains(&i) {
+            continue; // members shape the regions; only free tables dodge
+        }
+        let (w, h) = size[i];
+        loop {
+            let (x, y) = placed[i];
+            // obstacles: group frames first, then every other box at its
+            // current spot — a drop must not trade a frame overlap for a
+            // table-table one (later tables re-dodge the earlier drops'
+            // final spots; each pass only ever moves down)
+            let hit = regions
+                .iter()
+                .copied()
+                .chain((0..m).filter(|&o| o != i).map(|o| {
+                    let (ox, oy) = placed[o];
+                    let (ow, oh) = size[o];
+                    (ox, oy, ox + ow, oy + oh)
+                }))
+                .find(|&(ox0, oy0, ox1, oy1)| {
+                    x < ox1 && ox0 < x + w && y < oy1 && oy0 < y + h
+                });
+            let Some((_, _, _, oy1)) = hit else {
+                break;
+            };
+            placed[i].1 = oy1 + ARRANGE_LAYER_GAP_Y;
+        }
+    }
+
     // Normalize to non-negative cells: min corner at the origin (the
     // center lines all sit half the tallest component down — the global
     // center line).
@@ -423,6 +726,19 @@ pub fn layout_with_overrides(
     schema: &Schema,
     overrides: &std::collections::HashMap<String, (i32, i32)>,
 ) -> Layout {
+    layout_with_all_overrides(schema, overrides, &std::collections::HashMap::new())
+}
+
+/// The full form: table position overrides plus STICKY note overrides
+/// (full rects — x, y, w, h in cells — by note name). Notes without an
+/// override keep their auto-placed slot below the content; an override
+/// moves/resizes the note anywhere (no clamping, negative cells fine —
+/// like tables).
+pub fn layout_with_all_overrides(
+    schema: &Schema,
+    overrides: &std::collections::HashMap<String, (i32, i32)>,
+    note_overrides: &std::collections::HashMap<String, (i32, i32, i32, i32)>,
+) -> Layout {
     let layer = ref_layers(schema);
 
     // The schema's enums: never boxes (dbdiagram draws an "Enum" pill
@@ -436,6 +752,7 @@ pub fn layout_with_overrides(
         .map(|n| EnumInfo {
             name: n.name.clone(),
             values: n.columns.iter().map(|c| c.name.clone()).collect(),
+            name_span: n.name_span.clone(),
         })
         .collect();
     let enum_names: std::collections::HashSet<&str> =
@@ -462,37 +779,67 @@ pub fn layout_with_overrides(
                     not_null: c.not_null,
                     unique: c.unique,
                     note: c.note.clone(),
+                    default: c.default.clone(),
+                    custom: c.custom.clone(),
+                    increment: c.increment,
                 })
                 .collect::<Vec<_>>();
+            // the header reserves room for its own affordances — the
+            // title, then the always-visible note glyph (note/custom
+            // tables) and records glyph (records tables, placed RIGHT of
+            // the note glyph or of the title), plus the hover-only color
+            // wheel's slot at the right edge — so a narrow table GROWS
+            // instead of letting the glyphs ride over the wheel. Cell
+            // math mirrors the canvas painter's placement (paint_table /
+            // records_band): title inset 0.6, glyph gap 0.6 to the note,
+            // 0.45 between glyphs, note icon 1.0 cell wide (0.5 cell
+            // height), records icon ≈1.1 cells, wheel slot ≈2.2 cells at
+            // the right edge.
+            let has_info = node.note.is_some() || !node.custom.is_empty();
+            let header_min = 0.6
+                + Row::est_width(&title) * BOLD_TEXT
+                + if has_info { 0.6 + 1.0 } else { 0.0 }
+                + if node.records.is_some() { 0.45 + 1.1 } else { 0.0 }
+                + 0.45
+                + 2.2;
             let content = rows
                 .iter()
                 .map(|r| r.width())
-                .chain(std::iter::once(title.width() as i32 + 2))
+                .chain(std::iter::once((Row::est_width(&title) + 1.0).ceil() as i32))
+                .chain(std::iter::once(header_min.ceil() as i32))
                 .max()
                 .unwrap_or(6);
+            // dbdiagram's inheritance: a table WITHOUT an explicit
+            // `headercolor` renders in its TableGroup's color (an explicit
+            // one always wins)
+            let group_color = schema
+                .groups
+                .iter()
+                .find(|g| g.members.contains(&idx))
+                .and_then(|g| g.color.clone());
             TableBox {
                 node: idx,
                 x: 0,
                 y: 0,
-                w: content + 4,
-                h: rows.len() as i32 + 2,
+                // dbdiagram: each box hugs ITS content (no uniform width),
+                // and the height is exactly header + rows — a spare bottom
+                // row read as an empty section under the column list
+                w: content + 2,
+                h: rows.len() as i32 + 1,
                 title,
                 alias: node.alias.clone(),
-                header_color: node.header_color.clone(),
+                header_color: node
+                    .header_color
+                    .clone()
+                    .or(group_color),
                 rows,
                 records: node.records.clone(),
                 name_span: node.name_span.clone(),
+                custom: node.custom.clone(),
+                note: node.note.clone(),
             }
         })
         .collect();
-
-    // dbdiagram-style uniform width: every box as wide as the widest one
-    // (with a floor), so columns of tables read as tidy equal blocks.
-    let uniform_w = boxes.iter().map(|b| b.w).max().unwrap_or(6).max(16);
-    let mut boxes = boxes;
-    for b in &mut boxes {
-        b.w = uniform_w;
-    }
 
     // Column packing: one column of tables per layer, doc order within.
     // All boxes in a column are left-aligned; `cols` records each column's
@@ -503,8 +850,12 @@ pub fn layout_with_overrides(
     let mut x = 0i32;
     let mut max_right = 0i32;
     let mut max_bottom = 0i32;
+    // groups reserve a 3-cell header-band row ABOVE their topmost member:
+    // starting the packing at 3 keeps that band on-canvas (it would sit at
+    // negative y — clipped — in a fresh session otherwise)
+    let top_offset = if schema.groups.is_empty() { 0 } else { 3 };
     for l in 0..=max_layer {
-        let mut y = 0i32;
+        let mut y = top_offset;
         let mut col_w = 0i32;
         let count = boxes
             .iter()
@@ -557,6 +908,18 @@ pub fn layout_with_overrides(
             *col = (start, end);
         }
     }
+    if std::env::var("DBG_LAYOUT").is_ok() {
+        for b in &placed {
+            eprintln!(
+                "DBG layout box {:?} x={} y={} w={} node={} layer={}",
+                b.title, b.x, b.y, b.w, b.node, layer[b.node]
+            );
+        }
+        eprintln!(
+            "DBG layout cols={:?} overrides={}",
+            cols, overrides.len()
+        );
+    }
 
     let edges = schema
         .edges
@@ -564,14 +927,100 @@ pub fn layout_with_overrides(
         .enumerate()
         .map(|(ei, e)| {
             let (pts, ends) = route(&placed, e, &cols);
+            // color: EXPLICIT `[color:]` only, so the hover easing and the
+            // picker's current-color read see exactly the source
+            // attributes. The render fallback: a line without one takes
+            // the REFERENCED table's resolved header color (which itself
+            // may cascade from its TableGroup) — dbdiagram pairs the line
+            // with the header it points at.
+            let color = e.color.clone();
+            let inherited = if e.color.is_some() {
+                None
+            } else {
+                let (_, rf) = fk_ref(e);
+                placed
+                    .iter()
+                    .find(|b| b.node == rf)
+                    .and_then(|b| b.header_color.clone())
+            };
             EdgeRoute {
                 edge: ei,
                 pts,
                 ends,
                 card: e.card,
+                name: e.name.clone(),
+                color,
+                inherited,
+                ref_index: e.ref_index,
             }
         })
         .collect();
+
+    // Table group regions: each group's member bounding box + 2-cell
+    // padding (live-verified dbdiagram look). Groups with no placed
+    // members drop out.
+    const GROUP_PAD: i32 = 2;
+    let groups = schema
+        .groups
+        .iter()
+        .filter_map(|g| {
+            let mut min_x = i32::MAX;
+            let mut min_y = i32::MAX;
+            let mut max_r = i32::MIN;
+            let mut max_b = i32::MIN;
+            for b in placed.iter().filter(|b| g.members.contains(&b.node)) {
+                min_x = min_x.min(b.x);
+                min_y = min_y.min(b.y);
+                max_r = max_r.max(b.right());
+                max_b = max_b.max(b.bottom());
+            }
+            if min_x == i32::MAX {
+                return None;
+            }
+            Some(GroupRegion {
+                name: g.name.clone(),
+                color: g.color.clone(),
+                note: g.note.clone(),
+                custom: g.custom.clone(),
+                rect: (
+                    min_x - GROUP_PAD,
+                    min_y - GROUP_PAD - 1,
+                    max_r - min_x + 2 * GROUP_PAD,
+                    max_b - min_y + 2 * GROUP_PAD + 1,
+                ),
+                members: g.members.clone(),
+            })
+        })
+        .collect::<Vec<_>>();
+    for gr in &groups {
+        max_right = max_right.max(gr.rect.0 + gr.rect.2);
+        max_bottom = max_bottom.max(gr.rect.1 + gr.rect.3);
+    }
+
+    // Sticky notes: a row below everything, ~14x5 cells each, packed left
+    // to right (dbdiagram's stickies are free-floating; auto-placement
+    // keeps them visible without a drag store).
+    let mut notes = Vec::new();
+    if !schema.notes.is_empty() {
+        let y = max_bottom + 2;
+        let mut x = 0;
+        for n in &schema.notes {
+            // user-dragged/resized notes keep their full rect; the rest
+            // keep the auto slot below the content
+            let rect = match note_overrides.get(&n.name) {
+                Some((nx, ny, nw, nh)) => (*nx, *ny, *nw, *nh),
+                None => (x, y, 14, 5),
+            };
+            notes.push(NoteBox {
+                name: n.name.clone(),
+                text: n.text.clone(),
+                rect,
+            });
+            x += 16;
+        }
+        max_bottom = y + 5;
+        max_right = max_right.max(x);
+    }
 
     Layout {
         boxes: placed,
@@ -579,6 +1028,8 @@ pub fn layout_with_overrides(
         enums,
         cols,
         extent: (max_right, max_bottom + 1),
+        groups,
+        notes,
     }
 }
 
@@ -591,6 +1042,35 @@ impl Layout {
             .filter(|r| r.ends.contains(&(node, col)))
             .map(|r| r.edge)
             .collect()
+    }
+
+    /// Every edge attached to a table (either end) — hovering the table's
+    /// header lights all of its relationships, dbdiagram-style.
+    pub fn edges_touching_table(&self, node: usize) -> Vec<usize> {
+        self.edges
+            .iter()
+            .filter(|r| r.ends.iter().any(|(n, _)| *n == node))
+            .map(|r| r.edge)
+            .collect()
+    }
+
+    /// During a table drag the re-layout recomputes EVERY route from the
+    /// moved positions — the dragged table shifts the column-gap lanes,
+    /// which made unrelated relationship lines wander as the drag crossed
+    /// them. This pins each edge that does not touch `dragged_node` to its
+    /// previous route (matched by index — the source is unchanged
+    /// mid-drag); the dragged table's own edges keep the recomputed,
+    /// live-following ones.
+    pub fn with_frozen_routes(mut self, dragged_node: usize, prev: &Layout) -> Layout {
+        for (i, e) in self.edges.iter_mut().enumerate() {
+            let touches = e.ends.iter().any(|(n, _)| *n == dragged_node);
+            if !touches {
+                if let Some(p) = prev.edges.get(i) {
+                    e.pts = p.pts.clone();
+                }
+            }
+        }
+        self
     }
 }
 
@@ -918,12 +1398,14 @@ Ref: b.b_ref > a.id
         assert_eq!(l.boxes.len(), 1);
         assert_eq!(l.boxes[0].title, "t");
         // the layout carries the enum for the pill's tooltip / hover docs
+        assert_eq!(l.enums.len(), 1);
+        let e = &l.enums[0];
+        assert_eq!(e.name, "st");
+        assert_eq!(e.values, vec!["a".to_string(), "b".to_string()]);
+        // the name token's span: the go-to-definition target
         assert_eq!(
-            l.enums,
-            vec![EnumInfo {
-                name: "st".to_string(),
-                values: vec!["a".to_string(), "b".to_string()],
-            }]
+            e.name_span.as_ref().map(|sp| &src[sp.clone()]),
+            Some("st")
         );
         // and the enum-typed column is flagged
         assert!(l.boxes[0].rows[0].ty_enum);
@@ -949,22 +1431,66 @@ Ref: b.b_ref > a.id
         );
     }
 
+
     #[test]
-    fn boxes_share_a_uniform_width() {
-        // dbdiagram renders all tables at one equal width (the widest one)
+    fn frozen_routes_pin_unrelated_edges_and_release_the_dragged_ones() {
+        // drag c (unconnected) into the a—b route's lane area: the a—b
+        // line is FROZEN (pinned to its pre-drag route); drag b
+        // (connected) instead: its line re-routes live, following b
+        let src = "Table a { id integer [pk] }\nTable b { a_id integer }\nTable c { x integer }\nRef: b.a_id > a.id\n";
+        let schema = crate::model::build(&parser::parse(src).doc);
+        let base = layout(&schema);
+        let c_node = base.boxes.iter().find(|b| b.title == "c").unwrap().node;
+        let b_node = base.boxes.iter().find(|b| b.title == "b").unwrap().node;
+        let c_pos: std::collections::HashMap<String, (i32, i32)> =
+            [("c".to_string(), (base.boxes[0].x + 8, base.boxes[0].y + 2))]
+                .into_iter()
+                .collect();
+        let b_pos: std::collections::HashMap<String, (i32, i32)> =
+            [("b".to_string(), (base.boxes[1].x + 6, base.boxes[1].y + 3))]
+                .into_iter()
+                .collect();
+
+        let moved_c = layout_with_overrides(&schema, &c_pos);
+        let frozen = moved_c.with_frozen_routes(c_node, &base);
+        assert_eq!(
+            frozen.edges[0].pts, base.edges[0].pts,
+            "the unrelated a—b line is pinned to its pre-drag route"
+        );
+
+        let moved_b = layout_with_overrides(&schema, &b_pos);
+        let live = moved_b.with_frozen_routes(b_node, &base);
+        assert_ne!(
+            live.edges[0].pts, base.edges[0].pts,
+            "the dragged table's own line follows"
+        );
+    }
+
+    #[test]
+    fn boxes_hug_their_own_content() {
+        // dbdiagram sizes each table to ITS widest line (name + icons vs
+        // type + badges) — no uniform width stretching every box to the
+        // widest sibling (audit_log read as an accidental wide block)
         let src = "
 Table short { id integer }
 Table much_longer_name { id integer [pk] very_long_column integer }
 ";
         let l = layout_of(src);
         let ws: Vec<i32> = l.boxes.iter().map(|b| b.w).collect();
-        assert!(ws.windows(2).all(|w| w[0] == w[1]), "{ws:?}");
-        // the short box alone needs only 16 cells; uniform width must have
-        // been stretched past its own content by the wide sibling
-        let short_row = 2 + 2 + 1 + 7; // "id integer"
-        assert_eq!(short_row, 12);
-        assert!(ws[0] > short_row + 4, "stretched: {ws:?}");
-        assert!(ws[0] >= 16, "minimum width floor");
+        assert!(
+            ws[0] < ws[1],
+            "the short box is narrower than the long one: {ws:?}"
+        );
+        // the short box hugs its own single line: name inset + name +
+        // 0.25 gap + type inset + type + pads, +2 box padding
+        let short_content = 1.0 + Row::est_width("id") + 0.25 + 0.6 + Row::est_width("integer")
+            + 0.4 + 2.0;
+        assert_eq!(ws[0] as f32, short_content.ceil(), "{ws:?}");
+        // the long box is at least as wide as its longest row needs
+        let long_row = 1.0 + Row::est_width("very_long_column") + 0.25
+            + Row::ICON_CELL /* pk icon */
+            + 0.6 + Row::est_width("integer") + 0.4;
+        assert!(ws[1] as f32 >= long_row, "{ws:?}");
     }
 
     #[test]
@@ -1092,11 +1618,12 @@ Ref: r1.q2_id > q2.id
 
     #[test]
     fn auto_arrange_centers_layers_on_one_line() {
-        // even heights (2 rows + 2) so centering is exact
+        // even heights: one column per table = 1 row + 1 header cell, and
+        // the 2-cell layer gap keeps every center on an integer line
         let (l, schema) = arrange_parts(
-            "Table a { id integer [pk] name varchar }
-Table b { a_id integer x integer }
-Table c { a_id integer y integer }
+            "Table a { id integer [pk] }
+Table b { a_id integer }
+Table c { a_id integer }
 Ref: b.a_id > a.id
 Ref: c.a_id > a.id
 ",
@@ -1179,6 +1706,58 @@ Ref: u.id > t.id
             pos1["u"].0,
             pos1["t"].0 + box_of(&l, "t").w + ARRANGE_LAYER_GAP_X,
             "t and u pack as one component, no enum gap"
+        );
+    }
+
+    fn route_of<'a>(l: &'a Layout, from: &str, to: &str) -> &'a EdgeRoute {
+        l.edges
+            .iter()
+            .find(|r| {
+                let (a, b) = (
+                    l.boxes.iter().find(|x| x.node == r.ends[0].0),
+                    l.boxes.iter().find(|x| x.node == r.ends[1].0),
+                );
+                a.is_some_and(|a| a.title == from) && b.is_some_and(|b| b.title == to)
+            })
+            .expect("the fixture route")
+    }
+
+    #[test]
+    fn an_uncolored_line_wears_the_referenced_table_s_header_color() {
+        // likes.post_id > posts.id with NO explicit [color:]: the line
+        // renders posts' resolved header color — the dbdiagram line ↔
+        // header pairing (the explicit pick on posts does NOT touch the
+        // line's own attribute)
+        let src = "Table posts [headercolor: #7a4f9e] { id integer [pk] }\n\
+                   Table likes { post_id integer [ref: > posts.id] }\n";
+        let l = layout_of(src);
+        let r = route_of(&l, "likes", "posts");
+        assert!(r.color.is_none(), "no explicit color on the line");
+        assert_eq!(
+            r.inherited.as_deref(),
+            Some("#7a4f9e"),
+            "the line falls back to the referenced header"
+        );
+
+        // an explicit `[color:]` wins and leaves the fallback unset
+        let src = "Table posts [headercolor: #7a4f9e] { id integer [pk] }\n\
+                   Table likes { post_id integer }\n\
+                   Ref: likes.post_id > posts.id [color: #f1c40f]\n";
+        let l = layout_of(src);
+        let r = route_of(&l, "likes", "posts");
+        assert_eq!(r.color.as_deref(), Some("#f1c40f"));
+        assert!(r.inherited.is_none(), "explicit color owns the line");
+
+        // the referenced header may itself cascade from a TableGroup
+        let src = "TableGroup g [color: #1e69fd] { posts }\n\
+                   Table posts { id integer [pk] }\n\
+                   Table likes { post_id integer [ref: > posts.id] }\n";
+        let l = layout_of(src);
+        let r = route_of(&l, "likes", "posts");
+        assert_eq!(
+            r.inherited.as_deref(),
+            Some("#1e69fd"),
+            "the fallback resolves through the group cascade"
         );
     }
 }

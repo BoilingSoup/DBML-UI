@@ -1,0 +1,47 @@
+Parser/AST corroboration notes — what the dbdiagram-parity diagnostics work
+did and did not verify (session of Oct 2026).
+
+WHAT IT CORROBORATED
+--------------------
+- The semantic model (AST -> resolution) matches dbdiagram's compiler on
+  every comparable case: name/alias lookup (`Table users as U`), endpoint
+  direction (left of `>` = FK side), nullity flags, enum identity,
+  duplicate detection. Strongest evidence: showcase.dbml pasted into their
+  live editor produced exactly ONE warning (nullable `users.referrer_id`);
+  our validator independently produces exactly that one, same phrasing.
+  Same agreement on dangling-ref / duplicate / group-member errors.
+- Spans are accurate: every diagnostic anchors at a byte offset and lands
+  on the right token (editor-mark tests verify row/column).
+- The AST->text path (formatter) is externally valid: formatted
+  showcase.dbml re-parses with 0 errors in dbdiagram's own editor.
+
+WHAT IT DID NOT CORROBORATE
+---------------------------
+- The `pk` => NOT NULL assumption in the nullable-FK lint is a GUESS
+  (SQL semantics). Could not be verified in their bundle. If dbdiagram
+  treats `[pk]`-only columns as nullable, our lint under-reports there.
+- Error granularity deliberately diverges: broken formatted file -> their
+  6 index errors (per token) vs our 2 warnings (per index entry). Message
+  parity, not parse parity.
+- Recovery is intentionally different: their compiler bails on the first
+  hard error (one bad ref made a whole doc fail to render); ours recovers
+  per-item ("loosey goosey" on purpose). Parser-error comparison beyond
+  mild cases is therefore not meaningful.
+- Constructs the diagnostics never touch got no new evidence: records,
+  checks, index `type: hash`, multi-column refs, schema qualifiers,
+  project settings. Those still rest on the vendored upstream fixture
+  suite (90+ goldens) from before this work.
+- Their deployment rejects every `check:` syntax form ("'check' must be a
+  function expression") — first divergence to triage if a conformance
+  test is ever built.
+
+CLARIFICATION
+-------------
+The only parser-adjacent bug this session surfaced (bare-comma index
+settings) was deliberate parser leniency; the actual bug was in the
+FORMATTER emitting that form — found by the round-trip diff, not by the
+diagnostics.
+
+If real parser conformance is wanted next: differential fuzzing —
+generate/perturb DBML, run both parsers, compare accepted construct sets
+and resolved models rather than error text.

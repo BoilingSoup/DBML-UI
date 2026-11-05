@@ -24,6 +24,16 @@ pub enum Move {
     ParagraphBack,
     /// Jump to (row, col), clamped into the text.
     Jump(usize, usize),
+    /// Vim's `$`: end of line, and the desired column goes MAXCOL —
+    /// vertical moves land on EVERY line's end until a horizontal motion
+    /// re-aims (vim's curswant semantics).
+    EndMax,
+    /// Land on an absolute row at the DESIRED column, preserving the aim
+    /// — the animated scroll's per-tick cursor move (a `Jump` would clamp
+    /// the column to each crossed line and feed the collapse forward:
+    /// one blank line during ctrl+u used to park the cursor at col 0 for
+    /// the rest of the scroll).
+    GotoRow(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -51,6 +61,9 @@ pub struct Buffer {
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
     search: Option<Regex>,
+    /// `:noh` — the pattern stays alive for `n`/`N`, but the match bands
+    /// draw hidden until a fresh search re-shows them.
+    search_hl_hidden: bool,
 }
 
 #[allow(dead_code)] // full editing surface kept for the engine
@@ -160,6 +173,51 @@ impl Buffer {
             (a, self.advance(self.cursor))
         };
         Some((start, end))
+    }
+
+    /// The charwise selection as a DRAWABLE exclusive range: like
+    /// `selection_range`, but the end never leaves the end line's text.
+    /// The cursor may legitimately sit on the insert column one past the
+    /// last char (a click past EOL clamps there via px_to_pos/Jump), and
+    /// `advance`'s wrap to the next row start is right for text semantics
+    /// (the newline counts as selected) but wrong for pixels: the band
+    /// must stop at the last character cell instead of painting the empty
+    /// space past EOL. Pure; the canvas maps it to rectangles.
+    pub fn selection_draw_range(&self) -> Option<(Pos, Pos)> {
+        let a = self.selection?;
+        let c = self.cursor;
+        let (start, end) = if self.before(c, a) { (c, a) } else { (a, c) };
+        // end.col + 1: the char under the cursor side counts as covered
+        // (same convention as selection_range's advance), clamped so an
+        // insert-column end draws through the last char, not past it
+        let end_col = (end.col + 1).min(self.line_len(end.row));
+        Some((
+            start,
+            Pos {
+                row: end.row,
+                col: end_col,
+            },
+        ))
+    }
+
+    /// The charwise selection as a DRAWABLE exclusive range for the
+    /// THIN-CARET modes (insert / regular): the caret is the insertion
+    /// boundary, so the band stops AT it — no `+1`. (The inclusive
+    /// `selection_draw_range` is the vim-visual convention, where the
+    /// cursor sits ON the last selected char.) The end clamps to the end
+    /// line's text the same way.
+    pub fn selection_draw_range_exclusive(&self) -> Option<(Pos, Pos)> {
+        let a = self.selection?;
+        let c = self.cursor;
+        let (start, end) = if self.before(c, a) { (c, a) } else { (a, c) };
+        let end_col = end.col.min(self.line_len(end.row));
+        Some((
+            start,
+            Pos {
+                row: end.row,
+                col: end_col,
+            },
+        ))
     }
 
     /// One cell past `p`, wrapping to the next line start after EOL.
@@ -689,8 +747,10 @@ impl Buffer {
         std::mem::swap(&mut next.undo, &mut self.undo);
         std::mem::swap(&mut next.redo, &mut self.redo);
         let search = self.search.clone();
+        let hl_hidden = self.search_hl_hidden;
         *self = next;
         self.search = search;
+        self.search_hl_hidden = hl_hidden;
     }
 
     // ---- cursor movement ----
@@ -718,11 +778,18 @@ impl Buffer {
             }
             Move::Up => {
                 let row = row.checked_sub(1)?;
-                Some((row, fit_col(col, &lines[row])))
+                // aim at the REMEMBERED column, not the current one: a
+                // short/blank line clamps the landing col only, so the
+                // aim survives the crossing (vim's curswant)
+                Some((row, fit_col(self.desired_col, &lines[row])))
             }
-            Move::Down => Some((row + 1, fit_col(col, lines.get(row + 1)?))),
+            Move::Down => Some((
+                row + 1,
+                fit_col(self.desired_col, lines.get(row + 1)?),
+            )),
             Move::Head => Some((row, 0)),
             Move::End => Some((row, lines[row].chars().count())),
+            Move::EndMax => Some((row, lines[row].chars().count())),
             Move::Top => Some((0, fit_col(col, &lines[0]))),
             Move::Bottom => {
                 let row = lines.len() - 1;
@@ -793,6 +860,13 @@ impl Buffer {
                 let col = fit_col(col, &lines[row]);
                 Some((row, col))
             }
+            Move::GotoRow(row) => {
+                // curswant semantics: aim at the remembered column, keep
+                // the aim across short/blank lines (move_cursor preserves
+                // it for this move)
+                lines.get(row.min(lines.len() - 1))
+                    .map(|l| (row.min(lines.len() - 1), fit_col(self.desired_col, l)))
+            }
         }
     }
 
@@ -801,18 +875,44 @@ impl Buffer {
         if let Some(next) = self.next_cursor((row, col), m) {
             self.cursor.row = next.0;
             self.cursor.col = next.1;
+            // vim's curswant: vertical moves AIM at the remembered column
+            // without consuming it (short lines clamp the landing only);
+            // every other motion re-aims, and `$` aims at every line's
+            // end until a horizontal motion re-aims.
+            match m {
+                Move::Up | Move::Down | Move::GotoRow(_) => {}
+                Move::EndMax => self.desired_col = usize::MAX,
+                _ => self.desired_col = next.1,
+            }
         }
     }
 
     fn set_col(&mut self, col: usize) {
         self.cursor.col = col;
+        // edits move the cursor horizontally: the vertical aim follows
+        // (typing then `j` aims from the new column, like vim)
+        self.desired_col = col;
+    }
+
+    /// Clamp the cursor column onto the line's last char (col len-1;
+    /// empty lines: 0) WITHOUT touching the vertical-move aim — vim
+    /// normal/visual never rest on the past-EOL insert cell, but `$`'s
+    /// MAXCOL aim must survive the clamp so the next `j` still rides the
+    /// line ends. Insert mode skips this: its caret lives past the last
+    /// char by design.
+    pub fn clamp_cursor_to_line_end(&mut self) {
+        let max = self.lines[self.cursor.row].chars().count().saturating_sub(1);
+        if self.cursor.col > max {
+            self.cursor.col = max;
+        }
     }
 
     fn before(&self, a: Pos, b: Pos) -> bool {
         (a.row, a.col) < (b.row, b.col)
     }
 
-    fn line_len(&self, row: usize) -> usize {
+    /// Chars in a row (cursor clamping when restoring a session).
+    pub fn line_len(&self, row: usize) -> usize {
         self.line(row).chars().count()
     }
 
@@ -849,6 +949,36 @@ impl Buffer {
         self.lines.insert(r + 1, rest);
         self.cursor.row += 1;
         self.set_col(0);
+    }
+
+    /// `o`: open a line below the cursor's line, wearing the indent the
+    /// position calls for (see `opened_indent`). Atomic with the cursor
+    /// the user actually occupied — the undo snapshot must hold the
+    /// PRE-command position, not the line-end spot a move-first
+    /// implementation would record (undoing `o` used to land on a
+    /// fabricated end-of-line column, and the left-ctrl chord salvage
+    /// then pushed that ghost into the jumplist).
+    pub fn open_line_below(&mut self) {
+        self.push_history();
+        let r = self.cursor.row;
+        let indent = opened_indent(&self.lines[r], true);
+        self.lines.insert(r + 1, indent.clone());
+        self.cursor.row += 1;
+        self.set_col(indent.chars().count());
+    }
+
+    /// `O`: open a line above, the cursor riding up onto it (the old
+    /// line shifts down untouched). The new line sits where the cursor
+    /// line's own position dictates: the same indent for a body line or
+    /// a block closer, the opener's own (shallower) indent when the
+    /// cursor is ON the opener — above it is outside the block. Same
+    /// snapshot contract as `open_line_below`.
+    pub fn open_line_above(&mut self) {
+        self.push_history();
+        let r = self.cursor.row;
+        let indent = opened_indent(&self.lines[r], false);
+        self.lines.insert(r, indent.clone());
+        self.set_col(indent.chars().count());
     }
 
     /// Backspace.
@@ -895,6 +1025,25 @@ impl Buffer {
     /// Delete `chars` characters forward from the cursor; newlines count as
     /// one character and crossing lines joins them. Deletes an active
     /// selection first.
+    /// Replace the `chars` chars at (`row`, `col`) with `text` as ONE
+    /// undo step — the quick-fix splice: a plain delete+insert splits into
+    /// two history entries, and undo then walks the fix back in halves
+    /// with the caret teleporting between them. The snapshot's caret is
+    /// the CALLER's position (pre-move), so undo returns there.
+    pub fn replace_span(&mut self, row: usize, col: usize, chars: usize, text: &str) {
+        self.push_history();
+        let _ = self.delete_selection();
+        self.move_cursor(Move::Jump(row, col));
+        if chars > 0 {
+            self.delete_str_raw(chars);
+        }
+        let (r, cpos) = (self.cursor.row, self.cursor.col);
+        let line = &mut self.lines[r];
+        let off = char_off(line, cpos);
+        line.insert_str(off, text);
+        self.set_col(cpos + text.chars().count());
+    }
+
     pub fn delete_str(&mut self, chars: usize) {
         if self.delete_selection() {
             return;
@@ -904,6 +1053,80 @@ impl Buffer {
         }
         self.push_history();
         self.delete_str_raw(chars);
+    }
+
+    /// The (char column, commented?) state of a line's `//` opener at its
+    /// first non-blank char.
+    fn comment_state(line: &str) -> (usize, bool) {
+        let col = line.chars().take_while(|c| c.is_whitespace()).count();
+        let commented = line.chars().skip(col).take(2).eq(['/', '/']);
+        (col, commented)
+    }
+
+    /// Move the inclusive row range up/down one line (a rotation: the
+    /// neighbor line swaps places with the block). One undo unit. False
+    /// at the document edges (no move).
+    pub fn move_lines(&mut self, first: usize, last: usize, down: bool) -> bool {
+        if down {
+            if last + 1 >= self.lines.len() {
+                return false;
+            }
+            self.push_history();
+            let below = self.lines.remove(last + 1);
+            self.lines.insert(first, below);
+        } else {
+            if first == 0 {
+                return false;
+            }
+            self.push_history();
+            let above = self.lines.remove(first - 1);
+            self.lines.insert(last, above);
+        }
+        true
+    }
+
+    /// Toggle a `//` line comment on `row` at its first non-blank column
+    /// (one undo unit): `// text` becomes `text`, `text` becomes `// text`.
+    pub fn toggle_line_comment(&mut self, row: usize) {
+        // the raw ops delete the active selection first: clear it so a
+        // live visual highlight is not eaten by the edit
+        self.cancel_selection();
+        let line = self.lines[row].clone();
+        let (col, commented) = Self::comment_state(&line);
+        self.push_history();
+        self.move_cursor(Move::Jump(row, col));
+        if commented {
+            let remove = if line.chars().nth(col + 2) == Some(' ') { 3 } else { 2 };
+            self.delete_str_raw(remove);
+        } else {
+            let ins = if line.trim().is_empty() { "//" } else { "// " };
+            self.insert_str_raw(ins);
+        }
+    }
+
+    /// Toggle `//` over the inclusive row range as ONE undo unit:
+    /// uncomment only when EVERY line is commented, otherwise comment
+    /// them all (vim-commentary's visual gc).
+    pub fn toggle_comment_rows(&mut self, first: usize, last: usize) {
+        // clear the visual highlight before editing (the raw ops would
+        // otherwise delete the selection text on the first insert)
+        self.cancel_selection();
+        let all_commented = (first..=last).all(|r| Self::comment_state(&self.lines[r]).1);
+        self.push_history();
+        for r in first..=last {
+            let line = self.lines[r].clone();
+            let (col, commented) = Self::comment_state(&line);
+            self.move_cursor(Move::Jump(r, col));
+            if all_commented {
+                let remove = if line.chars().nth(col + 2) == Some(' ') { 3 } else { 2 };
+                self.delete_str_raw(remove);
+            } else if !commented {
+                // mixed: comment the bare lines only — a line already
+                // carrying // never gains a second //
+                let ins = if line.trim().is_empty() { "//" } else { "// " };
+                self.insert_str_raw(ins);
+            }
+        }
     }
 
     /// `delete_str` without the undo snapshot: compose with `push_history`
@@ -1090,7 +1313,7 @@ impl Buffer {
         }
     }
 
-    fn insert_newline_raw(&mut self) {
+    pub(crate) fn insert_newline_raw(&mut self) {
         self.delete_selection();
         let (r, cpos) = (self.cursor.row, self.cursor.col);
         let mut line = self.lines[r].clone();
@@ -1102,7 +1325,7 @@ impl Buffer {
         self.cursor.col = 0;
     }
 
-    fn insert_str_raw(&mut self, s: &str) {
+    pub(crate) fn insert_str_raw(&mut self, s: &str) {
         self.delete_selection();
         let (r, cpos) = (self.cursor.row, self.cursor.col);
         let line = &mut self.lines[r];
@@ -1176,9 +1399,21 @@ impl Buffer {
         !self.undo.is_empty()
     }
 
+    /// Entries on the undo stack: the left-ctrl pair salvage compares this
+    /// across a bare letter to learn whether that copy edited the buffer.
+    pub fn history_len(&self) -> usize {
+        self.undo.len()
+    }
+
     /// A redo step is available (gates the toolbar Redo button).
     pub fn can_redo(&self) -> bool {
         !self.redo.is_empty()
+    }
+
+    /// One history snapshot for a composite edit (vim's put): subsequent
+    /// raw mutations share this single undo unit.
+    pub fn begin_edit(&mut self) {
+        self.push_history();
     }
 
     fn push_history(&mut self) {
@@ -1225,12 +1460,13 @@ impl Buffer {
 
     // ---- search ----
 
-    /// Compile a regex pattern; returns false on invalid pattern (keeps the
-    /// previous one).
+    /// Compile a regex pattern; returns false on invalid pattern (keeps
+    /// the previous one). A fresh pattern shows its match bands again.
     pub fn set_search_pattern(&mut self, pattern: &str) -> bool {
         match Regex::new(pattern) {
             Ok(re) => {
                 self.search = Some(re);
+                self.search_hl_hidden = false;
                 true
             }
             Err(_) => false,
@@ -1245,6 +1481,46 @@ impl Buffer {
     /// Move the cursor to the next match at-or-after the cursor (wrapping).
     /// When `from_cursor` is false, a match starting exactly at the cursor
     /// is skipped (used for `n`).
+    /// Drop the search pattern (the GUI find's × / empty query).
+    pub fn clear_search(&mut self) {
+        self.search = None;
+        self.search_hl_hidden = false;
+    }
+
+    /// `:noh`: hide the match bands while keeping the pattern — `n`/`N`
+    /// keep cycling (vim's hlsearch-off).
+    pub fn hide_search_hl(&mut self) {
+        self.search_hl_hidden = true;
+    }
+
+    /// The match spans as they DRAW: empty while the highlights are
+    /// hidden (`hide_search_hl`), the real spans otherwise. Cycling and
+    /// the find bar's "n of m" read `search_match_spans` instead.
+    pub fn search_hl_spans(&self) -> Vec<(usize, usize, usize)> {
+        if self.search_hl_hidden {
+            Vec::new()
+        } else {
+            self.search_match_spans()
+        }
+    }
+
+    /// Every search match as (row, start col, end col) spans — the
+    /// engine's matches never span lines — in document order.
+    pub fn search_match_spans(&self) -> Vec<(usize, usize, usize)> {
+        let Some(re) = &self.search else { return Vec::new() };
+        let mut out = Vec::new();
+        for (r, line) in self.lines.iter().enumerate() {
+            for m in re.find_iter(line) {
+                let start = line[..m.start()].chars().count();
+                let end = line[..m.end()].chars().count();
+                if end > start {
+                    out.push((r, start, end));
+                }
+            }
+        }
+        out
+    }
+
     pub fn search_forward(&mut self, from_cursor: bool) -> bool {
         self.search_next(true, from_cursor)
     }
@@ -1320,6 +1596,26 @@ fn replace_char_at(s: &mut String, col: usize, c: char) {
 
 fn char_off(s: &str, col: usize) -> usize {
     s.char_indices().nth(col).map(|(i, _)| i).unwrap_or(s.len())
+}
+
+/// The indent a vim `o`/`O` line should wear, given the cursor line:
+/// vim's autoindent (the new line inherits the reference line's leading
+/// whitespace), plus — for the line BELOW — the smart-enter block rule
+/// (`Editor::smart_enter`'s same unit): code that ends in `{` opens a
+/// block, so the line under it sits INSIDE the block, one unit deeper.
+/// A `//` comment tail never opens a block (the smart-enter rule).
+fn opened_indent(reference: &str, below: bool) -> String {
+    const UNIT: &str = "  ";
+    let base: String = reference.chars().take_while(|ch| ch.is_whitespace()).collect();
+    if !below {
+        return base;
+    }
+    let code = reference.split("//").next().unwrap_or("").trim_end();
+    if code.ends_with('{') {
+        format!("{base}{UNIT}")
+    } else {
+        base
+    }
 }
 
 // ---- vim-style word scanning ----
@@ -1405,6 +1701,7 @@ fn find_word_start_backward(line: &str, start_col: usize) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     fn buf(s: &str) -> Buffer {
@@ -1430,13 +1727,16 @@ mod tests {
     }
 
     #[test]
-    fn up_down_clamp_without_sticky_column() {
+    fn up_down_clamp_and_keep_the_aim() {
+        // short lines clamp the LANDING column but never consume the aim
+        // (the old contract — "no stickiness" — was vim-divergent: crossing
+        // a short line used to collapse the column for good)
         let mut b = buf("hello\nab\nlonger line");
         b.move_cursor(Move::Jump(0, 4));
         b.move_cursor(Move::Down); // "ab" (len 2) clamps to 2
         assert_eq!(b.cursor().1, 2);
-        b.move_cursor(Move::Down); // no stickiness: stays 2
-        assert_eq!(b.cursor().1, 2);
+        b.move_cursor(Move::Down);
+        assert_eq!(b.cursor().1, 4, "the aim (4) survived the short line");
     }
 
     #[test]
@@ -1572,6 +1872,153 @@ mod tests {
     }
 
     #[test]
+    fn selection_draw_range_stops_at_the_lines_text() {
+        // A click past EOL clamps (px_to_pos / Jump) to the insert column,
+        // one past the last char: the drawable range must never extend past
+        // the last character cell, while selection_range keeps its wrapped
+        // text semantics (the newline counts as selected)
+        let mut b = buf("hello\nab");
+        b.move_cursor(Move::Jump(0, 5));
+        b.start_selection();
+        assert_eq!(b.pos(), Pos { row: 0, col: 5 });
+        assert_eq!(
+            b.selection_range(),
+            Some((Pos { row: 0, col: 5 }, Pos { row: 1, col: 0 })),
+            "text semantics still wrap past EOL"
+        );
+        assert_eq!(
+            b.selection_draw_range(),
+            Some((Pos { row: 0, col: 5 }, Pos { row: 0, col: 5 })),
+            "press-hold at the insert column: empty span, nothing to band"
+        );
+
+        // dragging left: the band covers cols 2..5 (through the last char)
+        // on the SAME row — it must not wrap onto the next line
+        b.move_cursor(Move::Jump(0, 2));
+        assert_eq!(
+            b.selection_draw_range(),
+            Some((Pos { row: 0, col: 2 }, Pos { row: 0, col: 5 }))
+        );
+
+        // multi-line: the end row covers only its own cells; an
+        // insert-column end draws through its last char, on its own row
+        // (trailing newline so the wrap target row exists)
+        let mut b = buf("hello\nmid\nab\n");
+        b.move_cursor(Move::Jump(0, 2));
+        b.start_selection();
+        b.move_cursor(Move::Jump(2, 2));
+        assert_eq!(
+            b.selection_range(),
+            Some((Pos { row: 0, col: 2 }, Pos { row: 3, col: 0 })),
+        );
+        assert_eq!(
+            b.selection_draw_range(),
+            Some((Pos { row: 0, col: 2 }, Pos { row: 2, col: 2 })),
+            "end row banded through its last char, no wrap to row 3"
+        );
+
+        // an empty END line has no last char cell: nothing draws on it
+        let mut b = buf("hello\n\nab");
+        b.move_cursor(Move::Jump(0, 1));
+        b.start_selection();
+        b.move_cursor(Move::Jump(1, 0));
+        assert_eq!(
+            b.selection_draw_range(),
+            Some((Pos { row: 0, col: 1 }, Pos { row: 1, col: 0 })),
+            "end col clamps to the empty line's zero cells"
+        );
+    }
+
+    #[test]
+    fn drag_past_eol_selects_like_ending_exactly_at_line_end() {
+        // however far past EOL the drag ends, the clamp lands on the
+        // insert column, so the selection matches a drag ending exactly at
+        // the line's last available position
+        let at_end = |end_col| {
+            let mut b = buf("hello\nworld");
+            b.move_cursor(Move::Jump(0, 1));
+            b.start_selection();
+            b.move_cursor(Move::Jump(0, end_col));
+            (b.pos(), b.selection_range(), b.selection_draw_range())
+        };
+        let (pos, range, draw_range) = at_end(5);
+        assert_eq!(pos, Pos { row: 0, col: 5 }, "line end is the insert column");
+        for past in [6, 50, 500] {
+            assert_eq!(
+                at_end(past),
+                (pos, range, draw_range),
+                "a drag ending {past} cols past EOL selects the same span"
+            );
+        }
+
+        // anchor on the insert column, dragging left: identical band to a
+        // selection whose cursor side ends exactly at line end
+        let mut anchored_past = buf("hello\nworld");
+        anchored_past.move_cursor(Move::Jump(0, 5));
+        anchored_past.start_selection();
+        anchored_past.move_cursor(Move::Jump(0, 2));
+        let mut anchored_at = buf("hello\nworld");
+        anchored_at.move_cursor(Move::Jump(0, 5));
+        anchored_at.start_selection();
+        anchored_at.move_cursor(Move::Jump(0, 2));
+        assert_eq!(
+            anchored_past.selection_range(),
+            anchored_at.selection_range()
+        );
+        assert_eq!(
+            anchored_past.selection_draw_range(),
+            Some((Pos { row: 0, col: 2 }, Pos { row: 0, col: 5 })),
+            "the band stops at the last char cell"
+        );
+    }
+
+    #[test]
+    fn vertical_moves_keep_the_desired_column_across_short_lines() {
+        // the user's repro: `$` on line 1, then `j` past a BLANK line —
+        // the aim must survive the crossing (vim curswant), not collapse
+        // to the blank line's column 0
+        let mut b = buf("one two three\n\nfour five six\nseven eight");
+        b.move_cursor(Move::End);
+        assert_eq!(b.cursor(), (0, 13));
+        b.move_cursor(Move::Down); // the blank line: landing clamps to 0
+        assert_eq!(b.cursor(), (1, 0));
+        b.move_cursor(Move::Down);
+        assert_eq!(b.cursor(), (2, 13), "the aim survived the blank line");
+        b.move_cursor(Move::Down);
+        assert_eq!(b.cursor(), (3, 11), "clamped to this line's length");
+        b.move_cursor(Move::Up);
+        assert_eq!(b.cursor(), (2, 13), "aiming back up re-lands the column");
+        // a horizontal motion re-aims
+        b.move_cursor(Move::Back);
+        assert_eq!(b.cursor(), (2, 12));
+        b.move_cursor(Move::Down);
+        assert_eq!(b.cursor(), (3, 11), "the new aim (12) clamped");
+    }
+
+    #[test]
+    fn dollar_aims_at_every_lines_end_until_re_aimed() {
+        // vim's $: curswant = MAXCOL — j/k ride each line's end, even
+        // through lines that end BEFORE the original column
+        let mut b = buf("one two three\nshort\n\nlonger line here");
+        b.move_cursor(Move::EndMax);
+        assert_eq!(b.cursor(), (0, 13));
+        b.move_cursor(Move::Down);
+        assert_eq!(b.cursor(), (1, 5), "short line: its end");
+        b.move_cursor(Move::Down);
+        assert_eq!(b.cursor(), (2, 0), "blank line: its end");
+        b.move_cursor(Move::Down);
+        assert_eq!(b.cursor(), (3, 16), "long line: still riding the end");
+        // typing re-aims via set_col
+        b.set_col(10);
+        b.move_cursor(Move::Up);
+        assert_eq!(b.cursor(), (2, 0), "clamped to the blank line");
+        b.move_cursor(Move::Up);
+        assert_eq!(b.cursor(), (1, 5), "clamped to the short line");
+        b.move_cursor(Move::Up);
+        assert_eq!(b.cursor(), (0, 10), "the re-aimed column, not MAXCOL");
+    }
+
+    #[test]
     fn undo_redo_roundtrip() {
         let mut b = buf("abc");
         b.move_cursor(Move::End);
@@ -1605,9 +2052,79 @@ mod tests {
     }
 
     #[test]
+    fn hidden_hl_keeps_the_pattern_and_fresh_search_re_shows() {
+        let mut b = buf("foo bar\nfoo baz");
+        assert!(b.set_search_pattern("foo"));
+        assert_eq!(b.search_hl_spans().len(), 2);
+        // :noh — the bands drop but the engine keeps cycling
+        b.hide_search_hl();
+        assert!(b.search_hl_spans().is_empty(), "hidden");
+        assert_eq!(b.search_match_spans().len(), 2, "the pattern lives");
+        assert!(b.search_forward(false), "n works while hidden");
+        // an invalid pattern keeps the previous one (still hidden)
+        assert!(!b.set_search_pattern("("));
+        assert!(b.search_hl_spans().is_empty());
+        // a valid fresh pattern re-shows the bands
+        assert!(b.set_search_pattern("bar"));
+        assert_eq!(b.search_hl_spans().len(), 1, "re-shown");
+        // clear_search drops pattern and flag together
+        b.hide_search_hl();
+        b.clear_search();
+        assert!(b.search_match_spans().is_empty());
+        assert!(b.search_hl_spans().is_empty());
+        assert!(b.set_search_pattern("foo"));
+        assert_eq!(b.search_hl_spans().len(), 2);
+    }
+
+    #[test]
     fn text_roundtrip() {
         let src = "a\nb\nc\n";
         let b = Buffer::from_text(src);
         assert_eq!(b.text(), src);
+    }
+
+    #[test]
+    fn opened_lines_wear_the_indent_their_position_calls_for() {
+        // a body line: `o`/`O` inherit its indent (vim autoindent)
+        let mut b = buf("Table users {\n  id integer\n}");
+        b.move_cursor(Move::Jump(1, 4));
+        b.open_line_below();
+        assert_eq!(b.lines(), ["Table users {", "  id integer", "  ", "}"]);
+        assert_eq!(b.pos(), Pos { row: 2, col: 2 }, "cursor after the indent");
+        b.move_cursor(Move::Jump(1, 4));
+        b.open_line_above();
+        assert_eq!(b.lines(), ["Table users {", "  ", "  id integer", "  ", "}"]);
+        assert_eq!(b.pos(), Pos { row: 1, col: 2 });
+
+        // the opener: the line BELOW sits inside the block, one unit
+        // deeper; the line ABOVE is outside it, at the opener's indent
+        let mut b = buf("Table users {\n  id integer\n}");
+        b.move_cursor(Move::Jump(0, 6));
+        b.open_line_below();
+        assert_eq!(b.lines(), ["Table users {", "  ", "  id integer", "}"]);
+        b.undo();
+        assert_eq!(b.lines(), ["Table users {", "  id integer", "}"]);
+        b.move_cursor(Move::Jump(0, 6));
+        b.open_line_above();
+        assert_eq!(b.lines(), ["", "Table users {", "  id integer", "}"]);
+
+        // the closer: `o` continues at the closer's indent (still the
+        // block's level for an indented closer), `O` lands inside
+        let mut b = buf("Table users {\n  records (id) {\n    1\n  }\n}");
+        b.move_cursor(Move::Jump(3, 2));
+        b.open_line_below();
+        assert_eq!(b.lines()[4], "  ", "below the inner closer: body level");
+        b.move_cursor(Move::Jump(3, 2));
+        b.open_line_above();
+        assert_eq!(b.lines()[3], "  ", "above the inner closer: same level");
+
+        // a comment tail never MAKES a block open — but the `{` before
+        // the `//` still does
+        let mut b = buf("Table users { // many");
+        b.open_line_below();
+        assert_eq!(b.lines()[1], "  ", "the {{ before the // still opens");
+        let mut b = buf("// TODO {");
+        b.open_line_below();
+        assert_eq!(b.lines()[1], "", "a comment's {{ opens nothing");
     }
 }

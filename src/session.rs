@@ -15,9 +15,6 @@
 //! Hand-rolled length-prefixed text, no serde: buffer text is arbitrary
 //! UTF-8, so sections carry byte lengths rather than trusting newlines.
 
-// Desktop only: the web session is inert (no file system), so the
-// encoding machinery has no caller there.
-#[cfg(not(target_arch = "wasm32"))]
 const MAGIC: &str = "dbml-ui session 1";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -96,7 +93,6 @@ pub fn load() -> Option<Session> {
     None
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub fn encode(s: &Session) -> String {
     let mut out = String::new();
     out.push_str(MAGIC);
@@ -123,7 +119,6 @@ pub fn encode(s: &Session) -> String {
     out
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub fn decode(text: &str) -> Option<Session> {
     let mut rest = text.strip_prefix(MAGIC)?.strip_prefix('\n')?;
     let mut session = Session::default();

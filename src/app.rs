@@ -2779,6 +2779,50 @@ pub(crate) fn map_key_event(
     Some((code, m))
 }
 
+/// winit's web backend never reports held modifiers: every KeyPressed
+/// arrives with empty flags even mid-chord (ctrl+z reads as plain z —
+/// which typed 'z' into the editor) and ModifiersChanged never fires at
+/// all, so the browser's modifier state simply doesn't reach iced (both
+/// verified in the browser console). listen_with takes a bare fn pointer,
+/// so the held set lives in these atomics: the web key listener records
+/// each modifier press/release through [`web_mods_record`] and folds the
+/// held set into every key with [`web_mods_held`], making the web build
+/// look like the desktop one to every downstream consumer (global chords,
+/// the vim engine's ctrl+r/ctrl+o/ctrl+a, the toolbar Ctrl+Z undo). The
+/// X11 physical-ctrl arbiter is untouched — its bridge stays inert here.
+/// Meta folds into the ctrl bit: web apps map Cmd to Ctrl universally
+/// (cmd+z undoes), and KeyModifiers has no meta slot.
+#[cfg(target_arch = "wasm32")]
+mod web_mods {
+    use iced::keyboard::{key::Named, Key};
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    /// Bit 1: ctrl (Meta folds in) · 2: shift · 4: alt
+    static HELD: AtomicU32 = AtomicU32::new(0);
+
+    /// Fold a modifier key press/release into the held set (no-op for
+    /// every other key).
+    pub fn record(key: &Key, down: bool) {
+        let bit = match key {
+            Key::Named(Named::Control | Named::Meta) => 1,
+            Key::Named(Named::Shift) => 2,
+            Key::Named(Named::Alt) => 4,
+            _ => return,
+        };
+        if down {
+            HELD.fetch_or(bit, Ordering::Relaxed);
+        } else {
+            HELD.fetch_and(!bit, Ordering::Relaxed);
+        }
+    }
+
+    /// The held (ctrl, shift, alt) set to OR into the event's own flags.
+    pub fn held() -> (bool, bool, bool) {
+        let h = HELD.load(Ordering::Relaxed);
+        (h & 1 != 0, h & 2 != 0, h & 4 != 0)
+    }
+}
+
 pub fn subscription(_app: &App) -> iced::Subscription<Message> {
     let mouse = iced::event::listen_with(|event, _status, _id| match event {
         iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
@@ -2805,12 +2849,30 @@ pub fn subscription(_app: &App) -> iced::Subscription<Message> {
             modifiers,
             ..
         }) => {
+            // web: fold the tracked browser-held modifiers into this key
+            #[cfg(target_arch = "wasm32")]
+            web_mods::record(&key, true);
             // the physical ctrl switch: the Control keydown itself
             if matches!(
                 &key,
                 iced::keyboard::Key::Named(iced::keyboard::key::Named::Control)
             ) {
                 return Some(Message::CtrlPhysical(true));
+            }
+            // the event's own flags, OR'd with the web-tracked held set
+            // (winit's web backend ships empty flags — see web_mods)
+            #[allow(unused_mut)]
+            let mut ctrl = modifiers.control();
+            #[allow(unused_mut)]
+            let mut shift = modifiers.shift();
+            #[allow(unused_mut)]
+            let mut alt = modifiers.alt();
+            #[cfg(target_arch = "wasm32")]
+            {
+                let (c, s, a) = web_mods::held();
+                ctrl = ctrl || c;
+                shift = shift || s;
+                alt = alt || a;
             }
             // raw fields BEFORE mapping: when a key misbehaves under a
             // desktop-environment modifier grab, key debug shows whether the
@@ -2821,13 +2883,7 @@ pub fn subscription(_app: &App) -> iced::Subscription<Message> {
                 modifiers.shift(),
                 modifiers.alt()
             );
-            let (code, mut m) = map_key_event(
-                &key,
-                &modified_key,
-                modifiers.control(),
-                modifiers.shift(),
-                modifiers.alt(),
-            )?;
+            let (code, mut m) = map_key_event(&key, &modified_key, ctrl, shift, alt)?;
             // THE central X arbiter (the kitty trick): a letter with no
             // ctrl flag while the server's keymap says Control is
             // PHYSICALLY held means the DE stripped the modifier — restore
@@ -2848,6 +2904,9 @@ pub fn subscription(_app: &App) -> iced::Subscription<Message> {
             Some(Message::KeyEcho { raw, code, mods: m, stripped })
         }
         iced::Event::Keyboard(iced::keyboard::Event::KeyReleased { key, .. }) => {
+            // web: the release clears the tracked held set
+            #[cfg(target_arch = "wasm32")]
+            web_mods::record(&key, false);
             // the Control keyup flips the physical switch off
             if matches!(
                 &key,

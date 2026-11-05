@@ -118,14 +118,21 @@ fn first_token(code: &str) -> String {
 }
 
 /// Name token of a construct header: the word after the keyword,
-/// quote-stripped.
+/// quote-stripped. A quoted name may contain spaces ("Content System"):
+/// the quoted span is taken verbatim — the scan keys must match the
+/// parser's (and renderer's) full name or the construct's comments
+/// silently drop.
 fn header_name(code: &str, keyword: &str) -> String {
     let t = code.trim();
     let rest = t[keyword.len()..].trim_start();
-    rest.trim_start_matches(['"', '`'])
-        .chars()
-        .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '.')
-        .collect()
+    match rest.chars().next() {
+        Some(q @ ('"' | '`' | '\'')) => rest[1..].chars().take_while(|c| *c != q).collect(),
+        _ => rest
+            .trim_start_matches(['"', '`'])
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '.')
+            .collect(),
+    }
 }
 
 #[derive(Default)]
@@ -265,6 +272,16 @@ impl ScanState {
                     *e += 1;
                     Some(key)
                 }
+                // top-level sticky notes: their leading comments anchor to
+                // the N:#i key the renderer emits (without this, a comment
+                // above a Note stayed pending and landed AFTER the block —
+                // at EOF for a trailing note)
+                "note" => {
+                    let e = self.occ.entry("N".into()).or_insert(0);
+                    let key = format!("N:#{}", *e);
+                    *e += 1;
+                    Some(key)
+                }
                 _ => None,
             };
             if let Some(key) = key {
@@ -276,9 +293,12 @@ impl ScanState {
                     "table" => 'T',
                     "enum" | "enumeration" => 'E',
                     "tablegroup" => 'G',
+                    "note" => 'N',
                     _ => 'R',
                 };
-                if kind != 'R' {
+                // refs and notes are header-only constructs: no body frame
+                // (the note's ''' text lines must not scan as body items)
+                if kind != 'R' && kind != 'N' {
                     self.stack.push((key, kind, 0));
                 }
             } else if let Some(c) = comment {
@@ -483,127 +503,267 @@ fn render(doc: &Document, cm: &CommentMap) -> String {
     let mut t_occ: HashMap<&str, usize> = HashMap::new();
     let mut e_occ: HashMap<&str, usize> = HashMap::new();
 
+    // Top-level items in SOURCE order. The AST groups constructs by kind
+    // (doc.tables, doc.refs, ...), so walking those vectors one kind after
+    // another moved every Ref to the end of the file — formatting
+    // restructured the code. Each construct carries its header span: merge
+    // them, sort by start offset, and emit in the order the user wrote
+    // them (the per-kind occurrence counters still see each kind in its
+    // own source order, so the comment-map keys are unchanged).
+    enum Top<'a> {
+        Project(&'a super::ast::Project),
+        Table(&'a super::ast::Table),
+        Enum(&'a super::ast::Enum),
+        Group(&'a super::ast::TableGroup),
+        Note(usize, &'a super::ast::StickyNote),
+        Ref(usize, &'a super::ast::Ref),
+    }
+    let mut tops: Vec<(usize, Top)> = Vec::new();
     if let Some(p) = &doc.project {
-        let key = "P:#0";
-        e.header("", key, &format!("Project {} {{", p.name));
-        if let Some(t) = &p.database_type {
-            e.line("  ", key, "db", &format!("database_type: '{t}'"));
-        }
-        if let Some(n) = &p.note {
-            e.line("  ", key, "pn", &format!("note: {}", quote_note(n)));
-        }
-        e.close(0, key);
-        e.blank();
+        tops.push((p.span.start, Top::Project(p)));
     }
     for t in &doc.tables {
-        let occ = { let v = t_occ.entry(t.name.as_str()).or_insert(0); let o = *v; *v += 1; o };
-        let key = format!("T:{}#{occ}", t.name);
-        let mut header = format!("Table {}", t.name);
-        if let Some(a) = &t.alias {
-            header.push_str(&format!(" as {a}"));
-        }
-        if let Some(c) = &t.header_color {
-            header.push_str(&format!(" [headercolor: {c}]"));
-        }
-        header.push_str(" {");
-        e.header("", &key, &header);
-        for (i, c) in t.columns.iter().enumerate() {
-            let item = &format!("c{i}");
-            let mut text = c.name.to_string();
-            if !c.ty.is_empty() {
-                text.push_str(&format!(" {}", c.ty));
-            }
-            let st = column_settings(&c.settings);
-            if !st.is_empty() {
-                text.push_str(&format!(" [{}]", st.join(", ")));
-            }
-            e.line("  ", &key, item, &text);
-        }
-        if !t.indexes.is_empty() {
-            e.leading(&key, Some("i0"), "  ");
-            e.out.push_str("  indexes {\n");
-            for ix in &t.indexes {
-                let mut parts = vec![format!("({})", ix.columns.join(", "))];
-                if ix.unique {
-                    parts.push("unique".to_string());
-                }
-                if ix.pk {
-                    parts.push("pk".to_string());
-                }
-                if let Some(n) = &ix.name {
-                    parts.push(format!("name: '{n}'"));
-                }
-                if let Some(t) = &ix.index_type {
-                    parts.push(format!("type: {t}"));
-                }
-                e.out.push_str(&format!("    {}\n", parts.join(", ")));
-            }
-            e.out.push_str("  }\n");
-        }
-        if let Some(rec) = &t.records {
-            let mut blob = String::from("records");
-            if !rec.columns.is_empty() {
-                blob.push_str(&format!(" ({})", rec.columns.join(", ")));
-            }
-            if rec.example {
-                blob.push_str(" [example]");
-            }
-            blob.push_str(" {");
-            for row in &rec.rows {
-                blob.push_str("\n    ");
-                blob.push_str(
-                    &row.iter().map(record_value_src).collect::<Vec<_>>().join(", "),
-                );
-            }
-            blob.push_str("\n  }");
-            e.line("  ", &key, "r0", &blob);
-        }
-        if let Some(c) = &t.checks {
-            e.leading(&key, Some("k0"), "  ");
-            e.line("  ", &key, "k0", &format!("Checks {{\n{c}\n  }}"));
-        }
-        if let Some(n) = &t.note {
-            e.line("  ", &key, "n0", &format!("note: {}", quote_note(n)));
-        }
-        e.close(0, &key);
-        e.blank();
+        tops.push((t.span.start, Top::Table(t)));
     }
     for en in &doc.enums {
-        let occ = { let v = e_occ.entry(en.name.as_str()).or_insert(0); let o = *v; *v += 1; o };
-        let key = format!("E:{}#{occ}", en.name);
-        e.header("", &key, &format!("Enum {} {{", en.name));
-        for (i, v) in en.values.iter().enumerate() {
-            let item = &format!("v{i}");
-            let text = if let Some(n) = &v.note {
-                format!("{} [note: {}]", v.name, quote_note(n))
-            } else {
-                v.name.clone()
-            };
-            e.line("  ", &key, item, &text);
-        }
-        e.close(0, &key);
-        e.blank();
+        tops.push((en.span.start, Top::Enum(en)));
     }
     for g in &doc.table_groups {
-        let key = format!("G:{}#0", g.name);
-        e.header("", &key, &format!("TableGroup {} {{", g.name));
-        e.loose(&key, "  ");
-        e.line("  ", &key, "g0", &g.tables.join(", "));
-        e.close(0, &key);
-        e.blank();
+        tops.push((g.span.start, Top::Group(g)));
+    }
+    for (i, n) in doc.notes.iter().enumerate() {
+        tops.push((n.span.start, Top::Note(i, n)));
     }
     for (i, r) in doc.refs.iter().enumerate() {
-        let key = format!("R:#{i}");
-        let name = r
-            .name
-            .as_deref()
-            .map(|n| format!("{n} "))
-            .unwrap_or_default();
-        e.header(
-            "",
-            &key,
-            &format!("Ref: {}{} {} {}", name, endpoint(&r.from), card_str(r.card), endpoint(&r.to)),
-        );
+        tops.push((r.span.start, Top::Ref(i, r)));
+    }
+    tops.sort_by_key(|(start, _)| *start);
+
+    for (_start, top) in &tops {
+        match top {
+            Top::Project(p) => {
+                let key = "P:#0";
+                e.header("", key, &format!("Project {} {{", p.name));
+                if let Some(t) = &p.database_type {
+                    e.line("  ", key, "db", &format!("database_type: '{t}'"));
+                }
+                if let Some(n) = &p.note {
+                    e.line("  ", key, "pn", &format!("note: {}", quote_note(n)));
+                }
+                e.close(0, key);
+                e.blank();
+            }
+            Top::Table(t) => {
+                let occ = { let v = t_occ.entry(t.name.as_str()).or_insert(0); let o = *v; *v += 1; o };
+                let key = format!("T:{}#{occ}", t.name);
+                let mut header = format!("Table {}", ident(&t.name));
+                if let Some(a) = &t.alias {
+                    header.push_str(&format!(" as {}", ident(a)));
+                }
+                if t.header_color.is_some() || !t.custom.is_empty() {
+                    let mut st = Vec::new();
+                    if let Some(c) = &t.header_color {
+                        st.push(format!("headercolor: {c}"));
+                    }
+                    for (k, v) in &t.custom {
+                        st.push(format!("{k}: \"{v}\""));
+                    }
+                    header.push_str(&format!(" [{}]", st.join(", ")));
+                }
+                header.push_str(" {");
+                e.header("", &key, &header);
+                for (i, c) in t.columns.iter().enumerate() {
+                    let item = &format!("c{i}");
+                    let mut text = ident(&c.name);
+                    if !c.ty.is_empty() {
+                        // a type with whitespace ("character varying(15)")
+                        // needs quotes to re-parse as one type — but the
+                        // parser keeps the source quotes in `ty`, so an
+                        // already-quoted type goes back verbatim
+                        let quoted =
+                            c.ty.starts_with('"') && c.ty.ends_with('"') && c.ty.len() >= 2;
+                        let ty = if quoted || !c.ty.chars().any(|ch| ch.is_whitespace()) {
+                            c.ty.clone()
+                        } else {
+                            format!("\"{}\"", c.ty)
+                        };
+                        text.push_str(&format!(" {}", ty));
+                    }
+                    let st = column_settings(&c.settings);
+                    if !st.is_empty() {
+                        text.push_str(&format!(" [{}]", st.join(", ")));
+                    }
+                    e.line("  ", &key, item, &text);
+                }
+                if !t.indexes.is_empty() {
+                    e.leading(&key, Some("i0"), "  ");
+                    e.out.push_str("  indexes {\n");
+                    for ix in &t.indexes {
+                        // dbdiagram's grammar: a bracketed column list, then any
+                        // settings INSIDE one [...] — `(a, b) [unique, name: 'x']`.
+                        // Settings after a bare comma do not parse there.
+                        let mut st = Vec::new();
+                        if ix.unique {
+                            st.push("unique".to_string());
+                        }
+                        if ix.pk {
+                            st.push("pk".to_string());
+                        }
+                        if let Some(n) = &ix.name {
+                            st.push(format!("name: '{n}'"));
+                        }
+                        if let Some(t) = &ix.index_type {
+                            st.push(format!("type: {t}"));
+                        }
+                        let line = if st.is_empty() {
+                            format!("({})", ix.columns.join(", "))
+                        } else {
+                            format!("({}) [{}]", ix.columns.join(", "), st.join(", "))
+                        };
+                        e.out.push_str(&format!("    {line}\n"));
+                    }
+                    e.out.push_str("  }\n");
+                }
+                if let Some(rec) = &t.records {
+                    let mut blob = String::from("records");
+                    if !rec.columns.is_empty() {
+                        blob.push_str(&format!(" ({})", rec.columns.join(", ")));
+                    }
+                    if rec.example {
+                        blob.push_str(" [example]");
+                    }
+                    blob.push_str(" {");
+                    for row in &rec.rows {
+                        blob.push_str("\n    ");
+                        blob.push_str(
+                            &row.iter().map(record_value_src).collect::<Vec<_>>().join(", "),
+                        );
+                    }
+                    blob.push_str("\n  }");
+                    e.line("  ", &key, "r0", &blob);
+                }
+                if let Some(c) = &t.checks {
+                    e.leading(&key, Some("k0"), "  ");
+                    e.line("  ", &key, "k0", &format!("Checks {{\n{c}\n  }}"));
+                }
+                if let Some(n) = &t.note {
+                    e.line("  ", &key, "n0", &format!("note: {}", quote_note(n)));
+                }
+                e.close(0, &key);
+                e.blank();
+            }
+            Top::Enum(en) => {
+                let occ = { let v = e_occ.entry(en.name.as_str()).or_insert(0); let o = *v; *v += 1; o };
+                let key = format!("E:{}#{occ}", en.name);
+                e.header("", &key, &format!("Enum {} {{", ident(&en.name)));
+                for (i, v) in en.values.iter().enumerate() {
+                    let item = &format!("v{i}");
+                    let text = if let Some(n) = &v.note {
+                        format!("{} [note: {}]", ident(&v.name), quote_note(n))
+                    } else {
+                        ident(&v.name)
+                    };
+                    e.line("  ", &key, item, &text);
+                }
+                e.close(0, &key);
+                e.blank();
+            }
+            Top::Group(g) => {
+                let key = format!("G:{}#0", g.name);
+                // names with spaces need quoting (dbdiagram's doc example)
+                let name = if g.name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                    g.name.clone()
+                } else {
+                    format!("\"{}\"", g.name)
+                };
+                let settings = if g.color.is_some() {
+                    format!(" [color: {}]", g.color.clone().unwrap_or_default())
+                } else {
+                    String::new()
+                };
+                e.header("", &key, &format!("TableGroup {name}{settings} {{"));
+                e.loose(&key, "  ");
+                // one member per line, no commas — dbdiagram's grammar separates
+                // group members with whitespace only
+                let body = g.tables.iter().map(|t| ident(t)).collect::<Vec<_>>().join("\n  ");
+                e.line("  ", &key, "g0", &body);
+                if let Some(n) = &g.note {
+                    // multi-line notes emit the uniform expanded block
+                    // (quotes on their own lines, lines indented) — a raw
+                    // newline inside quote_note's single quotes would
+                    // produce output that no longer parses
+                    if n.contains('\n') {
+                        e.line("  ", &key, "gn", "Note: '''");
+                        for l in n.lines() {
+                            e.line("  ", &key, "gn", l);
+                        }
+                        e.line("  ", &key, "gn", "'''");
+                    } else {
+                        e.line("  ", &key, "gn", &format!("Note: {}", quote_note(n)));
+                    }
+                }
+                e.close(0, &key);
+                e.blank();
+            }
+            Top::Note(i, n) => {
+                // top-level sticky notes: single-line text stays inline; multi-line
+                // text emits the uniform expanded block (each line indented, the
+                // quotes on their own lines) — an embedded raw newline inside one
+                // e.line() mangled the block's line structure
+                let key = format!("N:#{i}");
+                e.header("", &key, &format!("Note {} {{", ident(&n.name)));
+                if n.text.contains('\n') {
+                    e.line("  ", &key, "n0", "'''");
+                    for l in n.text.lines() {
+                        e.line("  ", &key, "n0", l);
+                    }
+                    e.line("  ", &key, "n0", "'''");
+                } else {
+                    e.line("  ", &key, "n0", &format!("'''{}'''", n.text));
+                }
+                e.close(0, &key);
+                e.blank();
+            }
+            Top::Ref(i, r) => {
+                let key = format!("R:#{i}");
+                // named grammar is `Ref name: from > to` — `Ref: name ...`
+                // parses the name as the FROM table and breaks on re-parse
+                let name = match r.name.as_deref() {
+                    Some(n) => format!(" {}", ident(n)),
+                    None => String::new(),
+                };
+                let mut settings = Vec::new();
+                if let Some(d) = &r.on_delete {
+                    settings.push(format!("delete: {d}"));
+                }
+                if let Some(u) = &r.on_update {
+                    settings.push(format!("update: {u}"));
+                }
+                if let Some(c) = &r.color {
+                    settings.push(format!("color: {c}"));
+                }
+                let st = if settings.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [{}]", settings.join(", "))
+                };
+                e.header(
+                    "",
+                    &key,
+                    &format!(
+                        "Ref{name}: {} {} {}{}",
+                        endpoint(&r.from),
+                        card_str_full(r.card, r.left_optional, r.right_optional),
+                        endpoint(&r.to),
+                        st
+                    ),
+                );
+                // single-line construct, but the one-blank-line-between-
+                // blocks rule applies here too now that a Ref can sit
+                // between two blocks instead of ending the file
+                e.blank();
+            }
+        }
     }
     // comments after everything
     e.leading("EOF", None, "");
@@ -615,13 +775,20 @@ fn render(doc: &Document, cm: &CommentMap) -> String {
     out
 }
 
-fn card_str(c: Cardinality) -> &'static str {
-    match c {
+/// The operator with its optional marks round-tripped (`?>`, `>-?`, …).
+fn card_str_full(c: Cardinality, left_opt: bool, right_opt: bool) -> String {
+    let base = match c {
         Cardinality::OneToMany => "<",
         Cardinality::ManyToOne => ">",
         Cardinality::OneToOne => "-",
         Cardinality::ManyToMany => "<>",
-    }
+    };
+    format!(
+        "{}{}{}",
+        if left_opt { "?" } else { "" },
+        base,
+        if right_opt { "?" } else { "" }
+    )
 }
 
 /// Records value as source text. Strings re-quote with the record
@@ -645,11 +812,27 @@ fn record_value_src(v: &super::ast::RecordValue) -> String {
     }
 }
 
+/// An identifier rendered so it re-parses to the same name: bare when
+/// every char is a bare-ident char, double-quoted otherwise (a name with
+/// a space or `#` emitted bare would parse as junk — `Table Customer
+/// Data {` — and corrupt the file on the next format).
+fn ident(n: &str) -> String {
+    if !n.is_empty() && n.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+        n.to_string()
+    } else {
+        format!("\"{n}\"")
+    }
+}
+
 fn endpoint(e: &super::ast::Endpoint) -> String {
     match e.columns.as_slice() {
-        [] | [_] if e.columns.first().map_or(true, |c| c == "*") => e.table.clone(),
-        [_] => format!("{}.{}", e.table, e.columns[0]),
-        cols => format!("{}.({})", e.table, cols.join(", ")),
+        [] | [_] if e.columns.first().map_or(true, |c| c == "*") => ident(&e.table),
+        [_] => format!("{}.{}", ident(&e.table), ident(&e.columns[0])),
+        cols => format!(
+            "{}.({})",
+            ident(&e.table),
+            cols.iter().map(|c| ident(c)).collect::<Vec<_>>().join(", ")
+        ),
     }
 }
 
@@ -673,7 +856,18 @@ fn column_settings(st: &super::ast::ColumnSettings) -> Vec<String> {
         out.push(format!("default: {d}"));
     }
     if let Some(r) = &st.inline_ref {
-        out.push(format!("ref: {} {}", card_str(r.card), endpoint(&r.to)));
+        // the endpoint color bracket round-trips (the picker writes it)
+        let color = r
+            .color
+            .as_deref()
+            .map(|c| format!(" [color: {c}]"))
+            .unwrap_or_default();
+        out.push(format!(
+            "ref: {} {}{}",
+            card_str_full(r.card, r.left_optional, r.right_optional),
+            endpoint(&r.to),
+            color
+        ));
     }
     if let Some(c) = &st.check {
         out.push(format!("check: {c}"));
@@ -681,11 +875,136 @@ fn column_settings(st: &super::ast::ColumnSettings) -> Vec<String> {
     if let Some(n) = &st.note {
         out.push(format!("note: {}", quote_note(n)));
     }
+    // custom properties re-emit double-quoted (dbdiagram's own style), so
+    // values with spaces or empty strings round-trip
+    for (k, v) in &st.custom {
+        out.push(format!("{k}: \"{v}\""));
+    }
     out
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn comments_above_a_sticky_note_stay_above_it() {
+        // the scanner's top-level recognition had no `note` arm: a comment
+        // above a Note stayed pending and landed AFTER the block (at EOF
+        // for a trailing note — the user's showcase.dbml report)
+        let src = "Table t {\n  id int\n}\n\n// sticky notes howto\nNote todo {\n  '''one'''\n}\n";
+        let out = format_source(src).unwrap();
+        let c = out.find("// sticky notes howto").unwrap();
+        let n = out.find("Note todo {").unwrap();
+        assert!(c < n, "the comment stays above the note: {out}");
+        assert!(!out[c..n].contains("Note todo {"));
+        // and the comment is not duplicated after the block
+        assert_eq!(out.matches("// sticky notes howto").count(), 1);
+    }
+
+    #[test]
+    fn sticky_note_blocks_round_trip() {
+        // the Note header lost its braces once (an ident() refactor
+        // dropped the '{{') and the file stopped parsing — pin the block
+        let src = "Table t { id int }\nNote todo {\n  '''one\ntwo'''\n}\n";
+        let out = format_source(src).unwrap();
+        assert!(out.contains("Note todo {"), "{out}");
+        assert!(out.contains("'''"), "{out}");
+        assert!(out.trim_end().ends_with('}'), "{out}");
+        // re-parses to the same note
+        let reparsed = crate::dbml::parser::parse(&out);
+        assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
+        assert_eq!(reparsed.doc.notes.len(), 1);
+        assert_eq!(reparsed.doc.notes[0].name, "todo");
+        assert_eq!(reparsed.doc.notes[0].text, "one\ntwo");
+    }
+
+    #[test]
+    fn every_construct_kind_formats_idempotently() {
+        // format(format(x)) == format(x) for a document containing every
+        // top-level kind: the renderer's output must always re-parse to
+        // the same model (this catches dropped braces, broken quoting,
+        // and type round-trips in one net)
+        let src = "Project demo {\n  database_type: 'PostgreSQL'\n}\n\nTable \"user data\" [headercolor: #123456, owner: \"team\"] {\n  \"id\" integer [pk, increment]\n  \"name\" \"character varying(80)\" [not null, ref: > \"order rows\".\"order id\"]\n  indexes { (\"name\") [unique] }\n  note: 'the users'\n}\n\nEnum \"order state\" {\n  open\n  closed [note: 'done']\n}\n\nTableGroup \"Content System\" [color: #1E69FD] {\n  \"user data\"\n}\n\nRef \"fk_1\": \"order rows\".\"order id\" > \"user data\".\"id\" [delete: cascade]\n\nNote todo {\n  '''\n  multi\n  line\n  '''\n}\n";
+        let once = format_source(src).unwrap();
+        let twice = format_source(&once).unwrap();
+        assert_eq!(once, twice, "format must be idempotent:\n{once}\n----\n{twice}");
+        let reparsed = crate::dbml::parser::parse(&once);
+        assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
+        assert_eq!(reparsed.doc.tables.len(), 1);
+        assert_eq!(reparsed.doc.enums.len(), 1);
+        assert_eq!(reparsed.doc.table_groups.len(), 1);
+        assert_eq!(reparsed.doc.notes.len(), 1);
+        assert_eq!(reparsed.doc.refs.len(), 1);
+    }
+
+    #[test]
+    fn inline_ref_colors_round_trip() {
+        // the picker writes the endpoint color bracket on inline refs;
+        // the formatter must keep it (it re-renders the line's color)
+        let src = "Table a { id integer [pk] }\nTable b { user_id integer [ref: > a.id [color: #ff0000]] }\n";
+        let once = format_source(src).unwrap();
+        assert!(once.contains("[color: #ff0000]"), "{once}");
+        let twice = format_source(&once).unwrap();
+        assert_eq!(once, twice, "idempotent: {once}");
+    }
+
+    #[test]
+    fn top_level_items_keep_their_source_order() {
+        // the AST groups by kind; the renderer must NOT — a Ref written
+        // between two tables used to move to the end of the file
+        let src = "Table a {\n  x int\n}\n\nRef: b.y > a.x\n\nTable b {\n  y int\n}\n";
+        let out = format_source(src).unwrap();
+        let a = out.find("Table a").unwrap();
+        let r = out.find("Ref:").unwrap();
+        let b = out.find("Table b").unwrap();
+        assert!(a < r && r < b, "Ref stays where it was written: {out}");
+        // a blank line separates the interleaved Ref from its neighbors
+        assert!(out.contains("}\n\nRef: b.y > a.x\n\nTable b {"), "{out}");
+    }
+
+    #[test]
+    fn quoted_group_names_keep_their_leading_comments() {
+        // the scan's header name must be the quoted span (spaces inside):
+        // keying by the first word made the scan's key differ from the
+        // renderer's, silently dropping the group's comments
+        let src = "Table users {\n  id int\n}\n\n// about the group\nTableGroup \"Content System\" {\n  users\n}\n";
+        let out = format_source(src).unwrap();
+        assert!(
+            out.find("// about the group").unwrap() < out.find("TableGroup").unwrap(),
+            "the group's comment survives: {out}"
+        );
+    }
+
+    #[test]
+    fn group_multiline_notes_emit_the_expanded_block() {
+        // a raw newline inside quote_note's single quotes produced output
+        // that no longer parsed
+        let src = "TableGroup g {\n  a\n  Note: '''\n  one\n  two\n  '''\n}\n";
+        let out = format_source(src).unwrap();
+        assert!(out.contains("Note: '''\n  one\n  two\n  '''"), "{out}");
+        // and it round-trips: the re-parse sees the same note
+        let reparsed = crate::dbml::parser::parse(&out);
+        assert_eq!(reparsed.doc.table_groups[0].note.as_deref(), Some("one\ntwo"));
+    }
+
+    #[test]
+    fn custom_properties_round_trip() {
+        // double-quoted re-emission keeps spaces round-tripping
+        let src = "Table t [owner: \"data team\"] {\n  a int [zone: \"a 1\"]\n}\n";
+        let once = format_source(src).unwrap();
+        let out = crate::dbml::parser::parse(&once);
+        assert_eq!(
+            out.doc.tables[0].custom,
+            vec![("owner".to_string(), "data team".to_string())]
+        );
+        assert_eq!(
+            out.doc.tables[0].columns[0].settings.custom,
+            vec![("zone".to_string(), "a 1".to_string())]
+        );
+        // and the second format is stable
+        assert_eq!(format_source(&once).unwrap(), once);
+    }
+
+
     use super::*;
 
     #[test]

@@ -27,6 +27,9 @@ pub enum KeyCode {
     Delete,
     Char(char),
     Esc,
+    F1,
+    F2,
+    F12,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -75,15 +78,24 @@ pub enum Action {
     None,
     /// Text changed; the preview debounce should restart.
     Changed,
-    /// An ex command was submitted (`:w`, `:q`, ...); handled by the app.
-    Command(String),
+    /// `gd`: the app resolves the word under the caret to its definition
+    /// (the engine has no schema access) and moves the cursor there.
+    GotoDefinition,
 }
 
-/// Active command-line input: '/' search or ':' ex command.
+/// The find popup's live query (the GUI find, shared by vim `/` and
+/// Regular ctrl-f). Each keystroke re-sets the buffer's search pattern
+/// and jumps to the first match at/after the caret; Enter cycles
+/// forward, `n`/`N` keep working once the popup closes.
 #[derive(Debug, Clone)]
-pub struct CmdLine {
-    pub kind: char,
+pub struct FindState {
     pub input: String,
+    /// The caret as a CHAR offset into `input` — the active end of the
+    /// selection (where typed text lands).
+    pub caret: usize,
+    /// The selection anchor (char offset); None = no selection. The
+    /// selected span spans between anchor and caret.
+    pub anchor: Option<usize>,
 }
 
 /// In-flight key sequences: `g`…, and the `d`/`c`/`y` operators awaiting a
@@ -97,6 +109,11 @@ enum Pending {
     /// `d g…` / `c g…` awaiting `g`
     Dg,
     Cg,
+    /// `y g…` awaiting `g` (ygg)
+    Yg,
+    /// `g c…` — the comment-toggle operator awaiting the second `c`
+    /// (vim-commentary's gcc line toggle)
+    Gc,
     /// `r` awaiting the replacement character
     R,
     /// operator + `i`/`a` awaiting the object char (diw, ci(, ya"…)
@@ -152,6 +169,17 @@ enum AddStage {
     Line,
 }
 
+/// The yanked region, flashed briefly in the editor (vim's on_yank blink):
+/// start/end in buffer positions, end exclusive. A linewise yank encodes
+/// whole rows as (first row, 0) .. (end row, 0), which the renderer's band
+/// helper draws full-width.
+#[derive(Debug, Clone, Copy)]
+pub struct YankFlash {
+    pub start: (usize, usize),
+    pub end: (usize, usize),
+    pub started: web_time::Instant,
+}
+
 pub struct Editor {
     pub buf: Buffer,
     pub mode: Mode,
@@ -164,7 +192,10 @@ pub struct Editor {
     /// Count captured when the operator key itself was pressed; multiplies
     /// with `count` (vim: 2d3w == 6w).
     op_count: Option<u32>,
-    pub cmdline: Option<CmdLine>,
+    pub find: Option<FindState>,
+    /// The vim `/` prompt's live query — a vim-style bottom command line,
+    /// NOT the gui find popup (ctrl+f / the toolbar button own that).
+    pub vim_search: Option<String>,
     register: Vec<String>,
     /// The most recent YANK (the `y` family: y/yy/yiw/visual y…), queued
     /// for the app to push to the SYSTEM clipboard — the Editor has no
@@ -174,9 +205,21 @@ pub struct Editor {
     system_yank: Option<String>,
     /// Last f/F/t/T (forward, till, char) for `;` and `,`
     last_find: Option<(bool, bool, char)>,
+    /// The yanked region flashing after a yank (vim's on_yank blink).
+    pub yank_flash: Option<YankFlash>,
+    /// How the register was filled: linewise (yy/yj/visual-V y) pastes
+    /// whole lines below/above; charwise (yw/visual y) pastes inline at
+    /// the cursor (vim's put semantics).
+    register_linewise: bool,
     /// Source ended with a newline; preserved by `text()` for byte-identical
     /// file round-trips.
     trailing_newline: bool,
+    /// Vim's jumplist, two stacks: `jumps_past` holds jump ORIGINS (the
+    /// position before each jump, most recent on top), `jumps_future` the
+    /// positions left by Ctrl+O so Ctrl+I can return to them. A new jump
+    /// discards the future, like vim's.
+    jumps_past: Vec<Pos>,
+    jumps_future: Vec<Pos>,
 }
 
 impl Default for Editor {
@@ -191,7 +234,7 @@ impl std::fmt::Debug for Editor {
             .field("mode", &self.mode)
             .field("cursor", &self.buf.cursor())
             .field("lines", &self.buf.lines().len())
-            .field("cmdline", &self.cmdline)
+            .field("find", &self.find)
             .finish()
     }
 }
@@ -206,11 +249,16 @@ impl Editor {
             pending: None,
             count: None,
             op_count: None,
-            cmdline: None,
+            find: None,
+            vim_search: None,
             register: Vec::new(),
             system_yank: None,
             last_find: None,
+            yank_flash: None,
+            register_linewise: false,
             trailing_newline: source.ends_with('\n'),
+            jumps_past: Vec::new(),
+            jumps_future: Vec::new(),
         }
     }
 
@@ -242,6 +290,15 @@ impl Editor {
     /// Replace the yank register (used by Regular-mode copy/cut).
     pub fn set_register(&mut self, lines: Vec<String>) {
         self.register = lines;
+        self.register_linewise = true;
+    }
+
+    /// Replace the yank register with an explicit linewise-ness: the
+    /// external-clipboard adoption (vim `p` over copied-from-elsewhere
+    /// text) classifies by the text's trailing newline.
+    pub fn set_register_kind(&mut self, lines: Vec<String>, linewise: bool) {
+        self.register = lines;
+        self.register_linewise = linewise;
     }
 
     /// Snapshot of the yank register (used by Regular-mode paste).
@@ -255,10 +312,36 @@ impl Editor {
         self.system_yank.take()
     }
 
-    /// Charwise yank: the text into the register AND queued for the
+    /// The previous/next word boundary in a one-line input (char offsets):
+/// whitespace/non-whitespace transitions — the standard text-field word
+/// motion the find field's ctrl/alt+arrows walk.
+fn find_word_boundary(input: &str, from: usize, forward: bool) -> usize {
+    let chars: Vec<char> = input.chars().collect();
+    let mut i = from.min(chars.len());
+    let is_word = |c: char| !c.is_whitespace();
+    if forward {
+        while i < chars.len() && !is_word(chars[i]) {
+            i += 1;
+        }
+        while i < chars.len() && is_word(chars[i]) {
+            i += 1;
+        }
+    } else {
+        while i > 0 && !is_word(chars[i - 1]) {
+            i -= 1;
+        }
+        while i > 0 && is_word(chars[i - 1]) {
+            i -= 1;
+        }
+    }
+    i
+}
+
+/// Charwise yank: the text into the register AND queued for the
     /// system clipboard.
     fn yank_chars(&mut self, text: String) {
         self.register = text.split('\n').map(str::to_string).collect();
+        self.register_linewise = false;
         self.system_yank = Some(text);
     }
 
@@ -276,6 +359,8 @@ impl Editor {
             Some(Pending::Y) => "y",
             Some(Pending::Dg) => "dg",
             Some(Pending::Cg) => "cg",
+            Some(Pending::Yg) => "yg",
+            Some(Pending::Gc) => "gc",
             Some(Pending::R) => "r",
             Some(Pending::Obj {
                 op: ObjOp::Delete,
@@ -394,50 +479,456 @@ impl Editor {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Action {
-        if let Some(mut cmd) = self.cmdline.take() {
-            let (action, keep_open) = self.handle_cmdline_key(key, &mut cmd);
-            if keep_open {
-                self.cmdline = Some(cmd);
-            }
-            return action;
+        // the vim `/` prompt swallows every key while open (typing
+        // searches live, Enter commits, Esc cancels)
+        if self.vim_search.is_some() {
+            return self.handle_vim_search_key(key);
         }
-        match self.mode {
+        // the find popup swallows every key while open (typing edits the
+        // query, Enter cycles, Esc closes) — vim and Regular alike
+        if self.find.is_some() {
+            return self.handle_find_key(key);
+        }
+        // vim normal/visual never REST on the past-the-last-char cell:
+        // the block cursor would sit on a phantom column past EOL (which
+        // reads as "a space at the end of the line"). The buffer cursor is
+        // mode-agnostic — the insert caret legitimately lives at len — so
+        // the resting clamp happens here, but ONLY when the key STAYED in
+        // normal/visual: a motion that ENTERED insert (i/a/A/o/cc) must
+        // keep its landing caret untouched.
+        let was_vim = self.mode != Mode::Insert;
+        let mode_before = self.mode;
+        let action = match self.mode {
             Mode::Insert => self.handle_insert_key(key),
             Mode::Normal | Mode::Visual => self.handle_normal_key(key),
+        };
+        if was_vim && self.mode != Mode::Insert {
+            self.buf.clamp_cursor_to_line_end();
         }
+        // leaving a vim mode for another hides the search match bands
+        // (vim's :noh on mode-changing actions) — the pattern stays for
+        // `n`/`N`, and a fresh `/` or find query re-shows them
+        if self.mode != mode_before {
+            self.buf.hide_search_hl();
+        }
+        action
     }
 
-    fn handle_cmdline_key(&mut self, key: KeyEvent, cmd: &mut CmdLine) -> (Action, bool) {
+    /// Keys while the find popup is open — always consumed. Typing edits
+    /// the query LIVE (the pattern re-sets and the caret jumps to the
+    /// first match at/after it per keystroke), Enter cycles forward, Esc
+    /// closes: the match bands drop (:noh) while the pattern stays for
+    /// `n`/`N`.
+    pub fn handle_find_key(&mut self, key: KeyEvent) -> Action {
+        let mods = key.modifiers;
         match key.code {
-            KeyCode::Esc => (Action::None, false),
+            KeyCode::Esc => {
+                self.close_find();
+                Action::None
+            }
             KeyCode::Enter => {
-                let input = std::mem::take(&mut cmd.input);
-                if cmd.kind == ':' {
-                    (Action::Command(input), false)
+                self.buf.search_forward(false);
+                Action::None
+            }
+            KeyCode::Left | KeyCode::Right if !mods.contains(KeyModifiers::ALT) => {
+                // caret motion: plain = char, ctrl = word, SHIFT =
+                // selection. A plain arrow with a live selection
+                // COLLAPSES to the pressed edge (left to the start,
+                // right to the end — the standard text-field behavior),
+                // then walks from there. ALT+arrows are inert (the user's
+                // contract: no move, no select).
+                let Some(f) = &mut self.find else {
+                    return Action::None;
+                };
+                let forward = key.code == KeyCode::Right;
+                let len = f.input.chars().count();
+                let caret = f.caret.min(len);
+                let anchor = f.anchor.unwrap_or(caret).min(len);
+                let (lo, hi) = (caret.min(anchor), caret.max(anchor));
+                let has_sel = hi > lo;
+                let by_word = mods.contains(KeyModifiers::CONTROL)
+                    || mods.contains(KeyModifiers::ALT);
+                let select =
+                    mods.contains(KeyModifiers::SHIFT) || mods.contains(KeyModifiers::ALT);
+                let base = if !select && has_sel {
+                    if forward {
+                        hi
+                    } else {
+                        lo
+                    }
                 } else {
-                    self.run_search(&input);
-                    (Action::None, false)
+                    caret
+                };
+                let target = if by_word {
+                    Self::find_word_boundary(&f.input, base, forward)
+                } else if forward {
+                    (base + 1).min(len)
+                } else {
+                    base.saturating_sub(1)
+                };
+                if select {
+                    f.anchor.get_or_insert(base);
+                    f.caret = target;
+                } else {
+                    f.caret = target;
+                    f.anchor = None;
                 }
+                Action::None
             }
-            KeyCode::Backspace => {
-                let keep = cmd.input.pop().is_some();
-                (Action::None, keep)
+            KeyCode::Home | KeyCode::End => {
+                let Some(f) = &mut self.find else {
+                    return Action::None;
+                };
+                let target = if key.code == KeyCode::Home {
+                    0
+                } else {
+                    f.input.chars().count()
+                };
+                if mods.contains(KeyModifiers::SHIFT) {
+                    f.anchor.get_or_insert(f.caret.min(f.input.chars().count()));
+                    f.caret = target;
+                } else {
+                    f.caret = target;
+                    f.anchor = None;
+                }
+                Action::None
             }
-            KeyCode::Char(c) => {
-                cmd.input.push(c);
-                (Action::None, true)
+            KeyCode::Backspace | KeyCode::Delete => {
+                // with a selection the chord empties it; without, the
+                // chord eats one char on the caret's side
+                let len = self
+                    .find
+                    .as_ref()
+                    .map(|f| f.input.chars().count())
+                    .unwrap_or(0);
+                let has_sel = self
+                    .find
+                    .as_ref()
+                    .map(|f| f.anchor.map(|a| a != f.caret.min(len)).unwrap_or(false))
+                    .unwrap_or(false);
+                let forward = key.code == KeyCode::Delete;
+                if has_sel {
+                    self.find_delete_selection();
+                } else if let Some(f) = &mut self.find {
+                    let caret = f.caret.min(len);
+                    let drop = if forward { caret } else { caret.saturating_sub(1) };
+                    if (!forward && caret > 0) || (forward && caret < len) {
+                        let b = f.input.char_indices().nth(drop).map(|(i, _)| i).unwrap_or(f.input.len());
+                        f.input.remove(b);
+                        if !forward {
+                            f.caret = caret - 1;
+                        }
+                    }
+                    f.anchor = None;
+                    self.apply_find_query();
+                }
+                Action::None
             }
-            _ => (Action::None, true),
+            KeyCode::Char(c)
+                if !mods.contains(KeyModifiers::CONTROL)
+                    && !mods.contains(KeyModifiers::ALT) =>
+            {
+                // typing replaces the selection or inserts at the caret
+                if let Some(f) = &mut self.find {
+                    let len = f.input.chars().count();
+                    let caret = f.caret.min(len);
+                    let anchor = f.anchor.unwrap_or(caret).min(len);
+                    let (s, e) = (caret.min(anchor), caret.max(anchor));
+                    let start_b = f
+                        .input
+                        .char_indices()
+                        .nth(s)
+                        .map(|(i, _)| i)
+                        .unwrap_or(f.input.len());
+                    let end_b = f
+                        .input
+                        .char_indices()
+                        .nth(e)
+                        .map(|(i, _)| i)
+                        .unwrap_or(f.input.len());
+                    if e > s {
+                        f.input.replace_range(start_b..end_b, "");
+                    }
+                    let at = f
+                        .input
+                        .char_indices()
+                        .nth(s)
+                        .map(|(i, _)| i)
+                        .unwrap_or(f.input.len());
+                    f.input.insert(at, c);
+                    f.caret = s + 1;
+                    f.anchor = None;
+                }
+                self.apply_find_query();
+                Action::None
+            }
+            // ctrl/alt chords are the app's business (select-all,
+            // clipboard) or inert — never typed into the query
+            _ => Action::None,
         }
     }
 
-    fn run_search(&mut self, pattern: &str) {
-        if self.buf.set_search_pattern(pattern) {
+    /// The find field's selected span, normalized (start, end) in chars.
+    fn find_sel_range(&self) -> (usize, usize) {
+        let Some(f) = &self.find else {
+            return (0, 0);
+        };
+        let len = f.input.chars().count();
+        let caret = f.caret.min(len);
+        let anchor = f.anchor.unwrap_or(caret).min(len);
+        (caret.min(anchor), caret.max(anchor))
+    }
+
+    /// The selected text (None without a non-empty selection).
+    pub fn find_selection_text(&self) -> Option<String> {
+        let f = self.find.as_ref()?;
+        let (s, e) = self.find_sel_range();
+        if e <= s {
+            return None;
+        }
+        let start = f
+            .input
+            .char_indices()
+            .nth(s)
+            .map(|(i, _)| i)
+            .unwrap_or(f.input.len());
+        let end = f
+            .input
+            .char_indices()
+            .nth(e)
+            .map(|(i, _)| i)
+            .unwrap_or(f.input.len());
+        Some(f.input[start..end].to_string())
+    }
+
+    /// Ctrl+A: the whole query selected (typing replaces it).
+    pub fn find_select_all(&mut self) {
+        if let Some(f) = &mut self.find {
+            f.anchor = Some(0);
+            f.caret = f.input.chars().count();
+        }
+    }
+
+    /// Ctrl+X: the selection out — returned for the system clipboard.
+    pub fn find_cut(&mut self) -> Option<String> {
+        let text = self.find_selection_text()?;
+        self.find_delete_selection();
+        Some(text)
+    }
+
+    /// Ctrl+V: the clipboard text in, replacing the selection or
+    /// inserting at the caret (newlines flatten — the field is one line).
+    pub fn find_paste(&mut self, text: &str) {
+        let flat = text.replace(['\n', '\r'], " ");
+        {
+            let Some(f) = &mut self.find else {
+                return;
+            };
+            let len = f.input.chars().count();
+            let caret = f.caret.min(len);
+            let anchor = f.anchor.unwrap_or(caret).min(len);
+            let (s, e) = (caret.min(anchor), caret.max(anchor));
+            let start_b = f
+                .input
+                .char_indices()
+                .nth(s)
+                .map(|(i, _)| i)
+                .unwrap_or(f.input.len());
+            let end_b = f
+                .input
+                .char_indices()
+                .nth(e)
+                .map(|(i, _)| i)
+                .unwrap_or(f.input.len());
+            if e > s {
+                f.input.replace_range(start_b..end_b, "");
+            }
+            let at = f
+                .input
+                .char_indices()
+                .nth(s)
+                .map(|(i, _)| i)
+                .unwrap_or(f.input.len());
+            f.input.insert_str(at, &flat);
+            f.caret = s + flat.chars().count();
+            f.anchor = None;
+        }
+        self.apply_find_query();
+    }
+
+    fn find_delete_selection(&mut self) {
+        {
+            let Some(f) = &mut self.find else {
+                return;
+            };
+            let len = f.input.chars().count();
+            let caret = f.caret.min(len);
+            let anchor = f.anchor.unwrap_or(caret).min(len);
+            let (s, e) = (caret.min(anchor), caret.max(anchor));
+            if e > s {
+                let start_b = f
+                    .input
+                    .char_indices()
+                    .nth(s)
+                    .map(|(i, _)| i)
+                    .unwrap_or(f.input.len());
+                let end_b = f
+                    .input
+                    .char_indices()
+                    .nth(e)
+                    .map(|(i, _)| i)
+                    .unwrap_or(f.input.len());
+                f.input.replace_range(start_b..end_b, "");
+            }
+            f.caret = s;
+            f.anchor = None;
+        }
+        self.apply_find_query();
+    }
+
+    /// Push the popup's query into the buffer's search engine and jump to
+    /// the first match at/after the caret. An empty query clears the
+    /// pattern (an empty regex would match everywhere).
+    fn apply_find_query(&mut self) {
+        let Some(f) = self.find.as_ref() else { return };
+        if f.input.is_empty() {
+            self.buf.clear_search();
+        } else if self.buf.set_search_pattern(&f.input) {
             self.buf.search_forward(true);
         }
     }
 
+    /// Keys while the vim `/` prompt is open — always consumed. Typing
+    /// searches live (the same engine the gui find drives: highlights
+    /// appear and the caret rides the first match per keystroke), Enter
+    /// LOCKS IN the pattern (no jump: cycling is `n`/`N`'s job), Esc
+    /// cancels and clears.
+    pub fn handle_vim_search_key(&mut self, key: KeyEvent) -> Action {
+        match key.code {
+            KeyCode::Esc => {
+                self.buf.clear_search();
+                self.vim_search = None;
+                Action::None
+            }
+            KeyCode::Enter => {
+                // lock in: live typing already applied the pattern (an
+                // empty one cleared it) — Enter closes the prompt and
+                // leaves the caret alone; `n`/`N` do the cycling
+                self.vim_search = None;
+                Action::None
+            }
+            KeyCode::Backspace => {
+                if let Some(q) = self.vim_search.as_mut() {
+                    q.pop();
+                }
+                self.apply_vim_search();
+                Action::None
+            }
+            KeyCode::Char(c)
+                if !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                if let Some(q) = self.vim_search.as_mut() {
+                    q.push(c);
+                }
+                self.apply_vim_search();
+                Action::None
+            }
+            _ => Action::None,
+        }
+    }
+
+    /// Push the `/` prompt's query into the buffer's search engine (live:
+    /// highlights + the caret ride per keystroke). An empty query clears
+    /// the pattern (an empty regex would match everywhere).
+    fn apply_vim_search(&mut self) {
+        let Some(q) = self.vim_search.as_ref() else { return };
+        if q.is_empty() {
+            self.buf.clear_search();
+        } else if self.buf.set_search_pattern(q) {
+            self.buf.search_forward(true);
+        }
+    }
+
+    /// Open/close the find popup. Closing hides the match bands (the
+    /// pattern stays: `n`/`N` keep cycling) and keeps the cursor where the
+    /// last match landed.
+    pub fn toggle_find(&mut self) {
+        match self.find.take() {
+            None => {
+                self.find = Some(FindState {
+                    input: String::new(),
+                    caret: 0,
+                    anchor: None,
+                })
+            }
+            Some(_) => self.close_find(),
+        }
+    }
+
+    /// Close the find popup, dropping the match bands — a fresh query
+    /// (find or `/`) re-shows them.
+    pub fn close_find(&mut self) {
+        self.find = None;
+        self.buf.hide_search_hl();
+    }
+
+    pub fn find_open(&self) -> bool {
+        self.find.is_some()
+    }
+
+    /// (current 1-based index, total) for the popup's "n of m" — the
+    /// current match is the first at/after the caret, wrapping.
+    pub fn find_position(&self) -> (usize, usize) {
+        let spans = self.buf.search_match_spans();
+        if spans.is_empty() {
+            return (0, 0);
+        }
+        let cur = self.buf.pos();
+        let idx = spans
+            .iter()
+            .position(|&(r, c, _)| (r, c) >= (cur.row, cur.col))
+            .unwrap_or(0);
+        (idx + 1, spans.len())
+    }
+
     fn handle_insert_key(&mut self, key: KeyEvent) -> Action {
+        // ctrl-f opens the find popup even in insert mode (IDE muscle
+        // memory) — before the ctrl-chord swallow
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && key.code == KeyCode::Char('f')
+        {
+            self.toggle_find();
+            return Action::None;
+        }
+        // the app-wide select-all chord works in insert mode too
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && key.code == KeyCode::Char('a')
+        {
+            self.buf.cancel_selection();
+            self.buf.move_cursor(CursorMove::Jump(0, 0));
+            self.buf.start_selection();
+            let last = self.buf.line_count().saturating_sub(1);
+            self.buf.move_cursor(CursorMove::Jump(last, usize::MAX));
+            return Action::None;
+        }
+        // alt+arrows: word-wise SELECTION in insert mode too (the same
+        // text-field semantics regular mode got) — before the chord
+        // swallow, which would eat them
+        if key.modifiers.contains(KeyModifiers::ALT)
+            && matches!(key.code, KeyCode::Left | KeyCode::Right)
+        {
+            if self.buf.selection_anchor().is_none() {
+                self.buf.start_selection();
+            }
+            // the caret lands PAST the word's last char (the insertion
+            // boundary — the band stops there)
+            self.buf.move_cursor(CursorMove::WordEnd);
+            if key.code == KeyCode::Right {
+                self.buf.move_cursor(CursorMove::Forward);
+            }
+            return Action::None;
+        }
         // ctrl/alt chords never type (vim's insert-mode ctrl+d/u/k have no
         // port here, and a flubbed modifier must not insert text)
         if key.modifiers.contains(KeyModifiers::CONTROL)
@@ -466,6 +957,8 @@ impl Editor {
                 }
                 Action::None
             }
+            KeyCode::Char(c) if matches!(c, '(' | '[' | '{') => self.open_pair(c),
+            KeyCode::Char(c) if matches!(c, ')' | ']' | '}') => self.type_over(c),
             KeyCode::Char(c) => {
                 self.buf.insert_char(c);
                 Action::Changed
@@ -474,12 +967,11 @@ impl Editor {
                 self.buf.insert_char(' ');
                 Action::Changed
             }
-            KeyCode::Enter => {
-                self.buf.insert_newline();
-                Action::Changed
-            }
+            KeyCode::Enter => self.smart_enter(),
             KeyCode::Backspace => {
-                self.buf.delete_char();
+                if !self.pair_backspace() {
+                    self.buf.delete_char();
+                }
                 Action::Changed
             }
             KeyCode::Delete => {
@@ -502,12 +994,20 @@ impl Editor {
                 self.insert_arrow(CursorMove::Down, shift);
                 Action::None
             }
-            KeyCode::Home => {
-                self.buf.move_cursor(CursorMove::Head);
-                Action::None
-            }
-            KeyCode::End => {
-                self.buf.move_cursor(CursorMove::End);
+            KeyCode::Home | KeyCode::End => {
+                // shift+home/end selects to the line start/end (regular
+                // mode's notepad behavior; shift+arrows do the same)
+                if shift {
+                    if self.buf.selection_anchor().is_none() {
+                        self.buf.start_selection();
+                    }
+                } else {
+                    self.buf.cancel_selection();
+                }
+                self.buf.move_cursor(match key.code {
+                    KeyCode::Home => CursorMove::Head,
+                    _ => CursorMove::End,
+                });
                 Action::None
             }
             // PageUp/PageDown are handled by the app (animated, page-size
@@ -532,12 +1032,12 @@ impl Editor {
     }
 
     fn handle_normal_key(&mut self, key: KeyEvent) -> Action {
-        // escape clears a mouse/shift-arrow highlight made in NORMAL mode
-        // (visual mode has its own escape, which lands in normal)
-        if self.mode == Mode::Normal
-            && key.code == KeyCode::Esc
-            && self.buf.selection_anchor().is_some()
-        {
+        // escape is :noh — the search match bands drop (the pattern stays
+        // for `n`/`N`) — and it also clears a mouse/shift-arrow highlight
+        // made in NORMAL mode (visual mode has its own escape, which lands
+        // in normal). A pending operator still gets the Esc first.
+        if self.mode == Mode::Normal && key.code == KeyCode::Esc && self.pending.is_none() {
+            self.buf.hide_search_hl();
             self.buf.cancel_selection();
             return Action::None;
         }
@@ -545,15 +1045,53 @@ impl Editor {
         // on ctrl+d/u itself, and an operator armed from a modified letter
         // turned `ctrl+d … gg` into `dgg` (delete to the top). The lone
         // ctrl chord vim uses in normal mode is Ctrl+r (redo).
+        // VISUAL mode runs no ctrl guard: every visual key acts immediately
+        // (nothing arms an operator from one), and a ctrl letter with an
+        // app-level binding (c/x/d/u/v…) never reaches this function — it
+        // was intercepted upstream. Without this, a stale ctrl flag on `y`
+        // (winit's tracked state after an eaten release, or the arbiter
+        // restoring a stripped chord) killed visual yank while normal yy
+        // survived.
         let m = key.modifiers;
+        // Alt+k / Alt+j: move lines up/down (VS Code's alt+arrows) — the
+        // cursor line in normal mode, every highlighted row (partial
+        // highlights included) in visual, cursor/selection riding along.
+        // The document edges are no-ops.
+        if m.contains(KeyModifiers::ALT)
+            && matches!(key.code, KeyCode::Char('k') | KeyCode::Char('j'))
+        {
+            return self.move_lines_by(key.code == KeyCode::Char('j'));
+        }
         if m.contains(KeyModifiers::ALT)
             || (m.contains(KeyModifiers::CONTROL)
-                && !(key.code == KeyCode::Char('r') && self.mode == Mode::Normal))
+                && self.mode == Mode::Normal
+                && !matches!(
+                    key.code,
+                    KeyCode::Char('r')
+                        | KeyCode::Char('o')
+                        | KeyCode::Char('i')
+                        | KeyCode::Char('y')
+                ))
         {
             return Action::None;
         }
         // pending sequences run in every mode, so viw/S… work from visual
         if let Some(p) = self.pending.take() {
+            // a ctrl chord never completes a replace-pending ('r' waits for
+            // a literal char). Desktop environments that re-inject a
+            // stripped copy of ctrl-chord letters made slow left-ctrl+r arm
+            // replace and then complete with 'r' — salvage the intended
+            // chord instead.
+            if p == Pending::R && key.modifiers.contains(KeyModifiers::CONTROL) {
+                if key.code == KeyCode::Char('r') {
+                    let n = self.count.take().unwrap_or(1).max(1);
+                    for _ in 0..n {
+                        self.buf.redo();
+                    }
+                    return Action::Changed;
+                }
+                return Action::None; // cancel the pending replace, swallow
+            }
             let action = self.handle_sequence(p, key.code);
             if self.pending.is_none() {
                 self.count = None;
@@ -624,6 +1162,16 @@ impl Editor {
     fn dispatch_normal(&mut self, key: KeyEvent, m: KeyModifiers) -> Action {
         match key.code {
             KeyCode::Delete => self.x_delete(),
+            // jumplist navigation (vim: Ctrl+O back, Ctrl+I forward; Tab
+            // doubles as Ctrl+I in terminals but is taken by pane logic)
+            KeyCode::Char('o') if m.contains(KeyModifiers::CONTROL) => {
+                self.jump_back();
+                Action::None
+            }
+            KeyCode::Char('i') if m.contains(KeyModifiers::CONTROL) => {
+                self.jump_forward();
+                Action::None
+            }
             KeyCode::Char('r') if m.contains(KeyModifiers::CONTROL) => {
                 let n = self.count.take().unwrap_or(1).max(1);
                 for _ in 0..n {
@@ -676,15 +1224,12 @@ impl Editor {
                 Action::None
             }
             KeyCode::Char('o') => {
-                self.buf.move_cursor(CursorMove::End);
-                self.buf.insert_newline();
+                self.buf.open_line_below();
                 self.mode = Mode::Insert;
                 Action::Changed
             }
             KeyCode::Char('O') => {
-                self.buf.move_cursor(CursorMove::Head);
-                self.buf.insert_newline();
-                self.buf.move_cursor(CursorMove::Up);
+                self.buf.open_line_above();
                 self.mode = Mode::Insert;
                 Action::Changed
             }
@@ -698,6 +1243,14 @@ impl Editor {
                 self.mode = Mode::Insert;
                 Action::Changed
             }
+            // vim S: substitute [count] lines — cc's linewise change
+            KeyCode::Char('S') => {
+                let rep = self.count.take().unwrap_or(1).max(1) as usize;
+                self.yank_lines(rep, false);
+                self.change_lines_seeded(rep);
+                self.mode = Mode::Insert;
+                Action::Changed
+            }
             KeyCode::Char('c') => {
                 self.op_count = self.count.take();
                 self.pending = Some(Pending::C);
@@ -706,6 +1259,19 @@ impl Editor {
             KeyCode::Char('d') => {
                 self.op_count = self.count.take();
                 self.pending = Some(Pending::D);
+                Action::None
+            }
+            // Y (shift+y): vim's Y == yy — linewise yank of [count] lines,
+            // executed immediately (not an operator)
+            KeyCode::Char('Y') => {
+                let n = self.count.take().unwrap_or(1).max(1) as usize;
+                let (row, _) = self.buf.cursor();
+                let n = n.min(self.buf.lines().len().saturating_sub(row)).max(1);
+                self.flash_yank((row, 0), (row + n, 0));
+                if std::env::var("DBML_UI_FLASH_DEBUG").is_ok() {
+                    eprintln!("[flash] set by yy: rows {row}..{} n={n}", row + n);
+                }
+                self.yank_lines(n, true);
                 Action::None
             }
             KeyCode::Char('y') => {
@@ -734,24 +1300,18 @@ impl Editor {
                 Action::Changed
             }
             KeyCode::Char('/') => {
-                self.cmdline = Some(CmdLine {
-                    kind: '/',
-                    input: String::new(),
-                });
-                Action::None
-            }
-            KeyCode::Char(':') => {
-                self.cmdline = Some(CmdLine {
-                    kind: ':',
-                    input: String::new(),
-                });
+                // vim's /: the bottom command line (the gui find stays on
+                // ctrl+f / the toolbar button)
+                self.vim_search = Some(String::new());
                 Action::None
             }
             KeyCode::Char('n') => {
+                self.record_jump();
                 self.buf.search_forward(false);
                 Action::None
             }
             KeyCode::Char('N') => {
+                self.record_jump();
                 self.buf.search_back(false);
                 Action::None
             }
@@ -795,6 +1355,7 @@ impl Editor {
             }
             KeyCode::Char('y') if self.visual_linewise => {
                 if let Some((from, n)) = self.selection_lines() {
+                    self.flash_yank((from, 0), (from + n, 0));
                     self.buf.move_cursor(CursorMove::Jump(from, 0));
                     self.yank_lines(n, true);
                 }
@@ -803,8 +1364,12 @@ impl Editor {
                 Action::None
             }
             KeyCode::Char('y') => {
+                let range = self.buf.selection_range();
                 if let Some(t) = self.buf.copy_selection() {
                     self.yank_chars(t);
+                    if let Some((from, to)) = range {
+                        self.flash_yank((from.row, from.col), (to.row, to.col));
+                    }
                 }
                 // copy() leaves selection_start set, which would make later
                 // normal-mode motions extend an invisible selection
@@ -833,7 +1398,7 @@ impl Editor {
                 if let Some((from, n)) = lines {
                     self.buf.move_cursor(CursorMove::Jump(from, 0));
                     self.yank_lines(n, false);
-                    self.buf.change_lines(n);
+                    self.change_lines_seeded(n);
                 }
                 self.mode = Mode::Insert;
                 self.visual_linewise = false;
@@ -861,6 +1426,22 @@ impl Editor {
                 // restarting from the current cursor
                 self.buf.cancel_selection();
                 self.buf.start_selection();
+                Action::None
+            }
+            KeyCode::Char('g') => {
+                // gc (toggle comments over the selection); gg lands on top
+                self.pending = Some(Pending::G);
+                Action::None
+            }
+            KeyCode::Char('p') | KeyCode::Char('P') => {
+                // vim: visual p/P replaces the selection with the register
+                self.paste_over_selection()
+            }
+            KeyCode::Char('r') => {
+                // vim: visual r{char} replaces every selected char — the
+                // char completes through the shared Pending::R sequence,
+                // which branches on the mode
+                self.pending = Some(Pending::R);
                 Action::None
             }
             // f/F/t/T extend the selection to a line char
@@ -952,20 +1533,24 @@ impl Editor {
                 }
             }
             // count is an absolute line number for G
-            KeyCode::Char('G') => match count {
-                Some(line) => {
-                    let rows = self.buf.lines().len().max(1);
-                    let row = (line as usize).saturating_sub(1).min(rows - 1);
-                    self.buf.move_cursor(CursorMove::Jump(row, 0));
+            KeyCode::Char('G') => {
+                self.record_jump();
+                match count {
+                    Some(line) => {
+                        let rows = self.buf.lines().len().max(1);
+                        let row = (line as usize).saturating_sub(1).min(rows - 1);
+                        self.buf.move_cursor(CursorMove::Jump(row, 0));
+                    }
+                    None => self.buf.move_cursor(CursorMove::Bottom),
                 }
-                None => self.buf.move_cursor(CursorMove::Bottom),
-            },
-            // n$ moves to the end of the (n-1)th line below
+            }
+            // n$ moves to the end of the (n-1)th line below; the aim goes
+            // MAXCOL so following j/k ride every line's end (vim curswant)
             KeyCode::Char('$') | KeyCode::End => {
                 for _ in 1..n {
                     self.buf.move_cursor(CursorMove::Down);
                 }
-                self.buf.move_cursor(CursorMove::End);
+                self.buf.move_cursor(CursorMove::EndMax);
             }
             // counts don't repeat line-head motions
             KeyCode::Char('0') | KeyCode::Home | KeyCode::Char('^') => {
@@ -978,8 +1563,15 @@ impl Editor {
             KeyCode::Char('w') => self.repeat(CursorMove::WordForward, n),
             KeyCode::Char('b') => self.repeat(CursorMove::WordBack, n),
             KeyCode::Char('e') => self.repeat(CursorMove::WordEnd, n),
-            KeyCode::Char('{') => self.repeat(CursorMove::ParagraphBack, n),
-            KeyCode::Char('}') => self.repeat(CursorMove::ParagraphForward, n),
+            // paragraph motions are jumps (vim's jumplist includes them)
+            KeyCode::Char('{') => {
+                self.record_jump();
+                self.repeat(CursorMove::ParagraphBack, n)
+            }
+            KeyCode::Char('}') => {
+                self.record_jump();
+                self.repeat(CursorMove::ParagraphForward, n)
+            }
             _ => {
                 self.count = count; // not a motion; keep the count
                 return None;
@@ -1073,15 +1665,28 @@ impl Editor {
                 }
             }
             (R, KeyCode::Char(c)) => {
-                if self.buf.replace_next(rep.max(1), c) {
+                // visual r{char} replaces the whole selection (vim);
+                // normal r{char} replaces [count] chars at the cursor
+                if self.mode == Mode::Visual {
+                    if self.visual_replace_selection(c) {
+                        Action::Changed
+                    } else {
+                        Action::None
+                    }
+                } else if self.buf.replace_next(rep.max(1), c) {
                     Action::Changed
                 } else {
                     Action::None
                 }
             }
             (R, _) => Action::None,
+            (G, KeyCode::Char('d')) => {
+                // gd — the app resolves the definition (needs the schema)
+                Action::GotoDefinition
+            }
             (G, KeyCode::Char('g')) => {
                 // [count]gg jumps to line N
+                self.record_jump();
                 if let Some(line) = self.count.or(self.op_count) {
                     let rows = self.buf.lines().len().max(1);
                     let row = (line as usize).saturating_sub(1).min(rows - 1);
@@ -1091,8 +1696,83 @@ impl Editor {
                 }
                 Action::None
             }
-            (Y, KeyCode::Char('y')) => {
-                self.yank_lines(rep, true);
+            (G, KeyCode::Char('c')) => {
+                // gc: in visual, toggle EVERY highlighted line now —
+                // uncomment only when all of them carry `//`, else comment
+                // them all; in normal, await gcc's second `c`
+                if self.mode == Mode::Visual {
+                    if let Some((a, b)) = self.buf.selection_range() {
+                        let first = a.row.min(b.row);
+                        let last = a.row.max(b.row);
+                        self.buf.toggle_comment_rows(first, last);
+                    }
+                    self.buf.cancel_selection();
+                    self.mode = Mode::Normal;
+                    self.visual_linewise = false;
+                    Action::Changed
+                } else {
+                    self.pending = Some(Pending::Gc);
+                    Action::None
+                }
+            }
+            (Gc, KeyCode::Char('c')) => {
+                // gcc: toggle the current line's // comment
+                let row = self.buf.pos().row;
+                self.buf.toggle_line_comment(row);
+                Action::Changed
+            }
+            (Y, KeyCode::Char('y') | KeyCode::Char('Y')) => {
+                // yy / Y: [count] whole lines, flash the rows
+                let (row, _) = self.buf.cursor();
+                let n = rep.min(self.buf.lines().len().saturating_sub(row));
+                self.flash_yank((row, 0), (row + n, 0));
+                self.yank_lines(n, true);
+                Action::None
+            }
+            (Y, KeyCode::Char('g')) => {
+                self.pending = Some(Yg);
+                Action::None
+            }
+            // yj / yk: linewise to the adjacent line, cursor RESTORED
+            (Y, KeyCode::Char('j') | KeyCode::Down) => {
+                let (row, col) = self.buf.cursor();
+                let target = (row + rep).min(self.buf.lines().len().saturating_sub(1));
+                self.flash_yank((row, 0), (target + 1, 0));
+                self.yank_lines(target - row + 1, true);
+                self.buf.move_cursor(CursorMove::Jump(row, col));
+                Action::None
+            }
+            (Y, KeyCode::Char('k') | KeyCode::Up) => {
+                let (row, col) = self.buf.cursor();
+                let target = row.saturating_sub(rep);
+                self.flash_yank((target, 0), (row + 1, 0));
+                self.buf.move_cursor(CursorMove::Jump(target, 0));
+                self.yank_lines(row - target + 1, true);
+                self.buf.move_cursor(CursorMove::Jump(row, col));
+                Action::None
+            }
+            // yw / ye / yb / y0 / y$: charwise, cursor RESTORED (vim's y
+            // does not move); same range math as the d counterparts
+            (Y, KeyCode::Char('w')) => {
+                self.yank_over(&vec![CursorMove::WordForward; rep], false, true)
+            }
+            (Y, KeyCode::Char('e')) => self.yank_over(&vec![CursorMove::WordEnd; rep], true, false),
+            (Y, KeyCode::Char('b')) => self.yank_over(&vec![CursorMove::WordBack; rep], false, false),
+            (Y, KeyCode::Char('0') | KeyCode::Home | KeyCode::Char('^')) => {
+                self.yank_over(&[CursorMove::Head], false, false)
+            }
+            (Y, KeyCode::Char('$') | KeyCode::End) => {
+                let mut ms = vec![CursorMove::Down; rep.saturating_sub(1)];
+                ms.push(CursorMove::End);
+                self.yank_over(&ms, false, false)
+            }
+            // yG: linewise to the last line — the range starts at the
+            // cursor, so no jump is needed; y does not move the cursor
+            (Y, KeyCode::Char('G')) => {
+                let (row, _) = self.buf.cursor();
+                let last = self.buf.lines().len().saturating_sub(1);
+                self.flash_yank((row, 0), (last + 1, 0));
+                self.yank_lines(last - row + 1, true);
                 Action::None
             }
             (D, KeyCode::Char('d')) => {
@@ -1101,10 +1781,11 @@ impl Editor {
                 Action::Changed
             }
             (C, KeyCode::Char('c')) => {
-                // [count]cc deletes the lines and edits one empty line
-                // (one undo unit: change_lines snapshots before both steps)
+                // [count]cc deletes the lines and edits one line seeded
+                // with the formatter's indent (one undo unit: insert_str
+                // snapshots before the whole change; delete_range is raw)
                 self.yank_lines(rep, false);
-                self.buf.change_lines(rep);
+                self.change_lines_seeded(rep);
                 self.mode = Mode::Insert;
                 Action::Changed
             }
@@ -1164,6 +1845,19 @@ impl Editor {
                     Action::None
                 }
             }
+            // dj / dk: linewise to the adjacent line — [count] multiplies
+            // the motion's line distance (d3j deletes 4 lines), clamped at
+            // the buffer ends (vim: dj on the last line deletes just the
+            // current line)
+            (D, KeyCode::Char('j') | KeyCode::Down) => {
+                let (row, _) = self.buf.cursor();
+                let target = (row + rep).min(self.buf.lines().len().saturating_sub(1));
+                self.operate_lines(target, false)
+            }
+            (D, KeyCode::Char('k') | KeyCode::Up) => {
+                let (row, _) = self.buf.cursor();
+                self.operate_lines(row.saturating_sub(rep), false)
+            }
             // [count]G targets an absolute line, linewise (like vim)
             (D, KeyCode::Char('G')) => {
                 let target = self.line_target_row(false);
@@ -1172,6 +1866,16 @@ impl Editor {
             (C, KeyCode::Char('G')) => {
                 let target = self.line_target_row(false);
                 self.operate_lines(target, true)
+            }
+            // cj / ck: the change counterpart of dj/dk (one seeded line)
+            (C, KeyCode::Char('j') | KeyCode::Down) => {
+                let (row, _) = self.buf.cursor();
+                let target = (row + rep).min(self.buf.lines().len().saturating_sub(1));
+                self.operate_lines(target, true)
+            }
+            (C, KeyCode::Char('k') | KeyCode::Up) => {
+                let (row, _) = self.buf.cursor();
+                self.operate_lines(row.saturating_sub(rep), true)
             }
             (D, KeyCode::Char('{')) => {
                 self.operate(&vec![CursorMove::ParagraphBack; rep], false, false, false)
@@ -1199,6 +1903,16 @@ impl Editor {
             (Dg, KeyCode::Char('g')) => {
                 let target = self.line_target_row(true);
                 self.operate_lines(target, false)
+            }
+            (Yg, KeyCode::Char('g')) => {
+                // ygg: linewise to the first line, cursor restored
+                let (row, col) = self.buf.cursor();
+                let target = self.line_target_row(true);
+                self.flash_yank((target, 0), (row + 1, 0));
+                self.buf.move_cursor(CursorMove::Jump(target, 0));
+                self.yank_lines(row - target + 1, true);
+                self.buf.move_cursor(CursorMove::Jump(row, col));
+                Action::None
             }
             (Cg, KeyCode::Char('g')) => {
                 let target = self.line_target_row(true);
@@ -1611,12 +2325,12 @@ impl Editor {
             };
             let end_row = from + n - 1;
             TextObj {
+                linewise: true,
                 start: Pos { row: from, col: 0 },
                 end: Pos {
                     row: end_row,
                     col: self.buf.line(end_row).chars().count().saturating_sub(1),
                 },
-                linewise: false,
             }
         } else {
             let Some((s, e)) = self.buf.selection_range() else {
@@ -1657,13 +2371,81 @@ impl Editor {
         self.buf.move_cursor(CursorMove::Jump(from, 0));
         self.yank_lines(n, false);
         if insert {
-            // cG/cgg: one empty editable line, one undo unit
-            self.buf.change_lines(n);
+            // cG/cgg: one editable line seeded with the formatter's
+            // indent, one undo unit
+            self.change_lines_seeded(n);
             self.mode = Mode::Insert;
         } else {
             self.delete_lines(n);
         }
         Action::Changed
+    }
+
+    /// The indentation a linewise change should seed the fresh line with:
+    /// what the formatter would indent the line to (2-space unit, see
+    /// src/dbml/fmt.rs) without running it. The nearest non-blank line
+    /// above the replaced range decides: a block opener (`{` at end after
+    /// stripping a `//` comment) means one level deeper (its indent + 2);
+    /// otherwise that neighbor's indent carries over; with no neighbor
+    /// above, the replaced line's own leading whitespace. Empty for a
+    /// top-level line, so nothing is seeded.
+    fn linewise_change_indent(&self, row: usize) -> String {
+        let lines = self.buf.lines();
+        let indent_of = |l: &str| l.chars().count() - l.trim_start().chars().count();
+        let mut prev = None;
+        let mut r = row;
+        while r > 0 {
+            r -= 1;
+            if let Some(l) = lines.get(r) {
+                if !l.trim().is_empty() {
+                    prev = Some(l.as_str());
+                    break;
+                }
+            }
+        }
+        match prev {
+            Some(l) => {
+                let code = l.split("//").next().unwrap_or("").trim_end();
+                " ".repeat(indent_of(l) + usize::from(code.ends_with('{')) * 2)
+            }
+            None => match lines.get(row) {
+                Some(l) => " ".repeat(indent_of(l)),
+                None => String::new(),
+            },
+        }
+    }
+
+    /// Linewise change (`cc`, `S`, visual-line `c`, `cG`): clear `n` rows
+    /// into one editable line seeded with `linewise_change_indent` (the
+    /// formatter re-indents the line anyway), cursor after the seed. Still
+    /// one undo unit without touching the Buffer's private history:
+    /// `insert_str` takes the single pre-change snapshot and `delete_range`
+    /// never pushes, so deleting from the seed's end through the last
+    /// replaced row's EOL leaves exactly the seed on the fresh line — the
+    /// same shape `change_lines` leaves. An empty seed falls back to the
+    /// plain `change_lines` path.
+    fn change_lines_seeded(&mut self, n: usize) {
+        let row = self.buf.cursor().0;
+        let indent = self.linewise_change_indent(row);
+        if indent.is_empty() {
+            self.buf.change_lines(n);
+            return;
+        }
+        self.buf.cancel_selection();
+        self.buf.move_cursor(CursorMove::Jump(row, 0));
+        self.buf.insert_str(&indent);
+        let end_row = (row + n.max(1) - 1).min(self.buf.lines().len() - 1);
+        let end_col = self.buf.line(end_row).chars().count();
+        self.buf.delete_range(
+            Pos {
+                row,
+                col: indent.chars().count(),
+            },
+            Pos {
+                row: end_row,
+                col: end_col,
+            },
+        );
     }
 
     /// Rows covered by a visual-line selection: (first_row, count),
@@ -1716,6 +2498,7 @@ impl Editor {
         let lines = self.buf.lines();
         let end = (row + n.max(1)).min(lines.len());
         self.register = lines[row..end].to_vec();
+        self.register_linewise = true;
         if to_system {
             let mut text = self.register.join("\n");
             text.push('\n');
@@ -1769,6 +2552,26 @@ impl Editor {
         clamp_line: bool,
         insert: bool,
     ) -> Action {
+        let Some((from, n)) = self.operator_range(motions, inclusive, clamp_line) else {
+            return Action::None;
+        };
+        self.buf.move_cursor(CursorMove::Jump(from.0, from.1));
+        self.buf.delete_str(n);
+        if insert {
+            self.mode = Mode::Insert;
+        }
+        Action::Changed
+    }
+
+    /// Apply the operator's motions and normalize the covered range:
+    /// (start position, character count). The cursor ends wherever the
+    /// motions landed — the caller deletes, yanks, or restores.
+    fn operator_range(
+        &mut self,
+        motions: &[CursorMove],
+        inclusive: bool,
+        clamp_line: bool,
+    ) -> Option<((usize, usize), usize)> {
         let start = self.buf.cursor();
         for m in motions {
             self.buf.move_cursor(*m);
@@ -1785,18 +2588,57 @@ impl Editor {
         if inclusive && forward {
             n += 1;
         }
-        if n > 0 {
-            self.buf.move_cursor(CursorMove::Jump(from.0, from.1));
-            self.buf.delete_str(n);
+        (n > 0).then_some((from, n))
+    }
+
+    /// The `n` characters starting at `from` (newlines count as one, the
+    /// same accounting as `chars_between`), plus the exclusive end position.
+    fn text_from(&self, from: (usize, usize), n: usize) -> (String, (usize, usize)) {
+        let lines = self.buf.lines();
+        let mut out = String::new();
+        let (mut r, mut c) = from;
+        for _ in 0..n {
+            match lines.get(r) {
+                Some(line) if c < line.chars().count() => {
+                    out.push(line.chars().nth(c).unwrap());
+                    c += 1;
+                }
+                Some(_) => {
+                    out.push('\n');
+                    r += 1;
+                    c = 0;
+                }
+                None => break,
+            }
         }
-        if insert {
-            self.mode = Mode::Insert;
-        }
-        if n > 0 {
-            Action::Changed
-        } else {
-            Action::None
-        }
+        (out, (r, c))
+    }
+
+    /// Every yank hides the search match bands (an edit-class action reads
+    /// as :noh) while flashing the yanked span.
+    fn flash_yank(&mut self, start: (usize, usize), end: (usize, usize)) {
+        self.buf.hide_search_hl();
+        self.yank_flash = Some(YankFlash {
+            start,
+            end,
+            started: web_time::Instant::now(),
+        });
+    }
+
+    /// Yank (never delete) the range an operator covers: the text lands in
+    /// the register + system clipboard, the cursor is RESTORED (vim's y
+    /// does not move), and the yanked region flashes.
+    fn yank_over(&mut self, motions: &[CursorMove], inclusive: bool, clamp_line: bool) -> Action {
+        let start = self.buf.cursor();
+        let Some((from, n)) = self.operator_range(motions, inclusive, clamp_line) else {
+            self.buf.move_cursor(CursorMove::Jump(start.0, start.1));
+            return Action::None;
+        };
+        let (text, end) = self.text_from(from, n);
+        self.yank_chars(text);
+        self.flash_yank(from, end);
+        self.buf.move_cursor(CursorMove::Jump(start.0, start.1));
+        Action::None
     }
 
     /// Number of characters strictly between two positions, `to > from`
@@ -1877,35 +2719,452 @@ impl Editor {
         Some((s, e))
     }
 
-    fn paste_n(&mut self, before: bool, times: u32) -> Action {
+    /// Visual p/P: replace the selected text with the register's
+    /// contents — one undo unit, vim's register swap (the replaced text
+    /// becomes the unnamed register), and the pasted range is left
+    /// selected with the cursor at its end.
+    /// Alt+k/j: move the cursor line (normal) or every highlighted row
+    /// (visual) up/down one line, cursor/selection riding along. None at
+    /// the document edges.
+    fn move_lines_by(&mut self, down: bool) -> Action {
+        match self.mode {
+            Mode::Visual => {
+                let Some((a, b)) = self.buf.selection_range() else {
+                    return Action::None;
+                };
+                let first = a.row.min(b.row);
+                let last = a.row.max(b.row);
+                if !self.buf.move_lines(first, last, down) {
+                    return Action::None;
+                }
+                // the selection rides with the lines (the text of each
+                // line is unchanged — only the order — so the columns hold)
+                let (ar, ac) = match self.buf.selection_anchor() {
+                    Some(p) => (p.row, p.col),
+                    None => return Action::None,
+                };
+                let (cr, cc) = self.buf.cursor();
+                let d = if down { 1 } else { -1 };
+                self.buf.cancel_selection();
+                self.buf.move_cursor(CursorMove::Jump(
+                    (ar as i32 + d) as usize,
+                    ac,
+                ));
+                self.buf.start_selection();
+                self.buf.move_cursor(CursorMove::Jump(
+                    (cr as i32 + d) as usize,
+                    cc,
+                ));
+                Action::Changed
+            }
+            _ => {
+                let row = self.buf.pos().row;
+                if !self.buf.move_lines(row, row, down) {
+                    return Action::None;
+                }
+                let col = self.buf.cursor().1;
+                let to = (row as i32 + if down { 1 } else { -1 }) as usize;
+                self.buf.move_cursor(CursorMove::Jump(to, col));
+                Action::Changed
+            }
+        }
+    }
+
+    fn paste_over_selection(&mut self) -> Action {
         if self.register.is_empty() {
             return Action::None;
         }
-        let (row, _) = self.buf.cursor();
-        if before {
-            self.buf.move_cursor(CursorMove::Jump(row, 0));
+        let Some((a, b)) = self.buf.selection_range() else {
+            return Action::None;
+        };
+        let (start, end) = if (a.row, a.col) <= (b.row, b.col) {
+            (a, b)
         } else {
-            self.buf.move_cursor(CursorMove::Jump(row, usize::MAX));
-            self.buf.move_cursor(CursorMove::End);
-        }
-        self.buf.insert_newline();
-        for c in 0..times {
-            if c > 0 {
-                self.buf.insert_newline();
+            (b, a)
+        };
+        let first = start.row.min(end.row);
+        let last = start.row.max(end.row);
+        // the PASTE keeps the register's own kind (linewise register ->
+        // linewise rows); vim's swap then moves the replaced text into
+        // the register with the visual mode's kind
+        let pasted_linewise = self.register_linewise;
+        let pasted_lines = std::mem::take(&mut self.register);
+        let replaced = self.buf.selection_text().unwrap_or_default();
+        self.register = if replaced.is_empty() {
+            vec![String::new()]
+        } else {
+            replaced.lines().map(|l| l.to_string()).collect()
+        };
+        self.register_linewise = self.visual_linewise;
+        // the raw ops delete any active selection first: clear it so the
+        // v-highlight is not eaten mid-paste
+        self.buf.cancel_selection();
+        self.buf.begin_edit(); // one undo unit
+        if pasted_linewise {
+            // replace the WHOLE rows first..=last with the register lines
+            if last + 1 < self.buf.lines().len() {
+                self.buf.delete_range(
+                    Pos { row: first, col: 0 },
+                    Pos { row: last + 1, col: 0 },
+                );
+            } else {
+                // the range ends the buffer: eat the separator before it
+                let from = if first > 0 {
+                    Pos {
+                        row: first - 1,
+                        col: self.buf.line_len(first - 1),
+                    }
+                } else {
+                    Pos { row: 0, col: 0 }
+                };
+                self.buf
+                    .delete_range(from, Pos { row: last, col: self.buf.line_len(last) });
             }
-            for (i, line) in self.register.iter().enumerate() {
-                if i > 0 {
-                    self.buf.insert_newline();
+            self.buf.move_cursor(CursorMove::Jump(first, 0));
+            for l in pasted_lines.iter() {
+                // a linewise line carries its own newline: insert the text
+                // then split the remainder onto the next row
+                self.buf.insert_str_raw(l);
+                self.buf.insert_newline_raw();
+            }
+            // vim: the cursor rests on the first pasted row, NORMAL mode —
+            // no selection lingers, so motions never extend a highlight
+            self.mode = Mode::Normal;
+            self.visual_linewise = false;
+        } else {
+            // charwise: delete the selection, insert at the cursor, leave
+            // the cursor ON the pasted text's last char (vim's resting
+            // spot) in NORMAL mode — re-selecting the pasted range here
+            // kept visual alive, so the next motion extended a highlight
+            let pasted = pasted_lines.join("\n");
+            self.buf.delete_range(start, end);
+            self.buf.move_cursor(CursorMove::Jump(start.row, start.col));
+            self.insert_multiline_raw(&pasted);
+            let pl: Vec<&str> = pasted.split('\n').collect();
+            let end_pos = if pl.len() == 1 {
+                Pos {
+                    row: start.row,
+                    col: start.col + pl[0].chars().count().saturating_sub(1),
                 }
-                if !line.is_empty() {
-                    self.buf.insert_str(line);
+            } else {
+                Pos {
+                    row: start.row + pl.len() - 1,
+                    col: pl.last().map(|l| l.chars().count().saturating_sub(1)).unwrap_or(0),
+                }
+            };
+            self.buf.move_cursor(CursorMove::Jump(end_pos.row, end_pos.col));
+            self.mode = Mode::Normal;
+            self.visual_linewise = false;
+        }
+        Action::Changed
+    }
+
+    /// Visual `r{char}` (vim): replace EVERY selected character with
+    /// `{char}` — per row the selected span becomes that many copies; an
+    /// empty selected row receives one `{char}` (vim). Linewise (V)
+    /// selections replace the whole rows. One undo unit; the cursor
+    /// rests on the last replaced character, normal mode.
+    fn visual_replace_selection(&mut self, c: char) -> bool {
+        let Some((a, b)) = self.buf.selection_range() else {
+            return false;
+        };
+        let (start, end) = if (a.row, a.col) <= (b.row, b.col) {
+            (a, b)
+        } else {
+            (b, a)
+        };
+        // linewise (V): the whole rows are the span (vim replaces every
+        // character of every selected row)
+        let (start, end) = if self.visual_linewise {
+            let last = end.row.max(start.row);
+            (
+                Pos { row: start.row, col: 0 },
+                Pos {
+                    row: last,
+                    col: self.buf.line_len(last),
+                },
+            )
+        } else {
+            (start, end)
+        };
+        let fill = c.to_string();
+        self.buf.cancel_selection();
+        self.mode = Mode::Normal;
+        self.visual_linewise = false;
+        self.buf.begin_edit(); // one undo unit
+        let mut last = (start.row, 0usize);
+        for (i, row) in (start.row..=end.row).enumerate() {
+            // the selected span on this row: charwise selections start at
+            // start.col, end at end.col on the LAST row and run to EOL in
+            // between; linewise spans are whole rows
+            let (a, b) = if start.row == end.row {
+                (start.col, end.col)
+            } else if i == 0 {
+                (start.col, self.buf.line_len(row))
+            } else if row == end.row {
+                (0, end.col)
+            } else {
+                (0, self.buf.line_len(row))
+            };
+            // an empty selected row still receives one {char} (vim)
+            let count = b.saturating_sub(a).max(1);
+            self.buf.move_cursor(CursorMove::Jump(row, a));
+            self.buf.delete_range(Pos { row, col: a }, Pos { row, col: b });
+            self.buf.insert_str_raw(&fill.repeat(count));
+            last = (row, count - 1);
+        }
+        self.buf.move_cursor(CursorMove::Jump(last.0, last.1));
+        true
+    }
+
+    /// Insert `text` at the cursor as raw (history-free) ops, with
+    /// newlines split into real line breaks — `insert_str_raw` only
+    /// writes into the current line.
+    fn insert_multiline_raw(&mut self, text: &str) {
+        for (i, line) in text.split('\n').enumerate() {
+            if i > 0 {
+                self.buf.insert_newline_raw();
+            }
+            if !line.is_empty() {
+                self.buf.insert_str_raw(line);
+            }
+        }
+    }
+
+    // ---- IDE editing (shared by vim insert mode and Regular typing) ----
+
+    /// The closer for an auto-paired opener.
+    fn pair_close(open: char) -> char {
+        match open {
+            '(' => ')',
+            '[' => ']',
+            _ => '}',
+        }
+    }
+
+    /// Typing an opener (`(`, `[`, `{`): with a selection, WRAP it
+    /// (`(text)`, cursor after the closer — VS Code's behavior); without
+    /// one, insert the pair with the caret between. One undo unit.
+    pub fn open_pair(&mut self, open: char) -> Action {
+        let close = Self::pair_close(open);
+        let (row, col) = (self.buf.pos().row, self.buf.pos().col);
+        self.buf.insert_str(&format!("{open}{close}"));
+        // absolute jump: Move::Back would wrap at column 0
+        self.buf.move_cursor(CursorMove::Jump(row, col + 1));
+        Action::Changed
+    }
+
+    /// Typing a closer (`)`, `]`, `}`): when the caret sits on the
+    /// matching closer, step OVER it instead of inserting a twin; else
+    /// insert normally.
+    pub fn type_over(&mut self, close: char) -> Action {
+        let (row, col) = (self.buf.pos().row, self.buf.pos().col);
+        if self.buf.line(row).chars().nth(col) == Some(close) {
+            self.buf.move_cursor(CursorMove::Forward);
+            Action::None
+        } else {
+            self.buf.insert_char(close);
+            Action::Changed
+        }
+    }
+
+    /// Backspace between an empty pair deletes BOTH chars (IDE standard
+    /// companion to auto-pairs); returns false for the caller to fall
+    /// back to the plain backspace.
+    pub fn pair_backspace(&mut self) -> bool {
+        let (row, col) = (self.buf.pos().row, self.buf.pos().col);
+        if col == 0 {
+            return false;
+        }
+        let line = self.buf.line(row);
+        let opens = |c: char| matches!(c, '(' | '[' | '{');
+        let is_pair = line
+            .chars()
+            .nth(col - 1)
+            .filter(|p| opens(*p))
+            .and_then(|p| line.chars().nth(col).map(|n| n == Self::pair_close(p)))
+            .unwrap_or(false);
+        if !is_pair {
+            return false;
+        }
+        self.buf.begin_edit(); // one undo unit restores both
+        self.buf
+            .delete_range(Pos { row, col: col - 1 }, Pos { row, col: col + 1 });
+        self.buf.move_cursor(CursorMove::Jump(row, col - 1));
+        true
+    }
+
+    /// IDE Enter: the new line inherits the cursor line's indentation; a
+    /// `{` before the caret opens a block one level deeper (the 2-space
+    /// unit `linewise_change_indent` seeds), and a `}` right after the
+    /// caret EXPANDS the braces across three lines with the caret on the
+    /// indented middle line. One undo unit.
+    pub fn smart_enter(&mut self) -> Action {
+        let (row, col) = (self.buf.pos().row, self.buf.pos().col);
+        let line = self.buf.line(row).to_string();
+        let before: String = line.chars().take(col).collect();
+        let after: String = line.chars().skip(col).collect();
+        let base: String = line.chars().take_while(|ch| ch.is_whitespace()).collect();
+        // a `//` comment tail never opens a block (linewise_change_indent's
+        // rule)
+        let code = before.split("//").next().unwrap_or("").trim_end().to_string();
+        let opens = code.ends_with('{');
+        let closes_after = after.trim_start().starts_with('}');
+        let unit = "  ";
+        self.buf.begin_edit(); // one undo unit
+        match (opens, closes_after) {
+            (true, true) => {
+                // {  |  }  →  { ⏎ <base+unit>| ⏎ <base>}
+                self.buf.insert_newline_raw();
+                self.buf.insert_str_raw(&format!("{base}{unit}"));
+                self.buf.insert_newline_raw();
+                self.buf.insert_str_raw(&base);
+                self.buf.move_cursor(CursorMove::Jump(
+                    row + 1,
+                    base.chars().count() + unit.chars().count(),
+                ));
+            }
+            (true, false) => {
+                // {  |  …  →  { ⏎ <base+unit>|
+                self.buf.insert_newline_raw();
+                self.buf.insert_str_raw(&format!("{base}{unit}"));
+            }
+            _ => {
+                // plain auto-indent: the new line inherits the indent
+                self.buf.insert_newline_raw();
+                if !base.is_empty() {
+                    self.buf.insert_str_raw(&base);
                 }
             }
         }
         Action::Changed
     }
 
+
+    fn paste_n(&mut self, before: bool, times: u32) -> Action {
+        if self.register.is_empty() {
+            return Action::None;
+        }
+        let times = times.max(1);
+        if self.register_linewise {
+            // vim: a put is ONE undo unit — a single snapshot up front,
+            // then raw (history-free) mutations; u undoes the whole paste
+            // at once and restores the pre-put cursor
+            self.buf.begin_edit();
+            // linewise put: duplicate the block below (p) / above (P) the
+            // cursor line; the cursor lands on the first pasted line's
+            // first non-blank (verified against real nvim)
+            let (row, _) = self.buf.cursor();
+            let first = if before { row } else { row + 1 };
+            // p opens the slot at the END of the cursor line; P at its start
+            self.buf.move_cursor(CursorMove::Jump(row, 0));
+            if !before {
+                self.buf.move_cursor(CursorMove::End);
+            }
+            self.buf.insert_newline_raw();
+            let mut at = first;
+            for c in 0..times {
+                if c > 0 {
+                    at += self.register.len();
+                    self.buf.move_cursor(CursorMove::Jump(at, 0));
+                    self.buf.move_cursor(CursorMove::End);
+                    self.buf.insert_newline_raw();
+                }
+                // insert_newline_raw leaves the cursor on the remainder
+                // line — the block goes into the OPENED slot
+                self.buf.move_cursor(CursorMove::Jump(at, 0));
+                for (i, line) in self.register.iter().enumerate() {
+                    if i > 0 {
+                        self.buf.insert_newline_raw();
+                    }
+                    if !line.is_empty() {
+                        self.buf.insert_str_raw(line);
+                    }
+                }
+            }
+            // cursor: the first pasted line, its first non-blank column
+            let nb = self.register[0]
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .count();
+            self.buf.move_cursor(CursorMove::Jump(first, nb));
+            Action::Changed
+        } else {
+            // charwise put: inline after (p) / before (P) the cursor char;
+            // the cursor ends ON the last pasted character (nvim-verified)
+            let text = self.register.join("\n").repeat(times as usize);
+            if text.is_empty() {
+                return Action::None;
+            }
+            self.buf.begin_edit();
+            if !before {
+                self.buf.move_cursor(CursorMove::Forward);
+            }
+            let mut last: Option<Pos> = None;
+            for (i, part) in text.split('\n').enumerate() {
+                if i > 0 {
+                    self.buf.insert_newline_raw();
+                }
+                if !part.is_empty() {
+                    self.buf.insert_str_raw(part);
+                    let (r, c) = self.buf.cursor();
+                    last = Some(Pos { row: r, col: c.saturating_sub(1) });
+                }
+            }
+            if let Some(p) = last {
+                self.buf.move_cursor(CursorMove::Jump(p.row, p.col));
+            }
+            Action::Changed
+        }
+    }
+
     /// Move the cursor to a (row, col) in buffer coordinates (mouse click).
+    /// Disarm any pending operator/count (a flagged ctrl+d/u handled at
+    /// the app level implies its stripped twin may have armed one).
+    pub fn cancel_pending(&mut self) {
+        self.pending = None;
+        self.count = None;
+        self.op_count = None;
+    }
+
+    /// Capture the cursor position as a jump origin (call BEFORE a jump
+    /// motion moves the cursor). Dedupes consecutive records; discards the
+    /// forward stack like vim's jumplist; capped at 100.
+    pub fn record_jump(&mut self) {
+        let pos = self.buf.pos();
+        if self.jumps_past.last() == Some(&pos) {
+            self.jumps_future.clear();
+            return;
+        }
+        self.jumps_past.push(pos);
+        if self.jumps_past.len() > 100 {
+            self.jumps_past.remove(0);
+        }
+        self.jumps_future.clear();
+    }
+
+    /// Ctrl+O: back one jump — the current position goes to the future
+    /// stack so Ctrl+I can return. True when the cursor moved.
+    pub fn jump_back(&mut self) -> bool {
+        let Some(pos) = self.jumps_past.pop() else {
+            return false;
+        };
+        self.jumps_future.insert(0, self.buf.pos());
+        self.buf.move_cursor(CursorMove::Jump(pos.row, pos.col));
+        true
+    }
+
+    /// Ctrl+I: forward one jump (undo one Ctrl+O). True when moved.
+    pub fn jump_forward(&mut self) -> bool {
+        let Some(pos) = self.jumps_future.first().copied() else {
+            return false;
+        };
+        self.jumps_future.remove(0);
+        self.jumps_past.push(self.buf.pos());
+        self.buf.move_cursor(CursorMove::Jump(pos.row, pos.col));
+        true
+    }
+
     pub fn jump(&mut self, row: usize, col: usize) {
         let rows = self.buf.lines().len();
         let r = row.min(rows.saturating_sub(1));
@@ -1953,6 +3212,77 @@ mod tests {
     }
 
     #[test]
+    fn auto_pairs_wrap_the_caret_and_type_over() {
+        let mut e = editor("");
+        e.handle_key(key('i'));
+        e.handle_key(key('('));
+        assert_eq!(e.buf.line(0), "()");
+        assert_eq!(e.buf.pos(), Pos { row: 0, col: 1 }, "caret between");
+        e.handle_key(key('['));
+        assert_eq!(e.buf.line(0), "([])");
+        assert_eq!(e.buf.pos(), Pos { row: 0, col: 2 }, "nested pair");
+        e.handle_key(key(']'));
+        e.handle_key(key(')'));
+        assert_eq!(e.buf.line(0), "([])", "typed closers skip over");
+        assert_eq!(e.buf.pos(), Pos { row: 0, col: 4 });
+        // a closer with nothing to skip inserts normally
+        e.handle_key(key(')'));
+        assert_eq!(e.buf.line(0), "([]))");
+    }
+
+    #[test]
+    fn pair_backspace_deletes_both() {
+        let mut e = editor("");
+        e.handle_key(key('i'));
+        e.handle_key(key('('));
+        e.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(e.buf.line(0), "", "the empty pair collapses whole");
+        // a non-pair backspace stays plain
+        e.handle_key(key('('));
+        e.handle_key(key('a'));
+        e.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(e.buf.line(0), "()");
+    }
+
+    #[test]
+    fn smart_enter_expands_braces() {
+        let mut e = editor("Table users {}");
+        e.buf.move_cursor(CursorMove::Jump(0, 13)); // between { }
+        e.handle_key(key('i'));
+        e.handle_key(enter());
+        assert_eq!(
+            e.buf.lines(),
+            vec!["Table users {".to_string(), "  ".to_string(), "}".to_string()]
+        );
+        assert_eq!(e.buf.pos(), Pos { row: 1, col: 2 }, "caret on the inner line");
+        e.handle_key(esc());
+        // one undo reverts the whole expansion
+        e.handle_key(key('u'));
+        assert_eq!(e.buf.lines(), vec!["Table users {}".to_string()]);
+    }
+
+    #[test]
+    fn smart_enter_inherits_indent_and_opens_blocks() {
+        // plain Enter: the new line inherits the cursor line's indent
+        let mut e = editor("Table users {\n  id integer\n}");
+        e.buf.move_cursor(CursorMove::Jump(1, 11)); // on the last char
+        e.handle_key(key('a'));
+        e.handle_key(enter());
+        assert_eq!(e.buf.lines()[2], "  ");
+        assert_eq!(e.buf.pos(), Pos { row: 2, col: 2 });
+        // a `{` before the caret opens one level deeper
+        let mut e = editor("Table users {");
+        e.buf.move_cursor(CursorMove::Jump(0, 13));
+        e.handle_key(key('i'));
+        e.handle_key(enter());
+        assert_eq!(
+            e.buf.lines(),
+            vec!["Table users {".to_string(), "  ".to_string()]
+        );
+        assert_eq!(e.buf.pos(), Pos { row: 1, col: 2 });
+    }
+
+    #[test]
     fn backspace_in_insert() {
         let mut e = editor("hello");
         e.handle_key(key('A'));
@@ -1972,8 +3302,9 @@ mod tests {
         e.handle_key(key('0'));
         assert_eq!(e.cursor(), (1, 0));
         e.handle_key(key('$'));
+        // $ lands ON the last char, never on the phantom cell past it
         let (_, c) = e.cursor();
-        assert_eq!(c, "second line".chars().count());
+        assert_eq!(c, "second line".chars().count() - 1);
         e.handle_key(key('G'));
         assert_eq!(e.cursor().0, 2);
         e.handle_key(key('g'));
@@ -2068,28 +3399,442 @@ mod tests {
     }
 
     #[test]
-    fn search_jumps_to_match() {
+    fn vim_o_and_o_open_lines_at_the_indented_position() {
+        // `o` on a column row: insert mode ON the indented new line
+        let mut e = editor("Table users {\n  id integer\n}");
+        e.handle_key(key('j'));
+        e.handle_key(key('o'));
+        assert_eq!(e.mode, Mode::Insert);
+        assert_eq!(e.buf.lines(), ["Table users {", "  id integer", "  ", "}"]);
+        assert_eq!(e.buf.pos(), Pos { row: 2, col: 2 });
+        e.handle_key(esc());
+        e.handle_key(key('u'));
+        assert_eq!(e.buf.lines(), ["Table users {", "  id integer", "}"], "one undo removes the opened line");
+        // `o` on the opener sits INSIDE the block, one unit deeper
+        let mut e = editor("Table users {\n}");
+        e.handle_key(key('o'));
+        assert_eq!(e.buf.lines(), ["Table users {", "  ", "}"]);
+        // `O` above the opener stays outside the block
+        let mut e = editor("Table users {\n}");
+        e.handle_key(key('O'));
+        assert_eq!(e.buf.lines(), ["", "Table users {", "}"]);
+        assert_eq!(e.buf.pos(), Pos { row: 0, col: 0 });
+    }
+
+    #[test]
+    fn dollar_rides_line_ends_without_the_phantom_column() {
+        // vim normal mode never rests ON the past-the-last-char cell: a
+        // block cursor at col == len reads as "a space at the end of the
+        // line". $ lands ON the last char, and the MAXCOL aim survives
+        // the resting clamp (the next j still rides every line's end).
+        let mut e = editor("one two three\n\nfour five six\nseven eight");
+        e.handle_key(key('$'));
+        assert_eq!(e.cursor(), (0, 12), "$ lands ON the last char");
+        e.handle_key(key('j'));
+        assert_eq!(e.cursor(), (1, 0), "blank line: clamped to 0");
+        e.handle_key(key('j'));
+        assert_eq!(e.cursor(), (2, 12), "the aim rode past the blank line");
+        e.handle_key(key('j'));
+        assert_eq!(e.cursor(), (3, 10), "ON this line's last char too");
+        e.handle_key(key('k'));
+        assert_eq!(e.cursor(), (2, 12), "and back up, aim intact");
+        // plain l also stops at the last char instead of stepping past
+        let mut e = editor("abc");
+        e.handle_key(key('$'));
+        e.handle_key(key('l'));
+        assert_eq!(e.cursor(), (0, 2), "l never steps past the last char");
+    }
+
+    #[test]
+    fn visual_p_replaces_the_selection_with_the_register() {
+        let mut e = editor("AB go\none two\nthree");
+        // yank "AB" charwise (the visual selection includes the cursor
+        // char: one l from col 0 covers both letters)
+        e.handle_key(key('0'));
+        e.handle_key(key('v'));
+        e.handle_key(key('l'));
+        e.handle_key(key('y'));
+        // replace the whole second line with the register
+        e.handle_key(key('j'));
+        e.handle_key(key('0'));
+        e.handle_key(key('v'));
+        e.handle_key(key('$'));
+        e.handle_key(key('p'));
+        assert_eq!(e.text(), "AB go\nAB\nthree");
+        // vim's swap: the replaced text became the register
+        assert_eq!(e.register, vec!["one two".to_string()]);
+        // vim: visual p lands in NORMAL mode on the pasted text's last
+        // char — no selection lingers, so motions never extend a highlight
+        assert_eq!(e.mode, Mode::Normal);
+        assert!(e.buf.selection_anchor().is_none());
+        assert_eq!(e.cursor(), (1, 1), "on the last pasted char");
+        // one undo reverts the whole replace
+        e.handle_key(key('u'));
+        assert_eq!(e.text(), "AB go\none two\nthree");
+    }
+
+    #[test]
+    fn visual_p_then_motion_extends_nothing() {
+        // the report: after visual p, moving still highlighted text
+        let mut e = editor("AB go\none two\nthree");
+        e.handle_key(key('0'));
+        e.handle_key(key('v'));
+        e.handle_key(key('l'));
+        e.handle_key(key('y'));
+        e.handle_key(key('j'));
+        e.handle_key(key('0'));
+        e.handle_key(key('v'));
+        e.handle_key(key('$'));
+        e.handle_key(key('p'));
+        e.handle_key(key('j'));
+        e.handle_key(key('j'));
+        assert_eq!(e.mode, Mode::Normal, "p left visual");
+        assert!(
+            e.buf.selection_anchor().is_none(),
+            "no selection after p + motions"
+        );
+        assert_eq!(e.text(), "AB go\nAB\nthree");
+        assert_eq!(e.cursor(), (2, 1), "the motions moved the cursor");
+    }
+
+    #[test]
+    fn visual_p_linewise_register_replaces_the_rows() {
+        let mut e = editor("l1\nl2\nl3\nl4");
+        e.handle_key(key('y'));
+        e.handle_key(key('y')); // linewise "l1"
+        e.handle_key(key('j'));
+        e.handle_key(key('j'));
+        e.handle_key(key('v'));
+        e.handle_key(key('l')); // partial "l3"
+        e.handle_key(key('p'));
+        // yy yanks WITHOUT deleting: the rows are l1, l2, l1(new), l4
+        assert_eq!(e.text(), "l1\nl2\nl1\nl4", "the selection's row is replaced by the register lines");
+        // vim: normal mode on the first pasted row
+        assert_eq!(e.mode, Mode::Normal);
+        assert!(!e.visual_linewise);
+        assert!(e.buf.selection_anchor().is_none());
+    }
+
+    #[test]
+    fn visual_r_replaces_every_selected_char() {
+        // vim's visual r: every selected char becomes the typed char
+        let mut e = editor("foo bar baz\n");
+        e.handle_key(key('0'));
+        e.handle_key(key('v'));
+        e.handle_key(key('l'));
+        e.handle_key(key('l')); // "foo" selected
+        e.handle_key(key('r'));
+        e.handle_key(key('x'));
+        assert_eq!(e.text(), "xxx bar baz\n", "the selection became x's");
+        // normal mode, cursor on the LAST replaced char
+        assert_eq!(e.mode, Mode::Normal);
+        assert_eq!(e.cursor(), (0, 2));
+        // one undo reverts the whole replace
+        e.handle_key(key('u'));
+        assert_eq!(e.text(), "foo bar baz\n");
+    }
+
+    #[test]
+    fn visual_r_spans_rows_and_fills_empty_ones() {
+        // charwise over rows: each row's selected span becomes z's; an
+        // EMPTY selected row receives ONE z (vim), and the last row only
+        // up to the inclusive cursor char
+        let mut e = editor("abc\ndef\n\nghi");
+        e.handle_key(key('0'));
+        e.handle_key(key('v'));
+        e.handle_key(key('2'));
+        e.handle_key(key('j'));
+        e.handle_key(key('G'));
+        e.handle_key(key('r'));
+        e.handle_key(key('z'));
+        assert_eq!(e.text(), "zzz\nzzz\nz\nzhi");
+        assert_eq!(e.mode, Mode::Normal);
+        assert_eq!(e.cursor(), (3, 0), "on the last replaced char");
+    }
+
+    #[test]
+    fn visual_r_partial_columns_across_rows() {
+        // v l j j from col 1: row0 cols 1.. → "bc", row1 whole, row2 up
+        // to and including the cursor char (the selection includes it)
+        let mut e = editor("abc\ndef\nghi");
+        e.handle_key(key('l'));
+        e.handle_key(key('v'));
+        e.handle_key(key('j'));
+        e.handle_key(key('j'));
+        e.handle_key(key('r'));
+        e.handle_key(key('z'));
+        assert_eq!(e.text(), "azz\nzzz\nzzi");
+        assert_eq!(e.cursor(), (2, 1), "on the last replaced char");
+    }
+
+    #[test]
+    fn visual_line_r_replaces_whole_rows() {
+        // linewise V r: every char of every selected row
+        let mut e = editor("abc\ndef\nghi");
+        e.handle_key(key('V'));
+        e.handle_key(key('j'));
+        e.handle_key(key('r'));
+        e.handle_key(key('-'));
+        assert_eq!(e.text(), "---\n---\nghi");
+        assert_eq!(e.mode, Mode::Normal);
+        assert_eq!(e.cursor(), (1, 2), "on the last replaced char");
+    }
+
+    #[test]
+    fn alt_kj_moves_the_cursor_line() {
+        let alt = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT);
+        let mut e = editor("one\ntwo\nthree");
+        e.handle_key(key('j')); // row 1
+        e.handle_key(alt('k')); // move up, cursor rides
+        assert_eq!(e.text(), "two\none\nthree");
+        assert_eq!(e.cursor(), (0, 0));
+        // at the top: no-op
+        e.handle_key(alt('k'));
+        assert_eq!(e.text(), "two\none\nthree");
+        // down: "two" swaps with "one" beneath it, cursor rides
+        e.handle_key(key('$'));
+        e.handle_key(alt('j'));
+        assert_eq!(e.text(), "one\ntwo\nthree");
+        // down again: "two" swaps with "three"
+        e.handle_key(alt('j'));
+        assert_eq!(e.text(), "one\nthree\ntwo");
+        assert_eq!(e.cursor(), (2, 2), "the column rides along");
+        // at the bottom: no-op
+        e.handle_key(alt('j'));
+        assert_eq!(e.text(), "one\nthree\ntwo");
+        // one undo reverts ONE move (the second down)
+        e.handle_key(key('u'));
+        assert_eq!(e.text(), "one\ntwo\nthree");
+    }
+
+    #[test]
+    fn alt_kj_moves_the_highlighted_block() {
+        let alt = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT);
+        let mut e = editor("l0\nl1\nl2\nl3\nl4");
+        // select rows 0..=1 partially (v, j, l) — partial highlights count
+        e.handle_key(key('v'));
+        e.handle_key(key('j'));
+        e.handle_key(key('l'));
+        // at the TOP: no-op
+        e.handle_key(alt('k'));
+        assert_eq!(e.text(), "l0\nl1\nl2\nl3\nl4");
+        // down: the block swaps with l2, selection rides (rows 1..=2)
+        e.handle_key(alt('j'));
+        assert_eq!(e.text(), "l2\nl0\nl1\nl3\nl4");
+        assert_eq!(e.mode, Mode::Visual);
+        assert_eq!(
+            e.buf.selection_range(),
+            Some((Pos { row: 1, col: 0 }, Pos { row: 2, col: 2 }))
+        );
+        // down again, and again — the block parks at the bottom
+        e.handle_key(alt('j'));
+        e.handle_key(alt('j'));
+        assert_eq!(e.text(), "l2\nl3\nl4\nl0\nl1");
+        // at the BOTTOM: no-op
+        e.handle_key(alt('j'));
+        assert_eq!(e.text(), "l2\nl3\nl4\nl0\nl1");
+        // all the way back up restores the original order
+        for _ in 0..3 {
+            e.handle_key(alt('k'));
+        }
+        assert_eq!(e.text(), "l0\nl1\nl2\nl3\nl4");
+    }
+
+    #[test]
+    fn gcc_toggles_the_line_comment_both_ways() {
+        let mut e = editor("id integer\nname text");
+        e.handle_key(key('g'));
+        e.handle_key(key('c'));
+        e.handle_key(key('c'));
+        assert_eq!(e.text(), "// id integer\nname text");
+        e.handle_key(key('g'));
+        e.handle_key(key('c'));
+        e.handle_key(key('c'));
+        assert_eq!(e.text(), "id integer\nname text");
+        // one undo step per toggle
+        e.handle_key(key('u'));
+        assert_eq!(e.text(), "// id integer\nname text");
+        // an indented line toggles at its first non-blank column
+        let mut e = editor("Table t {\n  id integer\n}");
+        e.handle_key(key('j'));
+        for c in "gcc".chars() {
+            e.handle_key(key(c));
+        }
+        assert!(e.text().contains("\n  // id integer\n"), "{:?}", e.text());
+    }
+
+    #[test]
+    fn visual_gc_toggles_every_highlighted_line() {
+        // partial highlights count: the selection touches rows 0..=1
+        let mut e = editor("one\ntwo\nthree");
+        e.handle_key(key('v'));
+        e.handle_key(key('j'));
+        e.handle_key(key('l')); // partial second line
+        e.handle_key(key('g'));
+        e.handle_key(key('c'));
+        assert_eq!(e.text(), "// one\n// two\nthree");
+        // all-to-none: gc over BOTH commented lines uncomments (the
+        // cursor sits on row 1 after the first toggle: k back to row 0,
+        // then v j re-covers rows 0..1)
+        e.handle_key(key('k'));
+        e.handle_key(key('v'));
+        e.handle_key(key('j'));
+        e.handle_key(key('g'));
+        e.handle_key(key('c'));
+        assert_eq!(e.text(), "one\ntwo\nthree");
+        // mixed: any uncommented line makes the whole gc COMMENT
+        let mut e = editor("// one\ntwo\nthree");
+        e.handle_key(key('v'));
+        for _ in 0..2 {
+            e.handle_key(key('j'));
+        }
+        e.handle_key(key('g'));
+        e.handle_key(key('c'));
+        assert_eq!(e.text(), "// one\n// two\n// three");
+        // the toggle exits visual mode
+        assert_eq!(e.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn undo_after_o_returns_to_the_pre_command_cursor() {
+        // `o` from mid-line: undo must land where the user WAS, not the
+        // line-end column a move-first implementation snapshots (the
+        // left-ctrl chord salvage turns that ghost into a jumplist entry)
+        let mut e = editor("one two three\nfour");
+        e.handle_key(key('l'));
+        e.handle_key(key('l')); // (0, 2), mid-word
+        e.handle_key(key('o')); // open below, insert
+        assert_eq!(e.cursor(), (1, 0));
+        e.handle_key(esc()); // leave insert: `u` is the undo motion
+        e.handle_key(key('u'));
+        assert_eq!(e.text(), "one two three\nfour");
+        assert_eq!(e.cursor(), (0, 2), "back to the pre-`o` spot, col included");
+        // `O` mirrors it: undo returns to the same line and column
+        e.handle_key(key('O'));
+        assert_eq!(e.cursor(), (0, 0), "O opens above at col 0");
+        e.handle_key(esc());
+        e.handle_key(key('u'));
+        assert_eq!(e.cursor(), (0, 2), "undo restores the column again");
+    }
+
+    #[test]
+    fn vim_slash_search_is_vim_style_not_the_gui_find() {
         let mut e = editor("alpha\nbeta\ngamma");
-        // 'e' only occurs in "beta"
+        // 'e' only occurs in "beta": '/' opens the vim prompt (NOT the
+        // gui find popup), typing searches LIVE (the caret jumps per
+        // keystroke)
         e.handle_key(key('/'));
-        e.cmdline.as_mut().unwrap().input.push('e');
-        e.handle_key(enter());
+        assert!(e.vim_search.is_some());
+        assert!(!e.find_open(), "the gui find stays out of vim's /");
+        e.handle_key(key('e'));
         assert_eq!(e.cursor(), (1, 1));
-        // only match: n wraps back onto it
+        assert_eq!(e.find_position(), (1, 1), "one match, on it");
+        // Enter locks in: the prompt closes, the caret stays put
+        // (cycling is n/N's job)
+        e.handle_key(enter());
+        assert!(e.vim_search.is_none());
+        assert_eq!(e.cursor(), (1, 1));
+        // the pattern stays: n/N keep cycling
         e.handle_key(key('n'));
         assert_eq!(e.cursor(), (1, 1));
         e.handle_key(key('N'));
         assert_eq!(e.cursor(), (1, 1));
+        // a fresh search cancelled with Esc clears the pattern: n does
+        // not cycle on a cancelled query
+        e.handle_key(key('/'));
+        e.handle_key(key('z'));
+        e.handle_key(esc());
+        assert!(e.vim_search.is_none());
+        e.handle_key(key('n'));
+        assert_eq!(e.cursor(), (1, 1), "no z match: the caret stays");
     }
 
     #[test]
-    fn cmdline_enter_returns_command() {
-        let mut e = editor("x");
-        e.handle_key(key(':'));
-        e.cmdline.as_mut().unwrap().input.push('w');
-        let a = e.handle_key(enter());
-        assert_eq!(a, Action::Command("w".to_string()));
-        assert!(e.cmdline.is_none());
+    fn vim_slash_enter_locks_in_without_jumping() {
+        // three matches: live typing parks the caret on the first, and
+        // Enter must NOT advance — the caret stays parked while the
+        // pattern stays set for n/N
+        let mut e = editor("foo\nbar\nfoo\nfoo");
+        e.handle_key(key('/'));
+        for c in "foo".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.cursor(), (0, 0), "live search rides the first match");
+        e.handle_key(enter());
+        assert!(e.vim_search.is_none(), "the prompt closed");
+        assert_eq!(e.cursor(), (0, 0), "Enter does not cycle");
+        // the pattern is locked in: n cycles from the parked caret
+        e.handle_key(key('n'));
+        assert_eq!(e.cursor(), (2, 0), "n moves to the second match");
+        e.handle_key(key('n'));
+        assert_eq!(e.cursor(), (3, 0), "then the third");
+        e.handle_key(key('n'));
+        assert_eq!(e.cursor(), (0, 0), "n wraps back to the first");
+    }
+
+    #[test]
+    fn search_bands_drop_on_esc_insert_yank_visual_but_n_keeps_cycling() {
+        let mut e = editor("foo\nbar\nfoo");
+        // commit a / search: the caret rides the first match, bands drawn
+        e.handle_key(key('/'));
+        for c in "foo".chars() {
+            e.handle_key(key(c));
+        }
+        e.handle_key(enter());
+        assert_eq!(e.cursor(), (0, 0), "Enter locks in: the caret stays");
+        assert_eq!(e.buf.search_hl_spans().len(), 2, "bands on");
+        // Esc is :noh: bands gone, the pattern alive
+        e.handle_key(esc());
+        assert!(e.buf.search_hl_spans().is_empty(), "Esc hides");
+        e.handle_key(key('n'));
+        assert_eq!(e.cursor(), (2, 0), "n steps to the other match (hidden bands)");
+        e.handle_key(key('n'));
+        assert_eq!(e.cursor(), (0, 0), "n wraps with the hidden bands");
+        // a fresh search re-shows; entering insert hides again
+        e.handle_key(key('/'));
+        for c in "foo".chars() {
+            e.handle_key(key(c));
+        }
+        e.handle_key(enter());
+        assert_eq!(e.buf.search_hl_spans().len(), 2, "re-shown");
+        e.handle_key(key('i'));
+        assert!(e.buf.search_hl_spans().is_empty(), "insert hides");
+        e.handle_key(esc());
+        // yank (yy) hides
+        e.handle_key(key('y'));
+        e.handle_key(key('y'));
+        assert!(e.buf.search_hl_spans().is_empty(), "yank hides");
+        // visual entry hides
+        e.handle_key(key('v'));
+        assert!(e.buf.search_hl_spans().is_empty(), "visual hides");
+        e.handle_key(esc());
+        // the gui find: a fresh query re-shows, closing hides
+        e.toggle_find();
+        e.handle_key(key('o'));
+        assert!(!e.buf.search_hl_spans().is_empty(), "find query re-shows");
+        e.handle_key(esc());
+        assert!(!e.find_open(), "the find bar closed");
+        assert!(e.buf.search_hl_spans().is_empty(), "closing hides");
+        // and the pattern still cycles through all of it (the live query
+        // parked the caret on the first o: (0,1))
+        e.handle_key(key('n'));
+        assert_eq!(e.cursor(), (0, 2), "n lands on the next o ahead");
+    }
+
+    #[test]
+    fn ctrl_a_selects_all_in_vim_insert_mode() {
+        let mut e = editor("one\ntwo");
+        e.handle_key(key('i'));
+        e.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert!(e.buf.selection_range().is_some(), "select-all engaged");
+        assert_eq!(
+            e.buf.selection_text().as_deref(),
+            Some("one\ntwo"),
+            "the whole buffer"
+        );
+        // the selection is live: typing over it replaces everything
+        e.handle_key(key('x'));
+        assert_eq!(e.text(), "x");
     }
 
     #[test]
@@ -2105,24 +3850,24 @@ mod tests {
         assert_eq!(e.mode, Mode::Normal);
         assert_eq!(e.text(), "one two three"); // yank only
 
-        // visual y then p pastes the yanked text below
+        // visual y then p pastes INLINE after the cursor char (vim put)
         e.handle_key(key('$'));
         e.handle_key(key('v'));
         e.handle_key(key('b'));
         e.handle_key(key('y'));
         e.handle_key(key('p'));
-        let pasted = e.text().lines().nth(1).unwrap_or("").to_string();
-        // $ lands ON the last char, so $vb yanks "three" inclusive
-        assert_eq!(pasted, "three", "from {}", e.text());
+        // $ lands ON the last char, so $vb yanks "three" inclusive; visual
+        // y leaves the cursor at the selection START (vim) — p inserts
+        // inline after that char
+        assert_eq!(e.text(), "one two tthreehree", "{}", e.text());
 
-        // visual d deletes the selection (cursor sits on the pasted line)
+        // visual d deletes the selection
         e.handle_key(key('0'));
         e.handle_key(key('v'));
         e.handle_key(key('l'));
         e.handle_key(key('d'));
-        // vim v+l selects TWO chars (inclusive of the cursor cell): "th"
-        assert_eq!(e.text().lines().nth(1), Some("ree"), "{}", e.text());
-        assert!(e.text().starts_with("one two"));
+        // vim v+l selects TWO chars (inclusive of the cursor cell): "on"
+        assert_eq!(e.text(), "e two tthreehree", "{}", e.text());
     }
 
     #[test]
@@ -2341,10 +4086,11 @@ mod tests {
         // never crosses the line end; cl still enters insert there (vim:
         // nothing to delete at EOL, but the edit starts)
         let (e, t) = typed("ab", "$cl");
-        assert_eq!(t, "ab");
+        // $ lands ON the last char, so cl changes through it (vim's C)
+        assert_eq!(t, "a");
         assert_eq!(e.mode, Mode::Insert);
         let (_, t) = typed("ab", "$dl");
-        assert_eq!(t, "ab");
+        assert_eq!(t, "a");
         // a spent count does not multiply the typed text afterwards
         let (_, t) = typed("hello world", "3clx");
         assert_eq!(t, "xlo world");
@@ -2479,12 +4225,12 @@ mod tests {
         e.handle_key(key('1'));
         e.handle_key(key('0'));
         e.handle_key(key('l'));
-        assert_eq!(e.cursor(), (0, 5));
+        assert_eq!(e.cursor(), (0, 4), "l stops at the last char");
         // 2$ goes to the end of the next line
         let mut e = editor("hello\nworld!");
         e.handle_key(key('2'));
         e.handle_key(key('$'));
-        assert_eq!(e.cursor(), (1, 6));
+        assert_eq!(e.cursor(), (1, 5), "2$: ON the next line's last char");
         // 3gg / 4G absolute line jumps (clamped)
         let mut e = editor("a\nb\nc\nd\ne");
         e.handle_key(key('3'));
@@ -2765,6 +4511,21 @@ mod polish_tests {
         e.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
         e.handle_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
         assert_eq!(e.text(), "!!!lo\n");
+    }
+
+    #[test]
+    fn vim_insert_alt_arrows_select_a_word() {
+        let mut e = editor("one two");
+        e.mode = Mode::Insert;
+        e.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::ALT));
+        assert_eq!(
+            e.buf.selection_draw_range_exclusive(),
+            Some((
+                crate::editor::buffer::Pos { row: 0, col: 0 },
+                crate::editor::buffer::Pos { row: 0, col: 3 }
+            )),
+            "alt+right highlighted the word `one`"
+        );
     }
 
     #[test]
@@ -3462,5 +5223,645 @@ mod vline_tests {
         e.handle_key(key('f'));
         e.handle_key(key('o'));
         assert_eq!(e.take_system_yank().as_deref(), Some("hello"));
+    }
+}
+
+#[cfg(test)]
+mod indent_seed_tests {
+    use super::tests::{editor, esc, key};
+    use super::*;
+
+    // ---- linewise change seeds the formatter's indent (cc / S / V c) ----
+
+    #[test]
+    fn cc_on_a_body_line_seeds_the_formatter_indent() {
+        // the formatter would re-indent the line to its body level, so the
+        // fresh line starts pre-indented with the cursor after the seed
+        let mut e = editor("Table users {\n  id integer\n  name varchar\n}\n");
+        for c in "jjcc".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.mode, Mode::Insert);
+        assert_eq!(e.cursor(), (2, 2), "cursor after the seeded indent");
+        assert_eq!(
+            e.buf.lines(),
+            vec![
+                "Table users {".to_string(),
+                "  id integer".to_string(),
+                "  ".to_string(),
+                "}".to_string()
+            ]
+        );
+        // typing continues right after the indent
+        e.handle_key(key('X'));
+        assert_eq!(e.buf.line(2), "  X");
+    }
+
+    #[test]
+    fn cc_seed_is_part_of_the_change_undo_step() {
+        // one u after cc + Esc restores the original file (the indent seed
+        // rides in the change's snapshot, it is no extra step)
+        let mut e = editor("Table users {\n  id integer\n  name varchar\n}\n");
+        for c in "jjcc".chars() {
+            e.handle_key(key(c));
+        }
+        e.handle_key(esc());
+        assert_eq!(e.cursor(), (2, 1), "Esc backs up onto the indent line");
+        e.handle_key(key('u'));
+        assert_eq!(e.text(), "Table users {\n  id integer\n  name varchar\n}\n");
+        assert_eq!(e.cursor().0, 2, "undo returns to the changed line");
+        // redo brings the seeded line back
+        e.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        assert_eq!(e.text(), "Table users {\n  id integer\n  \n}\n");
+
+        // typed text stacks on top and enough undos still restore
+        let mut e = editor("Table users {\n  id integer\n}\n");
+        for c in "jccX".chars() {
+            e.handle_key(key(c));
+        }
+        e.handle_key(esc());
+        assert_eq!(e.text(), "Table users {\n  X\n}\n");
+        for _ in 0..3 {
+            e.handle_key(key('u'));
+        }
+        assert_eq!(e.text(), "Table users {\n  id integer\n}\n");
+    }
+
+    #[test]
+    fn vline_c_seeds_the_indent_on_the_first_row() {
+        // V+c over two body lines collapses them into one seeded line
+        let mut e = editor("Table users {\n  a integer\n  b integer\n  c integer\n}\n");
+        for c in "jjVjc".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.mode, Mode::Insert);
+        assert_eq!(e.cursor(), (2, 2));
+        assert_eq!(
+            e.buf.lines(),
+            vec![
+                "Table users {".to_string(),
+                "  a integer".to_string(),
+                "  ".to_string(),
+                "}".to_string()
+            ]
+        );
+        e.handle_key(esc());
+        e.handle_key(key('u'));
+        assert_eq!(
+            e.text(),
+            "Table users {\n  a integer\n  b integer\n  c integer\n}\n",
+            "one undo unit"
+        );
+    }
+
+    #[test]
+    fn cc_on_a_top_level_line_stays_at_col_zero() {
+        // no non-blank line above, own indent 0: nothing is seeded
+        let mut e = editor("Ref: fk\nTable users {\n  id integer\n}\n");
+        for c in "cc".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.mode, Mode::Insert);
+        assert_eq!(e.cursor(), (0, 0), "no indent at top level");
+        assert_eq!(e.text(), "\nTable users {\n  id integer\n}\n");
+
+        // below an indented body, the closing } is back at column 0
+        // (cc at EOF appends the fresh line below — change_lines' shape,
+        // pinned by the cG tests)
+        let mut e = editor("Table users {\n  id integer\n}\nRef: fk");
+        for c in "jjjcc".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.cursor(), (3, 0), "the closer's level carries over");
+        assert_eq!(e.text(), "Table users {\n  id integer\n}\n\n");
+    }
+
+    #[test]
+    fn cc_after_a_block_opener_indents_one_level() {
+        // the replaced line has no indent of its own, but the opener above
+        // says the formatter would put this line one level in
+        let mut e = editor("Table users {\nid integer\n}\n");
+        for c in "jcc".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.cursor(), (1, 2));
+        assert_eq!(e.buf.lines(), vec!["Table users {", "  ", "}"]);
+
+        // a trailing // comment does not hide the opener
+        let mut e = editor("Table users { // login\nid integer\n}\n");
+        for c in "jcc".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.cursor(), (1, 2));
+        assert_eq!(e.buf.lines(), vec!["Table users { // login", "  ", "}"]);
+    }
+
+    #[test]
+    fn counts_seed_like_their_first_line() {
+        // 2cc at the first body row: the opener above decides the level
+        let mut e = editor("Table users {\n  a\n  b\n  c\n}\n");
+        for c in "j2cc".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.cursor(), (1, 2));
+        assert_eq!(e.text(), "Table users {\n  \n  c\n}\n");
+    }
+
+    #[test]
+    fn s_substitutes_the_line_like_cc() {
+        let mut e = editor("Table users {\n  id integer\n}\n");
+        for c in "jS".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.mode, Mode::Insert);
+        assert_eq!(e.cursor(), (1, 2), "S seeds the indent like cc");
+        assert_eq!(e.buf.lines(), vec!["Table users {", "  ", "}"]);
+        e.handle_key(esc());
+        e.handle_key(key('u'));
+        assert_eq!(e.text(), "Table users {\n  id integer\n}\n", "one undo unit");
+
+        // [count]S clears count lines, seeded from the opener above
+        let mut e = editor("T {\n  b\n  c\nd");
+        for c in "j2S".chars() {
+            e.handle_key(key(c));
+        }
+        assert_eq!(e.cursor(), (1, 2), "seeded one level under the opener");
+        assert_eq!(e.text(), "T {\n  \nd");
+    }
+}
+
+#[cfg(test)]
+mod jumplist_tests {
+    use super::*;
+
+    fn editor() -> Editor {
+        let src: String = (0..50)
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        Editor::new(&src)
+    }
+
+    #[test]
+    fn back_and_forward_walk_the_recorded_origins() {
+        let mut e = editor();
+        e.jump(10, 0);
+        e.record_jump();
+        e.jump(20, 0);
+        e.record_jump();
+        e.jump(30, 0);
+        // present: (30,0). back -> (20,0), back -> (10,0)
+        assert!(e.jump_back());
+        assert_eq!(e.buf.cursor(), (20, 0));
+        assert!(e.jump_back());
+        assert_eq!(e.buf.cursor(), (10, 0));
+        assert!(!e.jump_back(), "past is empty");
+        // forward returns the way it came
+        assert!(e.jump_forward());
+        assert_eq!(e.buf.cursor(), (20, 0));
+        assert!(e.jump_forward());
+        assert_eq!(e.buf.cursor(), (30, 0));
+        assert!(!e.jump_forward(), "future is empty");
+    }
+
+    #[test]
+    fn a_new_jump_discards_the_forward_stack() {
+        let mut e = editor();
+        // A -> B -> C, then one step back to B; a fresh jump from there
+        // must discard the old future (C): forward now returns to the
+        // position just left (40), not the stale one
+        e.record_jump(); // origin (0,0)
+        e.jump(10, 0);
+        e.record_jump(); // origin (10,0)
+        e.jump(20, 0);
+        e.jump_back();
+        assert_eq!(e.buf.cursor(), (10, 0));
+        e.record_jump();
+        e.jump(40, 0);
+        e.jump_back();
+        assert_eq!(e.buf.cursor(), (10, 0));
+        assert!(e.jump_forward());
+        assert_eq!(e.buf.cursor(), (40, 0), "the stale (20,0) future is gone");
+    }
+
+    #[test]
+    fn records_never_create_spurious_slots() {
+        let mut e = editor();
+        // walk 0 -> 5 -> 10 -> 15 recording before each hop, then walk the
+        // whole list back: exactly three origins, no duplicates
+        e.record_jump();
+        e.jump(5, 0);
+        e.record_jump();
+        e.jump(10, 0);
+        e.record_jump();
+        e.jump(15, 0);
+        assert!(e.jump_back());
+        assert_eq!(e.buf.cursor(), (10, 0));
+        assert!(e.jump_back());
+        assert_eq!(e.buf.cursor(), (5, 0));
+        assert!(e.jump_back());
+        assert_eq!(e.buf.cursor(), (0, 0));
+        assert!(!e.jump_back());
+        // and recording repeatedly at one spot adds no slots
+        let mut e2 = editor();
+        e2.record_jump();
+        e2.record_jump();
+        e2.jump(5, 0);
+        e2.record_jump();
+        e2.jump(10, 0);
+        e2.jump_back();
+        assert_eq!(e2.buf.cursor(), (5, 0));
+        e2.jump_back();
+        assert_eq!(e2.buf.cursor(), (0, 0));
+        assert!(!e2.jump_back(), "the duplicate created no extra slot");
+    }
+}
+
+#[cfg(test)]
+mod replace_ctrl_tests {
+    use super::*;
+
+    #[test]
+    fn ctrl_r_never_completes_a_pending_replace() {
+        // the DE re-injection: bare 'r' arms replace, then the flagged
+        // ctrl+r arrives — it must REDO, not replace the char with 'r'
+        let mut e = Editor::new("abc\n");
+        e.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert_eq!(e.text(), "bc\n", "'x' deleted the 'a'");
+        e.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
+        assert_eq!(e.text(), "abc\n", "undone");
+        // bare r arms the replace-pending
+        e.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        // flagged ctrl+r: REDO (restores the delete), never replace-with-r
+        e.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        assert_eq!(e.text(), "bc\n", "redo ran — not replace-with-r");
+        assert_eq!(e.pending, None, "the pending was consumed");
+    }
+
+    #[test]
+    fn other_ctrl_chars_cancel_the_pending_replace() {
+        let mut e = Editor::new("abc\n");
+        e.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        // some other ctrl chord: the entry guard swallows it entirely —
+        // the pending replace stays armed (vim semantics: ctrl chords
+        // never complete a replace)
+        e.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        assert_eq!(e.text(), "abc\n");
+        assert_eq!(e.pending, Some(Pending::R), "the guard preserves the pending");
+        // Esc cancels the pending replace (vim), and the engine works on
+        e.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(e.pending, None);
+        e.handle_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
+        assert_eq!(e.buf.cursor(), (0, 1));
+    }
+}
+
+#[cfg(test)]
+mod linewise_operator_tests {
+    use super::*;
+
+    fn editor(src: &str) -> Editor {
+        let mut e = Editor::new(src);
+        e.mode = Mode::Normal;
+        e
+    }
+
+    fn keys(e: &mut Editor, k: &[(&str, char)]) {
+        for (mods, c) in k {
+            let m = match *mods {
+                "ctrl" => KeyModifiers::CONTROL,
+                _ => KeyModifiers::NONE,
+            };
+            e.handle_key(KeyEvent::new(KeyCode::Char(*c), m));
+        }
+    }
+
+    #[test]
+    fn dj_deletes_the_current_and_next_line() {
+        let mut e = editor("one\ntwo\nthree\n");
+        keys(&mut e, &[("", 'd'), ("", 'j')]);
+        assert_eq!(e.text(), "three\n");
+        assert_eq!(e.buf.cursor(), (0, 0));
+    }
+
+    #[test]
+    fn dk_deletes_the_current_and_previous_line() {
+        let mut e = editor("one\ntwo\nthree\n");
+        e.buf.move_cursor(CursorMove::Down);
+        keys(&mut e, &[("", 'd'), ("", 'k')]);
+        assert_eq!(e.text(), "three\n");
+        assert_eq!(e.buf.cursor(), (0, 0));
+    }
+
+    #[test]
+    fn d3j_deletes_four_lines() {
+        let src = "l0\nl1\nl2\nl3\nl4\n";
+        let mut e = editor(src);
+        keys(&mut e, &[("", 'd'), ("3", '3'), ("", 'j')]);
+        assert_eq!(e.text(), "l4\n");
+    }
+
+    #[test]
+    fn two_dj_deletes_three_lines() {
+        let src = "l0\nl1\nl2\nl3\nl4\n";
+        let mut e = editor(src);
+        keys(&mut e, &[("2", '2'), ("", 'd'), ("", 'j')]);
+        assert_eq!(e.text(), "l3\nl4\n");
+    }
+
+    #[test]
+    fn dj_on_the_last_line_deletes_just_the_current_line() {
+        // j runs out at the trailing EOL marker: dj deletes just the
+        // current (last content) line, the file's trailing newline stays
+        let mut e = editor("one\ntwo\n");
+        e.buf.move_cursor(CursorMove::Down);
+        keys(&mut e, &[("", 'd'), ("", 'j')]);
+        assert_eq!(e.text(), "one\n");
+    }
+
+    #[test]
+    fn dj_yanks_into_the_register_for_p() {
+        let mut e = editor("one\ntwo\nthree\n");
+        keys(&mut e, &[("", 'd'), ("", 'j')]);
+        e.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
+        assert_eq!(e.text(), "three\none\ntwo\n");
+    }
+
+    #[test]
+    fn cj_deletes_and_enters_insert_with_the_seed() {
+        let mut e = editor("Table t {\n  a integer\n  b integer\n}\n");
+        e.buf.move_cursor(CursorMove::Down);
+        keys(&mut e, &[("", 'c'), ("", 'j')]);
+        assert_eq!(e.mode, Mode::Insert);
+        assert_eq!(e.text(), "Table t {\n  \n}\n", "one seeded line replaces both");
+    }
+}
+
+#[cfg(test)]
+mod yank_motion_tests {
+    use super::*;
+
+    fn editor(src: &str) -> Editor {
+        let mut e = Editor::new(src);
+        e.mode = Mode::Normal;
+        e
+    }
+
+    fn keys(e: &mut Editor, k: &[char]) {
+        for c in k {
+            e.handle_key(KeyEvent::new(KeyCode::Char(*c), KeyModifiers::NONE));
+        }
+    }
+
+    #[test]
+    fn yw_yanks_the_word_and_keeps_the_cursor() {
+        let mut e = editor("foo bar baz\n");
+        keys(&mut e, &[('y'), ('w')]);
+        assert_eq!(e.register, vec!["foo ".to_string()]);
+        assert_eq!(e.buf.cursor(), (0, 0), "y does not move");
+        // p pastes INLINE after the cursor char (vim); yw takes the
+        // trailing space (dw semantics); the cursor lands on the last
+        // pasted character
+        e.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
+        assert_eq!(e.text(), "ffoo oo bar baz\n");
+        assert_eq!(e.buf.cursor(), (0, 4), "on the last pasted char");
+    }
+
+    #[test]
+    fn ye_yanks_inclusive_of_the_last_char() {
+        let mut e = editor("foo bar baz\n");
+        keys(&mut e, &[('y'), ('e')]);
+        assert_eq!(e.register, vec!["foo".to_string()]);
+    }
+
+    #[test]
+    fn y0_and_yy_span_the_line() {
+        let mut e = editor("foo bar baz\n");
+        e.buf.move_cursor(CursorMove::Forward);
+        e.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        e.handle_key(KeyEvent::new(KeyCode::Char('0'), KeyModifiers::NONE));
+        assert_eq!(e.register, vec!["f".to_string()]);
+        let mut e = editor("foo bar baz\n");
+        keys(&mut e, &[('y'), ('y')]);
+        assert_eq!(e.register, vec!["foo bar baz".to_string()]);
+        assert_eq!(e.buf.cursor(), (0, 0));
+    }
+
+    #[test]
+    fn y_dollar_yanks_to_the_line_end() {
+        let mut e = editor("foo bar baz\n");
+        e.buf.move_cursor(CursorMove::Forward);
+        e.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        e.handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+        assert_eq!(e.register, vec!["oo bar baz".to_string()]);
+    }
+
+    #[test]
+    fn yj_yanks_two_lines_and_restores_the_cursor() {
+        let mut e = editor("l0\nl1\nl2\n");
+        e.buf.move_cursor(CursorMove::Down);
+        e.buf.move_cursor(CursorMove::Forward);
+        keys(&mut e, &[('y'), ('j')]);
+        assert_eq!(e.register, vec!["l1".to_string(), "l2".to_string()]);
+        assert_eq!(e.buf.cursor(), (1, 1), "cursor restored");
+    }
+
+    #[test]
+    fn ygg_and_y_g_yank_to_the_ends() {
+        let mut e = editor("l0\nl1\nl2\n");
+        e.buf.move_cursor(CursorMove::Down);
+        keys(&mut e, &[('y'), ('g'), ('g')]);
+        assert_eq!(e.register, vec!["l0".to_string(), "l1".to_string()]);
+        assert_eq!(e.buf.cursor(), (1, 0), "restored");
+        keys(&mut e, &[('y'), ('G')]);
+        assert_eq!(e.register, vec!["l1".to_string(), "l2".to_string()]);
+        assert_eq!(e.buf.cursor(), (1, 0), "restored");
+    }
+
+    #[test]
+    fn capital_y_yanks_the_whole_line() {
+        let mut e = editor("l0\nl1\n");
+        e.buf.move_cursor(CursorMove::Forward);
+        e.handle_key(KeyEvent::new(KeyCode::Char('Y'), KeyModifiers::SHIFT));
+        assert_eq!(e.register, vec!["l0".to_string()]);
+        assert_eq!(e.buf.cursor(), (0, 1), "cursor restored");
+    }
+
+    #[test]
+    fn every_yank_flashes_the_region() {
+        let mut e = editor("l0\nl1\nl2\n");
+        keys(&mut e, &[('y'), ('y')]);
+        let f = e.yank_flash.expect("yy flashes");
+        assert!(f.start == (0, 0) && f.end == (1, 0), "whole-row encoding");
+        keys(&mut e, &[('y'), ('w')]);
+        let f = e.yank_flash.expect("yw flashes");
+        assert!(f.start == (0, 0) && f.end == (0, 2), "charwise span of l0");
+    }
+}
+
+#[cfg(test)]
+mod debug_yg {
+    use super::*;
+
+    #[test]
+    fn debug_ygg() {
+        let mut e = Editor::new("l0\nl1\nl2\n");
+        e.mode = Mode::Normal;
+        e.buf.move_cursor(CursorMove::Down);
+        println!("after down: {:?}", e.buf.cursor());
+        e.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        println!("after y: pending={:?} cursor={:?}", e.pending, e.buf.cursor());
+        e.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+        println!("after g: pending={:?} cursor={:?}", e.pending, e.buf.cursor());
+        e.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+        println!("after g2: register={:?} cursor={:?}", e.register, e.buf.cursor());
+    }
+}
+
+#[cfg(test)]
+mod paste_semantics_tests {
+    use super::*;
+
+    fn editor(src: &str) -> Editor {
+        let mut e = Editor::new(src);
+        e.mode = Mode::Normal;
+        e
+    }
+
+    fn keys(e: &mut Editor, k: &[char]) {
+        for c in k {
+            e.handle_key(KeyEvent::new(KeyCode::Char(*c), KeyModifiers::NONE));
+        }
+    }
+
+    #[test]
+    fn linewise_p_duplicates_below_cursor_on_first_non_blank() {
+        // nvim-verified: yy p duplicates the line below; the cursor lands
+        // on the first pasted line's first non-blank column
+        let mut e = editor("alpha beta\ngamma\n");
+        keys(&mut e, &[('y'), ('y'), ('p')]);
+        assert_eq!(
+            e.text(),
+            "alpha beta\nalpha beta\ngamma\n",
+            "duplicated below"
+        );
+        assert_eq!(e.buf.cursor(), (1, 0), "first pasted line, first non-blank");
+    }
+
+    #[test]
+    fn linewise_p_put_duplicates_above() {
+        let mut e = editor("alpha beta\ngamma\n");
+        keys(&mut e, &[('y'), ('y')]);
+        e.buf.move_cursor(CursorMove::Down);
+        keys(&mut e, &[('P')]);
+        assert_eq!(
+            e.text(),
+            "alpha beta\nalpha beta\ngamma\n",
+            "duplicated above the gamma line"
+        );
+        assert_eq!(e.buf.cursor(), (1, 0));
+    }
+
+    #[test]
+    fn charwise_p_inserts_after_the_cursor_char() {
+        // nvim-verified: yiw at "alpha", w to "beta", p inserts "alpha"
+        // after the 'b' of beta; the cursor ends ON the last pasted char
+        let mut e = editor("alpha beta gamma\n");
+        keys(&mut e, &[('y'), ('i'), ('w')]);
+        e.buf.move_cursor(CursorMove::WordForward);
+        keys(&mut e, &[('p')]);
+        assert_eq!(e.text(), "alpha balphaeta gamma\n");
+        // pasted "alpha" occupies cols 7..12; the cursor is on col 11
+        assert_eq!(e.buf.cursor(), (0, 11), "on the last pasted char");
+    }
+
+    #[test]
+    fn charwise_p_put_inserts_before_the_cursor_char() {
+        let mut e = editor("alpha beta gamma\n");
+        e.buf.move_cursor(CursorMove::WordForward); // cursor on 'b' of beta
+        keys(&mut e, &[('y'), ('i'), ('w')]);
+        keys(&mut e, &[('P')]);
+        assert_eq!(e.text(), "alpha betabeta gamma\n");
+        // pasted "beta" occupies cols 6..10; the cursor is on col 9
+        assert_eq!(e.buf.cursor(), (0, 9), "on the last pasted char");
+    }
+
+    #[test]
+    fn counts_repeat_the_put() {
+        let mut e = editor("alpha beta\ngamma\n");
+        keys(&mut e, &[('y'), ('y'), ('3'), ('p')]);
+        assert_eq!(e.buf.line_count(), 5, "1 + 3 pasted copies");
+    }
+}
+
+#[cfg(test)]
+mod paste_undo_tests {
+    use super::*;
+    use crate::editor::tests::key as engine_key;
+
+    fn editor(src: &str) -> Editor {
+        let mut e = Editor::new(src);
+        e.mode = Mode::Normal;
+        e
+    }
+
+    fn keys(e: &mut Editor, k: &[char]) {
+        for c in k {
+            e.handle_key(KeyEvent::new(KeyCode::Char(*c), KeyModifiers::NONE));
+        }
+    }
+
+    #[test]
+    fn one_u_undoes_a_whole_linewise_paste() {
+        let mut e = editor("alpha beta\ngamma\n");
+        keys(&mut e, &[('y'), ('y'), ('p')]);
+        assert_eq!(e.text(), "alpha beta\nalpha beta\ngamma\n", "pasted");
+        keys(&mut e, &[('u')]);
+        assert_eq!(e.text(), "alpha beta\ngamma\n", "ONE u undoes the paste");
+        // the cursor returns to the pre-paste position
+        assert_eq!(e.buf.cursor(), (0, 0));
+        // and ctrl+r redoes the whole paste
+        e.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        assert_eq!(e.text(), "alpha beta\nalpha beta\ngamma\n");
+    }
+
+    #[test]
+    fn two_pastes_undo_in_two_presses() {
+        let mut e = editor("alpha beta\ngamma\n");
+        keys(&mut e, &[('y'), ('y'), ('p'), ('p')]);
+        assert_eq!(
+            e.text(),
+            "alpha beta\nalpha beta\nalpha beta\ngamma\n",
+            "two pastes"
+        );
+        keys(&mut e, &[('u')]);
+        assert_eq!(e.text(), "alpha beta\nalpha beta\ngamma\n", "first u");
+        keys(&mut e, &[('u')]);
+        assert_eq!(e.text(), "alpha beta\ngamma\n", "second u");
+    }
+
+    #[test]
+    fn a_counted_paste_is_still_one_unit() {
+        let mut e = editor("l0\nl1\nl2\n");
+        keys(&mut e, &[('y'), ('y'), ('3'), ('p')]);
+        assert_eq!(e.buf.line_count(), 6, "1 + 3 copies");
+        keys(&mut e, &[('u')]);
+        assert_eq!(e.buf.line_count(), 3, "one u undoes all four");
+    }
+
+    #[test]
+    fn charwise_multiline_paste_is_one_unit() {
+        // visual across two lines: charwise register with an embedded
+        // newline — the paste splits lines but is still ONE undo unit
+        let mut e = editor("l0\nl1\n");
+        e.handle_key(engine_key('v'));
+        e.handle_key(engine_key('j'));
+        e.handle_key(engine_key('$'));
+        e.handle_key(engine_key('y'));
+        keys(&mut e, &[('p')]);
+        assert_eq!(e.buf.line_count(), 3, "pasted inline, splitting lines");
+        keys(&mut e, &[('u')]);
+        assert_eq!(e.buf.line_count(), 2, "one u undoes the whole put");
     }
 }
