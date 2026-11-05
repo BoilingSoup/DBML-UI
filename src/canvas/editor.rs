@@ -1362,6 +1362,9 @@ mod doc_tests {
 
     fn app() -> App {
         let mut app = App::default();
+        // these fixtures exercise insert-mode popups/carets: opt into vim
+        // (the shipped default is Regular) so the 'i' enters insert
+        app.config.vim = true;
         let _ = update(
             &mut app,
             crate::app::Message::KeyPressed(
@@ -1853,6 +1856,7 @@ mod popup_tests {
 
     fn app_with_caret(row: usize, col: usize) -> App {
         let mut app = App::default();
+        app.config.vim = true;
         let _ = update(
             &mut app,
             crate::app::Message::KeyPressed(
@@ -1875,6 +1879,7 @@ mod popup_tests {
     fn popup_flips_above_when_near_bottom() {
         // caret on the last visible line of a tall buffer
         let mut app = App::default();
+        app.config.vim = true;
         let _ = update(
             &mut app,
             crate::app::Message::KeyPressed(
@@ -2250,6 +2255,7 @@ mod tests {
         use iced::mouse::Interaction;
         let inside = Cursor::Available(Point::new(150.0, 100.0));
         let mut app = App::default();
+        app.config.vim = true;
         // insert mode: the I-beam; normal/visual: plain arrow
         for (mode, expected) in [
             (Mode::Insert, Interaction::Text),
@@ -2359,6 +2365,9 @@ mod blink_tests {
     #[test]
     fn block_cursor_tracks_mode_and_regular_mode() {
         let mut app = App::default();
+        // the shipped default is Regular: a thin caret in every mode
+        assert!(!is_block_cursor(&app), "regular default: thin caret");
+        app.config.vim = true;
         assert!(is_block_cursor(&app), "vim normal mode");
         app.editor_mut().mode = Mode::Visual;
         assert!(is_block_cursor(&app));
@@ -2375,6 +2384,7 @@ mod blink_tests {
     #[test]
     fn blink_gate_tracks_focus_pane_and_document() {
         let mut app = App::default();
+        app.config.vim = true;
         assert!(block_cursor_blinking(&app), "vim normal, focused, open");
 
         app.editor_mut().mode = Mode::Insert;
