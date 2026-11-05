@@ -3307,7 +3307,7 @@ fn draw_popup_chrome(
     let k = zoom / 20.0;
     let radius = 8.0 * k;
     let border = Color::from_rgba(1.0, 1.0, 1.0, 0.1);
-    let bg = Color::from_rgba8(0x30, 0x31, 0x37, 0.98);
+    let bg = Color::from_rgba8(0x30, 0x31, 0x37, 1.0); // opaque: even 2% alpha ghosts underlying table text through the card
     // soft shadow (their box-shadow 0 8px 24px #0006): two stacked
     // offset fills fake the falloff — the canvas has no blur
     for (off, alpha) in [(3.0, 0.16), (6.0, 0.10)] {
