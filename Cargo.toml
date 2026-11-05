@@ -132,3 +132,10 @@ x11rb = { version = "0.13", features = ["xkb"] }
 # dev-only, so the shipped binary keeps its feature set.
 [target.'cfg(all(unix, not(target_os = "macos")))'.dev-dependencies]
 x11rb = { version = "0.13", features = ["xtest", "xkb"] }
+
+# wasm CPU work (lyon tessellation, cosmic-text shaping, glyph atlas
+# uploads) runs per frame — LTO + one codegen unit measurably cut the
+# per-frame cost on the web build, and the desktop binary shrinks too.
+[profile.release]
+lto = "fat"
+codegen-units = 1

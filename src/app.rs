@@ -2863,17 +2863,18 @@ pub fn subscription(_app: &App) -> iced::Subscription<Message> {
         }
         _ => None,
     });
-    // Ticks drive the scroll animation and the edge-highlight easing +
-    // breathing glow: hot while scrolling, while something is hovered
-    // (the glow keeps breathing), until every fade-out has finished,
-    // while the vim block cursor is blinking (canvas::editor::BlinkState),
-    // and while a toast is up (its expiry needs them).
-    let file_poll = if _app.tabs.iter().any(|t| t.file.is_some()) {
-        iced::time::every(std::time::Duration::from_secs(1)).map(|_| Message::PollFiles)
-    } else {
-        iced::Subscription::none()
-    };
-    let tick = if _app.cur().scroll_anim.is_some()
+    // Ticks drive two classes of work at two rates:
+    // - 16ms while something SMOOTH is in flight: the editor scroll
+    //   animation, the edge-highlight dash march + glow (hot while an
+    //   edge is hovered or highlight mode is on), tab open/close/drag
+    //   slides, the plus-button pop, the find bar.
+    // - 250ms for the BLINK-class timers (editor caret / block cursor,
+    //   toast expiry, yank flash): a couple of steps per blink cycle is
+    //   indistinguishable, and this is the app's resting state — running
+    //   the 16ms tick here redrew the whole scene 60 times a second on
+    //   wasm and spun the fan at idle.
+    // Nothing animating means no ticks at all.
+    let smooth = _app.cur().scroll_anim.is_some()
         || _app.cur().highlight_all
         || !_app.cur().hover_edges.is_empty()
         || _app.tab_drag.is_some()
@@ -2881,17 +2882,23 @@ pub fn subscription(_app: &App) -> iced::Subscription<Message> {
         || _app.plus_anim.abs() > 0.5
         || !_app.tab_closing.is_empty()
         || _app.tab_opening.is_some()
-        || _app.message.is_some()
-        || _app.editor().yank_flash.is_some()
-        // the find bar's focused-input caret blinks while it is open
-        || _app.editor().find_open()
         || _app
             .last_editor_scroll
             .is_some_and(|t| t.elapsed().as_millis() < 1100)
+        || _app.editor().find_open();
+    let blink_class = _app.message.is_some()
+        || _app.editor().yank_flash.is_some()
         || crate::canvas::editor::block_cursor_blinking(_app)
-        || crate::canvas::editor::caret_blinking(_app)
-    {
+        || crate::canvas::editor::caret_blinking(_app);
+    let file_poll = if _app.tabs.iter().any(|t| t.file.is_some()) {
+        iced::time::every(std::time::Duration::from_secs(1)).map(|_| Message::PollFiles)
+    } else {
+        iced::Subscription::none()
+    };
+    let tick = if smooth {
         iced::time::every(std::time::Duration::from_millis(16)).map(|_| Message::Tick)
+    } else if blink_class {
+        iced::time::every(std::time::Duration::from_millis(250)).map(|_| Message::Tick)
     } else {
         iced::Subscription::none()
     };
