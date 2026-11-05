@@ -2,8 +2,7 @@
 
 A DBML diagram editor — vim-style editing on the left, a live ER diagram
 on the right. Runs as a native desktop app (Rust +
-[iced](https://iced.rs), GPU-rendered) and in the browser (wasm,
-software-rendered).
+[iced](https://iced.rs), GPU-rendered).
 
 ## DBML features
 
@@ -56,20 +55,9 @@ regenerate it.
 
 ## Running for development
 
-Desktop:
-
 ```
 cargo run --release
 ```
-
-Web (trunk, bundle in `dist/` — see `.github/workflows/pages.yml` for
-the GitHub Pages build; the wasm build renders through the GPU WebGL2
-chain with a software fallback):
-
-```
-trunk serve          # dev server
-trunk build --release
-````
 
 ## License
 

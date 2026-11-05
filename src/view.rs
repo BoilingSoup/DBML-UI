@@ -11,7 +11,6 @@ use crate::app::{
 use crate::canvas::diagram::{Diagram, DiagramOverlay};
 use crate::canvas::editor::{EditorOverlay, EditorView};
 use dbml_ui::dbml::ast::RecordValue;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::editor::{KeyCode, KeyModifiers};
 use crate::theme;
 use iced::widget::{
@@ -2397,7 +2396,6 @@ fn brighten(c: Color) -> Color {
 // bundle (save / edit / search) and the FA6 free set (undo / redo /
 // format wand / maximize expand + compress), rendered as inline SVGs
 // with the fill baked in (iced SVGs can't recolor currentColor).
-#[cfg(not(target_arch = "wasm32"))]
 const ICON_SAVE: (&str, &str) = ("M433.941 129.941l-83.882-83.882A48 48 0 0 0 316.118 32H48C21.49 32 0 53.49 0 80v352c0 26.51 21.49 48 48 48h352c26.51 0 48-21.49 48-48V163.882a48 48 0 0 0-14.059-33.941zM272 80v80H144V80h128zm122 352H54a6 6 0 0 1-6-6V86a6 6 0 0 1 6-6h42v104c0 13.255 10.745 24 24 24h176c13.255 0 24-10.745 24-24V83.882l78.243 78.243a6 6 0 0 1 1.757 4.243V426a6 6 0 0 1-6 6zM224 232c-48.523 0-88 39.477-88 88s39.477 88 88 88 88-39.477 88-88-39.477-88-88-88zm0 128c-22.056 0-40-17.944-40-40s17.944-40 40-40 40 17.944 40 40-17.944 40-40 40z", "0 0 448 512");
 const ICON_SAVE_AS: (&str, &str) = ("M433.941 129.941l-83.882-83.882A48 48 0 0 0 316.118 32H48C21.49 32 0 53.49 0 80v352c0 26.51 21.49 48 48 48h352c26.51 0 48-21.49 48-48V163.882a48 48 0 0 0-14.059-33.941zM272 80v80H144V80h128zm122 352H54a6 6 0 0 1-6-6V86a6 6 0 0 1 6-6h42v104c0 13.255 10.745 24 24 24h176c13.255 0 24-10.745 24-24V83.882l78.243 78.243a6 6 0 0 1 1.757 4.243V426a6 6 0 0 1-6 6zM224 232c-48.523 0-88 39.477-88 88s39.477 88 88 88 88-39.477 88-88-39.477-88-88-88zm0 128c-22.056 0-40-17.944-40-40s17.944-40 40-40 40 17.944 40 40-17.944 40-40 40z|M438.6 278.6c12.5-12.5 12.5-32.8 0-45.3l-160-160c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L338.8 224 32 224c-17.7 0-32 14.3-32 32s14.3 32 32 32l306.7 0L233.4 393.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0l160-160z", "0 0 448 512");
 const ICON_SEARCH: (&str, &str) = ("M505 442.7L405.3 343c-4.5-4.5-10.6-7-17-7H372c27.6-35.3 44-79.7 44-128C416 93.1 322.9 0 208 0S0 93.1 0 208s93.1 208 208 208c48.3 0 92.7-16.4 128-44v16.3c0 6.4 2.5 12.5 7 17l99.7 99.7c9.4 9.4 24.6 9.4 33.9 0l28.3-28.3c9.4-9.4 9.4-24.6.1-34zM208 336c-70.7 0-128-57.2-128-128 0-70.7 57.2-128 128-128 70.7 0 128 57.2 128 128 0 70.7-57.2 128-128 128z", "0 0 512 512");
@@ -2575,47 +2573,6 @@ fn editor_toolbar(app: &App) -> Element<'static, Message> {
     // left-aligned to the editor's line-number gutter (56px), so the
     // toolbar reads as part of the editor column
     let maximized = app.maximized == Maximized::Editor;
-    // the save slot: desktop keeps the floppy button; the web build
-    // swaps it for the autosave indicator ("Saved at hh:mm", a spinner
-    // while the IndexedDB write is in flight) in a FIXED-width box, so
-    // the swap never shifts the toolbar row
-    #[cfg(target_arch = "wasm32")]
-    let save_slot: Element<'static, Message> = {
-        let spin_glyphs = ['|', '/', '-', '\\'];
-        let content: Element<'static, Message> = if app.web_saving {
-            let glyph = spin_glyphs
-                [(app.anim_clock * 8.0) as usize % spin_glyphs.len()];
-            container(
-                text(glyph.to_string())
-                    .size(12.0)
-                    .font(theme::mono())
-                    .color(theme::DIM),
-            )
-            .width(Fill)
-            .center_x(Length::Fill)
-            .into()
-        } else if let Some(at) = &app.saved_at {
-            container(
-                text(format!("Saved at {at}"))
-                    .size(11.0)
-                    .font(theme::mono())
-                    .color(theme::DIM),
-            )
-            .width(Fill)
-            .center_x(Length::Fill)
-            .into()
-        } else {
-            // nothing autosaved yet: the slot stays (invisibly) so the
-            // first appearance never shifts anything
-            container(text("")).width(Fill).into()
-        };
-        container(content)
-            .width(Length::Fixed(96.0))
-            .padding([8, 0])
-            .align_y(iced::alignment::Vertical::Center)
-            .into()
-    };
-    #[cfg(not(target_arch = "wasm32"))]
     let save_slot: Element<'static, Message> = icon_btn(
         ICON_SAVE,
         "Save (Ctrl+S)",
@@ -3002,48 +2959,12 @@ fn start_screen(_app: &App) -> Element<'static, Message> {
     ]
     .spacing(10);
 
-    // the web build wears a wasm badge to the right of the word art: a
-    // different home (browser tab, autosaved state, downloads) deserves
-    // a marker. The pill is about a third of the art's height.
-    #[cfg(target_arch = "wasm32")]
-    let masthead: Element<'static, Message> = row![
-        text(WORD_ART.to_string())
-            .size(13.0)
-            .font(theme::mono())
-            .color(theme::TEXT),
-        container(
-            text("wasm")
-                .size(14.0)
-                .color(Color::from_rgb8(0xff, 0xff, 0xff)),
-        )
-        .height(Length::Fixed(34.0))
-        .padding([0, 18])
-        .align_y(iced::alignment::Vertical::Center)
-        .align_x(iced::alignment::Horizontal::Center)
-        .style(|_t| container::Style {
-            background: Some(iced::Background::Color(Color::from_rgb8(
-                0x6f, 0xb1, 0xe8,
-            ))),
-            border: iced::border::rounded(17.0),
-            ..Default::default()
-        }),
-    ]
-    .spacing(18)
-    .align_y(iced::alignment::Vertical::Center)
-    .into();
-    #[cfg(not(target_arch = "wasm32"))]
     let masthead: Element<'static, Message> = text(WORD_ART.to_string())
         .size(13.0)
         .font(theme::mono())
         .color(theme::TEXT)
         .into();
 
-    #[cfg(not(target_arch = "wasm32"))]
-    let caption: Element<'static, Message> = text("DBML DIAGRAM EDITOR".to_string())
-        .size(12.0)
-        .color(theme::DIM)
-        .into();
-    #[cfg(target_arch = "wasm32")]
     let caption: Element<'static, Message> = text("DBML DIAGRAM EDITOR".to_string())
         .size(12.0)
         .color(theme::DIM)
@@ -3065,26 +2986,11 @@ fn start_screen(_app: &App) -> Element<'static, Message> {
 /// The tab-close confirmation, same contract as the exit one but scoped
 /// to one tab: Save & close / Close without saving / Cancel.
 fn tab_close_overlay(app: &App, idx: usize) -> Element<'static, Message> {
-    #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
     let title = app
         .tabs
         .get(idx)
         .map(|t| t.title())
         .unwrap_or_else(|| "This tab".to_string());
-    // the web build's tabs have no backing file: their contents live only
-    // in the autosave record, so closing is destructive there (and there
-    // is no "save" to offer — the autosave already holds everything)
-    #[cfg(target_arch = "wasm32")]
-    return confirm_modal(
-        Box::leak("Are you sure?".to_string().into_boxed_str()),
-        "The content will be cleared from the browser's cache.",
-        &[
-            ("Close", Message::TabCloseDiscard, true),
-            ("Cancel", Message::TabCloseCancel, false),
-        ],
-        Message::TabCloseCancel,
-    );
-    #[cfg(not(target_arch = "wasm32"))]
     confirm_modal(
         Box::leak(format!("\"{title}\" has unsaved changes").into_boxed_str()),
         "Close it anyway?",

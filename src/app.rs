@@ -10,8 +10,6 @@ use iced::{Point, Vector};
 // The web build stubs every dialog task, so the path-bearing messages
 // the dialogs resolve to are never constructed there; the web messages
 // are the mirror image (never constructed on the desktop).
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Message {
     CanvasPressed(Point),
@@ -106,19 +104,6 @@ pub enum Message {
     PickerUnavailable,
     /// Toolbar/button save-as request.
     SaveAsPrompt,
-    /// The web build's idb boot record arrived: the persisted settings
-    /// text plus the last autosaved state (None parts = fresh browser).
-    WebRestored(Option<String>, Option<crate::session::Session>),
-    /// The web tab lost focus: flush the autosave right away.
-    WebFlush,
-    /// A web file pick or drop resolved: (file name, text content), or
-    /// None for a dismissed chooser.
-    WebFilePicked(Option<(String, String)>),
-    /// A web autosave put finished (true = landed in IndexedDB).
-    WebSaved(bool),
-    /// The browser delivered a paste (the DOM paste event carries the
-    /// clipboard text).
-    WebPaste(String),
     /// The native save dialog produced a target path.
     SaveAs(String),
     /// Run the canonical formatter over the whole buffer.
@@ -297,7 +282,7 @@ pub struct ScrollbarDrag {
 pub struct ScrollAnim {
     pub scroll_from: f32,
     pub scroll_to: f32,
-    pub started: web_time::Instant,
+    pub started: std::time::Instant,
     /// Seconds; see `scroll_duration_override`.
     pub duration: f32,
     /// Cursor rows coupled to the scroll (neoscroll scrolls the cursor one
@@ -763,12 +748,6 @@ impl Tab {
 
     /// Unsaved changes: the buffer differs from the last save/open.
     pub fn is_modified(&self) -> bool {
-        // the web build does not track unsaved changes: a download's
-        // success on the user's disk is unknowable, so "dirty" would be
-        // a lie (the autosave in IndexedDB already holds everything)
-        if cfg!(target_arch = "wasm32") {
-            return false;
-        }
         self.editor.text() != self.saved_text
     }
 
@@ -869,7 +848,7 @@ pub struct App {
     /// Animation clock in seconds; drives the hover glow's breathing.
     pub anim_clock: f32,
     /// Instant of the last Tick, for the real elapsed delta.
-    last_tick: Option<web_time::Instant>,
+    last_tick: Option<std::time::Instant>,
     /// Set by `key_pressed` when ctrl+S hit an unpacked buffer: the next
     /// update drains it into the Save As picker task (ctrl+S IS the first
     /// save for a file-less tab).
@@ -882,7 +861,7 @@ pub struct App {
     pub diagnostics_fix_menu: bool,
     /// When the fix menu opened: the fade-in samples this (the ticks run
     /// while the menu is up).
-    pub diagnostics_fix_menu_since: Option<web_time::Instant>,
+    pub diagnostics_fix_menu_since: Option<std::time::Instant>,
     /// The diagram's export dropdown is open (the consolidated Export
     /// button on the pane's top edge).
     pub export_menu_open: bool,
@@ -918,7 +897,7 @@ pub struct App {
     /// When the last ctrl+d/u scroll chord fired: a bare d/u right after
     /// it is the chord's roll-out (ctrl released a few ms early, or the
     /// autorepeat tail), not a vim key — see `editor_key`.
-    last_scroll_chord: Option<web_time::Instant>,
+    last_scroll_chord: Option<std::time::Instant>,
     /// Toast pill (bottom-right overlay; see `set_message`).
     pub message: Option<String>,
     /// The toast's severity: drives the pill's accent dot.
@@ -926,14 +905,14 @@ pub struct App {
     /// When the toast was set: the tick clears it after `TOAST_TTL` (the
     /// subscription keeps ticks hot while a toast is up), any keypress
     /// supersedes it sooner.
-    message_since: Option<web_time::Instant>,
+    message_since: Option<std::time::Instant>,
     /// Open completion popup (insert mode) over the active buffer.
     pub completion: Option<Completion>,
     /// Editor-pane hover position (local px) for error tooltips.
     pub editor_hover: Option<Point>,
     /// Last user scroll of the editor (wheel, scrollbar, paging): the
     /// overlay scrollbars stay revealed for a moment after it, Monaco-style.
-    pub last_editor_scroll: Option<web_time::Instant>,
+    pub last_editor_scroll: Option<std::time::Instant>,
     /// Help overlay visibility.
     /// The diagnostics panel (dbdiagram's problems pop-out) is open.
     pub diagnostics_open: bool,
@@ -960,17 +939,6 @@ pub struct App {
     /// The tab-close confirmation modal is up for this tab (dirty buffer +
     /// a tab close): Save & close / Close without saving / Cancel.
     pub tab_close_confirm: Option<usize>,
-    /// Web build: an IndexedDB save is in flight (the toolbar's
-    /// Saved-at slot shows a spinner until it lands).
-    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-    pub web_saving: bool,
-    /// Web build: when the last autosave landed, formatted "hh:mm".
-    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-    pub saved_at: Option<String>,
-    /// Web build: Ctrl+S requested an immediate flush (set in
-    /// key_pressed, consumed by update's tail task).
-    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-    pub web_save_now: bool,
     /// Editor state changed since the last session snapshot (the
     /// SessionTick autosave flushes it; the GPU-loss restart restores).
     pub session_dirty: bool,
@@ -978,24 +946,24 @@ pub struct App {
     /// first copy, restored by the X arbiter): its flagged twin is a
     /// duplicate of the same physical press and is dropped when it arrives.
     /// KeyCode, not char: the chord set is not letters-only (ctrl+space).
-    stripped_chord: Option<(KeyCode, web_time::Instant)>,
+    stripped_chord: Option<(KeyCode, std::time::Instant)>,
     /// The last NON-CHAR key echo (arrows and other named keys) — the DE
     /// re-injection pair delivers ONE physical press as two echoes, so a
     /// shift+arrow selected two cells (the user's "highlights 2 chars").
     /// A same-code+mods echo inside 80ms is the twin and is dropped (key
     /// repeat never lands that early: winit's delay is 250ms+).
-    last_named_echo: Option<(KeyCode, KeyModifiers, web_time::Instant)>,
+    last_named_echo: Option<(KeyCode, KeyModifiers, std::time::Instant)>,
     /// The last bare (unflagged) key typed in insert mode — the DE
     /// re-injection's stripped copy whose flagged twin carries the chord.
     /// The usize is the buffer's history length BEFORE the key ran: the
     /// twin's salvage undoes the copy only when it actually edited (an
     /// `i`/`a` merely switched mode — undoing then would eat a real edit).
-    last_bare: Option<(KeyCode, web_time::Instant, usize)>,
+    last_bare: Option<(KeyCode, std::time::Instant, usize)>,
     /// The key of a chord fired through the physical-ctrl arbiter: its
     /// flagged twin is a duplicate of the same physical press and is
     /// dropped when it arrives. KeyCode, not char: the chord set is not
     /// letters-only (ctrl+space).
-    bridged_chord: Option<(KeyCode, web_time::Instant)>,
+    bridged_chord: Option<(KeyCode, std::time::Instant)>,
     /// Category groups collapsed in the open diagnostics panel.
     pub diagnostics_collapsed: std::collections::HashSet<String>,
     /// The one expanded diagnostics row (their accordion), if any.
@@ -1038,9 +1006,6 @@ impl App {
             config: crate::config::Config::default(),
             anim_clock: 0.0,
             chain_save_as: false,
-            web_saving: false,
-            saved_at: None,
-            web_save_now: false,
             diagnostics_selected_fix: 0,
             diagnostics_fix_menu: false,
             diagnostics_fix_menu_since: None,
@@ -1385,7 +1350,7 @@ impl App {
     fn set_message_kind(&mut self, kind: ToastKind, msg: impl Into<String>) {
         self.message = Some(msg.into());
         self.message_kind = kind;
-        self.message_since = Some(web_time::Instant::now());
+        self.message_since = Some(std::time::Instant::now());
     }
 
     /// Drop the toast (expired or superseded).
@@ -1405,15 +1370,8 @@ impl App {
             return;
         }
         // a dirty tab asks first — same contract as app exit, scoped to
-        // the tab (the confirm re-enters here after its decision). The
-        // web build asks for EVERY open document: its buffer lives only
-        // in the IndexedDB record, and closing clears it from there —
-        // there is no file to reopen.
-        let needs_confirm = if cfg!(target_arch = "wasm32") {
-            self.tabs[idx].doc_open
-        } else {
-            self.tabs[idx].is_modified()
-        };
+        // the tab (the confirm re-enters here after its decision).
+        let needs_confirm = self.tabs[idx].is_modified();
         if needs_confirm && self.tab_close_confirm != Some(idx) {
             self.tab_close_confirm = Some(idx);
             return;
@@ -1792,9 +1750,6 @@ impl App {
         // the web build: pastes arrive as DOM paste events (the browser
         // fires one for every Ctrl+V); handling them here would double
         // every insert
-        #[cfg(target_arch = "wasm32")]
-        return;
-        #[cfg(not(target_arch = "wasm32"))]
         {
             let text = match self.clipboard_text() {
                 Some(t) => t,
@@ -2792,36 +2747,6 @@ pub(crate) fn map_key_event(
 /// X11 physical-ctrl arbiter is untouched — its bridge stays inert here.
 /// Meta folds into the ctrl bit: web apps map Cmd to Ctrl universally
 /// (cmd+z undoes), and KeyModifiers has no meta slot.
-#[cfg(target_arch = "wasm32")]
-mod web_mods {
-    use iced::keyboard::{key::Named, Key};
-    use std::sync::atomic::{AtomicU32, Ordering};
-
-    /// Bit 1: ctrl (Meta folds in) · 2: shift · 4: alt
-    static HELD: AtomicU32 = AtomicU32::new(0);
-
-    /// Fold a modifier key press/release into the held set (no-op for
-    /// every other key).
-    pub fn record(key: &Key, down: bool) {
-        let bit = match key {
-            Key::Named(Named::Control | Named::Meta) => 1,
-            Key::Named(Named::Shift) => 2,
-            Key::Named(Named::Alt) => 4,
-            _ => return,
-        };
-        if down {
-            HELD.fetch_or(bit, Ordering::Relaxed);
-        } else {
-            HELD.fetch_and(!bit, Ordering::Relaxed);
-        }
-    }
-
-    /// The held (ctrl, shift, alt) set to OR into the event's own flags.
-    pub fn held() -> (bool, bool, bool) {
-        let h = HELD.load(Ordering::Relaxed);
-        (h & 1 != 0, h & 2 != 0, h & 4 != 0)
-    }
-}
 
 pub fn subscription(_app: &App) -> iced::Subscription<Message> {
     let mouse = iced::event::listen_with(|event, _status, _id| match event {
@@ -2833,8 +2758,6 @@ pub fn subscription(_app: &App) -> iced::Subscription<Message> {
         }
         // the web tab losing focus flushes the autosave right away (a
         // switch-away is often followed by a refresh)
-        #[cfg(target_arch = "wasm32")]
-        iced::Event::Window(iced::window::Event::Unfocused) => Some(Message::WebFlush),
         _ => None,
     });
     // Full keyboard events, not on_key_press: the logical key it hands out
@@ -2850,8 +2773,6 @@ pub fn subscription(_app: &App) -> iced::Subscription<Message> {
             ..
         }) => {
             // web: fold the tracked browser-held modifiers into this key
-            #[cfg(target_arch = "wasm32")]
-            web_mods::record(&key, true);
             // the physical ctrl switch: the Control keydown itself
             if matches!(
                 &key,
@@ -2867,13 +2788,6 @@ pub fn subscription(_app: &App) -> iced::Subscription<Message> {
             let mut shift = modifiers.shift();
             #[allow(unused_mut)]
             let mut alt = modifiers.alt();
-            #[cfg(target_arch = "wasm32")]
-            {
-                let (c, s, a) = web_mods::held();
-                ctrl = ctrl || c;
-                shift = shift || s;
-                alt = alt || a;
-            }
             // raw fields BEFORE mapping: when a key misbehaves under a
             // desktop-environment modifier grab, key debug shows whether the
             // flag/character arrived at all
@@ -2905,8 +2819,6 @@ pub fn subscription(_app: &App) -> iced::Subscription<Message> {
         }
         iced::Event::Keyboard(iced::keyboard::Event::KeyReleased { key, .. }) => {
             // web: the release clears the tracked held set
-            #[cfg(target_arch = "wasm32")]
-            web_mods::record(&key, false);
             // the Control keyup flips the physical switch off
             if matches!(
                 &key,
@@ -2979,13 +2891,7 @@ pub fn subscription(_app: &App) -> iced::Subscription<Message> {
         // the snapshot lands on disk (crash / GPU-loss restart protection)
         iced::time::every(std::time::Duration::from_secs(2)).map(|_| Message::SessionTick),
         // dropped files stream in as in-memory opens (web)
-        #[cfg(target_arch = "wasm32")]
-        crate::web::dropped_files().map(|(name, content)| {
-            Message::WebFilePicked(Some((name, content)))
-        }),
         // the browser's paste event delivers the clipboard text (web)
-        #[cfg(target_arch = "wasm32")]
-        crate::web::paste_events().map(Message::WebPaste),
     ])
 }
 
@@ -3038,7 +2944,6 @@ impl ExportKind {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn filter(&self) -> (&'static str, &'static [&'static str]) {
         match self {
             ExportKind::Svg => ("SVG image", &["svg"]),
@@ -3047,7 +2952,6 @@ impl ExportKind {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn title(&self) -> &'static str {
         match self {
             ExportKind::Svg => "Export SVG",
@@ -3065,7 +2969,6 @@ impl ExportKind {
 // to `PickerUnavailable`, whose toast explains.
 
 /// The dialog result handed back from the picker thread.
-#[cfg(not(target_arch = "wasm32"))]
 enum PickOutcome {
     Chosen(String),
     Cancelled,
@@ -3077,7 +2980,6 @@ enum PickOutcome {
 /// dialogs (a browser file input is a later milestone).
 /// Spawn the native save dialog off the UI thread; the confirmed path
 /// comes back through `then` (a dismissal folds to `PickerDismissed`).
-#[cfg(not(target_arch = "wasm32"))]
 fn save_dialog_task(
     default_name: String,
     filter_name: &'static str,
@@ -3099,7 +3001,6 @@ fn save_dialog_task(
 }
 
 /// The Save As picker: the native dialog with the DBML filter.
-#[cfg(not(target_arch = "wasm32"))]
 fn save_as_picker_task(default_name: String) -> iced::Task<Message> {
     save_dialog_task(
         default_name,
@@ -3112,7 +3013,6 @@ fn save_as_picker_task(default_name: String) -> iced::Task<Message> {
 
 /// The native save dialog (rfd: GTK on Linux, native on Windows/macOS).
 /// Must run off the UI thread — the blocking API drives its own event loop.
-#[cfg(not(target_arch = "wasm32"))]
 fn pick_save_path_blocking(default_name: &str, filter_name: &str, patterns: &[&str], title: &str) -> PickOutcome {
     // the native dialog maps behind the app window (no transient parent):
     // raise + focus it as soon as it maps
@@ -3139,7 +3039,6 @@ pub enum PickerKind {
     Sql,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn picker_filters(kind: PickerKind) -> Vec<&'static str> {
     let combined = [
         "--file-filter=Diagram & SQL files | *.dbml *.sql",
@@ -3157,7 +3056,6 @@ fn picker_filters(kind: PickerKind) -> Vec<&'static str> {
 }
 
 /// Blocking zenity/kdialog file picker. Must run off the UI thread.
-#[cfg(not(target_arch = "wasm32"))]
 fn pick_file_blocking(kind: PickerKind) -> PickOutcome {
     let run = |cmd: &str, args: &[&str]| -> Option<std::process::Output> {
         std::process::Command::new(cmd)
@@ -3199,8 +3097,6 @@ fn pick_file_blocking(kind: PickerKind) -> PickOutcome {
 /// The open-file picker task: desktop spawns the blocking picker off the
 /// UI thread (a missing tool folds to `PickerUnavailable`); the web build
 /// has no dialog yet.
-#[cfg(not(target_arch = "wasm32"))]
-#[cfg(not(target_arch = "wasm32"))]
 fn open_file_picker_task(kind: PickerKind) -> iced::Task<Message> {
     let (tx, rx) = smol::channel::bounded(1);
     std::thread::spawn(move || {
@@ -3216,19 +3112,9 @@ fn open_file_picker_task(kind: PickerKind) -> iced::Task<Message> {
     })
 }
 
-#[cfg(target_arch = "wasm32")]
-fn open_file_picker_task(kind: PickerKind) -> iced::Task<Message> {
-    let accept = match kind {
-        PickerKind::Dbml => ".dbml",
-        PickerKind::Sql => ".sql,.ddl",
-        PickerKind::DiagramAndSql => ".dbml,.sql,.ddl",
-    };
-    crate::web::pick_file(accept).map(Message::WebFilePicked)
-}
 
 /// The export save-dialog task: desktop asks for a destination path; the
 /// web build has no dialog yet.
-#[cfg(not(target_arch = "wasm32"))]
 fn export_pick_task(
     kind: ExportKind,
     default_name: String,
@@ -3276,17 +3162,6 @@ pub fn update(app: &mut App, message: Message) -> iced::Task<Message> {
         }
         Message::PickerDismissed => {}
         // Ctrl+O opens the picker from either editing mode
-        #[cfg(target_arch = "wasm32")]
-        Message::SaveAsPrompt => {
-            // the web save is a download with the default name (no
-            // dialogs, no success tracking, no toast: the browser's own
-            // download UI may be cancelled, and none of that is visible
-            // to the app)
-            let name = app.cur().save_as_default_name();
-            let text = app.editor().text().to_string();
-            crate::web::download(&name, "text/plain", text.as_bytes());
-        }
-        #[cfg(not(target_arch = "wasm32"))]
         Message::SaveAsPrompt => return save_as_picker_task(app.cur().save_as_default_name()),
         Message::SaveAs(path) => {
             if let Err(e) = app.save_as(&path) {
@@ -3306,28 +3181,9 @@ pub fn update(app: &mut App, message: Message) -> iced::Task<Message> {
         m => delegated = handle_message(app, m),
     }
     // ctrl+S on an unpacked buffer chains the Save As picker (the flag is
-    // set inside key_pressed, which cannot return a task itself). The web
-    // build's Save As is a download instead, and its ctrl+S is an
-    // immediate IndexedDB flush.
-    if app.web_save_now {
-        app.web_save_now = false;
-        #[cfg(target_arch = "wasm32")]
-        {
-            app.web_saving = true;
-            return crate::web::save_state_task(&app.session_snapshot())
-                .map(crate::app::Message::WebSaved);
-        }
-    }
+    // set inside key_pressed, which cannot return a task itself).
     if app.chain_save_as {
         app.chain_save_as = false;
-        #[cfg(target_arch = "wasm32")]
-        {
-            let name = app.cur().save_as_default_name();
-            let text = app.editor().text().to_string();
-            crate::web::download(&name, "text/plain", text.as_bytes());
-            return iced::Task::none();
-        }
-        #[cfg(not(target_arch = "wasm32"))]
         return save_as_picker_task(app.cur().save_as_default_name());
     }
     if app.should_quit {
@@ -3547,69 +3403,6 @@ fn remove_headercolor(inner: &str) -> String {
 
 fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
     match message {
-        Message::WebRestored(config_text, session) => {
-            // the persisted settings land first (the editing mode is a
-            // global preference: the restored tabs follow it), then the
-            // idb session — buffers, unsaved edits included (there is no
-            // "unsaved" on the web)
-            if let Some(text) = &config_text {
-                app.config = crate::config::Config::from_text(text);
-                let mode = if app.config.vim {
-                    editor::Mode::Normal
-                } else {
-                    editor::Mode::Insert
-                };
-                for t in &mut app.tabs {
-                    t.editor.mode = mode;
-                }
-            }
-            if let Some(session) = session {
-                app.restore_session(session);
-            }
-        }
-        Message::WebFlush => {
-            #[cfg(target_arch = "wasm32")]
-            {
-                app.web_saving = true;
-                return crate::web::save_state_task(&app.session_snapshot())
-                    .map(crate::app::Message::WebSaved);
-            }
-        }
-        Message::WebSaved(ok) => {
-            #[cfg(target_arch = "wasm32")]
-            {
-                app.web_saving = false;
-                if ok {
-                    app.saved_at = Some(crate::web::clock_hh_mm());
-                } else {
-                    app.set_message_kind(
-                        ToastKind::Error,
-                        "autosave failed — the browser may be blocking storage",
-                    );
-                }
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            let _ = ok;
-        }
-        Message::WebPaste(text) => {
-            #[cfg(target_arch = "wasm32")]
-            {
-                app.paste_text(&text);
-                app.after_edit(editor::Action::Changed);
-                app.follow_cursor_horizontal();
-                app.keep_cursor_visible();
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            let _ = text;
-        }
-        Message::WebFilePicked(picked) => {
-            #[cfg(target_arch = "wasm32")]
-            if let Some((name, content)) = picked {
-                app.open_from_memory(&name, &content);
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            let _ = picked;
-        }
         Message::CanvasPressed(p) => app.canvas_pressed(p),
         Message::CanvasMoved(p) => app.canvas_moved(p),
         Message::CanvasLeft => app.canvas_left(),
@@ -3653,7 +3446,7 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
         Message::DiagnosticToggleFixMenu => {
             app.diagnostics_fix_menu = !app.diagnostics_fix_menu;
             app.diagnostics_fix_menu_since =
-                app.diagnostics_fix_menu.then(web_time::Instant::now);
+                app.diagnostics_fix_menu.then(std::time::Instant::now);
         }
         Message::DiagnosticDismissFixMenu => {
             app.diagnostics_fix_menu = false;
@@ -3716,7 +3509,7 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
                             && t.elapsed().as_millis() < 80
                     });
                 app.last_named_echo =
-                    Some((code, mods, web_time::Instant::now()));
+                    Some((code, mods, std::time::Instant::now()));
                 if twin {
                     if app.key_debug {
                         app.set_message("echo twin dropped");
@@ -3725,7 +3518,7 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
                 }
             }
             if stripped {
-                app.stripped_chord = Some((code, web_time::Instant::now()));
+                app.stripped_chord = Some((code, std::time::Instant::now()));
             } else if mods.contains(KeyModifiers::CONTROL) {
                 if app
                     .stripped_chord
@@ -3751,7 +3544,7 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
             // the wheel path converts its notch deltas before emitting
             // (canvas/editor.rs), so the scrollbar drag and the wheel
             // share one contract and neither under-shoots the target.
-            app.last_editor_scroll = Some(web_time::Instant::now());
+            app.last_editor_scroll = Some(std::time::Instant::now());
             // scrolling dismisses the hover tooltip (Monaco does too) and
             // it must not sit stale through a scrollbar drag
             app.editor_hover = None;
@@ -3856,16 +3649,10 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
         Message::FormatNow => {}                                 // handled in update
         Message::ToggleFmtOnSave => {}                           // handled in update
         Message::PickerUnavailable => {
-            #[cfg(not(target_arch = "wasm32"))]
             {
                 // no zenity/kdialog and no cmdline to type a path into
                 // either: the way in is the launcher (dbml-ui <file>)
                 app.set_message_kind(ToastKind::Error, "no file dialog available — open via the launcher: dbml-ui <file>");
-            }
-            #[cfg(target_arch = "wasm32")]
-            {
-                // the web build has no file system or dialogs yet
-                app.set_message_kind(ToastKind::Info, "file dialogs aren't available in the web build yet");
             }
         }
         Message::NewDiagram => app.new_diagram(),
@@ -3958,9 +3745,6 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
         Message::ExportSql(dialect) => {
             app.export_menu_open = false;
             app.export_menu_sql_open = false;
-            #[cfg(target_arch = "wasm32")]
-            app.web_download(ExportKind::Sql(dialect));
-            #[cfg(not(target_arch = "wasm32"))]
             {
                 let kind = ExportKind::Sql(dialect);
                 let default_name = kind.default_name(&app.export_stem());
@@ -3971,9 +3755,6 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
         Message::ExportAs(kind) => {
             app.export_menu_open = false;
             app.export_menu_sql_open = false;
-            #[cfg(target_arch = "wasm32")]
-            app.web_download(kind);
-            #[cfg(not(target_arch = "wasm32"))]
             {
                 let default_name = kind.default_name(&app.export_stem());
                 let (filter_name, patterns) = kind.filter();
@@ -4027,22 +3808,12 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
         Message::SessionTick => {
             // the browser tab's title follows the active tab's file (the
             // desktop window title's web twin); refreshed every tick
-            #[cfg(target_arch = "wasm32")]
-            crate::web::set_title(&app.window_title());
             // flush the state snapshot when the editor state moved since
             // the last write. Desktop: the file session (the GPU-loss
             // restart restores it). Web: IndexedDB — the last known state
             // IS the web session.
             if app.session_dirty {
                 let snap = app.session_snapshot();
-                #[cfg(target_arch = "wasm32")]
-                {
-                    app.web_saving = true;
-                    app.session_dirty = false;
-                    return crate::web::save_state_task(&snap)
-                        .map(crate::app::Message::WebSaved);
-                }
-                #[cfg(not(target_arch = "wasm32"))]
                 if crate::session::save(&snap).is_ok() {
                     app.session_dirty = false;
                 }
@@ -4051,7 +3822,7 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
         Message::Tick => {
             // ease every edge's highlight toward its hover target with the
             // real elapsed delta (fade-in ~0.22s, fade-out ~0.30s)
-            let now = web_time::Instant::now();
+            let now = std::time::Instant::now();
             let dt = app
                 .last_tick
                 .map_or(0.016, |t| (now - t).as_secs_f32().min(0.1));
@@ -4137,28 +3908,9 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
         }
     }
     // ctrl+S on an unpacked buffer chains the Save As picker (the flag is
-    // set inside key_pressed, which cannot return a task itself). The web
-    // build's Save As is a download instead, and its ctrl+S is an
-    // immediate IndexedDB flush.
-    if app.web_save_now {
-        app.web_save_now = false;
-        #[cfg(target_arch = "wasm32")]
-        {
-            app.web_saving = true;
-            return crate::web::save_state_task(&app.session_snapshot())
-                .map(crate::app::Message::WebSaved);
-        }
-    }
+    // set inside key_pressed, which cannot return a task itself).
     if app.chain_save_as {
         app.chain_save_as = false;
-        #[cfg(target_arch = "wasm32")]
-        {
-            let name = app.cur().save_as_default_name();
-            let text = app.editor().text().to_string();
-            crate::web::download(&name, "text/plain", text.as_bytes());
-            return iced::Task::none();
-        }
-        #[cfg(not(target_arch = "wasm32"))]
         return save_as_picker_task(app.cur().save_as_default_name());
     }
     handle_message_finish(app)
@@ -4676,7 +4428,7 @@ impl App {
     /// the same side effects a user scroll has (animation cleared, hover
     /// dismissed, reveal-timer restarted).
     fn apply_scroll_target(app: &mut App, vertical: bool, target: f32) {
-        app.last_editor_scroll = Some(web_time::Instant::now());
+        app.last_editor_scroll = Some(std::time::Instant::now());
         app.editor_hover = None;
         app.cur_mut().scroll_anim = None;
         app.cur_mut().scroll_target = None;
@@ -5200,29 +4952,6 @@ impl App {
     /// The web build's in-memory open: `name` only decides the SQL
     /// import (`.sql`/`.ddl` dumps convert to DBML, with an untitled
     /// buffer either way — the browser holds the state from here on).
-    #[cfg(target_arch = "wasm32")]
-    pub fn open_from_memory(&mut self, name: &str, content: &str) {
-        self.mark_session_dirty();
-        if name.to_ascii_lowercase().ends_with(".sql")
-            || name.to_ascii_lowercase().ends_with(".ddl")
-        {
-            let dialect = dbml::sqldump::detect_dialect(content);
-            let converted = dbml::sqldump::import(content, dialect)
-                .map_err(|e| format!("import: {e}"));
-            match converted {
-                Ok(dbml_text) => {
-                    self.load_into_current(&dbml_text);
-                    self.set_message_kind(
-                        ToastKind::Warning,
-                        format!("imported as {} — Save As to keep the DBML", dialect.label()),
-                    );
-                }
-                Err(e) => self.set_message_kind(ToastKind::Error, e),
-            }
-        } else {
-            self.load_into_current(content);
-        }
-    }
 
     /// Format the whole buffer canonically (comments are preserved by the
     /// formatter). Skips sources with parse errors; reports why. The
@@ -5404,39 +5133,6 @@ impl App {
     /// browser as a download named after the default file name. No
     /// success tracking — once the user confirms the download, its fate
     /// on their disk is unknowable.
-    #[cfg(target_arch = "wasm32")]
-    pub fn web_download(&mut self, kind: ExportKind) {
-        let name = kind.default_name(&self.export_stem());
-        let render = match &kind {
-            ExportKind::Sql(dialect) => dbml::sql::export(&self.editor().text(), *dialect)
-                .map(|sql| (name, "text/plain", sql.into_bytes()))
-                .map_err(|e| e.to_string()),
-            ExportKind::Svg => Ok((
-                name,
-                "image/svg+xml",
-                dbml_ui::render::svg::build_svg(&self.cur().diagram).into_bytes(),
-            )),
-            ExportKind::Png => {
-                use dbml_ui::render::{raster, svg};
-                let doc = svg::build_svg(&self.cur().diagram);
-                let (sw, sh) = svg::svg_size(&self.cur().diagram);
-                let scale = 2.0;
-                raster::rasterize(&doc, (sw * scale) as u32, (sh * scale) as u32, scale, scale)
-                    .map_err(|e| e.to_string())
-                    .and_then(|img| {
-                        let mut bytes = Vec::new();
-                        img.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
-                            .map_err(|e| e.to_string())?;
-                        Ok((name, "image/png", bytes))
-                    })
-            }
-        };
-        let result = render;
-        match result {
-            Ok((name, mime, bytes)) => crate::web::download(&name, mime, &bytes),
-            Err(e) => self.set_message_kind(ToastKind::Error, format!("export failed: {e}")),
-        }
-    }
 
     /// Export SVG next to the open file (the floating diagram button).
     /// File stem for export paths ("diagram" without a backing file).
@@ -5514,7 +5210,7 @@ impl App {
                     mods.contains(KeyModifiers::SHIFT),
                     mods.contains(KeyModifiers::ALT),
                 );
-                self.bridged_chord = Some((code, web_time::Instant::now()));
+                self.bridged_chord = Some((code, std::time::Instant::now()));
             } else {
                 // a stale switch (the DE ate the ctrl release): heal it —
                 // this key is a plain key
@@ -5530,7 +5226,7 @@ impl App {
                 {
                     self.last_bare = Some((
                         code,
-                        web_time::Instant::now(),
+                        std::time::Instant::now(),
                         self.editor().buf.history_len(),
                     ));
                 }
@@ -5612,14 +5308,6 @@ impl App {
                     // IndexedDB record instead: the state IS the session
                     // there, no file involved.
                     if self.cur().file.is_none() {
-                        #[cfg(target_arch = "wasm32")]
-                        {
-                            // the manual save = an immediate IndexedDB
-                            // flush; key_pressed cannot return tasks, so
-                            // update's tail picks the flag up
-                            self.web_save_now = true;
-                        }
-                        #[cfg(not(target_arch = "wasm32"))]
                         {
                             self.chain_save_as = true;
                         }
@@ -5840,7 +5528,7 @@ impl App {
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL)
                 && self.editor().mode != editor::Mode::Insert =>
             {
-                self.last_scroll_chord = Some(web_time::Instant::now());
+                self.last_scroll_chord = Some(std::time::Instant::now());
                 // the DE re-injection: the stripped twin of this very press
                 // may have armed the delete operator — a ctrl chord never
                 // leaves one armed
@@ -5851,7 +5539,7 @@ impl App {
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL)
                 && self.editor().mode != editor::Mode::Insert =>
             {
-                self.last_scroll_chord = Some(web_time::Instant::now());
+                self.last_scroll_chord = Some(std::time::Instant::now());
                 self.editor_mut().cancel_pending();
                 self.half_page(-1.0);
                 return;
@@ -5877,7 +5565,7 @@ impl App {
                 if matches!(key.code, KeyCode::Char('d') | KeyCode::Char('u'))
                     && !key.modifiers.contains(KeyModifiers::CONTROL)
                 {
-                    self.last_scroll_chord = Some(web_time::Instant::now());
+                    self.last_scroll_chord = Some(std::time::Instant::now());
                     return;
                 }
             } else {
@@ -6440,7 +6128,7 @@ impl App {
         self.cur_mut().scroll_anim = Some(ScrollAnim {
             scroll_from: from,
             scroll_to: to,
-            started: web_time::Instant::now(),
+            started: std::time::Instant::now(),
             duration: scroll_duration_override().unwrap_or(duration_ms / 1000.0),
             cursor,
         });
@@ -7596,7 +7284,7 @@ TableGroup g { a c }
         // aged past the TTL, a tick clears it (the subscription's tick gate
         // stays hot while a toast is up, so these ticks do arrive)
         app.message_since =
-            Some(web_time::Instant::now() - TOAST_TTL - std::time::Duration::from_millis(1));
+            Some(std::time::Instant::now() - TOAST_TTL - std::time::Duration::from_millis(1));
         let _ = update(&mut app, Message::Tick);
         assert!(app.message.is_none());
         assert!(app.message_since.is_none(), "the gate drops with the toast");
@@ -9475,7 +9163,7 @@ mod scroll_tests {
         );
         force_finish(&mut app);
         app.last_scroll_chord =
-            Some(web_time::Instant::now() - SCROLL_CHORD_ROLLOUT - std::time::Duration::from_millis(1));
+            Some(std::time::Instant::now() - SCROLL_CHORD_ROLLOUT - std::time::Duration::from_millis(1));
         let _ = update(
             &mut app,
             Message::KeyPressed(KeyCode::Char('d'), KeyModifiers::NONE),
@@ -13248,7 +12936,7 @@ mod yank_flash_tests {
         let _ = update(&mut app, Message::Tick);
         assert!(app.editor().yank_flash.is_some(), "within the 250ms window");
         app.editor_mut().yank_flash.as_mut().unwrap().started =
-            web_time::Instant::now() - std::time::Duration::from_millis(400);
+            std::time::Instant::now() - std::time::Duration::from_millis(400);
         let _ = update(&mut app, Message::Tick);
         assert!(app.editor().yank_flash.is_none(), "expired");
     }

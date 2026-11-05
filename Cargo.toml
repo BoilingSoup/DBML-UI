@@ -3,36 +3,14 @@ name = "dbml-ui"
 version = "0.1.0"
 edition = "2021"
 
-# The 0x0-viewport guard for the web build: iced_tiny_skia 0.13 creates
-# the softbuffer surface with NonZeroU32::expect on the window size, but
-# on the web the window exists before the browser's first resize report —
-# the boot dies there. Upstream-worthy.
-[patch.crates-io]
-iced_tiny_skia = { path = "vendor/iced_tiny_skia" }
-iced_graphics = { path = "vendor/iced_graphics" }
-# The web adapter chain: wgpu's Instance commits to a WebGPU-only context
-# whenever navigator.gpu exists (even with no adapter — Electron, Chrome
-# on Linux), so the GL/WebGL2 backend never runs and the boot falls
-# straight to software. The vendored compositor retries the adapter
-# request without BROWSER_WEBGPU before giving up.
-iced_wgpu = { path = "vendor/iced_wgpu" }
-iced_glyphon = { path = "vendor/iced_glyphon" }
-
 [dependencies]
 anyhow = "1.0.104"
-# The renderer is per-target: the desktop keeps wgpu (added below), the
-# web build renders with the GPU WebGL2 chain (see the vendored
-# iced_wgpu/iced_glyphon and the wgpu dep below — WebGPU when the browser
-# has it, WebGL2 otherwise, tiny-skia software as the last fallback).
 # The popups' text renders through widget paragraphs (PopupTextLayer)
 # because canvas geometry text does not render inside `with_layer` layers
-# on iced 0.13's WebGL2 backend. `advanced` enables the custom-widget
-# API; `fira-sans` embeds the default UI font (the web has no
-# system-font scan).
-# `web-colors` (browser composites in sRGB; the native gamma pipeline
-# writes linear text colors, which the WebGL2 surface rendered washed-out
-# at ~6% alpha) is enabled for the wasm build by the [target.'cfg(...)']
-# block below.
+# on iced 0.13. `advanced` enables the custom-widget API; `fira-sans`
+# embeds the default UI font. The renderer is wgpu (with the tiny-skia
+# fallback iced activates when the adapter request fails);
+# `auto-detect-theme` follows the system theme.
 iced = { version = "=0.13.1", default-features = false, features = [
     "advanced",
     "canvas",
@@ -41,6 +19,7 @@ iced = { version = "=0.13.1", default-features = false, features = [
     "wgpu",
     "tiny-skia",
     "fira-sans",
+    "auto-detect-theme",
 ] }
 # MSRV pins for rustc 1.84: newer releases of these crates require 1.85+.
 image = { version = "=0.25.6", default-features = false, features = ["png"] }
@@ -49,62 +28,7 @@ resvg = { version = "0.45.1", features = ["raster-images", "text"] }
 tiny-skia = "0.11.4"
 unicode-width = "=0.2.0"
 usvg = "0.45.1"
-# std's Instant/SystemTime are unimplemented on wasm32-unknown-unknown;
-# this swaps in performance.now() there and keeps std elsewhere
-web-time = "1"
 
-# Desktop-only OS plumbing: smol's reactor (async-io/rustix/errno) has no
-# wasm32-unknown-unknown backend, rfd drives GTK, arboard drives the
-# system clipboard. The web build cfg-gates every use site.
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-# browser composites in sRGB: the native gamma pipeline writes linear
-# text colors, which the WebGL2 surface rendered washed-out (~6% alpha)
-iced = { version = "=0.13.1", features = ["web-colors"] }
-web-sys = { version = "0.3", features = [
-    "console",
-    "Blob",
-    "BlobPropertyBag",
-    "Document",
-    "Element",
-    "HtmlAnchorElement",
-    "HtmlElement",
-    "IdbDatabase",
-    "IdbFactory",
-    "IdbObjectStore",
-    "IdbOpenDbRequest",
-    "IdbRequest",
-    "IdbTransaction",
-    "IdbTransactionMode",
-    "Url",
-    "Window",
-    "Clipboard",
-    "ClipboardEvent",
-    "DataTransfer",
-    "DragEvent",
-    "File",
-    "FileList",
-    "FileReader",
-    "HtmlInputElement",
-] }
-js-sys = "0.3"
-wasm-bindgen = "0.2"
-# wasm panics write to a stderr nobody reads: route them to the browser
-# console (the iced web examples do the same)
-console_error_panic_hook = "0.1"
-# The web build's wgpu groundwork: compiling the WebGL2 (GL) backend in
-# gives navigator.gpu's null-adapter answer a real fallback (Chrome on
-# Linux without WebGPU) instead of stalling the boot (iced#2978). Inert
-# until the wasm `iced` feature flips to "wgpu" (see above).
-wgpu = { version = "0.19", features = ["webgl"] }
-# the boot's adapter-selection diagnostics route to the browser console
-log = "0.4"
-
-[build-dependencies]
-# embeds icons/app-icon.ico into the exe (build.rs gates on the target —
-# winresource only compiles for windows hosts' cross builds of it)
-winresource = "=0.1.17"
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # System-clipboard text (copy/paste) on X11/Wayland/Windows/macOS. Text
 # only: no image-data feature. Unreachable clipboards (headless CI, SSH)
 # are a handled error, never a panic.
@@ -116,10 +40,11 @@ rfd = { version = "0.15", default-features = false, features = ["gtk3"] }
 # iced's runtime (smol feature); also hands the file-picker thread's result
 # back to the update loop
 smol = "2"
-# the desktop renderer: wgpu (with the tiny-skia fallback iced activates
-# when the adapter request fails). `auto-detect-theme` follows the system
-# theme — the desktop's original default feature set.
-iced = { version = "=0.13.1", features = ["wgpu", "auto-detect-theme"] }
+
+[build-dependencies]
+# embeds icons/app-icon.ico into the exe (build.rs gates on the target —
+# winresource only compiles for windows hosts' cross builds of it)
+winresource = "=0.1.17"
 
 # X11 keymap query for the physical-ctrl bridge (left-ctrl chords under DE
 # modifier grabs): already in the tree as winit's X11 backend, so this adds
@@ -133,9 +58,8 @@ x11rb = { version = "0.13", features = ["xkb"] }
 [target.'cfg(all(unix, not(target_os = "macos")))'.dev-dependencies]
 x11rb = { version = "0.13", features = ["xtest", "xkb"] }
 
-# wasm CPU work (lyon tessellation, cosmic-text shaping, glyph atlas
-# uploads) runs per frame — LTO + one codegen unit measurably cut the
-# per-frame cost on the web build, and the desktop binary shrinks too.
+# Per-frame CPU work (lyon tessellation, cosmic-text shaping, glyph atlas
+# uploads) shrinks measurably under LTO + one codegen unit.
 [profile.release]
 lto = "fat"
 codegen-units = 1

@@ -3,16 +3,10 @@
 //! Shared dark palette. The on-screen canvas and the SVG exporter use the
 //! same values so `:export` matches what you see.
 
-/// The editor/diagram monospace font. Desktop resolves `Font::MONOSPACE`
-/// through the system font set; the web build has no system fonts at all,
-/// so there the family names the EMBEDDED DejaVu Sans Mono (loaded in
-/// main via `.font(..)`) — same glyphs, same 0.6 advance ratio.
+/// The editor/diagram monospace font: resolved through the system font
+/// set.
 pub fn mono() -> iced::Font {
-    if cfg!(target_arch = "wasm32") {
-        iced::Font::with_name("DejaVu Sans Mono")
-    } else {
-        iced::Font::MONOSPACE
-    }
+    iced::Font::MONOSPACE
 }
 
 pub const BG: iced::Color = iced::Color::from_rgb(0.063, 0.071, 0.086); // #101216

@@ -11,11 +11,6 @@ fn fontdb() -> Arc<usvg::fontdb::Database> {
     static DB: OnceLock<Arc<usvg::fontdb::Database>> = OnceLock::new();
     DB.get_or_init(|| {
         let mut db = usvg::fontdb::Database::new();
-        // The web build has no system fonts: the embedded editor mono face
-        // is the whole font set (and the generic-family target).
-        #[cfg(target_arch = "wasm32")]
-        db.load_font_data(crate::MONO_TTF.to_vec());
-        #[cfg(not(target_arch = "wasm32"))]
         db.load_system_fonts();
         // Point the generic `monospace` family at a font that actually exists.
         const PREFERRED: [&str; 6] = [

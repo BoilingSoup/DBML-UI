@@ -177,7 +177,7 @@ enum AddStage {
 pub struct YankFlash {
     pub start: (usize, usize),
     pub end: (usize, usize),
-    pub started: web_time::Instant,
+    pub started: std::time::Instant,
 }
 
 pub struct Editor {
@@ -2621,7 +2621,7 @@ fn find_word_boundary(input: &str, from: usize, forward: bool) -> usize {
         self.yank_flash = Some(YankFlash {
             start,
             end,
-            started: web_time::Instant::now(),
+            started: std::time::Instant::now(),
         });
     }
 

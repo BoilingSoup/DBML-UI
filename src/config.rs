@@ -82,7 +82,6 @@ impl Default for Config {
 pub const RECENT_CAP: usize = 8;
 
 impl Config {
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn path() -> std::path::PathBuf {
         #[cfg(test)]
         if let Ok(g) = CONFIG_PATH_OVERRIDE.lock() {
@@ -102,8 +101,7 @@ impl Config {
         dir.join("dbml-ui").join("config")
     }
 
-    /// Parse the key=value store text (shared by the desktop file and
-    /// the web build's IndexedDB record).
+    /// Parse the key=value store text.
     pub fn from_text(text: &str) -> Config {
         let mut c = Config::default();
         for line in text.lines() {
@@ -123,22 +121,15 @@ impl Config {
 
     pub fn load() -> Config {
         let _g = CONFIG_ENV_LOCK.lock();
-        #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
         let mut c = Config::default();
-        // the web build has no file system: its config rides the
-        // IndexedDB record (see web.rs)
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let Ok(text) = std::fs::read_to_string(Self::path()) else {
-                return c;
-            };
-            c = Self::from_text(&text);
-        }
+        let Ok(text) = std::fs::read_to_string(Self::path()) else {
+            return c;
+        };
+        c = Self::from_text(&text);
         c
     }
 
-    /// The key=value store text (the web build persists this string; the
-    /// desktop writes it to the config file).
+    /// The key=value store text (written to the config file).
     pub fn to_text(&self) -> String {
         let mut out = format!(
             "vim={}\nfmt_on_save={}\n",
@@ -154,11 +145,6 @@ impl Config {
     }
 
     pub fn save(&self) {
-        // the web build persists the settings text in its IndexedDB
-        // record (alongside the autosaved state)
-        #[cfg(target_arch = "wasm32")]
-        crate::web::save_config(&self.to_text());
-        #[cfg(not(target_arch = "wasm32"))]
         {
             let _g = CONFIG_ENV_LOCK.lock();
             let p = Self::path();

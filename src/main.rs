@@ -4,15 +4,6 @@
 mod app;
 #[cfg(all(unix, not(target_os = "macos")))]
 mod platform;
-// The web build has no X keymap to query: `None` is the documented
-// "inert" answer (the same as Wayland/no-X on the desktop), so every
-// physical-ctrl bridge call site falls back to its tracked switch.
-#[cfg(target_arch = "wasm32")]
-mod platform {
-    pub fn ctrl_held() -> Option<bool> {
-        None
-    }
-}
 mod canvas;
 mod clipboard;
 mod config;
@@ -20,13 +11,9 @@ mod editor;
 mod session;
 mod theme;
 mod view;
-#[cfg(target_arch = "wasm32")]
-mod web;
 
 /// The window/taskbar icon: icons/app-icon-128.png (the favicon mark)
-/// decoded at boot. The web build skips it — the browser tab carries the
-/// favicon instead.
-#[cfg(not(target_arch = "wasm32"))]
+/// decoded at boot.
 fn window_icon() -> Option<iced::window::Icon> {
     let png = include_bytes!("../icons/app-icon-128.png");
     let img = image::load_from_memory(png).ok()?.into_rgba8();
@@ -34,39 +21,9 @@ fn window_icon() -> Option<iced::window::Icon> {
     iced::window::icon::from_rgba(img.into_raw(), width, height).ok()
 }
 
-#[cfg(target_arch = "wasm32")]
-fn window_icon() -> Option<iced::window::Icon> {
-    None
-}
-
 fn main() -> Result<(), iced::Error> {
     let run = || -> Result<(), iced::Error> {
         // dbml-ui [FILE]
-        #[cfg(target_arch = "wasm32")]
-        {
-            std::panic::set_hook(Box::new(console_error_panic_hook::hook));
-            // iced/wgpu log their boot diagnostics (adapter selection,
-            // backend failures) through the `log` crate: without a
-            // logger those go nowhere on the web, and the adapter chain
-            // is exactly what a dead canvas needs diagnosed
-            struct ConsoleLog;
-            impl log::Log for ConsoleLog {
-                fn enabled(&self, meta: &log::Metadata) -> bool {
-                    meta.level() <= log::Level::Info
-                }
-                fn log(&self, record: &log::Record) {
-                    let line = format!("[{}] {}", record.level(), record.args());
-                    web_sys::console::log_1(&line.into());
-                }
-                fn flush(&self) {}
-            }
-            let _ = log::set_logger(&ConsoleLog).map(|_| {
-                log::set_max_level(log::LevelFilter::Info)
-            });
-            // the pagehide/visibilitychange autosave flush: the gap
-            // closer between the 2s tick and a refresh
-            web::install_flush_hook();
-        }
         let restarted = std::env::var_os("DBML_UI_RESTARTED").is_some();
         let arg_file = std::env::args().nth(1);
         // an explicit file argument opens as-is; everything else starts
@@ -105,10 +62,9 @@ fn main() -> Result<(), iced::Error> {
         // the window title follows the active tab's file
         iced::application(|app: &app::App| app.window_title(), app::update, view::root)
             .theme(|_| theme::app())
-            // the web build's embedded faces: no system fonts exist there.
-            // The regular weights come from iced's fira-sans feature; the
-            // bold/semibold weights of both families ride along so weight
-            // selects don't render blank
+            // the embedded faces: the mono family for the editor, and the
+            // bold/semibold weights of both families so weight selects
+            // render even where system fonts lack those weights
             .font(dbml_ui::MONO_TTF)
             .font(dbml_ui::MONO_TTF_BOLD)
             .font(dbml_ui::FIRA_SANS_BOLD)
@@ -131,8 +87,7 @@ fn main() -> Result<(), iced::Error> {
                 // the auto-close (the dialog vanished once that way)
                 exit_on_close_request: false,
                 // the favicon mark as the window/taskbar icon: the 128px
-                // PNG decoded at boot (the web build has no window icon —
-                // the browser tab carries the favicon instead)
+                // PNG decoded at boot
                 icon: window_icon(),
                 ..Default::default()
             })
@@ -144,24 +99,14 @@ fn main() -> Result<(), iced::Error> {
                     id.map(iced::window::gain_focus)
                         .unwrap_or_else(iced::Task::none)
                 });
-                // the web session restores from IndexedDB (the last
-                // autosave); the desktop boots as-is
-                #[cfg(target_arch = "wasm32")]
-                let restore = web::load_boot().map(
-                    |boot| crate::app::Message::WebRestored(boot.config, boot.session),
-                );
-                #[cfg(not(target_arch = "wasm32"))]
-                let restore = iced::Task::none();
-                (app, iced::Task::batch([restore, focus]))
+                (app, focus)
             })
     };
     // wgpu 0.19 PANICS (no error path) when the GPU device dies under a
     // live surface — which happens when the screen blanks / the machine
     // suspends and the driver drops the device ("Parent device is lost" at
     // the next frame). The next process initializes wgpu cleanly, so this
-    // specific panic restarts the app once instead of dying. Desktop only:
-    // wasm panics abort (no unwinding) and there is nothing to restart.
-    #[cfg(not(target_arch = "wasm32"))]
+    // specific panic restarts the app once instead of dying.
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)) {
         Ok(result) => result,
         Err(panic) => {
@@ -191,19 +136,15 @@ fn main() -> Result<(), iced::Error> {
             std::panic::resume_unwind(panic)
         }
     }
-
-    #[cfg(target_arch = "wasm32")]
-    run()
 }
 
 /// The wgpu panic signatures that mean "the GPU device died under us"
 /// (screen blank, suspend, driver reset): nothing else should restart.
-#[cfg(not(target_arch = "wasm32"))]
 fn is_gpu_device_loss(message: &str) -> bool {
     message.contains("Parent device is lost") || message.contains("Surface::get_current_texture")
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
 mod tests {
     use super::is_gpu_device_loss;
 

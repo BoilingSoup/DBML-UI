@@ -7,7 +7,7 @@ use crate::editor::buffer::Pos;
 use crate::editor::Mode;
 use crate::theme;
 use std::cell::Cell;
-use web_time::Instant;
+use std::time::Instant;
 use iced::widget::canvas::{self, Text};
 use iced::{Color, Font, Point, Rectangle, Size};
 
