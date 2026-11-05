@@ -26,22 +26,34 @@ fn main() -> Result<(), iced::Error> {
         // dbml-ui [FILE]
         let restarted = std::env::var_os("DBML_UI_RESTARTED").is_some();
         let arg_file = std::env::args().nth(1);
+        // persisted preferences (vim/Regular) + recent files load FIRST:
+        // open_file records the recent file and saves the config — doing
+        // that on the default config clobbered the user's saved vim/fmt
+        // preferences on every `dbml-ui FILE` launch
+        let mut app = app::App::default();
+        app.config = config::Config::load();
         // an explicit file argument opens as-is; everything else starts
         // from the splash screen
         let mut app = match &arg_file {
-            Some(path) => {
-                let mut app = app::App::default();
-                if let Err(e) = app.open_file(path) {
-                    eprintln!("cannot open {path}: {e}");
-                    app::App::default()
-                } else {
+            Some(path) => match app.open_file(path) {
+                Ok(()) => {
+                    // the editing mode is a global preference: a CLI-arg
+                    // tab opens in the configured mode, like every other
+                    // open path
+                    app.editor_mut().mode = if app.config.vim {
+                        editor::Mode::Normal
+                    } else {
+                        editor::Mode::Insert
+                    };
                     app
                 }
-            }
+                Err(e) => {
+                    eprintln!("cannot open {path}: {e}");
+                    app::App::default()
+                }
+            },
             None => app::App::blank_start(),
         };
-        // persisted preferences (vim/Regular) + recent files
-        app.config = config::Config::load();
         // Restore rules (no file argument):
         // - a clean-exit record reopens its files from disk on ANY start
         //   (a purposeful close remembered them); paths that fail —

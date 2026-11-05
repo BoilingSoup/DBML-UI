@@ -1160,6 +1160,28 @@ fn find_word_boundary(input: &str, from: usize, forward: bool) -> usize {
     }
 
     fn dispatch_normal(&mut self, key: KeyEvent, m: KeyModifiers) -> Action {
+        let action = self.dispatch_normal_match(key, m);
+        // vim never rests the cursor on the document's EOL marker: the
+        // empty last row a trailing newline stores is not a line, so a
+        // motion that landed there (j past the end, a search, a jump)
+        // clamps back onto the last content line — dd then operates on
+        // the line the cursor visibly sits on, never the brace above an
+        // empty-looking row.
+        if self.mode == Mode::Normal {
+            let (row, col) = self.buf.cursor();
+            let marker_row = self.buf.line_count().saturating_sub(1);
+            let has_marker =
+                marker_row > 0 && self.buf.line(marker_row).is_empty();
+            if has_marker && row == marker_row {
+                let last = self.buf.last_content_row();
+                let col = col.min(self.buf.line_len(last));
+                self.buf.move_cursor(CursorMove::Jump(last, col));
+            }
+        }
+        action
+    }
+
+    fn dispatch_normal_match(&mut self, key: KeyEvent, m: KeyModifiers) -> Action {
         match key.code {
             KeyCode::Delete => self.x_delete(),
             // jumplist navigation (vim: Ctrl+O back, Ctrl+I forward; Tab
@@ -1537,11 +1559,16 @@ fn find_word_boundary(input: &str, from: usize, forward: bool) -> usize {
                 self.record_jump();
                 match count {
                     Some(line) => {
-                        let rows = self.buf.lines().len().max(1);
-                        let row = (line as usize).saturating_sub(1).min(rows - 1);
+                        let row = (line as usize)
+                            .saturating_sub(1)
+                            .min(self.buf.last_content_row());
                         self.buf.move_cursor(CursorMove::Jump(row, 0));
                     }
-                    None => self.buf.move_cursor(CursorMove::Bottom),
+                    // the last line is the last CONTENT line — the EOL
+                    // marker row below it is not a cursor destination
+                    None => self
+                        .buf
+                        .move_cursor(CursorMove::Jump(self.buf.last_content_row(), 0)),
                 }
             }
             // n$ moves to the end of the (n-1)th line below; the aim goes
@@ -3372,6 +3399,41 @@ mod tests {
         e.handle_key(key('d'));
         e.handle_key(key('d'));
         assert_eq!(e.text(), "one\ntwo\n");
+    }
+
+    #[test]
+    fn motions_never_rest_on_the_eol_marker_row() {
+        // a trailing newline stores an empty last row — the file's EOL
+        // marker, not a line. G lands on the last CONTENT line (the
+        // cursor visibly sits on the brace), j past the end stays put,
+        // and dd deletes the line the cursor is on — never the marker
+        // row's "contents"
+        let mut e = editor("one\n}\n");
+        e.handle_key(key('G'));
+        assert_eq!(e.buf.pos(), Pos { row: 1, col: 0 }, "G: last content line");
+        e.handle_key(key('j'));
+        e.handle_key(key('j'));
+        assert_eq!(e.buf.pos(), Pos { row: 1, col: 0 }, "j stays on the last line");
+        e.handle_key(key('d'));
+        e.handle_key(key('d'));
+        assert_eq!(e.text(), "one\n");
+
+        // a real empty line before the marker is still a line: G lands
+        // on it, not on the content line above
+        let mut e = editor("one\n\n\n");
+        e.handle_key(key('G'));
+        assert_eq!(e.buf.pos(), Pos { row: 1, col: 0 });
+
+        // no trailing newline: no marker, G is the plain last row
+        let mut e = editor("one\n}");
+        e.handle_key(key('G'));
+        assert_eq!(e.buf.pos(), Pos { row: 1, col: 0 });
+
+        // [count]G clamps to the last content line too
+        let mut e = editor("one\n}\n");
+        e.handle_key(key('9'));
+        e.handle_key(key('G'));
+        assert_eq!(e.buf.pos(), Pos { row: 1, col: 0 });
     }
 
     #[test]

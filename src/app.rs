@@ -1843,7 +1843,7 @@ impl App {
     /// the pointer and start the drag (MouseMovedWindow extends,
     /// MouseReleased finalizes).
     fn editor_select_pressed(&mut self, local: Point) {
-        let pos = crate::canvas::editor::px_to_pos(self, local);
+        let pos = self.clamped_click_pos(local);
         self.editor_mut().buf.cancel_selection();
         self.editor_mut()
             .buf
@@ -1866,11 +1866,28 @@ impl App {
     /// under the (canvas-local) pointer. Points outside the pane (the
     /// drag left it) clamp to the buffer edges via px_to_pos.
     fn editor_select_moved(&mut self, local: Point) {
-        let pos = crate::canvas::editor::px_to_pos(self, local);
+        let pos = self.clamped_click_pos(local);
         self.editor_mut()
             .buf
             .move_cursor(editor::buffer::Move::Jump(pos.row, pos.col));
         self.follow_cursor_horizontal();
+    }
+
+    /// The buffer position a click targets, with the rows below the
+    /// document folded onto the last content line's end: the EOL-marker
+    /// row a trailing newline stores — and the horizontal scrollbar's
+    /// reserved empty space under it — look like blank lines but are not
+    /// lines, so clicking them edits at the end of the real last line
+    /// (VS Code's click-below-the-document behavior) instead of parking
+    /// the cursor on a row whose dd would eat the brace above it.
+    fn clamped_click_pos(&mut self, local: Point) -> crate::editor::buffer::Pos {
+        let mut pos = crate::canvas::editor::px_to_pos(self, local);
+        let last = self.editor().buf.last_content_row();
+        if pos.row > last {
+            pos.row = last;
+            pos.col = self.editor().buf.line_len(last);
+        }
+        pos
     }
 
     /// Selection-drag end: finalize. A click that never extended the

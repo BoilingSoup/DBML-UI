@@ -159,6 +159,20 @@ impl Buffer {
         self.lines.len()
     }
 
+    /// The last CONTENT line's row: a document stored with a trailing
+    /// newline keeps that newline as an empty last row (the file's EOL
+    /// marker), which vim never shows as a line nor rests the cursor on.
+    /// Motions and click targeting clamp here — the empty row below the
+    /// document (and the horizontal scrollbar's reserved space under it)
+    /// is not a cursor destination.
+    pub fn last_content_row(&self) -> usize {
+        if self.lines.len() > 1 && self.lines.last().is_some_and(|l| l.is_empty()) {
+            self.lines.len() - 2
+        } else {
+            self.lines.len() - 1
+        }
+    }
+
     /// Normalized selection range (start inclusive, end exclusive), if a
     /// selection is active.
     ///

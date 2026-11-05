@@ -644,6 +644,15 @@ impl canvas::Program<Message> for EditorView<'_> {
 
         // gutter + text, token-colored
         let src = app.source();
+        // the EOL-marker row (the empty last row a trailing newline
+        // stores) is not a line: it gets no gutter number, so the
+        // blank-looking space below the document — scrollbar reserve
+        // included — never reads as a line the file contains
+        let marker_row = if lines.len() > 1 && lines.last().is_some_and(|l| l.is_empty()) {
+            Some(lines.len() - 1)
+        } else {
+            None
+        };
         // byte offset of each line start in `source` (highlight spans index it)
         let mut line_start = 0usize;
         let mut line_starts = Vec::with_capacity(lines.len());
@@ -660,7 +669,9 @@ impl canvas::Program<Message> for EditorView<'_> {
                     if m.warn { theme::WARN } else { theme::ERR },
                 );
             }
-            gutter_number(&mut frame, i, text_y);
+            if Some(i) != marker_row {
+                gutter_number(&mut frame, i, text_y);
+            }
             if !line.is_empty() {
                 let ls = line_starts[i];
                 let le = ls + line.len();
