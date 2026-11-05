@@ -514,13 +514,6 @@ pub struct Diagram<'a> {
     pub edge_anim: &'a [f32],
     /// Animation clock in seconds; advances the dash-flow phase.
     pub clock: f32,
-    /// The popup card scroll offsets (px below each card's top): the
-    /// wheel over an open popup scrolls the card, not the canvas. The
-    /// popups draw in THIS widget (unlayered — canvas text inside a
-    /// `with_layer` layer renders nothing on iced 0.13's WebGL2 backend).
-    pub field_card_scroll: f32,
-    pub table_card_scroll: f32,
-    pub group_card_scroll: f32,
 }
 
 impl canvas::Program<crate::app::Message> for Diagram<'_> {
@@ -623,27 +616,6 @@ impl canvas::Program<crate::app::Message> for Diagram<'_> {
                 drag_edges: self.drag_edges.as_deref(),
             },
         );
-
-        // the popups draw HERE, in the unlayered diagram canvas: canvas
-        // geometry text inside a `with_layer` layer renders nothing on
-        // iced 0.13's WebGL2 backend (the pane stack layers its children
-        // 1+), while this widget's own canvas text renders fine — the
-        // tables prove it. One widget for chrome + text keeps the
-        // z-order: this widget's meshes (chrome) composite before its
-        // text.
-        if let Some(p) = self.hover {
-            draw_active_popup(
-                self.layout,
-                self.zoom,
-                self.pan,
-                p,
-                bounds,
-                self.field_card_scroll,
-                self.table_card_scroll,
-                self.group_card_scroll,
-                &mut frame,
-            );
-        }
 
         vec![frame.into_geometry()]
     }
@@ -2959,9 +2931,6 @@ mod interaction_tests {
             drag_group: None,
             drag_note: None,
             drag_edges: None,
-            field_card_scroll: 0.0,
-            table_card_scroll: 0.0,
-            group_card_scroll: 0.0,
         }
     }
 
@@ -4007,6 +3976,13 @@ pub struct DiagramOverlay<'a> {
     pub layout: &'a Layout,
     pub zoom: f32,
     pub pan: Vector,
+    /// Cursor position over the canvas (local px), as `Diagram::hover`.
+    pub hover: Option<Point>,
+    /// The popup card scroll offsets (px below each card's top): the
+    /// wheel over an open popup scrolls the card, not the canvas.
+    pub field_card_scroll: f32,
+    pub table_card_scroll: f32,
+    pub group_card_scroll: f32,
 }
 
 impl canvas::Program<crate::app::Message> for DiagramOverlay<'_> {
@@ -4073,18 +4049,36 @@ impl canvas::Program<crate::app::Message> for DiagramOverlay<'_> {
         bounds: Rectangle,
         _cursor: iced::mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
-        // the popups moved into the Diagram widget (unlayered canvas text
-        // renders fine here, but nothing renders inside a `with_layer`
-        // layer on iced 0.13's WebGL2 backend — chrome included)
-        let frame = canvas::Frame::new(renderer, bounds.size());
+        // the popups draw in THIS stacked widget, above the Diagram
+        // widget's chrome: one canvas geometry flattens into a mesh pass
+        // (everything) + a text pass (everything), so popup chrome drawn
+        // into the base widget's frame would land under every table's
+        // text. A second widget composites wholly after the first — the
+        // popup (chrome + text) rides on top of everything again.
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        if let Some(p) = self.hover {
+            draw_active_popup(
+                self.layout,
+                self.zoom,
+                self.pan,
+                p,
+                bounds,
+                self.field_card_scroll,
+                self.table_card_scroll,
+                self.group_card_scroll,
+                &mut frame,
+            );
+        }
         vec![frame.into_geometry()]
     }
 }
 
 /// Draws the popup under the pointer (chrome + text) into the given
-/// canvas frame. Called from the Diagram widget's own draw: canvas text
-/// inside a `with_layer` layer renders nothing on iced 0.13's WebGL2
-/// backend, so the popups live in the unlayered diagram canvas instead.
+/// canvas frame. Called from the DiagramOverlay widget's own draw: the
+/// overlay stacks above the Diagram widget, so the popup's chrome and
+/// text composite wholly after the base canvas — one geometry flattens
+/// into a mesh pass + a text pass, which would sink popup chrome under
+/// every table's text inside the base widget's frame.
 fn draw_active_popup(
     layout: &Layout,
     zoom: f32,

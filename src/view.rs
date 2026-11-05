@@ -197,10 +197,6 @@ pub fn root(app: &App) -> Element<'_, Message> {
             selected_note: app.selected_note.clone(),
             edge_anim: &app.cur().edge_anim,
             clock: app.anim_clock,
-            // the popups draw in this widget (see DiagramOverlay's note)
-            field_card_scroll: app.field_card_scroll,
-            table_card_scroll: app.table_card_scroll,
-            group_card_scroll: app.group_card_scroll,
         })
         .width(Fill)
         .height(Fill),
@@ -208,6 +204,19 @@ pub fn root(app: &App) -> Element<'_, Message> {
             layout: app.diagram(),
             zoom: app.cur().zoom,
             pan: app.cur().pan,
+            // the popups draw in this stacked widget (see DiagramOverlay's
+            // draw note): the same gated hover the chrome uses
+            hover: if app.drag == Drag::None
+                && !app.modal_open()
+                && !app.pointer_in_export_dropdown()
+            {
+                app.canvas_cursor
+            } else {
+                None
+            },
+            field_card_scroll: app.field_card_scroll,
+            table_card_scroll: app.table_card_scroll,
+            group_card_scroll: app.group_card_scroll,
         })
         .width(Fill)
         .height(Fill),
