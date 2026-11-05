@@ -66,9 +66,7 @@ impl TextRenderer {
 
         let resolution = viewport.resolution();
 
-        let areas: Vec<_> = text_areas.into_iter().collect();
-
-        for text_area in &areas {
+        for text_area in text_areas {
             for run in text_area.buffer.layout_runs() {
                 for glyph in run.glyphs.iter() {
                     let physical_glyph =
@@ -270,12 +268,10 @@ impl TextRenderer {
 
         let will_render = !self.glyph_vertices.is_empty();
         if !will_render {
-            log::warn!(
-                "glyphon prepare: 0 glyphs ({} text areas)",
-                areas.len()
-            );
             return Ok(());
         }
+
+
 
         let vertices = self.glyph_vertices.as_slice();
         let vertices_raw = unsafe {

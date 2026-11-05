@@ -21,19 +21,24 @@ iced_glyphon = { path = "vendor/iced_glyphon" }
 [dependencies]
 anyhow = "1.0.104"
 # The renderer is per-target: the desktop keeps wgpu (added below), the
-# web build renders with tiny-skia (software). The wgpu-WebGL2 groundwork
-# is DONE and kept ready (see the vendored iced_wgpu/iced_glyphon and the
-# wgpu dep below) — but iced 0.13 cannot ship it: canvas-geometry TEXT
-# inside a `with_layer` layer does not render on the WebGL2 backend (the
-# diagram's popups/pills are canvas text in the pane stack's layered
-# children; on the desktop's native wgpu the same code renders fine).
-# Flipping the wasm `iced` feature to "wgpu" re-enables the GPU chain
-# once upstream fixes text-in-layers on WebGL2. `fira-sans` embeds the
-# default UI font (the web has no system-font scan).
+# web build renders with the GPU WebGL2 chain (see the vendored
+# iced_wgpu/iced_glyphon and the wgpu dep below — WebGPU when the browser
+# has it, WebGL2 otherwise, tiny-skia software as the last fallback).
+# The popups' text renders through widget paragraphs (PopupTextLayer)
+# because canvas geometry text does not render inside `with_layer` layers
+# on iced 0.13's WebGL2 backend. `advanced` enables the custom-widget
+# API; `fira-sans` embeds the default UI font (the web has no
+# system-font scan).
+# `web-colors` (browser composites in sRGB; the native gamma pipeline
+# writes linear text colors, which the WebGL2 surface rendered washed-out
+# at ~6% alpha) is enabled for the wasm build by the [target.'cfg(...)']
+# block below.
 iced = { version = "=0.13.1", default-features = false, features = [
+    "advanced",
     "canvas",
     "smol",
     "svg",
+    "wgpu",
     "tiny-skia",
     "fira-sans",
 ] }
@@ -52,6 +57,9 @@ web-time = "1"
 # wasm32-unknown-unknown backend, rfd drives GTK, arboard drives the
 # system clipboard. The web build cfg-gates every use site.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+# browser composites in sRGB: the native gamma pipeline writes linear
+# text colors, which the WebGL2 surface rendered washed-out (~6% alpha)
+iced = { version = "=0.13.1", features = ["web-colors"] }
 web-sys = { version = "0.3", features = [
     "console",
     "Blob",

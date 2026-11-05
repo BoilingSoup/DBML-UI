@@ -17,7 +17,7 @@
       console[m] = (...a) => {
         try {
           keep.push(m + ": " + a.map(x => (typeof x === "string" ? x : String(x)).slice(0, 300)).join(" "));
-          if (keep.length > 60) keep.shift();
+          if (keep.length > 900) keep.shift();
           sessionStorage.__boot = JSON.stringify(keep);
         } catch {}
         orig(...a);

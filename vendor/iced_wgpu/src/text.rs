@@ -351,10 +351,6 @@ impl Pipeline {
                             // If the atlas cannot grow, then all bets are off.
                             // Instead of panicking, we will just pray that the result
                             // will be somewhat readable...
-                            log::warn!(
-                                "text prepare AtlasFull (layer {})",
-                                self.prepare_layer
-                            );
                         }
                     }
                 }
@@ -621,7 +617,30 @@ fn prepare(
 
             let clip_bounds = layer_bounds.intersection(
                 &(clip_bounds * transformation * layer_transformation),
-            )?;
+            );
+
+            #[cfg(target_arch = "wasm32")]
+            {
+                let (raw, alive) = match section {
+                    Text::Paragraph { paragraph, .. } => {
+                        (true, paragraph.upgrade().is_some())
+                    }
+                    _ => (false, true),
+                };
+                let intersect = clip_bounds
+                    .map(|c| format!("({},{},{},{})", c.x, c.y, c.width, c.height));
+                let raw_clip = match section {
+                    Text::Paragraph { clip_bounds, .. } => {
+                        format!("({},{},{},{})", clip_bounds.x, clip_bounds.y, clip_bounds.width, clip_bounds.height)
+                    }
+                    _ => String::from("-"),
+                };
+                log::warn!(
+                    "AREA para={} alive={} pos=({},{}) raw_clip={} intersect={:?}",
+                    raw, alive, left, top, raw_clip, intersect,
+                );
+            }
+            let clip_bounds = clip_bounds?;
 
             Some(glyphon::TextArea {
                 buffer,

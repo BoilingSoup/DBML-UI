@@ -514,6 +514,13 @@ pub struct Diagram<'a> {
     pub edge_anim: &'a [f32],
     /// Animation clock in seconds; advances the dash-flow phase.
     pub clock: f32,
+    /// The popup card scroll offsets (px below each card's top): the
+    /// wheel over an open popup scrolls the card, not the canvas. The
+    /// popups draw in THIS widget (unlayered — canvas text inside a
+    /// `with_layer` layer renders nothing on iced 0.13's WebGL2 backend).
+    pub field_card_scroll: f32,
+    pub table_card_scroll: f32,
+    pub group_card_scroll: f32,
 }
 
 impl canvas::Program<crate::app::Message> for Diagram<'_> {
@@ -616,6 +623,27 @@ impl canvas::Program<crate::app::Message> for Diagram<'_> {
                 drag_edges: self.drag_edges.as_deref(),
             },
         );
+
+        // the popups draw HERE, in the unlayered diagram canvas: canvas
+        // geometry text inside a `with_layer` layer renders nothing on
+        // iced 0.13's WebGL2 backend (the pane stack layers its children
+        // 1+), while this widget's own canvas text renders fine — the
+        // tables prove it. One widget for chrome + text keeps the
+        // z-order: this widget's meshes (chrome) composite before its
+        // text.
+        if let Some(p) = self.hover {
+            draw_active_popup(
+                self.layout,
+                self.zoom,
+                self.pan,
+                p,
+                bounds,
+                self.field_card_scroll,
+                self.table_card_scroll,
+                self.group_card_scroll,
+                &mut frame,
+            );
+        }
 
         vec![frame.into_geometry()]
     }
@@ -2931,7 +2959,9 @@ mod interaction_tests {
             drag_group: None,
             drag_note: None,
             drag_edges: None,
-
+            field_card_scroll: 0.0,
+            table_card_scroll: 0.0,
+            group_card_scroll: 0.0,
         }
     }
 
@@ -3384,13 +3414,13 @@ fn draw_popup_chrome(
         ),
         Color::from_rgba8(0x3a, 0x3c, 0x42, 0.98),
     );
-    frame.fill_rectangle(
-        Point::new(g.x, g.y + g.header_h),
-        Size::new(g.w, 1.0),
+    frame.fill(
+        &Path::rectangle(
+            Point::new(g.x + 0.5, g.y + g.header_h),
+            Size::new(g.w - 1.0, 1.0),
+        ),
         border,
     );
-    // the header glyph (their w-3 h-3 svg, gray-50), then the title
-    // 6px after it (their gap-1.5)
     let icon_size = if icon == PopupIcon::Group { 13.0 } else { 12.0 } * k;
     let icon_cx = g.x + POPUP_PAD_X * k + icon_size * 0.5;
     let icon_cy = g.y + g.header_h * 0.5;
@@ -3411,10 +3441,6 @@ fn draw_popup_chrome(
         ..Default::default()
     });
     if let Some((text, color)) = sub {
-        // the name advance is measured with the shared advance classes —
-        // the old flat per-char factor both overshot (a dead gap before
-        // the type) and undershot (the type sliding under the name)
-        // depending on the name's letters
         let name_w = semibold_px(title, 0.7 * zoom);
         frame.fill_text(Text {
             content: text.to_string(),
@@ -3971,25 +3997,16 @@ fn picker_glyph_hovered(layout: &Layout, zoom: f32, pan: Vector, p: Point) -> bo
         || super::groups::group_icon_hit(layout, zoom, pan, p).is_some()
 }
 
-/// The diagram's marker/note/enum-pill tooltip as its own canvas widget,
-/// STACKED above the diagram canvas: iced flattens one widget's geometries
-/// into a mesh pass + a text pass, so a second-geometry tooltip pill painted
-/// behind the box row text. Separate widgets composite fully in order.
+/// The diagram pane's event capture: the wheel over an open popup card
+/// scrolls the CARD, not the canvas (dbdiagram's popup scrolls too). The
+/// popups themselves draw in the Diagram widget — canvas text inside a
+/// `with_layer` layer renders nothing on iced 0.13's WebGL2 backend, and
+/// this widget IS layered (the pane stack layers children 1+), so its
+/// draw is intentionally empty.
 pub struct DiagramOverlay<'a> {
     pub layout: &'a Layout,
     pub zoom: f32,
     pub pan: Vector,
-    /// Cursor position over the canvas (local px), as `Diagram::hover`.
-    pub hover: Option<Point>,
-    /// The field card's scroll offset (px below its top): the wheel over
-    /// a field-card row scrolls the card's body, not the canvas.
-    pub field_card_scroll: f32,
-    /// The table popup's scroll offset (wheel over the table's header
-    /// band while its popup is open).
-    pub table_card_scroll: f32,
-    /// The group popup's scroll offset (wheel over the group's band
-    /// while its popup is open).
-    pub group_card_scroll: f32,
 }
 
 impl canvas::Program<crate::app::Message> for DiagramOverlay<'_> {
@@ -4056,103 +4073,108 @@ impl canvas::Program<crate::app::Message> for DiagramOverlay<'_> {
         bounds: Rectangle,
         _cursor: iced::mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
-        let mut frame = canvas::Frame::new(renderer, bounds.size());
-        let Some(p) = self.hover else {
-            return vec![frame.into_geometry()];
-        };
-        // the picker glyphs sit on the same header/band hover targets the
-        // popups below use: while one is under the pointer nothing pops
-        if picker_glyph_hovered(self.layout, self.zoom, self.pan, p) {
-            return vec![frame.into_geometry()];
-        }
-        // The left icon cluster and the field card compose: hovering a
-        // pk/fk/unique GLYPH pops that glyph's tooltip pill AND, when the
-        // row also qualifies, the field card — the card draws first, the
-        // pill on top. The note glyph raised by custom properties alone
-        // pops no pill (icon_tooltip_line already filtered it): the card
-        // below is that row's affordance. With a real `note` the pill
-        // shows the note text, again beside the card.
-        let icon_pill = icon_tooltip_line(self.layout, self.zoom, self.pan, p);
-        // the field card (dbdiagram's FieldTooltipPopup): hovering a
-        // column row shows a popup IFF the column has a note, an enum
-        // type, or a default — plain/nn/unique/pk/fk rows never pop.
-        // Content sections stack in their order: Note, Enum, Default.
-        let field_card: Option<(&TableBox, usize)> = {
-            let hovered = hit_test(self.layout, self.zoom, self.pan, p);
-            hovered.and_then(|b| {
-                row_at(self.layout, self.zoom, self.pan, p)
-                    .filter(|(hb, r)| hb.title == b.title && row_has_field_card(&b.rows[*r]))
-            })
-        };
-        if let Some((b, r)) = field_card {
-            draw_field_popup(
-                &mut frame,
-                self.layout,
-                b,
-                r,
-                self.zoom,
-                self.pan,
-                bounds,
-                self.field_card_scroll,
-            );
-            // the hovered glyph's tooltip pill rides on top of the card
-            if let Some(line) = icon_pill {
-                draw_tooltip_pill(&mut frame, &[line], p, self.zoom, bounds);
-            }
-            return vec![frame.into_geometry()];
-        }
-        // a glyph on a row the card never pops (a plain pk row, say)
-        // keeps today's behavior: its tooltip pill alone
-        if let Some(line) = icon_pill {
-            draw_tooltip_pill(&mut frame, &[line], p, self.zoom, bounds);
-            return vec![frame.into_geometry()];
-        }
-        // dbdiagram's table popup: hovering a table's HEADER band pops a
-        // card with the title and its Custom Properties (live-verified:
-        // `users` + owner/sla_hours/pii). Tables without custom properties
-        // never pop.
-        if let Some(b) = hit_test(self.layout, self.zoom, self.pan, p) {
-            let top_left = to_px(b.x, b.y, self.zoom, self.pan);
-            let s = cell_size(self.zoom);
-            let rowf = (p.y - top_left.y) / s.height;
-            if rowf < 1.0 && (!b.custom.is_empty() || b.note.is_some()) {
-                draw_table_popup(&mut frame, b, self.zoom, self.pan, bounds, self.table_card_scroll);
-                return vec![frame.into_geometry()];
-            }
-        }
-        // tooltip lines: the "Enum" pill shows the enum's definition (its
-        // name, then the values one per line). The cluster glyphs resolved
-        // above never reach this branch — every glyph hover returned at
-        // the card or pill branch (a pill-suppressed note glyph means
-        // custom properties, and that row always pops the card).
-        // a group's label hover pops the same card a column does — the
-        // Note section and the Custom Properties bullet list (the old
-        // pointer note pill duplicated the card's Note section)
-        if let Some(g) = super::groups::group_label_hit(self.layout, self.zoom, self.pan, p) {
-            if g.note.is_some() || !g.custom.is_empty() {
-                draw_group_popup(&mut frame, g, self.zoom, self.pan, bounds, self.group_card_scroll);
-                return vec![frame.into_geometry()];
-            }
-        }
-        let lines: Option<Vec<String>> =
-            if let Some((b, row)) = enum_hit(self.layout, self.zoom, self.pan, p) {
-                let ty = &b.rows[row].ty;
-                self.layout.enums.iter().find(|e| &e.name == ty).map(|e| {
-                    let mut lines = vec![e.name.clone()];
-                    let cap = 12; // keep the pill readable on huge enums
-                    lines.extend(e.values.iter().take(cap).cloned());
-                    if e.values.len() > cap {
-                        lines.push("\u{2026}".to_string());
-                    }
-                    lines
-                })
-            } else {
-                None
-            };
-        if let Some(lines) = lines {
-            draw_tooltip_pill(&mut frame, &lines, p, self.zoom, bounds);
-        }
+        // the popups moved into the Diagram widget (unlayered canvas text
+        // renders fine here, but nothing renders inside a `with_layer`
+        // layer on iced 0.13's WebGL2 backend — chrome included)
+        let frame = canvas::Frame::new(renderer, bounds.size());
         vec![frame.into_geometry()]
+    }
+}
+
+/// Draws the popup under the pointer (chrome + text) into the given
+/// canvas frame. Called from the Diagram widget's own draw: canvas text
+/// inside a `with_layer` layer renders nothing on iced 0.13's WebGL2
+/// backend, so the popups live in the unlayered diagram canvas instead.
+fn draw_active_popup(
+    layout: &Layout,
+    zoom: f32,
+    pan: Vector,
+    p: Point,
+    bounds: Rectangle,
+    field_scroll: f32,
+    table_scroll: f32,
+    group_scroll: f32,
+    frame: &mut canvas::Frame,
+) {
+    // the picker glyphs sit on the same header/band hover targets the
+    // popups below use: while one is under the pointer nothing pops
+    if picker_glyph_hovered(layout, zoom, pan, p) {
+        return;
+    }
+    // The left icon cluster and the field card compose: hovering a
+    // pk/fk/unique GLYPH pops that glyph's tooltip pill AND, when the
+    // row also qualifies, the field card — the card draws first, the
+    // pill on top. The note glyph raised by custom properties alone
+    // pops no pill (icon_tooltip_line already filtered it): the card
+    // below is that row's affordance. With a real `note` the pill
+    // shows the note text, again beside the card.
+    let icon_pill = icon_tooltip_line(layout, zoom, pan, p);
+    // the field card (dbdiagram's FieldTooltipPopup): hovering a
+    // column row shows a popup IFF the column has a note, an enum
+    // type, or a default — plain/nn/unique/pk/fk rows never pop.
+    // Content sections stack in their order: Note, Enum, Default.
+    let field_card: Option<(&TableBox, usize)> = {
+        let hovered = hit_test(layout, zoom, pan, p);
+        hovered.and_then(|b| {
+            row_at(layout, zoom, pan, p)
+                .filter(|(hb, r)| hb.title == b.title && row_has_field_card(&b.rows[*r]))
+        })
+    };
+    if let Some((b, r)) = field_card {
+        draw_field_popup(frame, layout, b, r, zoom, pan, bounds, field_scroll);
+        // the hovered glyph's tooltip pill rides on top of the card
+        if let Some(line) = icon_pill {
+            draw_tooltip_pill(frame, &[line], p, zoom, bounds);
+        }
+        return;
+    }
+    // a glyph on a row the card never pops (a plain pk row, say)
+    // keeps today's behavior: its tooltip pill alone
+    if let Some(line) = icon_pill {
+        draw_tooltip_pill(frame, &[line], p, zoom, bounds);
+        return;
+    }
+    // dbdiagram's table popup: hovering a table's HEADER band pops a
+    // card with the title and its Custom Properties (live-verified:
+    // `users` + owner/sla_hours/pii). Tables without custom properties
+    // never pop.
+    if let Some(b) = hit_test(layout, zoom, pan, p) {
+        let top_left = to_px(b.x, b.y, zoom, pan);
+        let s = cell_size(zoom);
+        let rowf = (p.y - top_left.y) / s.height;
+        if rowf < 1.0 && (!b.custom.is_empty() || b.note.is_some()) {
+            draw_table_popup(frame, b, zoom, pan, bounds, table_scroll);
+            return;
+        }
+    }
+    // a group's label hover pops the same card a column does — the
+    // Note section and the Custom Properties bullet list (the old
+    // pointer note pill duplicated the card's Note section)
+    if let Some(g) = super::groups::group_label_hit(layout, zoom, pan, p) {
+        if g.note.is_some() || !g.custom.is_empty() {
+            draw_group_popup(frame, g, zoom, pan, bounds, group_scroll);
+            return;
+        }
+    }
+    // the "Enum" pill shows the enum's definition (its name, then the
+    // values one per line)
+    let lines: Option<Vec<String>> =
+        if let Some((b, row)) = enum_hit(layout, zoom, pan, p) {
+            let ty = &b.rows[row].ty;
+            layout.enums.iter().find(|e| &e.name == ty).map(|e| {
+                let mut lines = vec![e.name.clone()];
+                let cap = 12; // keep the pill readable on huge enums
+                lines.extend(e.values.iter().take(cap).cloned());
+                if e.values.len() > cap {
+                    lines.push("\u{2026}".to_string());
+                }
+                lines
+            })
+        } else {
+            None
+        };
+    if let Some(lines) = lines {
+        draw_tooltip_pill(frame, &lines, p, zoom, bounds);
     }
 }
 
