@@ -391,6 +391,12 @@ impl geometry::frame::Backend for Frame {
     }
 
     fn draft(&mut self, clip_bounds: Rectangle) -> Frame {
+        // PATCH(dbml-ui): clamp to the parent's clip (see the
+        // iced_tiny_skia copy for the full note)
+        let clip_bounds = self
+            .clip_bounds
+            .intersection(&clip_bounds)
+            .unwrap_or_else(|| Rectangle::with_size(Size::ZERO));
         Frame::with_clip(clip_bounds)
     }
 

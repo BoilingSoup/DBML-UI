@@ -67,21 +67,6 @@ impl crate::graphics::Compositor for Compositor {
         )
         .expect("Create softbuffer surface for window");
 
-        // A 0x0 viewport is legal on the web: the window exists before the
-        // browser's first resize report (winit's ResizeObserver has not
-        // delivered yet). Build an empty surface without touching
-        // softbuffer; the Resized event reconfigures it.
-        if width == 0 || height == 0 {
-            let empty_mask = tiny_skia::Mask::new(1, 1).expect("Create clip mask");
-            return Surface {
-                window,
-                clip_mask: empty_mask,
-                layer_stack: VecDeque::new(),
-                background_color: Color::BLACK,
-                max_age: 0,
-            };
-        }
-
         let mut surface = Surface {
             window,
             clip_mask: tiny_skia::Mask::new(width, height)
@@ -102,9 +87,6 @@ impl crate::graphics::Compositor for Compositor {
         width: u32,
         height: u32,
     ) {
-        if width == 0 || height == 0 {
-            return;
-        }
         surface
             .window
             .resize(
@@ -156,6 +138,7 @@ pub fn new<W: compositor::Window>(
     let context = softbuffer::Context::new(Box::new(compatible_window) as _)
         .expect("Create softbuffer context");
 
+    log::info!("renderer: tiny-skia (software fallback)");
     Compositor { context, settings }
 }
 

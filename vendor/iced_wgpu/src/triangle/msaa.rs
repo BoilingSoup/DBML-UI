@@ -178,7 +178,6 @@ impl Blit {
             let ratio = Ratio {
                 u: region_size.width as f32 / targets.size.width as f32,
                 v: region_size.height as f32 / targets.size.height as f32,
-                _padding: [0.0; 2],
             };
 
             belt.write_buffer(
@@ -309,8 +308,4 @@ impl Targets {
 struct Ratio {
     u: f32,
     v: f32,
-    // Uniform buffer bindings must be 16-byte aligned on downlevel
-    // devices (WebGL2): pad the 8-byte ratio up to 16 (the shader side
-    // pads to match, see shader/blit.wgsl).
-    _padding: [f32; 2],
 }

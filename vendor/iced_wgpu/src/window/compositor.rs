@@ -54,48 +54,6 @@ impl Compositor {
         settings: Settings,
         compatible_window: Option<W>,
     ) -> Result<Self, Error> {
-        match Self::request_with(&settings, compatible_window.as_ref()).await {
-            Ok(compositor) => Ok(compositor),
-            Err(error) => {
-                // navigator.gpu can EXIST without yielding an adapter
-                // (Electron, Chrome on Linux without the flag): wgpu's
-                // Instance then commits to a WebGPU-only context and the
-                // adapter request fails outright, never reaching the GL
-                // (WebGL2) backend compiled in next to it. Retry without
-                // BROWSER_WEBGPU so the GL backend gets its turn.
-                #[cfg(target_arch = "wasm32")]
-                if settings.backends.contains(wgpu::Backends::BROWSER_WEBGPU) {
-                    log::warn!(
-                        "wgpu adapter request failed ({error}); retrying \
-                        without BROWSER_WEBGPU"
-                    );
-                    return match Self::request_with(
-                        &Settings {
-                            backends: settings.backends
-                                - wgpu::Backends::BROWSER_WEBGPU,
-                            ..settings
-                        },
-                        compatible_window.as_ref(),
-                    )
-                    .await
-                    {
-                        Ok(compositor) => Ok(compositor),
-                        Err(gl_error) => {
-                            log::warn!("GL fallback attempt failed too: {gl_error}");
-                            Err(gl_error)
-                        }
-                    };
-                }
-                Err(error)
-            }
-        }
-    }
-
-    async fn request_with<W: compositor::Window>(
-        settings: &Settings,
-        compatible_window: Option<&W>,
-    ) -> Result<Self, Error> {
-        let settings = *settings;
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: settings.backends,
             ..Default::default()
@@ -113,43 +71,9 @@ impl Compositor {
             log::info!("Available adapters: {available_adapters:#?}");
         }
 
-        // WebGL2's adapter lives IN the canvas context: the surface must
-        // exist before the adapter request. WebGPU adapters are
-        // surface-independent — and a wgpu surface only claims its canvas
-        // when created — so with BROWSER_WEBGPU requested the surface is
-        // DEFERRED until an adapter is found: creating it here would lock
-        // the canvas to a context type, and a browser advertising
-        // navigator.gpu without an adapter (Electron, Chrome on Linux)
-        // would then have no WebGL2 to fall back to either.
-        let deferred_surface = compatible_window.is_some()
-            && settings.backends.contains(wgpu::Backends::BROWSER_WEBGPU);
-        let make_surface = |instance: &wgpu::Instance| -> Option<wgpu::Surface<'static>> {
-            let window = compatible_window?;
-            let raw_display_handle = match window.display_handle() {
-                Ok(handle) => handle.as_raw(),
-                Err(_) => return None,
-            };
-            let raw_window_handle = match window.window_handle() {
-                Ok(handle) => handle.as_raw(),
-                Err(_) => return None,
-            };
-            // SAFETY: the window outlives the surface (iced holds it for
-            // the session) and the handles are valid for surface creation.
-            let target = wgpu::SurfaceTargetUnsafe::RawHandle {
-                raw_display_handle,
-                raw_window_handle,
-            };
-            unsafe { instance.create_surface_unsafe(target) }
-                .map_err(|error| {
-                    log::warn!("surface creation failed: {error}");
-                })
-                .ok()
-        };
-        let compatible_surface = if deferred_surface {
-            None
-        } else {
-            make_surface(&instance)
-        };
+        #[allow(unsafe_code)]
+        let compatible_surface = compatible_window
+            .and_then(|window| instance.create_surface(window).ok());
 
         let adapter_options = wgpu::RequestAdapterOptions {
             power_preference: wgpu::util::power_preference_from_env()
@@ -168,13 +92,6 @@ impl Compositor {
             .ok_or(Error::NoAdapterFound(format!("{:?}", adapter_options)))?;
 
         log::info!("Selected: {:#?}", adapter.get_info());
-
-        // an adapter exists: the deferred surface claims its canvas now
-        let compatible_surface = if compatible_surface.is_none() {
-            make_surface(&instance)
-        } else {
-            compatible_surface
-        };
 
         let (format, alpha_mode) = compatible_surface
             .as_ref()
@@ -286,7 +203,22 @@ pub async fn new<W: compositor::Window>(
     settings: Settings,
     compatible_window: W,
 ) -> Result<Compositor, Error> {
-    Compositor::request(settings, Some(compatible_window)).await
+    // PATCH(dbml-ui): boot diagnostics — name the adapter on success and
+    // log WHY the GPU path failed before the software fallback takes
+    // over (upstream the fallback is silent)
+    let result = Compositor::request(settings, Some(compatible_window)).await;
+    match &result {
+        Ok(compositor) => {
+            log::info!(
+                "renderer: wgpu (adapter: {})",
+                compositor.adapter.get_info().name
+            );
+        }
+        Err(error) => {
+            log::warn!("wgpu compositor init failed: {error}");
+        }
+    }
+    result
 }
 
 /// Presents the given primitives with the given [`Compositor`].

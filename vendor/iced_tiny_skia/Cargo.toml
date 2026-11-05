@@ -50,8 +50,6 @@ version = "0.13.0"
 [dependencies.kurbo]
 version = "0.10"
 
-[dependencies.log]
-version = "0.4"
 
 [dependencies.resvg]
 version = "0.42"
@@ -101,3 +99,6 @@ priority = -1
 
 [lints.rustdoc]
 broken_intra_doc_links = "forbid"
+
+[dependencies.log]
+version = "0.4"

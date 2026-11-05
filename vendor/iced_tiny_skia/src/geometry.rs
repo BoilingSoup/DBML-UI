@@ -223,7 +223,13 @@ impl geometry::frame::Backend for Frame {
                 height: f32::INFINITY,
             };
 
-            // TODO: Honor layering!
+            // PATCH(dbml-ui): honor layering — the frame's clip (the
+            // canvas widget's bounds, and every with_clip region) stamps
+            // into the text item so the renderer can clip it. Upstream
+            // ships INFINITY here, so canvas text ignores the widget
+            // bounds entirely and paints across neighboring panes
+            // (drag a table group left past the pane seam: its label
+            // renders over the editor).
             self.text.push(Text::Cached {
                 content: text.content,
                 bounds,
@@ -234,7 +240,7 @@ impl geometry::frame::Backend for Frame {
                 horizontal_alignment: text.horizontal_alignment,
                 vertical_alignment: text.vertical_alignment,
                 shaping: text.shaping,
-                clip_bounds: Rectangle::with_size(Size::INFINITY),
+                clip_bounds: self.clip_bounds,
             });
         } else {
             text.draw_with(|path, color| self.fill(&path, color));
@@ -250,6 +256,13 @@ impl geometry::frame::Backend for Frame {
     }
 
     fn draft(&mut self, clip_bounds: Rectangle) -> Self {
+        // PATCH(dbml-ui): a with_clip region can never widen what
+        // renders — clamp it to the parent's clip, or a sliver computed
+        // past the canvas widget's edge leaks text across panes
+        let clip_bounds = self
+            .clip_bounds
+            .intersection(&clip_bounds)
+            .unwrap_or_else(|| Rectangle::with_size(Size::ZERO));
         Self::with_clip(clip_bounds)
     }
 

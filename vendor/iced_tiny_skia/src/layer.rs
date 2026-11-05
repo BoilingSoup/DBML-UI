@@ -225,21 +225,16 @@ impl Layer {
             |item| match item {
                 Item::Live(primitive) => vec![primitive.visible_bounds()],
                 Item::Group(primitives, group_bounds, transformation) => {
-                    // group bounds are frame-LOCAL: transform them like
-                    // the primitive bounds (which already are) before
-                    // intersecting, or the damage lands shifted by the
-                    // widget's position
-                    let group_bounds = *group_bounds * *transformation;
                     primitives
                         .as_slice()
                         .iter()
                         .map(Primitive::visible_bounds)
                         .map(|bounds| bounds * *transformation)
-                        .filter_map(|bounds| bounds.intersection(&group_bounds))
+                        .filter_map(|bounds| bounds.intersection(group_bounds))
                         .collect()
                 }
-                Item::Cached(_, bounds, transformation) => {
-                    vec![*bounds * *transformation]
+                Item::Cached(_, bounds, _) => {
+                    vec![*bounds]
                 }
             },
             |primitive_a, primitive_b| match (primitive_a, primitive_b) {

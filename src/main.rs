@@ -24,6 +24,25 @@ fn window_icon() -> Option<iced::window::Icon> {
 fn main() -> Result<(), iced::Error> {
     let run = || -> Result<(), iced::Error> {
         // dbml-ui [FILE]
+        // iced/wgpu boot diagnostics (adapter selection, renderer
+        // fallback) route through the `log` crate: without a logger they
+        // vanish. DBML_UI_LOG=1 prints them to stderr — which renderer
+        // activated and why the GPU path fell back.
+        if std::env::var_os("DBML_UI_LOG").is_some() {
+            struct StderrLog;
+            impl log::Log for StderrLog {
+                fn enabled(&self, meta: &log::Metadata) -> bool {
+                    meta.level() <= log::Level::Info
+                }
+                fn log(&self, record: &log::Record) {
+                    eprintln!("[{}] {}", record.level(), record.args());
+                }
+                fn flush(&self) {}
+            }
+            let _ = log::set_logger(&StderrLog).map(|_| {
+                log::set_max_level(log::LevelFilter::Info)
+            });
+        }
         let restarted = std::env::var_os("DBML_UI_RESTARTED").is_some();
         let arg_file = std::env::args().nth(1);
         // persisted preferences (vim/Regular) + recent files load FIRST:

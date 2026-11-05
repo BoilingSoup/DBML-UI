@@ -912,6 +912,7 @@ dependencies = [
  "arboard",
  "iced",
  "image",
+ "log",
  "regex",
  "resvg 0.45.1",
  "rfd",
@@ -1851,8 +1852,6 @@ dependencies = [
 [[package]]
 name = "iced_tiny_skia"
 version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c625d368284fcc43b0b36b176f76eff1abebe7959dd58bd8ce6897d641962a50"
 dependencies = [
  "bytemuck",
  "cosmic-text",
@@ -1868,8 +1867,6 @@ dependencies = [
 [[package]]
 name = "iced_wgpu"
 version = "0.13.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15708887133671d2bcc6c1d01d1f176f43a64d6cdc3b2bf893396c3ee498295f"
 dependencies = [
  "bitflags 2.13.2",
  "bytemuck",

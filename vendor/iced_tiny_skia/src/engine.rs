@@ -402,16 +402,34 @@ impl Engine {
                 horizontal_alignment,
                 vertical_alignment,
                 shaping,
-                clip_bounds: text_bounds, // TODO
+                clip_bounds: text_bounds,
             } => {
+                // PATCH(dbml-ui): honor the text's own clip — canvas
+                // frames stamp their clip bounds here (the widget's
+                // bounds and every with_clip region). A stamped (finite)
+                // clip intersects the layer's and masks the glyphs; an
+                // unstamped (infinite) one keeps the old behavior. The
+                // mask is restored afterwards: the caller re-uses it for
+                // the remaining text items at the layer's clip.
+                let own = if text_bounds.width.is_finite()
+                    || text_bounds.height.is_finite()
+                {
+                    clip_bounds.intersection(&(*text_bounds * transformation))
+                } else {
+                    Some(clip_bounds)
+                };
+
+                let Some(own) = own else {
+                    return;
+                };
+
                 let physical_bounds = *text_bounds * transformation;
 
                 if !clip_bounds.intersects(&physical_bounds) {
                     return;
                 }
 
-                let clip_mask = (!physical_bounds.is_within(&clip_bounds))
-                    .then_some(clip_mask as &_);
+                adjust_clip_mask(clip_mask, own);
 
                 self.text_pipeline.draw_cached(
                     content,
@@ -424,9 +442,11 @@ impl Engine {
                     *vertical_alignment,
                     *shaping,
                     pixels,
-                    clip_mask,
+                    Some(clip_mask),
                     transformation,
                 );
+
+                adjust_clip_mask(clip_mask, clip_bounds);
             }
             Text::Raw {
                 raw,

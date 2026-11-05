@@ -8,16 +8,7 @@ var<private> uvs: array<vec2<f32>, 6> = array<vec2<f32>, 6>(
 );
 
 @group(0) @binding(0) var u_sampler: sampler;
-
-// Uniform buffer bindings must be 16-byte aligned on downlevel devices
-// (WebGL2): the 8-byte ratio is padded up to 16 (the Rust side pads to
-// match, see triangle/msaa.rs).
-struct Ratio {
-    uv: vec2<f32>,
-    _padding: vec2<f32>,
-}
-
-@group(0) @binding(1) var<uniform> u_ratio: Ratio;
+@group(0) @binding(1) var<uniform> u_ratio: vec2<f32>;
 @group(1) @binding(0) var u_texture: texture_2d<f32>;
 
 struct VertexInput {
@@ -34,7 +25,7 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     let uv = uvs[input.vertex_index];
 
     var out: VertexOutput;
-    out.uv = uv * u_ratio.uv;
+    out.uv = uv * u_ratio;
     out.position = vec4<f32>(uv * vec2(2.0, -2.0) + vec2(-1.0, 1.0), 0.0, 1.0);
 
     return out;

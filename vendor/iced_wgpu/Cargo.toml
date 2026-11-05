@@ -67,8 +67,6 @@ version = "0.6"
 [dependencies.iced_graphics]
 version = "0.13"
 
-[dependencies.log]
-version = "0.4"
 
 [dependencies.lyon]
 version = "1.0"
@@ -121,10 +119,7 @@ useless_conversion = "deny"
 [lints.rust]
 missing_debug_implementations = "deny"
 missing_docs = "deny"
-# the WebGPU→WebGL2 adapter retry (window/compositor.rs) builds the two
-# surfaces from the same window's raw handles — wgpu's safe create_surface
-# consumes the window per surface and yields 'static surfaces only
-unsafe_code = "allow"
+unsafe_code = "deny"
 unused_results = "deny"
 
 [lints.rust.rust_2018_idioms]
@@ -133,3 +128,6 @@ priority = -1
 
 [lints.rustdoc]
 broken_intra_doc_links = "forbid"
+
+[dependencies.log]
+version = "0.4"

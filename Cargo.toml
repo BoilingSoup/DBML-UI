@@ -3,6 +3,21 @@ name = "dbml-ui"
 version = "0.1.0"
 edition = "2021"
 
+# iced 0.13 canvas-text clipping holes (both backends):
+# - tiny_skia never clips canvas text at all ("TODO: Honor layering!" —
+#   fill_text stamps INFINITY and draw_text ignores the field), so text
+#   outside a canvas widget's bounds paints across neighboring panes;
+#   the vendored copy stamps the frame's clip into every text item and
+#   honors it in the draw path.
+# - neither backend clamps a with_clip region to its parent's clip, so
+#   a sliver computed past the canvas widget's edge leaks through even
+#   with text stamped; both drafts clamp now.
+# (iced_wgpu 0.13.5 already stamps the clip in fill_text — it only
+# needed the draft clamp.)
+[patch.crates-io]
+iced_tiny_skia = { path = "vendor/iced_tiny_skia" }
+iced_wgpu = { path = "vendor/iced_wgpu" }
+
 [dependencies]
 anyhow = "1.0.104"
 # The popups' text renders through widget paragraphs (PopupTextLayer)
@@ -40,6 +55,9 @@ rfd = { version = "0.15", default-features = false, features = ["gtk3"] }
 # iced's runtime (smol feature); also hands the file-picker thread's result
 # back to the update loop
 smol = "2"
+# iced/wgpu boot diagnostics route through the `log` crate; DBML_UI_LOG=1
+# prints them (which renderer activated, why the GPU path fell back)
+log = "0.4"
 
 [build-dependencies]
 # embeds icons/app-icon.ico into the exe (build.rs gates on the target —
