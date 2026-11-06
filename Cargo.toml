@@ -24,8 +24,8 @@ anyhow = "1.0.104"
 # because canvas geometry text does not render inside `with_layer` layers
 # on iced 0.13. `advanced` enables the custom-widget API; `fira-sans`
 # embeds the default UI font. The renderer is wgpu (with the tiny-skia
-# fallback iced activates when the adapter request fails);
-# `auto-detect-theme` follows the system theme.
+# fallback iced activates when the adapter request fails). The theme is
+# hardcoded Dark (theme::app), so auto-detect-theme stays off.
 iced = { version = "=0.13.1", default-features = false, features = [
     "advanced",
     "canvas",
@@ -34,7 +34,6 @@ iced = { version = "=0.13.1", default-features = false, features = [
     "wgpu",
     "tiny-skia",
     "fira-sans",
-    "auto-detect-theme",
 ] }
 # MSRV pins for rustc 1.84: newer releases of these crates require 1.85+.
 image = { version = "=0.25.6", default-features = false, features = ["png"] }
