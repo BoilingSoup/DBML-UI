@@ -19,18 +19,21 @@ the ER diagram render live on the right. Native desktop app
 
 | Platform | Download | Notes |
 |---|---|---|
-| Linux (x86_64) | tar.gz or .deb | glibc 2.29+ — Debian 11+, Ubuntu 20.04+, RHEL 9+, Fedora, Mint 20+, Arch · GTK3 · Wayland and X11 |
+| Linux (x86_64) | tar.gz, .deb or AppImage | glibc 2.29+ (AppImage: 2.31+) — Debian 11+, Ubuntu 20.04+, RHEL 9+, Fedora, Mint 20+, Arch · GTK3 (bundled in the AppImage) · Wayland and X11 |
 | Windows 10 / 11 (x86_64) | exe | portable single exe, no installer |
 | macOS 10.13+ (Apple Silicon & Intel) | .app.zip | ad-hoc signed: right-click → Open on first launch |
 
 ## Installation
 
-Prebuilt binaries for Linux (tar.gz, .deb), Windows (portable exe)
+Prebuilt binaries for Linux (tar.gz, .deb, AppImage), Windows (portable exe)
 and macOS (.app, Apple silicon + Intel) are on the
 [Releases](../../releases) page — grab the download for your OS and
 run `dbml-ui`. The Linux tar.gz also ships a `.desktop` launcher and hicolor
 icons; the `.deb` installs both system-wide
 (`sudo dpkg -i dbml-ui_<version>_amd64.deb`).
+
+The AppImage mounts itself through FUSE (the `fuse3` or `fuse` package;
+`libfuse2` is not needed); without FUSE, run it with `--appimage-extract-and-run`.
 
 Build from source instead (rustc 1.84+):
 

@@ -2,7 +2,7 @@
 #
 # Triggered by version tags (v*). Each target bundles its platform's
 # distribution format around the release binary:
-# - Linux:   tar.gz with the binary, .desktop launcher and icons
+# - Linux:   tar.gz (binary, .desktop launcher, icons), .deb and AppImage
 # - Windows: zip with the exe (app-icon.ico embedded at build time)
 # - macOS:   .app bundle (zipped), ad-hoc signed
 #
@@ -57,6 +57,12 @@ jobs:
             target/
           key: release-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
 
+      # rfd's GTK file dialogs link libgtk-3, and the runner image ships no
+      # GTK headers or .so links: every Linux cargo build needs these
+      - name: Install GTK3 dev files (Linux)
+        if: matrix.bundle == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev
+
       - name: Render icon PNG set
         run: cargo run --release --example render-icon
 
@@ -93,14 +99,14 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           OUT="dbml-ui-${VERSION}-x86_64-linux"
-          mkdir -p "dist/$OUT/icons/hicolor/{16x16,32x32,48x48,128x128,256x256}/apps" usr/bin
+          mkdir -p "dist/$OUT/icons/hicolor/"{16x16,32x32,48x48,128x128,256x256}/apps usr/bin
           cp "target/x86_64-unknown-linux-gnu/release/$BIN_NAME" "dist/$OUT/$BIN_NAME"
           cp icons/app-icon-16.png "dist/$OUT/icons/hicolor/16x16/apps/dbml-ui.png"
           cp icons/app-icon-32.png "dist/$OUT/icons/hicolor/32x32/apps/dbml-ui.png"
           cp icons/app-icon-48.png "dist/$OUT/icons/hicolor/48x48/apps/dbml-ui.png"
           cp icons/app-icon-128.png "dist/$OUT/icons/hicolor/128x128/apps/dbml-ui.png"
           cp icons/app-icon-256.png "dist/$OUT/icons/hicolor/256x256/apps/dbml-ui.png"
-          mkdir -p "dist/$OUT/usr/share/icons/hicolor/{16x16,32x32,48x48,128x128,256x256}/apps"
+          mkdir -p "dist/$OUT/usr/share/icons/hicolor/"{16x16,32x32,48x48,128x128,256x256}/apps
           cp -r "dist/$OUT/icons/hicolor/." "dist/$OUT/usr/share/icons/hicolor/"
           cat > "dist/$OUT/dbml-ui.desktop" <<DESKTOP
           [Desktop Entry]
@@ -114,7 +120,7 @@ jobs:
           tar -czf "dist/dbml-ui-${VERSION}-x86_64-linux.tar.gz" -C "dist/$OUT" .
           # .deb: the same payload as a package
           mkdir -p "dist/deb/DEBIAN" "dist/deb/usr/bin" "dist/deb/usr/share/applications"
-          mkdir -p "dist/deb/usr/share/icons/hicolor/{16x16,32x32,48x48,128x128,256x256}/apps"
+          mkdir -p "dist/deb/usr/share/icons/hicolor/"{16x16,32x32,48x48,128x128,256x256}/apps
           cp "target/x86_64-unknown-linux-gnu/release/$BIN_NAME" "dist/deb/usr/bin/"
           cp "dist/$OUT/dbml-ui.desktop" "dist/deb/usr/share/applications/"
           cp icons/app-icon-16.png "dist/deb/usr/share/icons/hicolor/16x16/apps/dbml-ui.png"
@@ -134,6 +140,121 @@ jobs:
            Vim-style editing on the left, a live ER diagram on the right.
           CONTROL
           dpkg-deb --build --root-owner-group "dist/deb" "dist/dbml-ui_${VERSION}_amd64.deb"
+
+      # AppImage: the same binary plus everything it loads, assembled in a
+      # Debian 11 container (runners have docker). The bundled bullseye
+      # libraries set the AppImage's effective glibc floor at the
+      # container's 2.31 (they are built against it; libsystemd alone needs
+      # GLIBC_2.30), above the bare binary's 2.29. GPU drivers
+      # (libGL/libEGL/libvulkan) stay host-provided by design.
+      - name: Bundle Linux (AppImage)
+        if: matrix.bundle == 'linux'
+        run: |
+          cat > "$RUNNER_TEMP/appimage.sh" <<'SCRIPT'
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive APPIMAGE_EXTRACT_AND_RUN=1
+          # Debian 11 is past its LTS: its packages, security updates
+          # included, now live on archive.debian.org only
+          cat > /etc/apt/sources.list <<'APT'
+          deb http://archive.debian.org/debian bullseye main
+          deb http://archive.debian.org/debian bullseye-updates main
+          deb http://archive.debian.org/debian-security bullseye-security main
+          APT
+          apt-get -o Acquire::Check-Valid-Until=false update -qq
+          apt-get install -y -qq --no-install-recommends ca-certificates curl file \
+            libgtk-3-0 libglib2.0-bin patchelf libx11-xcb1 libxkbcommon-x11-0 \
+            libxcursor1 libxrandr2 libxi6 libxinerama1 libxfixes3 libxrender1
+          T=/tmp/tools
+          mkdir -p "$T"
+          curl -fsSL -o "$T/linuxdeploy" \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          curl -fsSL -o "$T/appimagetool" \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x "$T/linuxdeploy" "$T/appimagetool"
+          STAGE="dist/dbml-ui-${VERSION}-x86_64-linux"
+          A=/tmp/AppDir
+          L=$A/usr/lib
+          SYS=/usr/lib/x86_64-linux-gnu
+          # binary, launcher, icon and the DT_NEEDED closure linuxdeploy
+          # takes (it sets the $ORIGIN rpaths)
+          "$T/linuxdeploy" --appdir "$A" -e "target/x86_64-unknown-linux-gnu/release/$BIN_NAME" \
+            -d "$STAGE/dbml-ui.desktop" -i "$STAGE/icons/hicolor/256x256/apps/dbml-ui.png"
+          # linuxdeploy's excludelist leaves the X11/xcb/font stack to the
+          # host, which a bare system lacks; winit dlopens libX11-xcb,
+          # libxkbcommon-x11 and the x11-dl set (never DT_NEEDED); GTK aborts
+          # without a PNG pixbuf loader. Bundle those, then close the set over
+          # DT_NEEDED: glibc, zlib, the C++ runtime and the GPU stack stay
+          # host-provided.
+          bundle() {
+            [ -e "$L/$1" ] && return
+            cp -L "$(ldconfig -p | awk -v n="$1" '$1 == n && /x86-64/ { print $NF; exit }')" "$L/$1"
+          }
+          cp -L "$SYS/gdk-pixbuf-2.0/2.10.0/loaders/libpixbufloader-png.so" "$L/"
+          for n in libX11-xcb.so.1 libxkbcommon-x11.so.0 libXcursor.so.1 libXrandr.so.2 \
+            libXi.so.6 libXinerama.so.1 libXrender.so.1 libXfixes.so.3 libXext.so.6; do
+            bundle "$n"
+          done
+          HOST='^(ld-linux-x86-64|lib(c|dl|m|pthread|resolv|rt|util|z|stdc\+\+|gcc_s)|lib(GL|EGL|GLX|GLdispatch|OpenGL|vulkan|drm|gbm))\.so'
+          unbundled() {
+            for f in "$A/usr/bin/$BIN_NAME" "$L"/*.so*; do patchelf --print-needed "$f"; done |
+              sort -u | { grep -vE "$HOST" || true; } |
+              while read -r n; do [ -e "$L/$n" ] || echo "$n"; done
+          }
+          while :; do
+            missing=$(unbundled)
+            [ -n "$missing" ] || break
+            for n in $missing; do bundle "$n"; done
+          done
+          for f in "$L"/*.so*; do patchelf --set-rpath '$ORIGIN' "$f"; done
+          "$SYS/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders" "$L/libpixbufloader-png.so" |
+            sed "s|$L/||" > "$L/loaders.cache"
+          # host GPU drivers built against wayland >= 1.20 call
+          # wl_proxy_marshal_flags, which bullseye's 1.18 lacks: the bundled
+          # copies sit off the rpath, for AppRun to add when the host has none
+          mkdir "$L/wayland"
+          mv "$L"/libwayland-{client.so.0,cursor.so.0,egl.so.1} "$L/wayland/"
+          for f in "$L"/wayland/*; do patchelf --set-rpath '$ORIGIN/..' "$f"; done
+          # data the bundled libs look up: GSettings schemas (GTK's file
+          # chooser), the mime cache and the XKB root libxkbcommon needs
+          mkdir -p "$A/usr/share/glib-2.0/schemas" "$A/usr/share/mime" "$A/usr/share/X11"
+          cp /usr/share/glib-2.0/schemas/*.xml "$A/usr/share/glib-2.0/schemas/"
+          glib-compile-schemas "$A/usr/share/glib-2.0/schemas"
+          find /usr/share/mime -maxdepth 1 -type f -exec cp {} "$A/usr/share/mime/" \;
+          cp -a /usr/share/X11/xkb "$A/usr/share/X11/"
+          # linuxdeploy's AppRun is a symlink to the binary: replace, don't
+          # write through it
+          rm -f "$A/AppRun"
+          cat > "$A/AppRun" <<'APPRUN'
+          #!/bin/bash
+          SELF=$(readlink -f "${0}")
+          HERE=${SELF%/*}
+          HOST_LIBS=$(/sbin/ldconfig -p 2>/dev/null)
+          # the bundled glib schemas and mime cache (GTK serves the file dialogs)
+          export XDG_DATA_DIRS="$HERE/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+          # GTK aborts when it cannot decode its PNG icons, and the bundled
+          # gdk-pixbuf's compiled-in loader path is Debian-specific
+          export GDK_PIXBUF_MODULE_FILE="$HERE/usr/lib/loaders.cache"
+          # libxkbcommon refuses a context without its data root (winit then
+          # panics, XKBNotFound): fall back to the bundled copy
+          [ -d /usr/share/X11/xkb ] || export XKB_CONFIG_ROOT="${XKB_CONFIG_ROOT:-$HERE/usr/share/X11/xkb}"
+          # the bundled wayland 1.18 only when the host lacks one of its libs
+          for lib in libwayland-client.so.0 libwayland-cursor.so.0 libwayland-egl.so.1; do
+            grep -qF "$lib (libc6,x86-64" <<<"$HOST_LIBS" && continue
+            export LD_LIBRARY_PATH="$HERE/usr/lib/wayland${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            break
+          done
+          # with no Vulkan or EGL loader wgpu panics before iced can fall back
+          # to tiny-skia: pick the software renderer up front
+          grep -qE 'lib(vulkan|EGL)\.so\.1 \(libc6,x86-64' <<<"$HOST_LIBS" ||
+            export ICED_BACKEND="${ICED_BACKEND:-tiny-skia}"
+          exec "$HERE/usr/bin/dbml-ui" "$@"
+          APPRUN
+          chmod 755 "$A/AppRun"
+          "$T/appimagetool" --no-appstream "$A" "dist/dbml-ui-${VERSION}-x86_64.AppImage"
+          SCRIPT
+          docker run --rm -e VERSION="${GITHUB_REF_NAME#v}" -e BIN_NAME \
+            -v "$PWD:/repo" -v "$RUNNER_TEMP/appimage.sh:/appimage.sh:ro" -w /repo \
+            debian:11 bash /appimage.sh
 
       - name: Stage Windows exe
         if: matrix.bundle == 'windows'
