@@ -4041,6 +4041,7 @@ impl App {
         // layout defaults
         self.auto_arrange();
         self.cur_mut().doc_open = true;
+        self.apply_config_mode();
         self.focus = Focus::Editor;
     }
 
@@ -4061,6 +4062,21 @@ impl App {
             tab.editor.buf.cancel_selection();
         }
         self.completion = None;
+    }
+
+    /// The editing mode is a global preference: a tab opened or created
+    /// under the other mode starts in the config's mode — the same rule
+    /// `after_tab_switch` applies on switches. Every tab-creating path
+    /// (CLI-arg open, the file dialog, New diagram) runs this, or a
+    /// vim-mode user lands in Insert with the toolbar claiming Vim.
+    pub fn apply_config_mode(&mut self) {
+        self.editor_mut().mode = if self.config.vim {
+            editor::Mode::Normal
+        } else {
+            editor::Mode::Insert
+        };
+        self.editor_mut().visual_linewise = false;
+        self.editor_mut().buf.cancel_selection();
     }
 
     /// Regular-mode editor keys: notepad behavior — typing inserts (a
@@ -4936,6 +4952,7 @@ impl App {
             // Save As chooses where the converted diagram lives (like
             // New diagram)
             self.load_into_current(&content);
+            self.apply_config_mode();
         } else {
             self.cur_mut().file = Some(std::path::PathBuf::from(path));
             self.cur_mut().saved_text = content.clone();
@@ -4951,6 +4968,7 @@ impl App {
             self.cur_mut().editor_scroll = 0.0;
             self.cur_mut().editor_hscroll = 0.0;
             self.cur_mut().doc_open = true;
+            self.apply_config_mode();
             self.config.push_recent(path);
             self.config.save();
         }
@@ -7839,7 +7857,12 @@ mod file_tests {
         std::fs::write(&path, "Table t {\n  id integer [pk]\n}\n").unwrap();
 
         let mut app = App::default();
+        // the edit below is a vim dd: open the tab in the configured
+        // vim mode (apply_config_mode now enforces the config's mode —
+        // Regular would type the d's instead)
+        app.config.vim = true;
         app.open_file(path.to_str().unwrap()).unwrap();
+        assert_eq!(app.editor().mode, editor::Mode::Normal);
         assert!(!app.cur().is_modified());
 
         // edit: dd the second line
@@ -8468,6 +8491,40 @@ mod completion_tests {
         app.cur_mut().set_source(messy2);
         app.save_file(Some(path.to_str().unwrap())).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), messy2);
+        std::env::remove_var("DBML_UI_CONFIG");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn new_diagram_opens_in_the_configured_mode() {
+        // the editing mode is a global preference: a vim-mode user's New
+        // diagram starts in NORMAL, not the Insert default — before this,
+        // the toolbar claimed Vim while the tab typed Insert
+        let mut app = App::blank_start();
+        app.config.vim = true;
+        let _ = update(&mut app, Message::NewDiagram);
+        assert_eq!(app.editor().mode, editor::Mode::Normal);
+
+        let mut app = App::blank_start();
+        app.config.vim = false;
+        let _ = update(&mut app, Message::NewDiagram);
+        assert_eq!(app.editor().mode, editor::Mode::Insert);
+    }
+
+    #[test]
+    fn open_file_opens_in_the_configured_mode() {
+        let _g = crate::config::CONFIG_ENV_LOCK.lock();
+        let dir = std::env::temp_dir().join(format!("dbml-ui-mode-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mode-test.dbml");
+        std::fs::write(&path, "Table users { id integer [pk] }\n").unwrap();
+        std::env::set_var("DBML_UI_CONFIG", dir.join("config"));
+
+        let mut app = App::blank_start();
+        app.config.vim = true;
+        app.open_file(path.to_str().unwrap()).unwrap();
+        assert_eq!(app.editor().mode, editor::Mode::Normal);
+
         std::env::remove_var("DBML_UI_CONFIG");
         let _ = std::fs::remove_dir_all(&dir);
     }
