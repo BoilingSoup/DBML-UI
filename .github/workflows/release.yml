@@ -135,15 +135,12 @@ jobs:
           CONTROL
           dpkg-deb --build --root-owner-group "dist/deb" "dist/dbml-ui_${VERSION}_amd64.deb"
 
-      - name: Bundle Windows (zip)
+      - name: Stage Windows exe
         if: matrix.bundle == 'windows'
         shell: pwsh
         run: |
           $version = $env:GITHUB_REF_NAME -replace '^v',''
-          $out = "dbml-ui-$version-x86_64-windows"
-          New-Item -ItemType Directory -Path "dist/$out" -Force | Out-Null
-          Copy-Item "target/x86_64-pc-windows-msvc/release/dbml-ui.exe" "dist/$out/"
-          Compress-Archive -Path "dist/$out" -DestinationPath "dist/dbml-ui-$version-x86_64-windows.zip"
+          Copy-Item "target/x86_64-pc-windows-msvc/release/dbml-ui.exe" "dist/dbml-ui-$version-x86_64-windows.exe"
 
       - name: Bundle macOS (.app zip)
         if: matrix.bundle == 'macos'
