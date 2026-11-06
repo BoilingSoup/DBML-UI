@@ -2,7 +2,6 @@
 // every note/custom-property combination, and the full feature surface:
 // aliases, header colors, all cardinalities, composite + inline refs,
 // indexes, records, groups, sticky notes, and enums.
-
 Project dbml_ui_stress {
   database_type: 'PostgreSQL'
   note: 'Stress tour: popups that overflow, popups that do not, and everything in between'
@@ -19,16 +18,12 @@ Table orders [headercolor: #8a4f2d, owner: "fulfillment-team", sla_hours: "48", 
   fulfillment_note text [null, note: 'Long single-column note: the courier pickups happen twice a day, once before the morning batch and once after the evening reconciliation, so fulfillment notes written after 6pm are not read until the following business day — plan accordingly.']
   warehouse_id integer [null, note: 'Fulfilling warehouse once the order ships']
   status order_status [not null, default: 'placed', note: 'Drives the pipeline; the enum pill on the right lists every value', priority: "high", sla: "4h", escalation: "on-call", audit: "full"]
-
   records (id, customer_id, total_cents, status) {
     1, 1, 12999, 'placed'
     2, 2, 4500, 'shipped'
     3, 1, 78000, 'delivered'
   }
-
-  note: '''
-  Orders is the transactional heart of the schema. This note is deliberately long so the table popup overflows its max height and clips: the morning batch imports from the storefront, the evening job reconciles against the payment provider, and the warehouse team reads fulfillment notes twice a day. The wheel keeps zooming the canvas even while this popup is open.
-  '''
+  note: 'Orders is the transactional heart of the schema. This note is deliberately long so the table popup overflows its max height and clips: the morning batch imports from the storefront, the evening job reconciles against the payment provider, and the warehouse team reads fulfillment notes twice a day. The wheel keeps zooming the canvas even while this popup is open.'
 }
 
 // ── Table popup that does NOT overflow: a short note and two short props ──
@@ -37,7 +32,6 @@ Table customers as C [headercolor: #2d7a4f, owner: "growth-team"] {
   email varchar(255) [not null, unique]
   tier customer_tier [not null, default: 'free', note: 'Pricing tier', marketing: "opt-in"]
   joined_at timestamp [not null, default: `now()`]
-
   note: 'Short note: no scroll needed.'
 }
 
@@ -49,12 +43,10 @@ Table payments [headercolor: #4f2d8a, owner: "billing-team"] {
   method payment_method [not null]
   processor_ref varchar(120) [null, note: 'Gateway reference — populated after the first successful capture attempt, retried nightly', gateway: "stripe", region: "eu", retry: "3x", signed: "true"]
   captured_at timestamp [null, prop: "value"]
-
   indexes {
     (order_id) [name: 'idx_payments_order']
     (method, captured_at) [name: 'idx_payments_method_time', type: hash]
   }
-
 }
 
 // ── Table popup: custom properties only, no note (short, no overflow) ──
@@ -72,17 +64,19 @@ Table shipments {
   warehouse_id integer [not null]
   batch_no integer [not null]
   shipped_at timestamp [null, note: 'Set by the scanner gun']
-
   note: 'Shipments leave through one of the warehouses.'
 }
 
 // ── Composite (multi-column) ref: shipments batch -> warehouse key ──
-Ref: (shipments.warehouse_id, shipments.batch_no) > (warehouses.id, warehouses.batch_no)
+Ref: shipments.(warehouse_id, batch_no) > warehouses.(id, batch_no)
 
 // ── All four cardinalities, including one-to-one and many-to-many ──
 Ref: orders.customer_id > customers.id [color: #2d7a4f]
+
 Ref: payments.order_id > orders.id
+
 Ref: orders.warehouse_id - warehouses.id
+
 Ref: shipments.warehouse_id <> orders.warehouse_id [color: #8a4f2d]
 
 // ── One-to-many pointing left, exercise the < tick side ──
@@ -130,24 +124,20 @@ Enum region_code {
 }
 
 // ── TableGroup, plain (no color): hover the label for the note ──
-TableGroup "Billing" {
+TableGroup Billing {
   payments
-  Note: '''
-  Payments and their gateway plumbing.
-  '''
+  Note: 'Payments and their gateway plumbing.'
 }
 
 // ── Second group: colored, two members ──
-TableGroup "Fulfillment" [color: #8a4f2d] {
+TableGroup Fulfillment [color: #8a4f2d] {
   warehouses
   shipments
 }
 
 // ── Sticky notes: one short, one long ──
 Note idea {
-  '''
-  Split the payments table by region in Q3.
-  '''
+  '''Split the payments table by region in Q3.'''
 }
 
 Note backlog {
@@ -158,3 +148,4 @@ Note backlog {
   - ask David about the batch numbering scheme
   '''
 }
+
