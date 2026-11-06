@@ -60,7 +60,28 @@ jobs:
       - name: Render icon PNG set
         run: cargo run --release --example render-icon
 
+      # Linux builds through cargo-zigbuild so the binary targets an OLD
+      # glibc: a plain build on the runner inherits ubuntu-24.04's 2.39
+      # and refuses to start on Debian 11 (2.31), RHEL 9 (2.34) or Mint
+      # 20. Targeting 2.31 covers every still-shipped desktop distro
+      # (the GTK stack is linked against the host's stable sonames and
+      # needs no zig involvement). Zig comes from the `ziglang` pip
+      # package, which cargo-zigbuild finds on PATH.
+      - name: Install cargo-zigbuild + zig (Linux)
+        if: matrix.bundle == 'linux'
+        run: |
+          pip3 install ziglang
+          cargo install --locked cargo-zigbuild
+
+      - name: Build release binary (Linux, glibc 2.31 floor)
+        if: matrix.bundle == 'linux'
+        env:
+          # zig's linker doesn't search the multiarch lib dir on its own
+          RUSTFLAGS: -L native=/usr/lib/x86_64-linux-gnu
+        run: cargo zigbuild --release --target x86_64-unknown-linux-gnu.2.31
+
       - name: Build release binary
+        if: matrix.bundle != 'linux'
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Install icnsutils (Linux icon packing for macOS)
@@ -108,7 +129,7 @@ jobs:
           Priority: optional
           Maintainer: BoilingSoup <boilingsoup@protonmail.com>
           Architecture: amd64
-          Depends: libxkbcommon0, libx11-6, libwayland-client0
+          Depends: libgtk-3-0, libxkbcommon0, libx11-6, libwayland-client0
           Description: DBML diagram editor
            Vim-style editing on the left, a live ER diagram on the right.
           CONTROL
