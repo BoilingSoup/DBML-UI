@@ -15,6 +15,14 @@ the ER diagram render live on the right. Native desktop app
 - Import SQL dumps (the dialect is auto-detected) and export DDL for
   PostgreSQL, MySQL, SQL Server and Oracle
 
+## Supported platforms
+
+| Platform | Download | Notes |
+|---|---|---|
+| Linux (x86_64) | tar.gz or .deb | glibc 2.29+ — Debian 11+, Ubuntu 20.04+, RHEL 9+, Fedora, Mint 20+, Arch · GTK3 · Wayland and X11 |
+| Windows 10 / 11 (x86_64) | zip | portable exe, no installer |
+| macOS 10.13+ (Apple Silicon & Intel) | .app.zip | ad-hoc signed: right-click → Open on first launch |
+
 ## Installation
 
 Prebuilt binaries for Linux (tar.gz, .deb), Windows (zip) and macOS
