@@ -322,11 +322,14 @@ const SPLIT_STEP: f32 = 0.02;
 const SPLIT_MIN: f32 = 0.15;
 const SPLIT_MAX: f32 = 0.85;
 /// Absolute pane floors beneath the split ratios: the editor keeps its
-/// toolbars/diagnostics readable (500px), the diagram keeps the export
-/// dropdown usable (340px). clamp_split translates them into split
-/// bounds on the current window width.
+/// toolbars/diagnostics readable (500px), the diagram keeps its bottom
+/// button row (Add Sticky Note / Highlight Relationships / Auto-arrange
+/// / Zoom to Fit renders ~380px) plus breathing room on each side
+/// (440px) — below that the centered row clips at the pane edges.
+/// clamp_split translates them into split bounds on the current window
+/// width; 500 + 440 = 940 is exactly the window's own minimum.
 const EDITOR_MIN_PX: f32 = 500.0;
-const DIAGRAM_MIN_PX: f32 = 340.0;
+const DIAGRAM_MIN_PX: f32 = 440.0;
 /// One FillPortion unit (view.rs maps the split through
 /// FillPortion((split * 1000) as u16), truncating to u16): without this
 /// much bias the truncated portions can leave a pane a pixel under its
@@ -4760,9 +4763,9 @@ impl App {
     /// (EDITOR_MIN_PX / DIAGRAM_MIN_PX) on the current window, under the
     /// SPLIT_MIN/MAX ratios. Every split write funnels through here:
     /// divider drag, ctrl-arrow nudge, session restore, window resize.
-    /// A window too narrow for both floors (under 500+340 = 840px, below
-    /// the app's 940px minimum) favors the editor's: the diagram lives
-    /// with the SPLIT_MAX-capped remainder.
+    /// A window too narrow for both floors (under 500+440 = 940px, the
+    /// app's own minimum) favors the editor's: the diagram lives with
+    /// the SPLIT_MAX-capped remainder.
     fn clamp_split(&self, split: f32) -> f32 {
         let w = self.window_size.0.max(1.0);
         let lo = SPLIT_MIN.max(EDITOR_MIN_PX / w + PORTION_SLACK);
@@ -9653,7 +9656,7 @@ mod maximize_tests {
             "both floors still fit at 940px: the diagram keeps its own"
         );
 
-        // 800px < 500+340: the floors conflict — the editor wins its
+        // 800px < 500+440: the floors conflict — the editor wins its
         // floor and the diagram drops below its own (the fallback)
         let _ = update(&mut app, Message::WindowResized(800.0, 900.0));
         assert!(
