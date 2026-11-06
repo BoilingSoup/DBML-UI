@@ -29,9 +29,24 @@ on the right. Runs as a native desktop app (Rust +
   `[count]`, `d`/`c` operators with text objects, `yy`/`p`/`P`, `r`,
   `/` search, undo/redo — or a Regular notepad mode (the toggle
   persists)
-- Smooth animated scrolling (`Ctrl-d`/`Ctrl-u`), hover tooltips, a
-  completion popup, goto-definition (`gd`, `Ctrl-o` back), sticky
-  notes, per-table header colors, a diagnostics panel with quick fixes
+- Smooth animated scrolling (`Ctrl-d`/`Ctrl-u`), hover tooltips (table
+  and column docs, with the diagram's Not null / Enum badges), a
+  completion popup, goto-definition (`gd`, `Ctrl-o` back), a
+  diagnostics panel with quick fixes
+
+## Diagram
+
+- Live ER diagram beside the editor: drag tables, TableGroups and
+  sticky notes (raise order kept); dragged positions persist in the
+  session until the file is closed, surviving restarts
+- Auto-arrange (left-right layered, referenced tables first) — fresh
+  opens and new diagrams start arranged — plus Zoom to Fit
+- dbdiagram-style hover cards on tables, columns and groups: note,
+  enum values, default, custom properties
+- Relationship highlighting: hover a line or a column, or highlight
+  every relationship at once
+- Records render on the tables as an overlay; sticky notes live on the
+  canvas, edited through the source
 
 ## Installation
 
