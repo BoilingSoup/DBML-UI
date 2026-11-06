@@ -2620,7 +2620,18 @@ impl App {
     fn auto_arrange(&mut self) {
         let src = self.source().to_string();
         let schema = model::build(&dbml::parser::parse(&src).doc);
-        let pos = layout::auto_arrange(&self.cur().diagram.boxes, &schema);
+        // user-pinned stickies hold their ground: the arrangement dodges
+        // their rects (unpinned notes reflow below the new content
+        // instead — their old spots are stale by definition)
+        let stickies: Vec<(i32, i32, i32, i32)> = self
+            .cur()
+            .diagram
+            .notes
+            .iter()
+            .filter(|n| self.cur().note_pos.contains_key(&n.name))
+            .map(|n| n.rect)
+            .collect();
+        let pos = layout::auto_arrange(&self.cur().diagram.boxes, &schema, &stickies);
         self.cur_mut().table_pos = pos;
         self.cur_mut().set_source(&src);
         self.cur_mut().edge_anim = vec![0.0; self.cur().diagram.edges.len()];

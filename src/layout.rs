@@ -456,7 +456,14 @@ fn ref_layers(schema: &Schema) -> Vec<usize> {
 pub fn auto_arrange(
     boxes: &[TableBox],
     schema: &Schema,
+    stickies: &[(i32, i32, i32, i32)],
 ) -> std::collections::HashMap<String, (i32, i32)> {
+    // sticky rects arrive as (x, y, w, h) cells — the NoteBox rect form —
+    // and every obstacle check below speaks (x0, y0, x1, y1)
+    let stickies: Vec<(i32, i32, i32, i32)> = stickies
+        .iter()
+        .map(|(x, y, w, h)| (*x, *y, x + w, y + h))
+        .collect();
     let n = schema.nodes.len();
     let mut out = std::collections::HashMap::new();
     if n == 0 {
@@ -644,40 +651,107 @@ pub fn auto_arrange(
     // or on another box, and each step moves strictly past an obstacle's
     // bottom, so it terminates.
     const GROUP_PAD: i32 = 2; // keep in sync with layout_with_all_overrides
-    let grouped: std::collections::HashSet<usize> = schema
+
+    /// A group's region: its members' current union box + the frame
+    /// padding and the header band row above. Half-open cells.
+    fn group_region(
+        members: &[usize],
+        placed: &[(i32, i32)],
+        size: &[(i32, i32)],
+    ) -> (i32, i32, i32, i32) {
+        let mut rect = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+        for &s in members {
+            let (x, y) = placed[s];
+            let (w, h) = size[s];
+            rect.0 = rect.0.min(x);
+            rect.1 = rect.1.min(y);
+            rect.2 = rect.2.max(x + w);
+            rect.3 = rect.3.max(y + h);
+        }
+        (
+            rect.0 - GROUP_PAD,
+            rect.1 - GROUP_PAD - 1,
+            rect.2 + GROUP_PAD,
+            rect.3 + GROUP_PAD,
+        )
+    }
+
+    let group_members: Vec<Vec<usize>> = schema
         .groups
         .iter()
-        .flat_map(|g| g.members.iter())
-        .filter_map(|n| slot_of.get(n).copied())
-        .collect();
-    let regions: Vec<(i32, i32, i32, i32)> = schema // half-open (x0, y0, x1, y1)
-        .groups
-        .iter()
-        .filter_map(|g| {
-            let mut rect: Option<(i32, i32, i32, i32)> = None;
-            for n in &g.members {
-                let Some(&s) = slot_of.get(n) else {
-                    continue; // stale member, no box
-                };
-                let (x, y) = placed[s];
-                let (w, h) = size[s];
-                rect = Some(match rect {
-                    None => (x, y, x + w, y + h),
-                    Some((x0, y0, x1, y1)) => {
-                        (x0.min(x), y0.min(y), x1.max(x + w), y1.max(y + h))
-                    }
-                });
-            }
-            rect.map(|(x0, y0, x1, y1)| {
-                (
-                    x0 - GROUP_PAD,
-                    y0 - GROUP_PAD - 1,
-                    x1 + GROUP_PAD,
-                    y1 + GROUP_PAD,
-                )
-            })
+        .map(|g| {
+            g.members
+                .iter()
+                .filter_map(|n| slot_of.get(n).copied())
+                .collect()
         })
         .collect();
+    let grouped: std::collections::HashSet<usize> =
+        group_members.iter().flatten().copied().collect();
+
+    // The arrangement anchors at the content's CURRENT min corner (not
+    // a re-normalized origin): pinned stickies are absolute-canvas
+    // obstacles, so the result must land in the same space they live in
+    // — the dodge below is meaningless if the whole layout then slides
+    // somewhere else.
+    let (anchor_x, anchor_y) = {
+        let mut mx = i32::MAX;
+        let mut my = i32::MAX;
+        for b in boxes {
+            mx = mx.min(b.x);
+            my = my.min(b.y);
+        }
+        if mx == i32::MAX {
+            (0, 0)
+        } else {
+            (mx, my)
+        }
+    };
+    let new_min_x = placed.iter().map(|p| p.0).min().unwrap_or(0);
+    let new_min_y = placed.iter().map(|p| p.1).min().unwrap_or(0);
+    for p in placed.iter_mut() {
+        p.0 += anchor_x - new_min_x;
+        p.1 += anchor_y - new_min_y;
+    }
+
+    // Group regions must not overlap EACH OTHER either: the naive
+    // per-component layering interleaves members of different groups (a
+    // pair sharing a layer spans that whole column, burying the other
+    // group's frame) — billing's frame used to land inside fulfillment's.
+    // And a user-pinned sticky holds its ground wherever the old layout
+    // left it, so regions must clear those too. Each group shifts DOWN
+    // as a rigid block — members keep their intra-group arrangement —
+    // until its region clears every earlier group's final region and
+    // every sticky. Groups resolve in schema order: earlier regions are
+    // final when the next group starts, and each step moves strictly
+    // past an obstacle's bottom, so it terminates.
+    let mut final_regions: Vec<(i32, i32, i32, i32)> = Vec::new();
+    for mem in &group_members {
+        if mem.is_empty() {
+            continue; // stale members only: no box, no region
+        }
+        let mut region = group_region(mem, &placed, &size);
+        loop {
+            let hit = final_regions
+                .iter()
+                .copied()
+                .chain(stickies.iter().copied())
+                .find(|&(ox0, oy0, ox1, oy1)| {
+                    region.0 < ox1 && ox0 < region.2 && region.1 < oy1 && oy0 < region.3
+                });
+            let Some((_, _, _, oy1)) = hit else {
+                break;
+            };
+            let dy = oy1 + ARRANGE_LAYER_GAP_Y - region.1;
+            for &s in mem {
+                placed[s].1 += dy;
+            }
+            region = group_region(mem, &placed, &size);
+        }
+        final_regions.push(region);
+    }
+    let regions = final_regions;
+
     for i in 0..m {
         if grouped.contains(&i) {
             continue; // members shape the regions; only free tables dodge
@@ -685,13 +759,14 @@ pub fn auto_arrange(
         let (w, h) = size[i];
         loop {
             let (x, y) = placed[i];
-            // obstacles: group frames first, then every other box at its
-            // current spot — a drop must not trade a frame overlap for a
-            // table-table one (later tables re-dodge the earlier drops'
-            // final spots; each pass only ever moves down)
+            // obstacles: group frames, then the pinned stickies, then
+            // every other box at its current spot — a drop must not
+            // trade one overlap for another (later tables re-dodge the
+            // earlier drops' final spots; each pass only ever moves down)
             let hit = regions
                 .iter()
                 .copied()
+                .chain(stickies.iter().copied())
                 .chain((0..m).filter(|&o| o != i).map(|o| {
                     let (ox, oy) = placed[o];
                     let (ow, oh) = size[o];
@@ -707,13 +782,8 @@ pub fn auto_arrange(
         }
     }
 
-    // Normalize to non-negative cells: min corner at the origin (the
-    // center lines all sit half the tallest component down — the global
-    // center line).
-    let min_x = placed.iter().map(|p| p.0).min().unwrap_or(0);
-    let min_y = placed.iter().map(|p| p.1).min().unwrap_or(0);
     for (i, p) in placed.iter().enumerate() {
-        out.insert(title[i].clone(), (p.0 - min_x, p.1 - min_y));
+        out.insert(title[i].clone(), *p);
     }
     out
 }
@@ -1548,7 +1618,7 @@ Ref: b.a_id > a.id
 Ref: c.b_id > b.id
 ",
         );
-        let pos = auto_arrange(&l.boxes, &schema);
+        let pos = auto_arrange(&l.boxes, &schema, &[]);
         // referenced LEFT of FK, one 12-cell gap between layers
         assert_eq!(pos["a"].0, 0, "first layer at the origin");
         assert_eq!(
@@ -1558,6 +1628,135 @@ Ref: c.b_id > b.id
         assert_eq!(
             pos["c"].0,
             pos["b"].0 + box_of(&l, "b").w + ARRANGE_LAYER_GAP_X
+        );
+    }
+
+    /// A group's padded region from the arrange result (the same rect
+    /// auto_arrange resolves with: member union + 2-cell frame padding
+    /// and the header band row above).
+    fn region_of(
+        pos: &std::collections::HashMap<String, (i32, i32)>,
+        l: &Layout,
+        members: &[&str],
+    ) -> (i32, i32, i32, i32) {
+        let mut rect = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+        for m in members {
+            let (x, y) = pos[*m];
+            let b = box_of(l, m);
+            rect.0 = rect.0.min(x);
+            rect.1 = rect.1.min(y);
+            rect.2 = rect.2.max(x + b.w);
+            rect.3 = rect.3.max(y + b.h);
+        }
+        (rect.0 - 2, rect.1 - 3, rect.2 + 2, rect.3 + 2)
+    }
+
+    fn regions_disjoint(a: (i32, i32, i32, i32), b: (i32, i32, i32, i32)) -> bool {
+        a.0 >= b.2 || b.0 >= a.2 || a.1 >= b.3 || b.1 >= a.3
+    }
+
+    #[test]
+    fn auto_arrange_separates_interleaved_group_regions() {
+        // A's members and B's members share both layers: the naive
+        // per-component layering interleaves them and the two frames
+        // land on top of each other. The regions must come out disjoint,
+        // with the later group shifted down as a rigid block (its
+        // members keep their arrangement).
+        let (l, schema) = arrange_parts(
+            "TableGroup \"A\" {
+  a
+  d
+}
+TableGroup \"B\" {
+  b
+  c
+}
+Table a { id integer [pk] }
+Table b { a_id integer }
+Table c { a_id integer }
+Table d { a_id integer }
+Ref: b.a_id > a.id
+Ref: c.a_id > a.id
+Ref: d.a_id > a.id
+",
+        );
+        let naive = auto_arrange(&l.boxes, &schema, &[]);
+        let naive_span = naive["c"].1 - naive["b"].1;
+        let naive_ra = region_of(&naive, &l, &["a", "d"]);
+        let naive_rb = region_of(&naive, &l, &["b", "c"]);
+        let pos = auto_arrange(&l.boxes, &schema, &[]);
+        let ra = region_of(&pos, &l, &["a", "d"]);
+        let rb = region_of(&pos, &l, &["b", "c"]);
+        assert!(
+            regions_disjoint(ra, rb),
+            "group regions overlap: {ra:?} vs {rb:?}"
+        );
+        // rigid shift: B's members keep their vertical arrangement —
+        // c sits below b by the same span the naive layout gave them
+        assert_eq!(pos["c"].1 - pos["b"].1, naive_span);
+    }
+
+    #[test]
+    fn auto_arrange_dodges_pinned_stickies() {
+        // a sticky parked over a table's naive placement: the table
+        // drops below it instead of covering the note
+        let (l, schema) = arrange_parts(
+            "Table a { id integer [pk] }
+Table b { a_id integer }
+Ref: b.a_id > a.id
+",
+        );
+        let naive = auto_arrange(&l.boxes, &schema, &[]);
+        let (ax, ay) = naive["a"];
+        let ba = box_of(&l, "a");
+        // the sticky covers a's naive spot exactly
+        let stickies = vec![(ax, ay, ba.w, ba.h)];
+        let pos = auto_arrange(&l.boxes, &schema, &stickies);
+        let (x, y) = pos["a"];
+        let clear = |sx0, sy0, sx1, sy1| x >= sx1 || sx0 >= x + ba.w || y >= sy1 || sy0 >= y + ba.h;
+        for &(sx0, sy0, sw, sh) in &stickies {
+            assert!(
+                clear(sx0, sy0, sx0 + sw, sy0 + sh),
+                "a still overlaps the sticky at ({x},{y})"
+            );
+        }
+    }
+
+    #[test]
+    fn auto_arrange_shifts_a_whole_group_off_a_sticky() {
+        // a sticky inside a group's naive region: the group's members
+        // move as one block, region clear of the note
+        let (l, schema) = arrange_parts(
+            "TableGroup \"G\" {
+  a
+  b
+}
+Table a { id integer [pk] }
+Table b { a_id integer }
+Ref: b.a_id > a.id
+",
+        );
+        let naive = auto_arrange(&l.boxes, &schema, &[]);
+        let rg = region_of(&naive, &l, &["a", "b"]);
+        // the sticky sits on the group region's middle
+        let stickies = vec![(
+            (rg.0 + rg.2) / 2 - 1,
+            (rg.1 + rg.3) / 2 - 1,
+            4,
+            4,
+        )];
+        let pos = auto_arrange(&l.boxes, &schema, &stickies);
+        let region = region_of(&pos, &l, &["a", "b"]);
+        for &(sx0, sy0, sw, sh) in &stickies {
+            assert!(
+                regions_disjoint(region, (sx0, sy0, sx0 + sw, sy0 + sh)),
+                "group region {region:?} still covers the sticky"
+            );
+        }
+        // rigid: the members keep their naive arrangement
+        assert_eq!(
+            (pos["b"].0 - pos["a"].0, pos["b"].1 - pos["a"].1),
+            (naive["b"].0 - naive["a"].0, naive["b"].1 - naive["a"].1)
         );
     }
 
@@ -1571,7 +1770,7 @@ Ref: b.a_id > a.id
 Ref: c.a_id > a.id
 ",
         );
-        let pos = auto_arrange(&l.boxes, &schema);
+        let pos = auto_arrange(&l.boxes, &schema, &[]);
         // same layer: same x, stacked top-down with the 2-cell gap; ties
         // keep model order (b before c, so b above c)
         assert_eq!(pos["b"].0, pos["c"].0);
@@ -1598,7 +1797,7 @@ Ref: r2.q1_id > q1.id
 Ref: r1.q2_id > q2.id
 ",
         );
-        let pos = auto_arrange(&l.boxes, &schema);
+        let pos = auto_arrange(&l.boxes, &schema, &[]);
         // model order (q1,q2 / r1,r2) would cross both edges; the sweeps
         // must leave the two layers ordered so no edge crosses (whether it
         // swapped the q layer, the r layer, or both)
@@ -1628,7 +1827,7 @@ Ref: b.a_id > a.id
 Ref: c.a_id > a.id
 ",
         );
-        let pos = auto_arrange(&l.boxes, &schema);
+        let pos = auto_arrange(&l.boxes, &schema, &[]);
         let a = box_of(&l, "a");
         let c = box_of(&l, "c");
         let (pa, pb, pc) = (pos["a"], pos["b"], pos["c"]);
@@ -1652,7 +1851,7 @@ Ref: b.a_id > a.id
 Ref: d.c_id > c.id
 ",
         );
-        let pos = auto_arrange(&l.boxes, &schema);
+        let pos = auto_arrange(&l.boxes, &schema, &[]);
         // the first component (model order) on the left; the second starts
         // one 8-cell component gap after the first's right edge (b is the
         // rightmost box of component 1)
@@ -1673,7 +1872,7 @@ Ref: a.rb > b.id
 Ref: b.ra > a.id
 ",
         );
-        let pos = auto_arrange(&l.boxes, &schema);
+        let pos = auto_arrange(&l.boxes, &schema, &[]);
         // cycle members park in one layer: same x, stacked
         assert_eq!(pos["a"].0, pos["b"].0);
         assert_eq!(
@@ -1691,8 +1890,8 @@ Table u { id integer [pk] }
 Ref: u.id > t.id
 ",
         );
-        let pos1 = auto_arrange(&l.boxes, &schema);
-        let pos2 = auto_arrange(&l.boxes, &schema);
+        let pos1 = auto_arrange(&l.boxes, &schema, &[]);
+        let pos2 = auto_arrange(&l.boxes, &schema, &[]);
         assert_eq!(pos1, pos2, "deterministic");
         assert_eq!(pos1.len(), l.boxes.len(), "every table gets an override");
         for b in &l.boxes {
