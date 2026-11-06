@@ -21,9 +21,6 @@ pub enum Message {
     /// Wheel notches (normalized: lines, or pixels / 40).
     Wheel(f32),
     /// Wheel over a field-card popup: scroll the card's body by px.
-    FieldCardScroll(f32),
-    TableCardScroll(f32),
-    GroupCardScroll(f32),
     FindToggle,
     FindNext,
     FindPrev,
@@ -871,24 +868,6 @@ pub struct App {
     pub drag: Drag,
     /// Last known cursor position over the diagram canvas (local px).
     pub canvas_cursor: Option<Point>,
-    /// The field-card popup's scroll offset (px), driven by the wheel
-    /// over the card; reset whenever the hovered row changes.
-    pub field_card_scroll: f32,
-    /// The table popup's scroll offset (wheel over its header band);
-    /// reset when the hovered table changes.
-    pub table_card_scroll: f32,
-    /// The group popup's scroll offset (wheel over its band); reset when
-    /// the hovered group changes.
-    pub group_card_scroll: f32,
-    /// Identity of the row under the popup: (table title, row). A change
-    /// resets `field_card_scroll`.
-    field_card_key: Option<(String, usize)>,
-    /// Identity of the table whose header popup is open (its title). A
-    /// change resets `table_card_scroll`.
-    table_card_key: Option<String>,
-    /// Identity of the group whose band popup is open (its name). A
-    /// change resets `group_card_scroll`.
-    group_card_key: Option<String>,
     /// Table or column row that was clicked (no drag) — the editor jumps
     /// to its definition line (the column's own, else the table's name).
     pub pending_jump: Option<PendingJump>,
@@ -1014,12 +993,6 @@ impl App {
             last_tick: None,
             drag: Drag::None,
             canvas_cursor: None,
-            field_card_scroll: 0.0,
-            table_card_scroll: 0.0,
-            group_card_scroll: 0.0,
-            field_card_key: None,
-            table_card_key: None,
-            group_card_key: None,
             pending_jump: None,
             should_quit: false,
             last_scroll_chord: None,
@@ -2235,9 +2208,6 @@ impl App {
         // and lines under the menu)
         if self.pointer_in_export_dropdown() {
             self.cur_mut().hover_edges.clear();
-            self.field_card_key = None;
-            self.table_card_key = None;
-            self.group_card_key = None;
             return;
         }
         // hover chrome belongs to the TOPMOST item at the pointer — the
@@ -2250,16 +2220,13 @@ impl App {
             dia::hit_topmost(&cur.diagram, cur.zoom, cur.pan, p, &cur.item_z)
         };
         let mut active: Vec<usize> = Vec::new();
-        let mut key = None;
-        let mut table_key = None;
-        let mut group_key = None;
         match top {
             Some(dia::PaintItem::Note(_)) => {
                 // a sticky has no hover chrome of its own — and it hides
                 // everything beneath it
             }
             Some(dia::PaintItem::Table(b)) => {
-                let (node, title) = (b.node, b.title.clone());
+                let node = b.node;
                 let row = dia::row_at(&self.cur().diagram, self.cur().zoom, self.cur().pan, p)
                     .filter(|(hb, _)| hb.node == node)
                     .map(|(_, r)| r);
@@ -2270,7 +2237,6 @@ impl App {
                                 active.push(ei);
                             }
                         }
-                        key = Some((title.clone(), row));
                     }
                     None => {
                         // the header band lights ALL of its
@@ -2278,25 +2244,6 @@ impl App {
                         for ei in self.cur().diagram.edges_touching_table(node) {
                             if !active.contains(&ei) {
                                 active.push(ei);
-                            }
-                        }
-                        // the table popup: hovered header + something to
-                        // show (note / custom properties)
-                        let hb = self
-                            .cur()
-                            .diagram
-                            .boxes
-                            .iter()
-                            .find(|b| b.node == node)
-                            .cloned();
-                        if let Some(b) = hb {
-                            let top_left =
-                                crate::canvas::diagram::to_px(b.x, b.y, self.cur().zoom, self.cur().pan);
-                            let s = crate::canvas::diagram::cell_size(self.cur().zoom);
-                            if (p.y - top_left.y) / s.height < 1.0
-                                && (!b.custom.is_empty() || b.note.is_some())
-                            {
-                                table_key = Some(title);
                             }
                         }
                     }
@@ -2310,33 +2257,9 @@ impl App {
                 {
                     active.push(ei);
                 }
-                group_key = crate::canvas::groups::group_label_hit(
-                    &self.cur().diagram,
-                    self.cur().zoom,
-                    self.cur().pan,
-                    p,
-                )
-                .filter(|g| g.note.is_some() || !g.custom.is_empty())
-                .map(|g| g.name.clone());
             }
         }
         self.cur_mut().hover_edges = active;
-        // the field card's scroll resets whenever the popup's row changes:
-        // a new card always opens at its top
-        if self.field_card_key != key {
-            self.field_card_key = key;
-            self.field_card_scroll = 0.0;
-        }
-        // the table/group popups' scrolls reset the same way: a new
-        // popup always opens at its top
-        if self.table_card_key != table_key {
-            self.table_card_key = table_key;
-            self.table_card_scroll = 0.0;
-        }
-        if self.group_card_key != group_key {
-            self.group_card_key = group_key;
-            self.group_card_scroll = 0.0;
-        }
     }
 
     fn canvas_moved(&mut self, p: Point) {
@@ -2577,23 +2500,11 @@ impl App {
     /// The Highlight Relationships toggle is a click state (highlight_all)
     /// and survives, as does the sticky selection.
     fn canvas_left(&mut self) {
-        if self.canvas_cursor.is_none()
-            && self.cur().hover_edges.is_empty()
-            && self.field_card_key.is_none()
-            && self.table_card_key.is_none()
-            && self.group_card_key.is_none()
-        {
+        if self.canvas_cursor.is_none() && self.cur().hover_edges.is_empty() {
             return;
         }
         self.canvas_cursor = None;
         self.cur_mut().hover_edges.clear();
-        // a reopened popup always starts at its top (the row-change reset)
-        self.field_card_key = None;
-        self.table_card_key = None;
-        self.group_card_key = None;
-        self.field_card_scroll = 0.0;
-        self.table_card_scroll = 0.0;
-        self.group_card_scroll = 0.0;
     }
 
     /// Zoom continuously, keeping the point under the cursor stationary.
@@ -3439,17 +3350,6 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
             app.consume_pending_jump();
         }
         Message::Wheel(n) => app.wheel(n),
-        Message::FieldCardScroll(d) => {
-            // upper bound is re-clamped against the real content height
-            // at draw time; keep it non-negative here
-            app.field_card_scroll = (app.field_card_scroll + d).max(0.0);
-        }
-        Message::TableCardScroll(d) => {
-            app.table_card_scroll = (app.table_card_scroll + d).max(0.0);
-        }
-        Message::GroupCardScroll(d) => {
-            app.group_card_scroll = (app.group_card_scroll + d).max(0.0);
-        }
         Message::FindToggle => app.editor_mut().toggle_find(),
         Message::FindNext => app.find_step(true),
         Message::FindPrev => app.find_step(false),
@@ -6623,14 +6523,41 @@ mod tests {
             !app.cur().hover_edges.is_empty(),
             "the exposed row's relationship lights"
         );
-        assert!(app.field_card_key.is_some());
+        // the popup arms: the pointer sits on a table row (the topmost
+        // item is the table)
+        {
+            let cur = app.cur();
+            assert!(matches!(
+                crate::canvas::diagram::hit_topmost(
+                    &cur.diagram,
+                    cur.zoom,
+                    cur.pan,
+                    exposed,
+                    &cur.item_z
+                ),
+                Some(crate::canvas::diagram::PaintItem::Table(_))
+            ));
+        }
         // covered: everything stays dark
         let _ = update(&mut app, Message::CanvasMoved(covered));
         assert!(
             app.cur().hover_edges.is_empty(),
             "the covered row's relationship stays dark"
         );
-        assert!(app.field_card_key.is_none(), "no field card through the sticky");
+        {
+            // no field card through the sticky: the topmost item is the note
+            let cur = app.cur();
+            assert!(!matches!(
+                crate::canvas::diagram::hit_topmost(
+                    &cur.diagram,
+                    cur.zoom,
+                    cur.pan,
+                    covered,
+                    &cur.item_z
+                ),
+                Some(crate::canvas::diagram::PaintItem::Table(_))
+            ));
+        }
     }
 
     /// Enter in the find bar: the same step the arrows drive — the
@@ -6717,7 +6644,7 @@ mod tests {
             "the pointer is inside the dropdown region"
         );
         assert!(
-            app.cur().hover_edges.is_empty() && app.field_card_key.is_none(),
+            app.cur().hover_edges.is_empty(),
             "nothing hovers under the menu"
         );
 
@@ -6729,8 +6656,11 @@ mod tests {
             !app.pointer_in_export_dropdown(),
             "the card region is gone with the menu closed"
         );
+        let cur = app.cur();
+        let on_a_row = crate::canvas::diagram::row_at(&cur.diagram, cur.zoom, cur.pan, in_region)
+            .is_some();
         assert!(
-            !app.cur().hover_edges.is_empty() || app.field_card_key.is_some(),
+            !app.cur().hover_edges.is_empty() || on_a_row,
             "the same point lights the diagram once the menu is closed"
         );
 
@@ -6744,7 +6674,7 @@ mod tests {
             "the closed trigger still owns its slot"
         );
         assert!(
-            app.cur().hover_edges.is_empty() && app.field_card_key.is_none(),
+            app.cur().hover_edges.is_empty(),
             "nothing hovers under the closed trigger"
         );
         // and away from the trigger the diagram lights again
@@ -6930,17 +6860,11 @@ mod tests {
             !app.cur().hover_edges.is_empty(),
             "the hovered row's relationship is lit"
         );
-        assert!(app.field_card_key.is_some(), "the field card identity armed");
-
         // the pointer crosses into the editor: the canvas sees the move
         // land outside its bounds and reports the leave
         let _ = update(&mut app, Message::CanvasLeft);
         assert!(app.canvas_cursor.is_none(), "border/glow/handle drop");
         assert!(app.cur().hover_edges.is_empty(), "edge highlights drop");
-        assert!(app.field_card_key.is_none(), "the field card drops");
-        assert!(app.table_card_key.is_none(), "the table card drops");
-        assert!(app.group_card_key.is_none(), "the group card drops");
-        assert_eq!(app.field_card_scroll, 0.0);
 
         // a second leave is inert (no state to drop)
         let _ = update(&mut app, Message::CanvasLeft);

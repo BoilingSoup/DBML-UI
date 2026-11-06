@@ -9,7 +9,8 @@ Project dbml_ui_stress {
 }
 
 // ── Table popup that OVERFLOWS: a long note plus six custom properties ──
-// (hover the header: the card body wheel-scrolls)
+// (hover the header: the popup card caps at the pane height and
+// clips — the wheel keeps zooming the canvas even over the card)
 Table orders [headercolor: #8a4f2d, owner: "fulfillment-team", sla_hours: "48", escalation: "on-call@shop.example", region: "eu-central", pii: "customer emails only", retention: "7 years"] {
   id integer [pk, increment, not null]
   customer_id integer [not null]
@@ -26,7 +27,7 @@ Table orders [headercolor: #8a4f2d, owner: "fulfillment-team", sla_hours: "48", 
   }
 
   note: '''
-  Orders is the transactional heart of the schema. This note is deliberately long so the table popup overflows its max height and the body becomes wheel-scrollable: the morning batch imports from the storefront, the evening job reconciles against the payment provider, and the warehouse team reads fulfillment notes twice a day. If you are reading this text inside the popup, scrolling works.
+  Orders is the transactional heart of the schema. This note is deliberately long so the table popup overflows its max height and clips: the morning batch imports from the storefront, the evening job reconciles against the payment provider, and the warehouse team reads fulfillment notes twice a day. The wheel keeps zooming the canvas even while this popup is open.
   '''
 }
 

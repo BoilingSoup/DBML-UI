@@ -712,21 +712,6 @@ impl canvas::Program<crate::app::Message> for Diagram<'_> {
     }
 }
 
-/// The (box, row) under a canvas point, if any row of that box.
-/// The field card's identity for a pointer position: (table node, row)
-/// when the pointer sits on a column row whose table pops a field card
-/// (the popup rows are hover targets for the wheel-scroll too).
-pub fn field_card_at(
-    layout: &Layout,
-    zoom: f32,
-    pan: Vector,
-    p: Point,
-) -> Option<(usize, usize)> {
-    let b = hit_test(layout, zoom, pan, p)?;
-    let (hb, r) = row_at(layout, zoom, pan, p)?;
-    (hb.title == b.title && row_has_field_card(&b.rows[r])).then_some((b.node, r))
-}
-
 pub fn row_at(layout: &Layout, zoom: f32, pan: Vector, p: Point) -> Option<(&TableBox, usize)> {
     let b = hit_test(layout, zoom, pan, p)?;
     let top_left = to_px(b.x, b.y, zoom, pan);
@@ -3032,7 +3017,7 @@ mod interaction_tests {
 /// note OR enum type OR default OR custom properties — verified against
 /// their bundle's `t.enumId || t.note || t.dbdefault ...` condition and
 /// live against the Custom Properties popup).
-fn row_has_field_card(row: &Row) -> bool {
+pub(crate) fn row_has_field_card(row: &Row) -> bool {
     row.note.is_some() || row.ty_enum || row.default.is_some() || !row.custom.is_empty()
 }
 
@@ -3050,7 +3035,8 @@ fn row_has_field_card(row: &Row) -> bool {
 /// label, pl-4 disc bullets, pb-1.5). Hairline dividers after the
 /// header, after the Note, and before Custom Properties — never between
 /// Enum and Default (their template's exact divider placement). The body
-/// wheel-scrolls when it overflows (their canvas-popover__scroll).
+/// caps at the pane height and clips (the wheel stays with the canvas
+/// zoom, even over an open card).
 enum PopupEntry {
     /// A text line (wrapped note lines, enum values).
     Plain(String, Color),
@@ -3177,8 +3163,6 @@ struct PopupGeom {
     w: f32,
     h: f32,
     header_h: f32,
-    scroll: f32,
-    max_scroll: f32,
     /// the tail rides the card's LEFT edge (false: flipped to the right
     /// edge when there is no room on the anchor's side)
     tail_left: bool,
@@ -3198,7 +3182,6 @@ fn popup_layout(
     anchor: PopupAnchor,
     zoom: f32,
     bounds: Rectangle,
-    scroll: f32,
 ) -> PopupGeom {
     let k = zoom / 20.0;
     let wrap_cols = ((POPUP_MAX_W - 2.0 * POPUP_PAD_X) / (6.6 * k)) as usize;
@@ -3251,8 +3234,6 @@ fn popup_layout(
     let header_h = POPUP_HEADER_H * k;
     let body_cap = (bounds.height - 24.0 * k - header_h).max(60.0 * k);
     let body_visible = content_h.min(body_cap);
-    let max_scroll = (content_h - body_visible).max(0.0);
-    let scroll = scroll.min(max_scroll);
     let h = header_h + body_visible;
     let w = content_w
         .max(POPUP_MIN_W * k)
@@ -3279,7 +3260,7 @@ fn popup_layout(
     // the tail points at the anchor's vertical center, kept clear of the
     // rounded corners (their arrowPadding)
     let tail_y = ((anchor.top + anchor.bottom) * 0.5).clamp(y + 14.0 * k, y + h - 14.0 * k);
-    PopupGeom { x, y, w, h, header_h, scroll, max_scroll, tail_left, tail_y }
+    PopupGeom { x, y, w, h, header_h, tail_left, tail_y }
 }
 
 /// The popup header's little glyph (their w-3 svg before the title): the
@@ -3543,7 +3524,6 @@ fn draw_popup_body(
     frame.with_clip(
         Rectangle::new(Point::new(g.x, body_top), Size::new(g.w, body_clip_h)),
         |f| {
-            f.translate(Vector::new(0.0, -g.scroll));
             let mut cy = 0.0;
             for sec in sections {
                 if sec.divider_before {
@@ -3684,30 +3664,6 @@ fn draw_popup_body(
             }
         },
     );
-    // scrollbar hint when the body scrolls: 4px track, thumb proportional
-    // to the visible share
-    if g.max_scroll > 0.0 {
-        let track_x = g.x + g.w - 6.0 * k;
-        let track_y = body_top + 4.0 * k;
-        let track_h = body_clip_h - 8.0 * k;
-        frame.fill_rectangle(
-            Point::new(track_x, track_y),
-            Size::new(4.0, track_h),
-            Color::from_rgba(1.0, 1.0, 1.0, 0.08),
-        );
-        let thumb_h = (track_h
-            * ((g.h - g.header_h) / (g.h - g.header_h + g.max_scroll)))
-        .max(18.0 * k)
-        .min(track_h);
-        let thumb_y = track_y
-            + (track_h - thumb_h)
-                * (if g.max_scroll > 0.0 { g.scroll / g.max_scroll } else { 0.0 });
-        frame.fill_rectangle(
-            Point::new(track_x, thumb_y),
-            Size::new(4.0, thumb_h),
-            Color::from_rgba(1.0, 1.0, 1.0, 0.25),
-        );
-    }
 }
 
 /// Truncate `text` to at most `max_w` px at the given per-char advance,
@@ -3733,7 +3689,6 @@ fn draw_field_popup(
     view_zoom: f32,
     pan: Vector,
     bounds: Rectangle,
-    scroll: f32,
 ) {
     // static size: dbdiagram's popovers are DOM nodes OUTSIDE the zoomed
     // canvas (their CanvasPopover anchors a position:fixed reference div
@@ -3813,7 +3768,7 @@ fn draw_field_popup(
         top: to_px(b.x, b.y + r as i32 + 1, view_zoom, pan).y,
         bottom: to_px(b.x, b.y + r as i32 + 1, view_zoom, pan).y + s.height,
     };
-    let g = popup_layout(&sections, header_w, anchor, zoom, bounds, scroll);
+    let g = popup_layout(&sections, header_w, anchor, zoom, bounds);
     let type_color = if row.ty_enum { ENUM_VALUE_BLUE } else { TYPE_ORANGE };
     draw_popup_chrome(frame, &g, PopupIcon::Field, &row.name, Some((row.ty.as_str(), type_color)), zoom);
     draw_popup_body(frame, &g, &sections, zoom);
@@ -3825,7 +3780,6 @@ fn draw_table_popup(
     view_zoom: f32,
     pan: Vector,
     bounds: Rectangle,
-    scroll: f32,
 ) {
     // static size (see draw_field_popup)
     let zoom = 20.0;
@@ -3851,7 +3805,7 @@ fn draw_table_popup(
         top: header_top,
         bottom: header_top + s.height,
     };
-    let g = popup_layout(&sections, header_w, anchor, zoom, bounds, scroll);
+    let g = popup_layout(&sections, header_w, anchor, zoom, bounds);
     draw_popup_chrome(frame, &g, PopupIcon::Table, &b.title, None, zoom);
     draw_popup_body(frame, &g, &sections, zoom);
 }
@@ -3862,7 +3816,6 @@ fn draw_group_popup(
     view_zoom: f32,
     pan: Vector,
     bounds: Rectangle,
-    scroll: f32,
 ) {
     // static size (see draw_field_popup)
     let zoom = 20.0;
@@ -3888,7 +3841,7 @@ fn draw_group_popup(
         top: band_top,
         bottom: band_top + s.height,
     };
-    let geom = popup_layout(&sections, header_w, anchor, zoom, bounds, scroll);
+    let geom = popup_layout(&sections, header_w, anchor, zoom, bounds);
     draw_popup_chrome(frame, &geom, PopupIcon::Group, &g.name, None, zoom);
     draw_popup_body(frame, &geom, &sections, zoom);
 }
@@ -3978,68 +3931,10 @@ pub struct DiagramOverlay<'a> {
     pub pan: Vector,
     /// Cursor position over the canvas (local px), as `Diagram::hover`.
     pub hover: Option<Point>,
-    /// The popup card scroll offsets (px below each card's top): the
-    /// wheel over an open popup scrolls the card, not the canvas.
-    pub field_card_scroll: f32,
-    pub table_card_scroll: f32,
-    pub group_card_scroll: f32,
 }
 
 impl canvas::Program<crate::app::Message> for DiagramOverlay<'_> {
     type State = ();
-
-    fn update(
-        &self,
-        _state: &mut Self::State,
-        event: canvas::Event,
-        bounds: Rectangle,
-        cursor: iced::mouse::Cursor,
-    ) -> (canvas::event::Status, Option<crate::app::Message>) {
-        use crate::app::Message;
-        use iced::mouse;
-
-        // the wheel over a field-card row scrolls the CARD (dbdiagram's
-        // popup scrolls too), never the canvas underneath: captured.
-        if let canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) = event {
-            if let Some(p) = cursor.position_over(bounds).map(|p| Point::new(p.x - bounds.x, p.y - bounds.y)) {
-                let notches = match delta {
-                    mouse::ScrollDelta::Pixels { y, .. } => y / 40.0,
-                    mouse::ScrollDelta::Lines { y, .. } => y,
-                };
-                // field card: wheel over a qualifying column row
-                if field_card_at(self.layout, self.zoom, self.pan, p).is_some() {
-                    return (
-                        canvas::event::Status::Captured,
-                        Some(Message::FieldCardScroll(notches * 40.0)),
-                    );
-                }
-                // table popup: wheel over the table's header band while
-                // its popup is open
-                if let Some(b) = hit_test(self.layout, self.zoom, self.pan, p) {
-                    let top_left = to_px(b.x, b.y, self.zoom, self.pan);
-                    let s = cell_size(self.zoom);
-                    let rowf = (p.y - top_left.y) / s.height;
-                    if rowf < 1.0 && (!b.custom.is_empty() || b.note.is_some()) {
-                        return (
-                            canvas::event::Status::Captured,
-                            Some(Message::TableCardScroll(notches * 40.0)),
-                        );
-                    }
-                }
-                // group popup: wheel over the group's band while its
-                // popup is open
-                if let Some(g) = super::groups::group_label_hit(self.layout, self.zoom, self.pan, p) {
-                    if g.note.is_some() || !g.custom.is_empty() {
-                        return (
-                            canvas::event::Status::Captured,
-                            Some(Message::GroupCardScroll(notches * 40.0)),
-                        );
-                    }
-                }
-            }
-        }
-        (canvas::event::Status::Ignored, None)
-    }
 
     fn draw(
         &self,
@@ -4063,9 +3958,6 @@ impl canvas::Program<crate::app::Message> for DiagramOverlay<'_> {
                 self.pan,
                 p,
                 bounds,
-                self.field_card_scroll,
-                self.table_card_scroll,
-                self.group_card_scroll,
                 &mut frame,
             );
         }
@@ -4085,9 +3977,6 @@ fn draw_active_popup(
     pan: Vector,
     p: Point,
     bounds: Rectangle,
-    field_scroll: f32,
-    table_scroll: f32,
-    group_scroll: f32,
     frame: &mut canvas::Frame,
 ) {
     // the picker glyphs sit on the same header/band hover targets the
@@ -4115,7 +4004,7 @@ fn draw_active_popup(
         })
     };
     if let Some((b, r)) = field_card {
-        draw_field_popup(frame, layout, b, r, zoom, pan, bounds, field_scroll);
+        draw_field_popup(frame, layout, b, r, zoom, pan, bounds);
         // the hovered glyph's tooltip pill rides on top of the card
         if let Some(line) = icon_pill {
             draw_tooltip_pill(frame, &[line], p, zoom, bounds);
@@ -4137,7 +4026,7 @@ fn draw_active_popup(
         let s = cell_size(zoom);
         let rowf = (p.y - top_left.y) / s.height;
         if rowf < 1.0 && (!b.custom.is_empty() || b.note.is_some()) {
-            draw_table_popup(frame, b, zoom, pan, bounds, table_scroll);
+            draw_table_popup(frame, b, zoom, pan, bounds);
             return;
         }
     }
@@ -4146,7 +4035,7 @@ fn draw_active_popup(
     // pointer note pill duplicated the card's Note section)
     if let Some(g) = super::groups::group_label_hit(layout, zoom, pan, p) {
         if g.note.is_some() || !g.custom.is_empty() {
-            draw_group_popup(frame, g, zoom, pan, bounds, group_scroll);
+            draw_group_popup(frame, g, zoom, pan, bounds);
             return;
         }
     }

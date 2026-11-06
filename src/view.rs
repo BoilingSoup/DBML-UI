@@ -214,9 +214,6 @@ pub fn root(app: &App) -> Element<'_, Message> {
             } else {
                 None
             },
-            field_card_scroll: app.field_card_scroll,
-            table_card_scroll: app.table_card_scroll,
-            group_card_scroll: app.group_card_scroll,
         })
         .width(Fill)
         .height(Fill),
