@@ -1063,6 +1063,27 @@ impl App {
                 scroll: t.editor_scroll,
                 hscroll: t.editor_hscroll,
                 doc_open: true,
+                // the dragged diagram layout rides with the tab: it
+                // persists until the file is closed (dropped from the
+                // session), like the tab itself
+                table_pos: t
+                    .table_pos
+                    .iter()
+                    .map(|(k, (x, y))| (k.clone(), *x, *y))
+                    .collect(),
+                note_pos: t
+                    .note_pos
+                    .iter()
+                    .map(|(k, (x, y, w, h))| (k.clone(), *x, *y, *w, *h))
+                    .collect(),
+                item_z: t
+                    .item_z
+                    .iter()
+                    .map(|z| match z {
+                        RaisedItem::Table(s) => (true, s.clone()),
+                        RaisedItem::Note(s) => (false, s.clone()),
+                    })
+                    .collect(),
             });
         }
         crate::session::Session {
@@ -1094,6 +1115,26 @@ impl App {
                 scroll: 0.0,
                 hscroll: 0.0,
                 doc_open: true,
+                // positions survive a clean exit too: the record carries
+                // no buffer text, but the layout is the tab's state
+                table_pos: t
+                    .table_pos
+                    .iter()
+                    .map(|(k, (x, y))| (k.clone(), *x, *y))
+                    .collect(),
+                note_pos: t
+                    .note_pos
+                    .iter()
+                    .map(|(k, (x, y, w, h))| (k.clone(), *x, *y, *w, *h))
+                    .collect(),
+                item_z: t
+                    .item_z
+                    .iter()
+                    .map(|z| match z {
+                        RaisedItem::Table(s) => (true, s.clone()),
+                        RaisedItem::Note(s) => (false, s.clone()),
+                    })
+                    .collect(),
             });
         }
         crate::session::Session {
@@ -1226,6 +1267,9 @@ impl App {
             // the baseline is the disk content just read: unmodified
             tab.saved_text = text;
             tab.editor.mode = mode;
+            // dragged positions return with the tab; a tab the session
+            // never laid out starts auto-arranged
+            apply_session_layout(&mut tab, st);
             tabs.push(tab);
         }
         if tabs.is_empty() {
@@ -2420,6 +2464,18 @@ impl App {
     fn canvas_released(&mut self, p: Point) {
         use crate::canvas::diagram as dia;
         self.canvas_cursor = Some(p);
+        // a drag moved diagram state the session snapshots (table/note
+        // positions, raise order): the SessionTick flush persists it, so
+        // the layout survives restarts until the file is closed
+        if matches!(
+            &self.drag,
+            Drag::Table { moved: true, .. }
+                | Drag::Group { moved: true, .. }
+                | Drag::Sticky { .. }
+                | Drag::StickyResize { .. }
+        ) {
+            self.mark_session_dirty();
+        }
         // a group-band release without movement is a CLICK: like a table
         // header it jumps the editor to the definition — the group's span
         // from a fresh parse (the layout carries only regions, not spans).
@@ -3847,24 +3903,64 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
     handle_message_finish(app)
 }
 
-/// Common tail of a restored tab: vim mode, cursor (clamped into the
-/// buffer), viewport scrolls, and the document-open flag.
-fn finish_restored_tab(
-    mut tab: Tab,
-    st: &crate::session::SessionTab,
-    mode_of: impl Fn(u8) -> editor::Mode,
-) -> Tab {
-    tab.editor.mode = mode_of(st.mode);
-    let row = st.cursor.0.min(tab.editor.buf.line_count().saturating_sub(1));
-    let col = st.cursor.1.min(tab.editor.buf.line_len(row));
-    tab.editor
-        .buf
-        .move_cursor(editor::buffer::Move::Jump(row, col));
-    tab.editor_scroll = st.scroll;
-    tab.editor_hscroll = st.hscroll;
-    tab.doc_open = st.doc_open && (tab.file.is_some() || !st.text.is_empty());
-    tab
+    /// Common tail of a restored tab: vim mode, cursor (clamped into the
+    /// buffer), viewport scrolls, and the document-open flag.
+    /// Re-apply a session tab's dragged diagram layout: table positions,
+/// sticky rects and the raise order go back onto the tab and the diagram
+/// re-lays-out with them. A tab with NO saved positions (first restore
+/// of a never-arranged file, or a legacy session) starts from the
+/// auto-arranged layout instead — file open and new diagram share that
+/// initial arrangement.
+fn apply_session_layout(tab: &mut Tab, st: &crate::session::SessionTab) {
+    if st.table_pos.is_empty() {
+        let schema = model::build(&dbml::parser::parse(&tab.source).doc);
+        tab.table_pos = layout::auto_arrange(&tab.diagram.boxes, &schema, &[]);
+    } else {
+        tab.table_pos = st
+            .table_pos
+            .iter()
+            .map(|(k, x, y)| (k.clone(), (*x, *y)))
+            .collect();
+        tab.note_pos = st
+            .note_pos
+            .iter()
+            .map(|(k, x, y, w, h)| (k.clone(), (*x, *y, *w, *h)))
+            .collect();
+        tab.item_z = st
+            .item_z
+            .iter()
+            .map(|(t, s)| {
+                if *t {
+                    RaisedItem::Table(s.clone())
+                } else {
+                    RaisedItem::Note(s.clone())
+                }
+            })
+            .collect();
+    }
+    // re-lay-out with the applied overrides (the tab was constructed
+    // with the default layout before this)
+    let src = tab.source.clone();
+    tab.set_source(&src);
 }
+
+fn finish_restored_tab(
+        mut tab: Tab,
+        st: &crate::session::SessionTab,
+        mode_of: impl Fn(u8) -> editor::Mode,
+    ) -> Tab {
+        apply_session_layout(&mut tab, st);
+        tab.editor.mode = mode_of(st.mode);
+        let row = st.cursor.0.min(tab.editor.buf.line_count().saturating_sub(1));
+        let col = st.cursor.1.min(tab.editor.buf.line_len(row));
+        tab.editor
+            .buf
+            .move_cursor(editor::buffer::Move::Jump(row, col));
+        tab.editor_scroll = st.scroll;
+        tab.editor_hscroll = st.hscroll;
+        tab.doc_open = st.doc_open && (tab.file.is_some() || !st.text.is_empty());
+        tab
+    }
 
 impl App {
 
@@ -4875,6 +4971,10 @@ impl App {
             self.config.push_recent(path);
             self.config.save();
         }
+        // a freshly opened diagram starts AUTO-ARRANGED (new diagram and
+        // SQL import share the rule) — the default layered layout is
+        // never the first thing you see
+        self.auto_arrange();
         Ok(())
     }
 
@@ -12371,6 +12471,106 @@ mod clipboard_menu_tests {
     /// cannot be read — moved, renamed, deleted — skip silently. Nothing
     /// restorable keeps the boot splash.
     #[test]
+    fn open_file_starts_auto_arranged() {
+        let dir = std::env::temp_dir().join(format!("dbml-ui-arr-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("arr.dbml");
+        std::fs::write(
+            &path,
+            "Table users { id integer [pk] }\nTable orders { user_id integer }\nRef: orders.user_id > users.id\n",
+        )
+        .unwrap();
+
+        let mut app = App::blank_start();
+        app.open_file(path.to_str().unwrap()).unwrap();
+        // the arrange wrote positions (the default layered layout and the
+        // auto-arranger disagree; non-emptiness is the observable)
+        assert!(!app.cur().table_pos.is_empty(), "open seeds table_pos");
+        let schema = model::build(&dbml::parser::parse(&app.source()).doc);
+        let arranged = layout::auto_arrange(&app.cur().diagram.boxes, &schema, &[]);
+        assert_eq!(app.cur().table_pos, arranged);
+        // the diagram boxes actually sit there
+        for (title, (x, y)) in &app.cur().table_pos {
+            let b = app
+                .cur()
+                .diagram
+                .boxes
+                .iter()
+                .find(|b| &b.title == title)
+                .unwrap();
+            assert_eq!((b.x, b.y), (*x, *y), "{title} at the arranged cell");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn session_restores_dragged_layout_and_arranges_legacy_tabs() {
+        let dir = std::env::temp_dir().join(format!("dbml-ui-pos-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("pos.dbml");
+        std::fs::write(&path, "Table users { id integer [pk] }\n").unwrap();
+
+        // drag state: the user moved `users`, raised it, pinned a sticky
+        let mut app = App::blank_start();
+        app.open_file(path.to_str().unwrap()).unwrap();
+        app.cur_mut().table_pos.insert("users".into(), (31, 17));
+        app.cur_mut().note_pos.insert("idea".into(), (2, 9, 14, 5));
+        app.cur_mut().item_z = vec![RaisedItem::Table("users".into())];
+        let src = app.source().to_string();
+        app.cur_mut().set_source(&src);
+
+        // crash-style restore (snapshot carries text + layout)
+        let snap = app.session_snapshot();
+        let mut back = App::blank_start();
+        back.restore_session(snap);
+        assert_eq!(back.cur().table_pos.get("users"), Some(&(31, 17)));
+        assert_eq!(back.cur().note_pos.get("idea"), Some(&(2, 9, 14, 5)));
+        assert_eq!(back.cur().item_z, vec![RaisedItem::Table("users".into())]);
+        let b = back
+            .cur()
+            .diagram
+            .boxes
+            .iter()
+            .find(|b| b.title == "users")
+            .unwrap();
+        assert_eq!((b.x, b.y), (31, 17), "the box re-laid-out at the saved cell");
+
+        // clean-exit restore (record carries paths + layout, text from disk)
+        let record = app.clean_record();
+        let mut back2 = App::blank_start();
+        back2.restore_open_files(record);
+        assert_eq!(back2.cur().table_pos.get("users"), Some(&(31, 17)));
+        assert_eq!(back2.cur().item_z, vec![RaisedItem::Table("users".into())]);
+
+        // a LEGACY session (no saved layout — an old binary wrote it):
+        // the restored tab starts auto-arranged instead
+        let legacy = crate::session::Session {
+            active: 0,
+            split: 0.5,
+            clean: true,
+            tabs: vec![crate::session::SessionTab {
+                file: Some(path.to_string_lossy().into_owned()),
+                text: String::new(),
+                cursor: (0, 0),
+                mode: 0,
+                scroll: 0.0,
+                hscroll: 0.0,
+                doc_open: true,
+                ..Default::default()
+            }],
+        };
+        let mut back3 = App::blank_start();
+        back3.restore_open_files(legacy);
+        assert!(
+            !back3.cur().table_pos.is_empty(),
+            "legacy tab boots arranged"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn clean_record_reopens_files_and_skips_missing() {
         let dir = std::env::temp_dir().join(format!("dbml-ui-reopen-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -12386,6 +12586,7 @@ mod clipboard_menu_tests {
             scroll: 0.0,
             hscroll: 0.0,
             doc_open: true,
+                ..Default::default()
         };
         let record = crate::session::Session {
             active: 1, // the alive file, second in the list

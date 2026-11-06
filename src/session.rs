@@ -17,7 +17,7 @@
 
 const MAGIC: &str = "dbml-ui session 1";
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct SessionTab {
     /// Backing file, if any (`None` = an unsaved/Untitled diagram).
     pub file: Option<String>,
@@ -32,6 +32,14 @@ pub struct SessionTab {
     pub hscroll: f32,
     /// False only for a start-screen tab.
     pub doc_open: bool,
+    /// Dragged table positions (cells): table title → (x, y). Empty
+    /// when nothing was ever moved — restore then auto-arranges.
+    pub table_pos: Vec<(String, i32, i32)>,
+    /// Dragged/resized sticky rects (cells): name → (x, y, w, h).
+    pub note_pos: Vec<(String, i32, i32, i32, i32)>,
+    /// Raise order across tables and stickies, most recently grabbed
+    /// last: (true = Table, false = Note), name.
+    pub item_z: Vec<(bool, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -99,6 +107,18 @@ pub fn encode(s: &Session) -> String {
             "cursor {} {} {} {} {} {}\n",
             t.cursor.0, t.cursor.1, t.mode, t.scroll, t.hscroll, u8::from(t.doc_open)
         ));
+        // diagram layout: dragged positions and the raise order. Names
+        // go LAST on the line (they may contain spaces — quoted DBML
+        // names); the leading fields are fixed-count integers.
+        for (name, x, y) in &t.table_pos {
+            out.push_str(&format!("tpos {x} {y} {name}\n"));
+        }
+        for (name, x, y, w, h) in &t.note_pos {
+            out.push_str(&format!("npos {x} {y} {w} {h} {name}\n"));
+        }
+        for (is_table, name) in &t.item_z {
+            out.push_str(&format!("z {} {name}\n", if *is_table { 'T' } else { 'N' }));
+        }
     }
     out
 }
@@ -155,6 +175,7 @@ pub fn decode(text: &str) -> Option<Session> {
                     scroll: 0.0,
                     hscroll: 0.0,
                     doc_open: true,
+                    ..Default::default()
                 });
             }
             "text" => {
@@ -169,6 +190,29 @@ pub fn decode(text: &str) -> Option<Session> {
                 t.scroll = nums.next()?.parse().ok()?;
                 t.hscroll = nums.next()?.parse().ok()?;
                 t.doc_open = nums.next()? == "1";
+            }
+            // diagram layout lines (all optional; older sessions without
+            // them decode to empty — restore then auto-arranges)
+            "tpos" => {
+                let t = next_tab.as_mut()?;
+                let mut parts = val.splitn(3, ' ');
+                let x = parts.next()?.parse().ok()?;
+                let y = parts.next()?.parse().ok()?;
+                t.table_pos.push((parts.next()?.to_string(), x, y));
+            }
+            "npos" => {
+                let t = next_tab.as_mut()?;
+                let mut parts = val.splitn(5, ' ');
+                let x = parts.next()?.parse().ok()?;
+                let y = parts.next()?.parse().ok()?;
+                let w = parts.next()?.parse().ok()?;
+                let h = parts.next()?.parse().ok()?;
+                t.note_pos.push((parts.next()?.to_string(), x, y, w, h));
+            }
+            "z" => {
+                let t = next_tab.as_mut()?;
+                let (kind, name) = val.split_once(' ')?;
+                t.item_z.push((kind == "T", name.to_string()));
             }
             _ => return None,
         }
@@ -187,6 +231,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn session_round_trips_diagram_layout() {
+        let s = Session {
+            active: 0,
+            split: 0.5,
+            clean: false,
+            tabs: vec![SessionTab {
+                file: Some("/tmp/x.dbml".into()),
+                text: "Table users { id integer }\n".into(),
+                cursor: (0, 0),
+                mode: 1,
+                scroll: 0.0,
+                hscroll: 0.0,
+                doc_open: true,
+                table_pos: vec![
+                    ("users".into(), 12, -3),
+                    ("order items".into(), 40, 7), // quoted name with a space
+                ],
+                note_pos: vec![("idea".into(), 2, 9, 14, 5)],
+                item_z: vec![(false, "idea".into()), (true, "users".into())],
+            }],
+        };
+        assert_eq!(decode(&encode(&s)), Some(s));
+    }
+
+    #[test]
     fn session_round_trips_multiline_text_and_files() {
         let s = Session {
             active: 1,
@@ -201,6 +270,7 @@ mod tests {
                     scroll: 3.0,
                     hscroll: 12.5,
                     doc_open: true,
+                ..Default::default()
                 },
                 SessionTab {
                     file: None,
@@ -210,6 +280,7 @@ mod tests {
                     scroll: 0.0,
                     hscroll: 0.0,
                     doc_open: false,
+                ..Default::default()
                 },
             ],
         };
@@ -233,6 +304,7 @@ mod tests {
                 scroll: 0.0,
                 hscroll: 0.0,
                 doc_open: true,
+                ..Default::default()
             }],
         };
         assert_eq!(decode(&encode(&s)), Some(s));
@@ -263,6 +335,7 @@ mod tests {
                 scroll: 0.0,
                 hscroll: 0.0,
                 doc_open: true,
+                ..Default::default()
             }],
         };
         let full = encode(&s);
