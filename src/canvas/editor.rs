@@ -2648,8 +2648,22 @@ impl canvas::Program<Message> for EditorOverlay<'_> {
                                 continue;
                             }
                             let pw = label.chars().count() as f32 * 5.4 + 10.0;
+                            // the pill carries the optical centering, not
+                            // the label: Vertical::Center centers the
+                            // LINE-HEIGHT box, which for these descender-
+                            // less labels puts the ink ~0.1-0.2px above the
+                            // pill's geometric center (pixel-measured via
+                            // AA edge-crossings on the rendered doc) — but
+                            // the crisp solid-row gaps read MORE lopsided
+                            // (1px above the glyph band vs 2px below).
+                            // The label itself can't take the correction:
+                            // glyph rasterization snaps vertically to
+                            // whole pixels (a 0.35px text nudge rendered
+                            // bit-identical), while this fill is a mesh
+                            // that rasterizes at full precision. A 0.2px
+                            // pill shift balances both measures.
                             let pill = canvas::Path::rounded_rectangle(
-                                Point::new(px, ry + 1.5),
+                                Point::new(px, ry + 1.30),
                                 Size::new(pw, 12.0),
                                 iced::border::Radius::from(3.0),
                             );
