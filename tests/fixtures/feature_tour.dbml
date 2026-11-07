@@ -1,4 +1,4 @@
-// dbml-ui feature showcase — open this file to see every diagram
+// dbml-ui feature tour — open this file to see every diagram
 // embellishment in one place. (Comments like this one also demonstrate
 // that format-on-save skips commented sources instead of dropping them.)
 Project dbml_ui_showcase {
@@ -77,7 +77,7 @@ TableGroup "Content System" [color: #1E69FD] {
 }
 
 // ── Custom properties: any `key: "value"` pair on a table or column ──
-// (hover the audit_log header or its rows in the diagram to see the
+// (hovr the audit_log header or its rows in the diagram to see the
 // "Custom Properties" hover cards, like dbdiagram's)
 Table audit_log [owner: "data-team", sla_hours: "24", pii: "true"] {
   id integer [pk, increment]
@@ -110,3 +110,4 @@ Note todo {
   TODO 2: Tea to add price to the products table
   '''
 }
+

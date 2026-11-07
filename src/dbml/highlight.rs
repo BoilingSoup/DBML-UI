@@ -385,7 +385,7 @@ mod multibyte_tests {
     fn multibyte_comments_never_panic() {
         // the em-dash in a comment: byte-casting 0xE2 made it look like the
         // letter 'â' and sliced mid-character (a real crash on
-        // showcase.dbml after an edit un-commented the line)
+        // feature_tour.dbml after an edit un-commented the line)
         let src = "r/ dbml-ui feature showcase \u{2014} open this file\nTable t {\n  id integer [pk]\n}\n";
         let _ = highlight(src); // must not panic
         let src = "// showcase\u{2014}open\nTable t { id integer }\n";

@@ -11100,7 +11100,7 @@ mod tab_tests {
     /// byte-for-byte, and the mutated source must re-parse cleanly.
     #[test]
     fn top_level_ref_color_splice_leaves_neighbors_alone() {
-        // the trailing blank + comment + table mirror showcase.dbml: the
+        // the trailing blank + comment + table mirror feature_tour.dbml: the
         // settings-less Ref is followed by prose before the next item
         let src = "Table users { id integer [pk] }\nTable sessions { user_id integer }\n\
                    Ref: sessions.user_id > users.id\n\n\

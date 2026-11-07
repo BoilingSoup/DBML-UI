@@ -1356,7 +1356,7 @@ fn ref_settings(
     // bracket follows, rewind — ref_stmt takes the Ref's span right
     // after this call, and a span that overshoots to the next item made
     // app.rs's line-color splice rewrite bystander lines (the
-    // settings-less `Ref: …` on showcase.dbml appended the color to the
+    // settings-less `Ref: …` on feature_tour.dbml appended the color to the
     // FOLLOWING comment and glued `Table likes` onto it)
     let before_ws = *input;
     ws(input);

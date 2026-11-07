@@ -889,7 +889,7 @@ mod tests {
     fn comments_above_a_sticky_note_stay_above_it() {
         // the scanner's top-level recognition had no `note` arm: a comment
         // above a Note stayed pending and landed AFTER the block (at EOF
-        // for a trailing note — the user's showcase.dbml report)
+        // for a trailing note — the user's feature_tour.dbml report)
         let src = "Table t {\n  id int\n}\n\n// sticky notes howto\nNote todo {\n  '''one'''\n}\n";
         let out = format_source(src).unwrap();
         let c = out.find("// sticky notes howto").unwrap();

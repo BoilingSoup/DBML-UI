@@ -830,12 +830,12 @@ mod tests {
     fn clean_documents_validate_empty() {
         assert!(diags(include_str!("../../tests/fixtures/basic.dbml")).is_empty());
         assert!(diags(crate::SAMPLE_DBML).is_empty());
-        // showcase.dbml's findings are the nullable self-ref FK (their
+        // feature_tour.dbml's findings are the nullable self-ref FK (their
         // editor anchors it twice: the column definition + the ref's FK
         // endpoint — 2 entries) plus 3 record-constraint violations (the
         // posts records' author_id against users' missing records; the
         // reverse direction is not checked)
-        let d = diags(include_str!("../../showcase.dbml"));
+        let d = diags(include_str!("../../tests/fixtures/feature_tour.dbml"));
         let nullable = d
             .iter()
             .filter(|x| x.contains("users.referrer_id` is nullable but operator `>`"))
