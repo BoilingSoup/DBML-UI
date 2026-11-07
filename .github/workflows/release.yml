@@ -364,7 +364,7 @@ jobs:
           path: dist/dbml-ui-*
 
   release:
-    needs: build
+    needs: [build, flatpak]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
