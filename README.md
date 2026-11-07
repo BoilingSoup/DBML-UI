@@ -55,5 +55,6 @@ cargo run --release
 
 ## License
 
-MIT — see [LICENSE.md](LICENSE.md). Bundled fonts and vendored crate
-patches carry their own permissive licenses, covered there as well.
+MIT — see [LICENSE](LICENSE). Bundled fonts and vendored crate
+patches carry their own permissive licenses, covered in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

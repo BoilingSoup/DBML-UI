@@ -2,6 +2,7 @@
 name = "dbml-ui"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 
 # iced 0.13 canvas-text clipping holes (both backends):
 # - tiny_skia never clips canvas text at all ("TODO: Honor layering!" —
