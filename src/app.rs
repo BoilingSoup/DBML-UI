@@ -3441,7 +3441,6 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
         Message::ToggleEditorMaximize => app.toggle_maximize_editor(),
         Message::ToggleDiagramMaximize => app.toggle_maximize_diagram(),
         Message::ToolbarTip(label) => {
-            eprintln!("[tt] set {:?}", label);
             app.toolbar_tip = label;
         }
         Message::ToggleDiagnostics => app.diagnostics_open = !app.diagnostics_open,
