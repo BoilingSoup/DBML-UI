@@ -258,6 +258,7 @@ jobs:
         shell: pwsh
         run: |
           $version = $env:GITHUB_REF_NAME -replace '^v',''
+          New-Item -ItemType Directory -Force "dist" | Out-Null
           Copy-Item "target/x86_64-pc-windows-msvc/release/dbml-ui.exe" "dist/dbml-ui-$version-x86_64-windows.exe"
 
       # the .icns: macOS's own iconutil over an iconset directory — no
