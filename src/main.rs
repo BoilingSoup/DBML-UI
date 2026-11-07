@@ -4,6 +4,9 @@
 mod app;
 #[cfg(all(unix, not(target_os = "macos")))]
 mod platform;
+#[cfg(not(all(unix, not(target_os = "macos"))))]
+#[path = "platform_stub.rs"]
+mod platform;
 mod canvas;
 mod clipboard;
 mod config;
