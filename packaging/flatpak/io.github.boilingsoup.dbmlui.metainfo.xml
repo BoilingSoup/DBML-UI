@@ -13,7 +13,7 @@
     </p>
   </description>
   <developer_name translatable="no">BoilingSoup</developer_name>
-  <url type="homepage">https://github.com/BoilingSoup/tui-db</url>
+  <url type="homepage">https://github.com/BoilingSoup/DBML-UI</url>
   <launchable type="desktop-id">io.github.boilingsoup.dbmlui.desktop</launchable>
   <content_rating type="oars-1.1"/>
   <provides>
