@@ -333,6 +333,7 @@ jobs:
       - name: Stage the flatpak payload
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p /tmp/linux-bundle
           tar -xzf "dist/dbml-ui-${VERSION}-x86_64-linux.tar.gz" -C /tmp/linux-bundle
           mkdir -p packaging/flatpak/bin packaging/flatpak/icons
           cp /tmp/linux-bundle/dbml-ui packaging/flatpak/bin/dbml-ui
