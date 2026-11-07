@@ -124,8 +124,13 @@ fn row_name_end_px(b: &TableBox, row: usize, zoom: f32, pan: Vector) -> f32 {
     let s = cell_size(zoom);
     // the shared per-character estimator (layout::Row::est_width): the old
     // uniform 0.58/char factor overshot narrow names like "author_id" and
-    // left a dead gap before the row's first icon
-    top_left.x + 1.0 * s.width + Row::est_width(&b.rows[row].name) * s.width
+    // left a dead gap before the row's first icon.
+    // pk names draw BOLD (dbdiagram parity) — bold runs past the regular
+    // estimate (the popup chrome carries the same 1.18 semibold factor),
+    // and the estimate must clear the ink: "channel" put the pk glyph ON
+    // the name. Overshooting only widens the gap, so 1.2 with headroom.
+    let ems = Row::est_width(&b.rows[row].name) * if b.rows[row].pk { 1.2 } else { 1.0 };
+    top_left.x + 1.0 * s.width + ems * s.width
 }
 
 /// The box's frame-px rect (the paint bounds, shadows excluded).
