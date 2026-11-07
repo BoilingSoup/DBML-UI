@@ -97,8 +97,6 @@ pub enum Message {
     OpenFilePicker(PickerKind),
     /// The file dialog closed without a choice.
     PickerDismissed,
-    /// No dialog tool exists; fall back to the cmdline.
-    PickerUnavailable,
     /// Toolbar/button save-as request.
     SaveAsPrompt,
     /// The native save dialog produced a target path.
@@ -2961,17 +2959,14 @@ impl ExportKind {
 
 // ------------------- file dialogs -------------------
 //
-// Desktop: rfd drives the native save dialog, zenity/kdialog the open
-// picker, all off the UI thread with the result handed back through a
-// channel. The web build has no dialogs yet — every task stub resolves
-// to `PickerUnavailable`, whose toast explains.
+// Desktop: rfd drives the native save dialog and backs the open picker
+// (zenity/kdialog first, rfd's native chooser last), all off the UI
+// thread with the result handed back through a channel.
 
 /// The dialog result handed back from the picker thread.
 enum PickOutcome {
     Chosen(String),
     Cancelled,
-    /// no dialog tool on the system
-    NoDialog,
 }
 
 /// The web placeholder for every dialog task: no file system, no native
@@ -3116,8 +3111,7 @@ fn pick_file_blocking(kind: PickerKind) -> PickOutcome {
 }
 
 /// The open-file picker task: desktop spawns the blocking picker off the
-/// UI thread (a missing tool folds to `PickerUnavailable`); the web build
-/// has no dialog yet.
+/// UI thread (zenity/kdialog, falling back to rfd's native chooser).
 fn open_file_picker_task(kind: PickerKind) -> iced::Task<Message> {
     let (tx, rx) = smol::channel::bounded(1);
     std::thread::spawn(move || {
@@ -3127,7 +3121,6 @@ fn open_file_picker_task(kind: PickerKind) -> iced::Task<Message> {
     iced::Task::future(async move {
         match rx.recv().await {
             Ok(PickOutcome::Chosen(p)) => Message::OpenRecent(p),
-            Ok(PickOutcome::NoDialog) => Message::PickerUnavailable,
             _ => Message::PickerDismissed,
         }
     })
@@ -3657,13 +3650,6 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
         Message::SaveAsPrompt | Message::SaveAs(_) => {}         // handled in update
         Message::FormatNow => {}                                 // handled in update
         Message::ToggleFmtOnSave => {}                           // handled in update
-        Message::PickerUnavailable => {
-            {
-                // no zenity/kdialog and no cmdline to type a path into
-                // either: the way in is the launcher (dbml-ui <file>)
-                app.set_message_kind(ToastKind::Error, "no file dialog available — open via the launcher: dbml-ui <file>");
-            }
-        }
         Message::NewDiagram => app.new_diagram(),
         Message::NewTab => app.new_tab(),
         Message::CloseTab(idx) => app.close_tab(idx),

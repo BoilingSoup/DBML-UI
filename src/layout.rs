@@ -1682,8 +1682,6 @@ Ref: d.a_id > a.id
         );
         let naive = auto_arrange(&l.boxes, &schema, &[]);
         let naive_span = naive["c"].1 - naive["b"].1;
-        let naive_ra = region_of(&naive, &l, &["a", "d"]);
-        let naive_rb = region_of(&naive, &l, &["b", "c"]);
         let pos = auto_arrange(&l.boxes, &schema, &[]);
         let ra = region_of(&pos, &l, &["a", "d"]);
         let rb = region_of(&pos, &l, &["b", "c"]);
