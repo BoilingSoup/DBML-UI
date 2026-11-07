@@ -340,6 +340,10 @@ jobs:
           cp icons/app-icon-48.png packaging/flatpak/icons/48x48.png
           cp icons/app-icon-128.png packaging/flatpak/icons/128x128.png
           cp icons/app-icon-256.png packaging/flatpak/icons/256x256.png
+      - name: Install flatpak and flatpak-builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
       - name: Install the GNOME runtime and SDK
         run: |
           flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
