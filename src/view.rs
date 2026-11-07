@@ -2469,9 +2469,9 @@ fn editor_toolbar(app: &App) -> Element<'static, Message> {
         let badge_svg = badge.map(|bd| {
             format!(
                 "<g transform='translate(300 330) scale(0.5)'><path d='{bd}' fill='#{:02x}{:02x}{:02x}'/></g>",
-                (theme::BG.r * 255.0) as u32,
-                (theme::BG.g * 255.0) as u32,
-                (theme::BG.b * 255.0) as u32,
+                (theme::PANEL.r * 255.0) as u32,
+                (theme::PANEL.g * 255.0) as u32,
+                (theme::PANEL.b * 255.0) as u32,
             )
         });
         let svg = iced::widget::svg(iced::widget::svg::Handle::from_memory(
@@ -2487,7 +2487,7 @@ fn editor_toolbar(app: &App) -> Element<'static, Message> {
             button(svg)
                 .padding([5, 8])
                 .style(move |_t, s| {
-                    let mut st = tool_button_style();
+                    let mut st = toolbar_button_style(s);
                     if active {
                         st.background = Some(iced::Background::Color(match s {
                             iced::widget::button::Status::Hovered => {
@@ -2550,7 +2550,7 @@ fn editor_toolbar(app: &App) -> Element<'static, Message> {
     // descenders): the heavier top padding drops it onto the button's
     // true center, checkbox riding along
     .padding(iced::Padding { top: 5.0, right: 8.0, bottom: 4.0, left: 8.0 })
-    .style(move |_t, _s| tool_button_style())
+    .style(move |_t, s| toolbar_button_style(s))
     .on_press(Message::ToggleFmtOnSave);
     // the mode switch shows the CURRENT mode (what you are in, not what a
     // press would switch to); its accent mirrors the fmt switch's on/off
@@ -2571,7 +2571,7 @@ fn editor_toolbar(app: &App) -> Element<'static, Message> {
             .align_y(iced::alignment::Vertical::Center),
         )
         .padding(iced::Padding { top: 5.0, right: 8.0, bottom: 4.0, left: 8.0 })
-        .style(move |_t, _s| tool_button_style())
+        .style(move |_t, s| toolbar_button_style(s))
         .on_press(Message::VimMenuOpen),
     )
     .on_enter(Message::ToolbarTip(Some("Editor mode")))
@@ -2635,12 +2635,12 @@ fn editor_toolbar(app: &App) -> Element<'static, Message> {
     ]
     .spacing(4)
     .align_y(iced::alignment::Vertical::Center);
-    // the toolbar's own band: a darker strip than the editor beneath it,
-    // so the row reads as chrome instead of blending into the buffer
+    // the toolbar's own band: the editor's own surface — the row reads as
+    // part of the code area, not a separate strip of chrome
     container(row)
         .width(Fill)
         .style(|_t| container::Style {
-            background: Some(iced::Background::Color(theme::BG)),
+            background: Some(iced::Background::Color(theme::PANEL)),
             ..Default::default()
         })
         .into()
@@ -3015,6 +3015,24 @@ fn tool_button_style() -> iced::widget::button::Style {
         background: Some(iced::Background::Color(theme::PANEL)),
         text_color: theme::TEXT,
         border: iced::border::rounded(6).color(theme::BORDER),
+        ..Default::default()
+    }
+}
+
+/// The EDITOR toolbar's buttons melt into the editor surface (same PANEL
+/// background, no boxes) — separation comes from spacing alone, hover is
+/// a quiet wash, and an active button still paints its blue accent on top
+/// (icon_btn overrides the background after this returns).
+fn toolbar_button_style(s: iced::widget::button::Status) -> iced::widget::button::Style {
+    iced::widget::button::Style {
+        background: Some(iced::Background::Color(match s {
+            iced::widget::button::Status::Hovered => {
+                Color { a: 0.08, ..theme::TEXT }
+            }
+            _ => Color::TRANSPARENT,
+        })),
+        text_color: theme::TEXT,
+        border: iced::border::rounded(6),
         ..Default::default()
     }
 }
