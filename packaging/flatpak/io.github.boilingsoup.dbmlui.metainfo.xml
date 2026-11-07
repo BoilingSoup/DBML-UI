@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.boilingsoup.dbmlui</id>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <name>dbml-ui</name>
+  <summary>DBML diagram editor</summary>
+  <description>
+    <p>
+      Vim-style editing on the left, a live ER diagram on the right.
+      Opens .dbml diagrams and .sql dumps, exports SVG, PNG and SQL for
+      PostgreSQL, MySQL, SQL Server and Oracle.
+    </p>
+  </description>
+  <developer_name translatable="no">BoilingSoup</developer_name>
+  <url type="homepage">https://github.com/BoilingSoup/tui-db</url>
+  <launchable type="desktop-id">io.github.boilingsoup.dbmlui.desktop</launchable>
+  <content_rating type="oars-1.1"/>
+  <provides>
+    <binary>dbml-ui</binary>
+  </provides>
+</component>

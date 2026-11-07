@@ -2,7 +2,8 @@
 #
 # Triggered by version tags (v*). Each target bundles its platform's
 # distribution format around the release binary:
-# - Linux:   tar.gz (binary, .desktop launcher, icons), .deb and AppImage
+# - Linux:   tar.gz (binary, .desktop launcher, icons), .deb, AppImage,
+#            .flatpak single-file bundle (repackages the tar.gz binary)
 # - Windows: zip with the exe (app-icon.ico embedded at build time)
 # - macOS:   .app bundle (zipped), ad-hoc signed
 #
@@ -303,6 +304,47 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bundle-${{ matrix.target }}
+          path: dist/dbml-ui-*
+
+  # Flatpak: repackages the Linux job's binary into a single-file bundle
+  # (manifest in packaging/flatpak/). The runtime's GNOME stack provides
+  # every library the binary links; the manifest's finish-args cover the
+  # sandbox settings (GPU, sockets, the FileChooser portal).
+  flatpak:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download the Linux bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: bundle-x86_64-unknown-linux-gnu
+          path: dist
+      - name: Stage the flatpak payload
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          tar -xzf "dist/dbml-ui-${VERSION}-x86_64-linux.tar.gz" -C /tmp/linux-bundle
+          mkdir -p packaging/flatpak/bin packaging/flatpak/icons
+          cp /tmp/linux-bundle/dbml-ui packaging/flatpak/bin/dbml-ui
+          cp icons/app-icon-48.png packaging/flatpak/icons/48x48.png
+          cp icons/app-icon-128.png packaging/flatpak/icons/128x128.png
+          cp icons/app-icon-256.png packaging/flatpak/icons/256x256.png
+      - name: Install the GNOME runtime and SDK
+        run: |
+          flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install --system --noninteractive flathub \
+            org.gnome.Platform//47 org.gnome.Sdk//47
+      - name: Build the flatpak bundle
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          flatpak-builder --force-clean --repo=flatpak-repo flatpak-build \
+            packaging/flatpak/io.github.boilingsoup.dbmlui.yml
+          flatpak build-bundle flatpak-repo \
+            "dist/dbml-ui-${VERSION}-x86_64.flatpak" io.github.boilingsoup.dbmlui
+      - name: Upload bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-flatpak
           path: dist/dbml-ui-*
 
   release:

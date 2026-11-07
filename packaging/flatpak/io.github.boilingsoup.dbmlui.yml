@@ -1,0 +1,39 @@
+# Flatpak manifest: repackages the release binary built by the workflow's
+# Linux job into a single-file bundle. The binary targets glibc 2.31, so it
+# runs inside the GNOME 47 runtime (2.38+) unmodified.
+#
+# The workflow stages the payload before invoking flatpak-builder:
+#   packaging/flatpak/bin/dbml-ui          the release binary
+#   packaging/flatpak/icons/<size>.png     the hicolor icon set
+app-id: io.github.boilingsoup.dbmlui
+runtime: org.gnome.Platform
+runtime-version: "47"
+sdk: org.gnome.Sdk
+command: dbml-ui
+finish-args:
+  # iced/winit: wayland preferred, X11 only when the session has none
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  # wgpu renders through the GPU; mesa ships in the runtime
+  - --device=dri
+  # the file dialogs are GtkFileChooserNative: inside the sandbox GTK
+  # routes them to the FileChooser portal, so Open and Save reach the
+  # whole host through the documents portal without a filesystem grant
+  - --talk-name=org.freedesktop.portal.*
+  # the portal-free fallback (a host without xdg-desktop-portal) still
+  # sees the home directory through its own GTK chooser
+  - --filesystem=home
+modules:
+  - name: dbml-ui
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 bin/dbml-ui /app/bin/dbml-ui
+      - install -Dm644 io.github.boilingsoup.dbmlui.desktop /app/share/applications/io.github.boilingsoup.dbmlui.desktop
+      - install -Dm644 io.github.boilingsoup.dbmlui.metainfo.xml /app/share/metainfo/io.github.boilingsoup.dbmlui.metainfo.xml
+      - install -Dm644 icons/48x48.png /app/share/icons/hicolor/48x48/apps/io.github.boilingsoup.dbmlui.png
+      - install -Dm644 icons/128x128.png /app/share/icons/hicolor/128x128/apps/io.github.boilingsoup.dbmlui.png
+      - install -Dm644 icons/256x256.png /app/share/icons/hicolor/256x256/apps/io.github.boilingsoup.dbmlui.png
+    sources:
+      - type: dir
+        path: .

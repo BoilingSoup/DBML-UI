@@ -3089,7 +3089,30 @@ fn pick_file_blocking(kind: PickerKind) -> PickOutcome {
             return PickOutcome::Cancelled;
         }
     }
-    PickOutcome::NoDialog
+    // flatpak's runtime ships neither zenity nor kdialog: rfd's native
+    // chooser is the last resort. Inside a sandbox GTK routes it through
+    // the FileChooser portal (host-wide access via the document portal);
+    // outside one it is the plain GTK dialog. Runs off the UI thread like
+    // the save dialog.
+    let mut dialog = rfd::FileDialog::new().set_title("Open DBML file");
+    match kind {
+        PickerKind::DiagramAndSql => {
+            dialog = dialog
+                .add_filter("Diagram & SQL files", &["dbml", "sql"])
+                .add_filter("DBML diagrams", &["dbml"])
+                .add_filter("SQL dumps", &["sql"]);
+        }
+        PickerKind::Dbml => {
+            dialog = dialog.add_filter("DBML diagrams", &["dbml"]);
+        }
+        PickerKind::Sql => {
+            dialog = dialog.add_filter("SQL dumps", &["sql"]);
+        }
+    }
+    match dialog.pick_file() {
+        Some(p) => PickOutcome::Chosen(p.to_string_lossy().into_owned()),
+        None => PickOutcome::Cancelled,
+    }
 }
 
 /// The open-file picker task: desktop spawns the blocking picker off the
