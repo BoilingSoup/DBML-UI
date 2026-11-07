@@ -91,9 +91,9 @@ jobs:
         if: matrix.bundle != 'linux'
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Install icnsutils (Linux icon packing for macOS)
+      - name: Install icnsutils (macOS icon packing)
         if: matrix.bundle == 'macos'
-        run: sudo apt-get update && sudo apt-get install -y icnsutils
+        run: brew install icnsutils
 
       - name: Bundle Linux (tar.gz + .deb)
         if: matrix.bundle == 'linux'
