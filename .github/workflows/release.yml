@@ -91,10 +91,6 @@ jobs:
         if: matrix.bundle != 'linux'
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Install icnsutils (macOS icon packing)
-        if: matrix.bundle == 'macos'
-        run: brew install icnsutils
-
       - name: Bundle Linux (tar.gz + .deb)
         if: matrix.bundle == 'linux'
         run: |
@@ -264,6 +260,23 @@ jobs:
           $version = $env:GITHUB_REF_NAME -replace '^v',''
           Copy-Item "target/x86_64-pc-windows-msvc/release/dbml-ui.exe" "dist/dbml-ui-$version-x86_64-windows.exe"
 
+      # the .icns: macOS's own iconutil over an iconset directory — no
+      # third-party package, and proper retina variants from the PNG set
+      - name: Build the .icns (macOS)
+        if: matrix.bundle == 'macos'
+        run: |
+          I="$RUNNER_TEMP/dbml-ui.iconset"
+          mkdir "$I"
+          cp icons/app-icon-16.png  "$I/icon_16x16.png"
+          cp icons/app-icon-32.png  "$I/icon_16x16@2x.png"
+          cp icons/app-icon-32.png  "$I/icon_32x32.png"
+          cp icons/app-icon-64.png  "$I/icon_32x32@2x.png"
+          cp icons/app-icon-128.png "$I/icon_128x128.png"
+          cp icons/app-icon-256.png "$I/icon_128x128@2x.png"
+          cp icons/app-icon-256.png "$I/icon_256x256.png"
+          cp icons/app-icon-512.png "$I/icon_512x512.png"
+          iconutil -c icns "$I" -o "$RUNNER_TEMP/dbml-ui.icns"
+
       - name: Bundle macOS (.app zip)
         if: matrix.bundle == 'macos'
         run: |
@@ -273,11 +286,7 @@ jobs:
           APP="dist/dbml-ui.app"
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
           cp "target/${{ matrix.target }}/release/$BIN_NAME" "$APP/Contents/MacOS/$BIN_NAME"
-          # png2icns comes from icnsutils (installed above); skip gracefully
-          # if a future runner drops it — the app runs without an icon
-          if command -v png2icns >/dev/null 2>&1; then
-            png2icns icons/app-icon-256.png > "$APP/Contents/Resources/dbml-ui.icns" || true
-          fi
+          cp "$RUNNER_TEMP/dbml-ui.icns" "$APP/Contents/Resources/dbml-ui.icns"
           cat > "$APP/Contents/Info.plist" <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
