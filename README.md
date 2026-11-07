@@ -12,8 +12,10 @@ the ER diagram render live on the right. Native desktop app
 - Built-in vim-style editor (a regular editing mode is one toggle
   away)
 - Export the diagram as SVG or PNG
-- Import SQL dumps (the dialect is auto-detected) and export DDL for
-  PostgreSQL, MySQL, SQL Server and Oracle
+- Export the schema as SQL DDL for PostgreSQL, MySQL, SQL Server,
+  Oracle and SQLite
+- Import SQL dumps — the dialect (PostgreSQL, MySQL, SQL Server,
+  Oracle or SQLite) is detected from the dump itself
 
 ## Supported platforms
 
