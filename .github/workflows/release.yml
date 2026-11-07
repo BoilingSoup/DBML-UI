@@ -314,7 +314,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bundle-${{ matrix.target }}
-          path: dist/dbml-ui-*
+          path: dist/dbml-ui*
 
   # Flatpak: repackages the Linux job's binary into a single-file bundle
   # (manifest in packaging/flatpak/). The runtime's GNOME stack provides
@@ -361,7 +361,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bundle-flatpak
-          path: dist/dbml-ui-*
+          path: dist/dbml-ui*
 
   release:
     needs: [build, flatpak]
@@ -374,4 +374,4 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: dist/dbml-ui-*
+          files: dist/dbml-ui*
