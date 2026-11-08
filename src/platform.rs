@@ -540,6 +540,26 @@ mod tests {
 }
 
 
+/// Is the primary (left) mouse button currently held? An X11
+/// XQueryPointer probe — the server-global state, independent of which
+/// window the pointer is over (an outside release is invisible to the
+/// window, not to the server). Wayland exposes no such global probe to
+/// a client: None.
+pub fn drag_button_held() -> Option<bool> {
+    let session = std::env::var("XDG_SESSION_TYPE").ok();
+    let is_x11 = session.as_deref() == Some("x11")
+        || (session.is_none() && std::env::var("DISPLAY").is_ok());
+    if !is_x11 {
+        return None;
+    }
+    let (conn, screen) = x11rb::connect(None).ok()?;
+    use x11rb::connection::Connection as _;
+    use x11rb::protocol::xproto::ConnectionExt as _;
+    let root = conn.setup().roots[screen].root;
+    let r = conn.query_pointer(root).ok()?.reply().ok()?;
+    Some(r.mask.intersects(x11rb::protocol::xproto::KeyButMask::BUTTON1)) // Button1Mask
+}
+
 /// Raise the app's own window at launch. A slow cold start (shader
 /// compile, font load) can outlive the WM's "recently launched" grace
 /// window; mutter then maps the window BEHIND whatever the user switched

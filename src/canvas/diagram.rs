@@ -637,7 +637,16 @@ impl canvas::Program<crate::app::Message> for Diagram<'_> {
             ),
             canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => (
                 canvas::event::Status::Captured,
-                tracked.map(Message::CanvasReleased),
+                // while a drag is in flight the release ENDS it
+                // unconditionally: Wayland's implicit grab delivers the
+                // release outside the surface, where iced's cursor is
+                // unavailable and `tracked` is None — gating on it
+                // dropped the arriving release and the drag stuck. The
+                // position-less end lands at the last known pointer
+                // (CanvasReleasedEnd); inside, the tracked path is exact.
+                tracked
+                    .map(Message::CanvasReleased)
+                    .or_else(|| self.dragging.then_some(Message::CanvasReleasedEnd)),
             ),
             canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => (
                 canvas::event::Status::Ignored,

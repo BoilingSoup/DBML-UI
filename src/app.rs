@@ -97,6 +97,16 @@ pub enum Message {
     OpenFilePicker(PickerKind),
     /// The file dialog closed without a choice.
     PickerDismissed,
+    /// A diagram drag's release arrived without a position: Wayland's
+    /// implicit grab delivers the release outside the surface, where
+    /// iced's cursor is unavailable (the canvas release arm can't carry
+    /// a point) — the drag ends at the last known pointer position.
+    CanvasReleasedEnd,
+    /// X11 drag watchdog tick: without a pointer grab the outside
+    /// release is never delivered, but the button STATE is server-global
+    /// — polled while a drag is active, and the drag ends when the
+    /// button has come up.
+    DragWatchTick,
     /// Toolbar/button save-as request.
     SaveAsPrompt,
     /// The native save dialog produced a target path.
@@ -2745,7 +2755,7 @@ pub(crate) fn map_key_event(
 /// Meta folds into the ctrl bit: web apps map Cmd to Ctrl universally
 /// (cmd+z undoes), and KeyModifiers has no meta slot.
 
-pub fn subscription(_app: &App) -> iced::Subscription<Message> {
+pub fn subscription(app: &App) -> iced::Subscription<Message> {
     let mouse = iced::event::listen_with(|event, _status, _id| match event {
         iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
             Some(Message::MouseMovedWindow(position.x, position.y))
@@ -2842,23 +2852,23 @@ pub fn subscription(_app: &App) -> iced::Subscription<Message> {
     //   the 16ms tick here redrew the whole scene 60 times a second on
     //   wasm and spun the fan at idle.
     // Nothing animating means no ticks at all.
-    let smooth = _app.cur().scroll_anim.is_some()
-        || _app.cur().highlight_all
-        || !_app.cur().hover_edges.is_empty()
-        || _app.tab_drag.is_some()
-        || _app.tab_anim.iter().any(|o| o.abs() > 0.5)
-        || _app.plus_anim.abs() > 0.5
-        || !_app.tab_closing.is_empty()
-        || _app.tab_opening.is_some()
-        || _app
+    let smooth = app.cur().scroll_anim.is_some()
+        || app.cur().highlight_all
+        || !app.cur().hover_edges.is_empty()
+        || app.tab_drag.is_some()
+        || app.tab_anim.iter().any(|o| o.abs() > 0.5)
+        || app.plus_anim.abs() > 0.5
+        || !app.tab_closing.is_empty()
+        || app.tab_opening.is_some()
+        || app
             .last_editor_scroll
             .is_some_and(|t| t.elapsed().as_millis() < 1100)
-        || _app.editor().find_open();
-    let blink_class = _app.message.is_some()
-        || _app.editor().yank_flash.is_some()
-        || crate::canvas::editor::block_cursor_blinking(_app)
-        || crate::canvas::editor::caret_blinking(_app);
-    let file_poll = if _app.tabs.iter().any(|t| t.file.is_some()) {
+        || app.editor().find_open();
+    let blink_class = app.message.is_some()
+        || app.editor().yank_flash.is_some()
+        || crate::canvas::editor::block_cursor_blinking(app)
+        || crate::canvas::editor::caret_blinking(app);
+    let file_poll = if app.tabs.iter().any(|t| t.file.is_some()) {
         iced::time::every(std::time::Duration::from_secs(1)).map(|_| Message::PollFiles)
     } else {
         iced::Subscription::none()
@@ -2870,11 +2880,21 @@ pub fn subscription(_app: &App) -> iced::Subscription<Message> {
     } else {
         iced::Subscription::none()
     };
+    // the X11 drag watchdog: polls the server-global button state while
+    // a diagram drag is active (an outside release is never DELIVERED on
+    // X11, but it is observable)
+    let drag_watch = if !matches!(app.drag, Drag::None) {
+        iced::time::every(std::time::Duration::from_millis(100))
+            .map(|_| Message::DragWatchTick)
+    } else {
+        iced::Subscription::none()
+    };
     iced::Subscription::batch([
         mouse,
         keys,
         tick,
         file_poll,
+        drag_watch,
         window_resize(),
         // the WM close request: gated on unsaved changes (the app opts
         // out of iced's auto-close for this)
@@ -3429,6 +3449,24 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
     match message {
         Message::CanvasPressed(p) => app.canvas_pressed(p),
         Message::CanvasMoved(p) => app.canvas_moved(p),
+        Message::CanvasReleasedEnd => {
+            // Wayland: the implicit grab delivers the outside release,
+            // but the canvas's position gate dropped it (cursor
+            // unavailable) — end the drag at the last known position
+            if !matches!(app.drag, Drag::None) {
+                app.canvas_released(app.canvas_cursor.unwrap_or_default());
+            }
+        }
+        Message::DragWatchTick => {
+            // the watchdog while a drag is active (X11): the button came
+            // up while the pointer was outside — end the drag now, at
+            // the last known position
+            if !matches!(app.drag, Drag::None)
+                && crate::platform::drag_button_held() == Some(false)
+            {
+                app.canvas_released(app.canvas_cursor.unwrap_or_default());
+            }
+        }
         Message::CanvasLeft => app.canvas_left(),
         Message::CanvasReleased(p) => {
             app.canvas_released(p);
@@ -3612,6 +3650,15 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
             }
         }
         Message::MouseReleased => {
+            // Wayland: the window-level release arrives even outside the
+            // surface (implicit grab) — the canvas's own release path
+            // gated on cursor position may have dropped it, so a still-
+            // active diagram drag ends here at the last known position.
+            // An INSIDE release already ran through the canvas (drag
+            // ended) — this is inert for it.
+            if !matches!(app.drag, Drag::None) {
+                app.canvas_released(app.canvas_cursor.unwrap_or_default());
+            }
             app.scrollbar_drag = None;
             if app.drag == Drag::Divider {
                 app.drag = Drag::None;
@@ -7599,7 +7646,7 @@ TableGroup g { a c }
 mod record_view_tests {
     use super::*;
 
-    fn records_app() -> App {
+    fn recordsapp() -> App {
         App::with_source(
             r#"Table users {
   id integer [pk]
@@ -7651,7 +7698,7 @@ Ref: posts.user_id > users.id
 
     #[test]
     fn records_icon_press_opens_the_view_not_a_drag() {
-        let mut app = records_app();
+        let mut app = recordsapp();
         let p = records_icon_point(&app, "users");
         let _ = update(&mut app, Message::CanvasPressed(p));
         let users = node_of(&app, "users");
@@ -7676,7 +7723,7 @@ Ref: posts.user_id > users.id
 
     #[test]
     fn record_view_messages_open_close_follow() {
-        let mut app = records_app();
+        let mut app = recordsapp();
         let users = node_of(&app, "users");
         let posts = node_of(&app, "posts");
         let _ = update(&mut app, Message::OpenRecords(users));
@@ -7701,7 +7748,7 @@ Ref: posts.user_id > users.id
         // with the other config-touching tests
         let _g = crate::config::CONFIG_ENV_LOCK
             .lock();
-        let mut app = records_app();
+        let mut app = recordsapp();
         let users = node_of(&app, "users");
         let _ = update(&mut app, Message::OpenRecords(users));
         // Escape closes
@@ -7935,7 +7982,7 @@ mod completion_tests {
     use super::*;
     use crate::editor::completion::ItemKind;
 
-    fn insert_app() -> App {
+    fn insertapp() -> App {
         let mut app = super::vim(App::default());
         let _ = update(
             &mut app,
@@ -7958,7 +8005,7 @@ mod completion_tests {
     /// the pair instead of one clean chord).
     #[test]
     fn ctrl_space_pair_opens_completion_without_typing() {
-        let mut app = insert_app();
+        let mut app = insertapp();
         let before = app.source().to_string();
         let _ = update(
             &mut app,
@@ -8102,7 +8149,7 @@ mod completion_tests {
 
 #[test]
     fn ctrl_space_opens_and_toggles() {
-        let mut app = insert_app();
+        let mut app = insertapp();
         let _ = update(&mut app, ctrl_space());
         let c = app.completion.as_ref().expect("popup open");
         assert!(c.items.iter().any(|i| i.label == "Table"));
@@ -8113,7 +8160,7 @@ mod completion_tests {
 
     #[test]
     fn typing_two_chars_autocompletes_and_filters() {
-        let mut app = insert_app();
+        let mut app = insertapp();
         for c in ['T', 'a'] {
             let _ = update(
                 &mut app,
@@ -8127,7 +8174,7 @@ mod completion_tests {
 
     #[test]
     fn enter_accepts_keyword_with_trailing_space() {
-        let mut app = insert_app();
+        let mut app = insertapp();
         for c in ['T', 'a'] {
             let _ = update(
                 &mut app,
@@ -8181,7 +8228,7 @@ mod completion_tests {
     fn esc_closes_popup_and_leaves_insert() {
         // one Esc does both jobs: the popup's dismissal used to swallow
         // the key, so insert mode survived until a second press
-        let mut app = insert_app();
+        let mut app = insertapp();
         let _ = update(&mut app, ctrl_space());
         assert!(app.completion.is_some());
         let _ = update(
@@ -8589,7 +8636,7 @@ mod completion_tests {
 
     #[test]
     fn space_types_in_insert_mode() {
-        let mut app = insert_app();
+        let mut app = insertapp();
         let _ = update(
             &mut app,
             Message::KeyPressed(KeyCode::Space, KeyModifiers::NONE),
@@ -8631,7 +8678,7 @@ mod completion_tests {
         );
         assert!(app.editor_hover.is_none());
         // K in insert mode just types (no hover)
-        let mut app = insert_app();
+        let mut app = insertapp();
         let _ = update(
             &mut app,
             Message::KeyPressed(KeyCode::Char('K'), KeyModifiers::NONE),
@@ -8793,7 +8840,7 @@ mod completion_tests {
 
     #[test]
     fn navigation_moves_selection() {
-        let mut app = insert_app();
+        let mut app = insertapp();
         let _ = update(&mut app, ctrl_space());
         let start = app.completion.as_ref().unwrap().selected;
         let _ = update(
@@ -8810,7 +8857,7 @@ mod completion_tests {
 
     #[test]
     fn no_popup_inside_strings_or_comments() {
-        let mut app = insert_app();
+        let mut app = insertapp();
         // cursor inside the project Note string
         app.editor_mut()
             .buf
@@ -8828,7 +8875,7 @@ mod completion_tests {
 
     #[test]
     fn backspace_refilters_and_closes_on_empty() {
-        let mut app = insert_app();
+        let mut app = insertapp();
         for c in ['T', 'a'] {
             let _ = update(
                 &mut app,
@@ -8857,7 +8904,7 @@ mod scroll_tests {
     use super::*;
     use std::time::Duration;
 
-    fn tall_app(lines: usize) -> App {
+    fn tallapp(lines: usize) -> App {
         let mut src = String::new();
         for i in 0..lines {
             src.push_str(&format!("Table t{i} {{\n  id integer [pk]\n}}\n"));
@@ -8878,7 +8925,7 @@ mod scroll_tests {
         // CURRENT column each tick: one blank line mid-scroll clamped it
         // to 0 and the rest of the animation rode the first column (the
         // same curswant bug j/k had). The aim must survive the crossing.
-        let mut app = tall_app(40);
+        let mut app = tallapp(40);
         app.window_size = (1400.0, 900.0);
         let mut lines: Vec<String> = (0..120)
             .map(|i| format!("line {i} padded so every line is long enough"))
@@ -8938,7 +8985,7 @@ mod scroll_tests {
 
     #[test]
     fn ctrl_d_couples_cursor_and_uses_half_page_duration() {
-        let mut app = tall_app(120);
+        let mut app = tallapp(120);
         app.window_size = (1400.0, 900.0);
         let page = app.page_lines();
         let _ = update(
@@ -8967,7 +9014,7 @@ mod scroll_tests {
 
     #[test]
     fn page_scroll_uses_the_full_page_duration() {
-        let mut app = tall_app(120);
+        let mut app = tallapp(120);
         app.window_size = (1400.0, 900.0);
         let _ = update(
             &mut app,
@@ -8981,7 +9028,7 @@ mod scroll_tests {
     #[test]
     fn steps_are_whole_lines_and_ease_out() {
         // quadratic ease-out in space: at t=0.5, 75% of the distance is due
-        let mut app = tall_app(120);
+        let mut app = tallapp(120);
         app.window_size = (1400.0, 900.0);
         let _ = update(
             &mut app,
@@ -9003,7 +9050,7 @@ mod scroll_tests {
 
     #[test]
     fn repeated_ctrl_d_stacks_to_a_full_page() {
-        let mut app = tall_app(120);
+        let mut app = tallapp(120);
         app.window_size = (1400.0, 900.0);
         let _ = update(
             &mut app,
@@ -9025,7 +9072,7 @@ mod scroll_tests {
 
     #[test]
     fn tick_completes_the_animation_at_the_target() {
-        let mut app = tall_app(120);
+        let mut app = tallapp(120);
         app.window_size = (1400.0, 900.0);
         let _ = update(
             &mut app,
@@ -9040,7 +9087,7 @@ mod scroll_tests {
 
     #[test]
     fn scroll_clamps_at_buffer_bottom() {
-        let mut app = tall_app(40);
+        let mut app = tallapp(40);
         app.window_size = (1400.0, 900.0);
         for _ in 0..12 {
             let _ = update(
@@ -9078,7 +9125,7 @@ mod scroll_tests {
     fn cursor_at_buffer_bottom_does_not_yank_backward() {
         // regression: cursor_from was reconstructed from the scroll delta,
         // so a clamped cursor jumped UP before animating back down
-        let mut app = tall_app(120);
+        let mut app = tallapp(120);
         app.window_size = (1400.0, 900.0);
         let last = app.editor_mut().buf.line_count() - 1;
         app.editor_mut()
@@ -9107,11 +9154,11 @@ mod scroll_tests {
         // neoscroll: with a document that fits the page the window never
         // scrolls but the cursor still glides line by line — never an
         // instant jump (regression: this case jumped instantly)
-        // tall_app(8): 24 lines, comfortably inside the ~37.8-line page at
+        // tallapp(8): 24 lines, comfortably inside the ~37.8-line page at
         // 900px. (The 40-line default sample does NOT fit the true page —
         // it only looked like it did while page_lines underestimated the
         // chrome and hid its tail under the status bar.)
-        let mut app = tall_app(8);
+        let mut app = tallapp(8);
         app.window_size = (1400.0, 900.0);
         assert!(
             app.max_scroll() == 0.0,
@@ -9156,7 +9203,7 @@ mod scroll_tests {
         // the user-observed behavior: with less than half a screen left,
         // neoscroll's stop_eof freezes the window at its clamp while the
         // cursor continues alone to its target
-        let mut app = tall_app(120);
+        let mut app = tallapp(120);
         app.window_size = (1400.0, 900.0);
         let last = app.editor_mut().buf.line_count() - 1;
         let max = app.max_scroll();
@@ -9188,7 +9235,7 @@ mod scroll_tests {
     fn ctrl_d_then_gg_does_not_arm_the_delete_operator() {
         // regression: ctrl+d to the bottom then gg deleted the whole
         // document — the vim D operator must never see the ctrl+d key
-        let mut app = tall_app(120);
+        let mut app = tallapp(120);
         app.window_size = (1400.0, 900.0);
         let rows = app.editor().buf.line_count();
         for _ in 0..12 {
@@ -9238,7 +9285,7 @@ mod scroll_tests {
         // releasing ctrl a few ms before d (or the chord's autorepeat
         // tail) delivers a bare `d` right after the scroll: that is chord
         // residue, not a vim operator — `gg` must not turn it into `dgg`
-        let mut app = tall_app(120);
+        let mut app = tallapp(120);
         app.window_size = (1400.0, 900.0);
         let rows = app.editor().buf.line_count();
         let _ = update(
@@ -9285,7 +9332,7 @@ mod scroll_tests {
     fn a_genuine_d_after_the_rollout_window_still_arms_the_operator() {
         // the residue window must not eat real vim keys: `d` pressed well
         // after a scroll chord still arms the operator (then Esc cancels)
-        let mut app = tall_app(120);
+        let mut app = tallapp(120);
         app.window_size = (1400.0, 900.0);
         let _ = update(
             &mut app,
@@ -9314,7 +9361,7 @@ mod scroll_tests {
     fn ctrl_modified_keys_never_drive_vim_directly() {
         // even if a ctrl-modified letter reaches the editor, it must not
         // arm operators, undo, or type — vim's keymap is unmodified-only
-        let mut app = tall_app(120);
+        let mut app = tallapp(120);
         app.window_size = (1400.0, 900.0);
         let src = app.editor().buf.lines().to_vec();
         let rows = app.editor().buf.line_count();
@@ -9354,7 +9401,7 @@ mod scroll_tests {
 
     #[test]
     fn wheel_cancels_the_animation() {
-        let mut app = tall_app(120);
+        let mut app = tallapp(120);
         app.window_size = (1400.0, 900.0);
         let _ = update(
             &mut app,
@@ -9370,7 +9417,7 @@ mod scroll_tests {
         // vim 'scrolloff': scrolling up with the cursor within 5 lines of
         // the window bottom first moves the cursor up to the 5-line
         // boundary, THEN the view scrolls with the cursor pinned there
-        let mut app = tall_app(120);
+        let mut app = tallapp(120);
         app.window_size = (1400.0, 900.0);
         let page = app.page_lines();
         let max = app.max_scroll();
@@ -9406,7 +9453,7 @@ mod scroll_tests {
     fn ctrl_u_outside_the_margin_keeps_the_cursor_screen_line() {
         // from well above the bottom margin the scroll is static: the
         // cursor keeps its screen position while the content moves
-        let mut app = tall_app(120);
+        let mut app = tallapp(120);
         app.window_size = (1400.0, 900.0);
         let page = app.page_lines();
         app.cur_mut().editor_scroll = 40.0;
@@ -9430,7 +9477,7 @@ mod scroll_tests {
     fn j_and_k_scroll_the_view_to_honor_scrolloff() {
         // stepping into the bottom margin scrolls the view under the
         // cursor instead of letting it inside the 5-line zone
-        let mut app = tall_app(120);
+        let mut app = tallapp(120);
         app.window_size = (1400.0, 900.0);
         let page = app.page_lines();
         // cursor at the last line that satisfies the bottom margin
@@ -9470,7 +9517,7 @@ mod scroll_tests {
     fn vim_jumps_land_instantly_and_cancel_neoscroll() {
         // vim semantics: G / gg / click-to-jump snap the viewport; only the
         // explicit neoscroll scrolls (Ctrl-d / Ctrl-u, page keys) animate
-        let mut app = tall_app(120);
+        let mut app = tallapp(120);
         app.window_size = (1400.0, 900.0);
         // a running half-page animation...
         let _ = update(
@@ -9523,7 +9570,7 @@ mod scroll_tests {
         // before the two toolbars existed), so max_scroll stopped ~2 lines
         // short of the buffer end and the last lines rendered beneath the
         // status bar, clipped out of view
-        let mut app = tall_app(120);
+        let mut app = tallapp(120);
         app.window_size = (1400.0, 900.0);
         let canvas_h = app.page_lines() * crate::canvas::editor::LINE_HEIGHT;
         assert!(
@@ -9540,7 +9587,7 @@ mod scroll_tests {
         // canvas — nothing hides beneath the window's flush bottom edge.
         // Scroll clamps then round, so allow the half-line rounding
         // overshoot.
-        let mut app = tall_app(120);
+        let mut app = tallapp(120);
         app.window_size = (1400.0, 900.0);
         let last = app.editor_mut().buf.line_count() - 1;
         app.cur_mut().editor_scroll = app.max_scroll();
@@ -9838,14 +9885,14 @@ mod maximize_tests {
 mod diagnostics_panel_tests {
     use super::*;
 
-    fn diag_app() -> App {
+    fn diagapp() -> App {
         // one dangling-ref diagnostic + one parse error
         App::with_source("Table a {\n  id integer [pk]\n}\nRef: a.id > b.x\nTable {\n".into())
     }
 
     #[test]
     fn all_diagnostics_merge_and_sort_by_source_order() {
-        let app = diag_app();
+        let app = diagapp();
         let all = app.all_diagnostics();
         // the parse error ("expected 'Table'") is at the last line, the
         // dangling table is mid-file: source order, not category order
@@ -9859,7 +9906,7 @@ mod diagnostics_panel_tests {
 
     #[test]
     fn clicking_a_row_jumps_and_the_panel_stays_open() {
-        let mut app = diag_app();
+        let mut app = diagapp();
         let all = app.all_diagnostics();
         let idx = all
             .iter()
@@ -9881,7 +9928,7 @@ mod diagnostics_panel_tests {
 
     #[test]
     fn esc_closes_but_typing_keeps_working() {
-        let mut app = diag_app();
+        let mut app = diagapp();
         app.diagnostics_open = true;
         // a regular key passes THROUGH (the list live-updates, like
         // dbdiagram's non-modal panel)
@@ -9918,7 +9965,7 @@ mod diagnostics_panel_tests {
 
     #[test]
     fn tab_switch_closes_the_panel() {
-        let mut app = diag_app();
+        let mut app = diagapp();
         app.diagnostics_open = true;
         app.new_tab();
         let _ = update(&mut app, Message::TabPressed(1));
@@ -10529,7 +10576,7 @@ mod scrollbar_drag_tests {
 
     const BOUNDS: Rectangle = Rectangle::new(Point::new(0.0, 0.0), Size::new(800.0, 600.0));
 
-    fn tall_app() -> App {
+    fn tallapp() -> App {
         let src: String = (0..400)
             .map(|i| i.to_string())
             .collect::<Vec<_>>()
@@ -10564,7 +10611,7 @@ mod scrollbar_drag_tests {
 
     #[test]
     fn drag_tracks_the_pointer_window_wide_without_thrashing() {
-        let mut app = tall_app();
+        let mut app = tallapp();
         let (vbar, _) = scrollbar_layout(&app, BOUNDS);
         let bar = vbar.expect("overflow: scrollbar visible");
 
@@ -10603,7 +10650,7 @@ mod scrollbar_drag_tests {
 
     #[test]
     fn track_press_centers_the_thumb_and_arms_the_drag() {
-        let mut app = tall_app();
+        let mut app = tallapp();
         let (vbar, _) = scrollbar_layout(&app, BOUNDS);
         assert!(vbar.is_some(), "overflow: scrollbar visible");
 
@@ -10648,7 +10695,7 @@ mod scrollbar_drag_tests {
 mod tab_anim_tests {
     use super::*;
 
-    fn three_tab_app() -> App {
+    fn three_tabapp() -> App {
         let mut app = App::default();
         app.new_tab();
         app.new_tab();
@@ -10666,7 +10713,7 @@ mod tab_anim_tests {
 
     #[test]
     fn closing_pushes_a_ghost_and_slides_successors() {
-        let mut app = three_tab_app();
+        let mut app = three_tabapp();
         app.close_tab(0);
         // ghost snapshot: the closed tab's drawn slot, full width
         assert_eq!(app.tab_closing.len(), 1);
@@ -10691,7 +10738,7 @@ mod tab_anim_tests {
 
     #[test]
     fn new_tab_slides_the_plus_from_its_old_slot() {
-        let mut app = three_tab_app();
+        let mut app = three_tabapp();
         let before = STRIP_LEFT + app.tabs.len() as f32 * TAB_SLOT_W + 8.0;
         app.new_tab();
         // the + target moved one slot right; it starts a slot LEFT of it
@@ -10710,7 +10757,7 @@ mod tab_anim_tests {
 
     #[test]
     fn rapid_multi_close_stacks_ghosts() {
-        let mut app = three_tab_app();
+        let mut app = three_tabapp();
         app.close_tab(0);
         app.close_tab(0);
         assert_eq!(app.tab_closing.len(), 2);
@@ -10722,7 +10769,7 @@ mod tab_anim_tests {
 
     #[test]
     fn new_tab_grows_from_a_sliver() {
-        let mut app = three_tab_app();
+        let mut app = three_tabapp();
         let _ = update(&mut app, Message::NewTab);
         assert_eq!(app.tab_opening, Some(0.0), "a sliver at the new slot");
         for _ in 0..40 {
@@ -10733,7 +10780,7 @@ mod tab_anim_tests {
 
     #[test]
     fn new_tab_during_close_folds_the_overlapping_ghost() {
-        let mut app = three_tab_app();
+        let mut app = three_tabapp();
         app.close_tab(2); // ghost at slot 2; tabs now 0..1
         assert_eq!(app.tab_closing.len(), 1);
         app.new_tab(); // lands on slot 2, over the ghost
@@ -10745,7 +10792,7 @@ mod tab_anim_tests {
 
     #[test]
     fn the_tick_gate_stays_hot_until_animations_finish() {
-        let mut app = three_tab_app();
+        let mut app = three_tabapp();
         app.close_tab(0);
         // the subscription predicate: ghosts keep the 16ms tick alive
         assert!(!app.tab_closing.is_empty());
@@ -10767,7 +10814,7 @@ mod tab_tests {
         // midpoint swaps the two; the displaced neighbor starts a slot
         // away and eases home (its slide), the dragged tab is
         // pointer-driven
-        let mut app = two_tab_app();
+        let mut app = two_tabapp();
         app.window_cursor = Some(Point::new(STRIP_LEFT, 12.0));
         let _ = update(&mut app, Message::TabPressed(0));
         // the swap fires when the dragged tab's leading edge crosses the
@@ -10807,7 +10854,7 @@ mod tab_tests {
     fn dragging_the_right_tab_left_keeps_both_tabs_visible() {
         // user report: dragging the right tab over the left one made a tab
         // vanish from the strip (clickable but invisible)
-        let mut app = two_tab_app();
+        let mut app = two_tabapp();
         app.window_cursor = Some(Point::new(STRIP_LEFT + TAB_SLOT_W + 80.0, 12.0));
         let _ = update(&mut app, Message::TabPressed(1));
         // walk the pointer left in small steps across the midpoint
@@ -10836,7 +10883,7 @@ mod tab_tests {
         assert_eq!(app.tabs.len(), 2);
     }
 
-    fn two_tab_app() -> App {
+    fn two_tabapp() -> App {
         // tab 0: the sample; tab 1: another document
         let mut app = super::vim(App::with_source(SAMPLE_DBML.to_string()));
         let _ = update(&mut app, Message::NewTab);
@@ -10866,7 +10913,7 @@ mod tab_tests {
 
     #[test]
     fn switching_tabs_swaps_buffer_editor_and_view_state() {
-        let mut app = two_tab_app();
+        let mut app = two_tabapp();
         // per-tab cursor, scroll and zoom (tab 0 is the sample). The
         // editing MODE is the global config preference: it does not
         // switch with the tab
@@ -10888,7 +10935,7 @@ mod tab_tests {
 
     #[test]
     fn unsaved_changes_and_undo_history_survive_tab_switches() {
-        let mut app = two_tab_app(); // active: tab 1 ("other")
+        let mut app = two_tabapp(); // active: tab 1 ("other")
         // unsaved edit at the end of tab 1
         let last = app.editor().buf.line_count() - 1;
         app.editor_mut().jump(last, 30);
@@ -10918,7 +10965,7 @@ mod tab_tests {
 
     #[test]
     fn dragging_a_tab_reorders_live_and_the_active_tab_follows() {
-        let mut app = two_tab_app(); // [sample, other], "other" active
+        let mut app = two_tabapp(); // [sample, other], "other" active
         // press tab 0 (the sample) ...
         let _ = update(&mut app, Message::MouseMovedWindow(STRIP_LEFT + 10.0, 12.0));
         let _ = update(&mut app, Message::TabPressed(0));
@@ -10946,7 +10993,7 @@ mod tab_tests {
 
     #[test]
     fn a_tab_click_without_drag_only_activates() {
-        let mut app = two_tab_app();
+        let mut app = two_tabapp();
         let _ = update(&mut app, Message::MouseMovedWindow(STRIP_LEFT + TAB_SLOT_W + 5.0, 12.0));
         let _ = update(&mut app, Message::TabPressed(1));
         let _ = update(&mut app, Message::MouseMovedWindow(STRIP_LEFT + TAB_SLOT_W + 7.0, 12.0));
@@ -10958,7 +11005,7 @@ mod tab_tests {
 
     #[test]
     fn close_tab_activates_the_right_neighbor_else_the_last() {
-        let mut app = two_tab_app(); // [sample, other]
+        let mut app = two_tabapp(); // [sample, other]
         // close a BACKGROUND tab on the left: the active choice survives
         let _ = update(&mut app, Message::TabPressed(1));
         let _ = update(&mut app, Message::CloseTab(0));
@@ -10981,7 +11028,7 @@ mod tab_tests {
 
     #[test]
     fn closing_the_last_tab_leaves_a_fresh_start_screen() {
-        let mut app = two_tab_app();
+        let mut app = two_tabapp();
         let _ = update(&mut app, Message::CloseTab(0));
         let _ = update(&mut app, Message::CloseTab(0));
         assert_eq!(app.tabs.len(), 1, "the window stays alive");
@@ -10992,7 +11039,7 @@ mod tab_tests {
 
     #[test]
     fn close_all_leaves_one_start_tab() {
-        let mut app = two_tab_app();
+        let mut app = two_tabapp();
         let _ = update(&mut app, key(KeyModifiers::CONTROL, 't')); // 3 tabs
         let _ = update(&mut app, Message::TabMenuCloseAll);
         assert_eq!(app.tabs.len(), 1);
@@ -11018,7 +11065,7 @@ mod tab_tests {
 
     #[test]
     fn the_tab_menu_closes_its_own_tab_and_dismisses_on_any_key() {
-        let mut app = two_tab_app();
+        let mut app = two_tabapp();
         // right-click the background tab (pointer where it last moved)
         let _ = update(&mut app, Message::MouseMovedWindow(STRIP_LEFT + 10.0, 12.0));
         let _ = update(&mut app, Message::TabMenu(0));
@@ -11032,7 +11079,7 @@ mod tab_tests {
         assert!(app.tab_menu.is_none(), "the menu went with the switch");
 
         // the menu is modal: any key dismisses it without acting
-        let mut app = two_tab_app();
+        let mut app = two_tabapp();
         let _ = update(&mut app, Message::TabMenu(1));
         let _ = update(&mut app, key(KeyModifiers::NONE, 'x'));
         assert!(app.tab_menu.is_none());
@@ -11347,7 +11394,7 @@ mod tab_tests {
     /// The Add-note button appends a uniquely-named sticky to the
     /// source; the diagram gains it; repeating never collides.
     #[test]
-    fn add_sticky_note_appends_a_unique_note() {
+    fn add_sticky_noteappends_a_unique_note() {
         let mut app = App::with_source("Table t { id integer }\n".into());
         let _ = update(&mut app, Message::AddStickyNote);
         assert!(
@@ -11614,7 +11661,7 @@ mod tab_tests {
     }
 
     #[test]
-    fn header_color_applies_to_a_table_without_settings() {
+    fn header_colorapplies_to_a_table_without_settings() {
         let mut app = App::with_source("Table users {\n  id integer [pk]\n}\n".into());
         app.table_header_menu_open(Point::new(420.0, 220.0), PickerTarget::Table(0));
         assert!(app.table_header_menu.is_some(), "the menu is up");
@@ -11739,7 +11786,7 @@ mod tab_tests {
     fn a_modified_tab_asks_and_only_itself_closes() {
         // a dirty tab confirms first (same contract as app exit); the
         // discard decision closes only that tab, never the others
-        let mut app = two_tab_app();
+        let mut app = two_tabapp();
         let _ = update(&mut app, Message::TabPressed(0));
         let _ = update(&mut app, key(KeyModifiers::NONE, 'i'));
         let _ = update(&mut app, key(KeyModifiers::NONE, 'x'));
@@ -11770,7 +11817,7 @@ mod clipboard_menu_tests {
     use crate::clipboard::FakeClipboard;
     use crate::editor::buffer::Pos;
 
-    fn regular_app() -> App {
+    fn regularapp() -> App {
         let mut app = App {
             config: crate::config::Config {
                 vim: false,
@@ -11814,7 +11861,7 @@ mod clipboard_menu_tests {
 
     #[test]
     fn regular_ctrl_c_copies_to_system_and_keeps_the_selection() {
-        let mut app = regular_app();
+        let mut app = regularapp();
         app.clipboard = Some(Box::new(FakeClipboard::default()));
         select_hello(&mut app);
         let _ = update(&mut app, key(KeyModifiers::CONTROL, 'c'));
@@ -11830,7 +11877,7 @@ mod clipboard_menu_tests {
 
     #[test]
     fn clipboard_failures_become_toasts_not_panics() {
-        let mut app = regular_app();
+        let mut app = regularapp();
         app.clipboard = Some(Box::new(FakeClipboard {
             fail_set: true,
             ..Default::default()
@@ -11844,7 +11891,7 @@ mod clipboard_menu_tests {
 
     #[test]
     fn regular_ctrl_x_cuts_to_system() {
-        let mut app = regular_app();
+        let mut app = regularapp();
         app.clipboard = Some(Box::new(FakeClipboard::default()));
         select_hello(&mut app);
         let _ = update(&mut app, key(KeyModifiers::CONTROL, 'x'));
@@ -11855,7 +11902,7 @@ mod clipboard_menu_tests {
 
     #[test]
     fn regular_ctrl_v_pastes_multiline_from_system() {
-        let mut app = regular_app();
+        let mut app = regularapp();
         app.clipboard = Some(Box::new(FakeClipboard::with_text("x\ny")));
         let _ = update(&mut app, key(KeyModifiers::CONTROL, 'v'));
         assert_eq!(app.editor().buf.lines(), ["x", "yhello world", "second line"]);
@@ -11863,7 +11910,7 @@ mod clipboard_menu_tests {
 
     #[test]
     fn regular_paste_replaces_the_selection() {
-        let mut app = regular_app();
+        let mut app = regularapp();
         app.clipboard = Some(Box::new(FakeClipboard::with_text("PASTED")));
         select_hello(&mut app);
         let _ = update(&mut app, key(KeyModifiers::CONTROL, 'v'));
@@ -11872,7 +11919,7 @@ mod clipboard_menu_tests {
 
     #[test]
     fn paste_falls_back_to_the_register_without_a_system_clipboard() {
-        let mut app = regular_app();
+        let mut app = regularapp();
         // an unreachable system clipboard: reads fail, so the internal
         // register (the pre-arboard paste source) is used
         app.clipboard = Some(Box::new(FakeClipboard {
@@ -11891,7 +11938,7 @@ mod clipboard_menu_tests {
 
     #[test]
     fn crlf_paste_is_normalized() {
-        let mut app = regular_app();
+        let mut app = regularapp();
         app.clipboard = Some(Box::new(FakeClipboard::with_text("a\r\nb")));
         let _ = update(&mut app, key(KeyModifiers::CONTROL, 'v'));
         assert_eq!(app.editor().buf.lines(), ["a", "bhello world", "second line"]);
@@ -12739,7 +12786,7 @@ mod clipboard_menu_tests {
 
     #[test]
     fn mouse_drag_selects_in_regular_mode() {
-        let mut app = regular_app();
+        let mut app = regularapp();
         let _ = update(&mut app, Message::EditorPressed(local_px(Pos { row: 0, col: 1 })));
         assert!(matches!(app.drag, Drag::EditorSelect));
         let to = window_px(Pos { row: 0, col: 4 });
@@ -12755,7 +12802,7 @@ mod clipboard_menu_tests {
 
     #[test]
     fn mouse_drag_clamps_when_it_leaves_the_pane() {
-        let mut app = regular_app();
+        let mut app = regularapp();
         let _ = update(&mut app, Message::EditorPressed(local_px(Pos { row: 0, col: 0 })));
         // way below/right of the buffer: clamps to the buffer end
         let _ = update(&mut app, Message::MouseMovedWindow(10_000.0, 10_000.0));
@@ -12769,7 +12816,7 @@ mod clipboard_menu_tests {
 
     #[test]
     fn mouse_click_collapses_the_selection() {
-        let mut app = regular_app();
+        let mut app = regularapp();
         let _ = update(&mut app, Message::EditorPressed(local_px(Pos { row: 0, col: 3 })));
         let _ = update(&mut app, Message::MouseReleased);
         assert!(app.editor().buf.selection_anchor().is_none(), "a click places the caret");
@@ -12814,7 +12861,7 @@ mod clipboard_menu_tests {
     #[test]
     fn editor_menu_flags_snapshot_at_open() {
         // no selection, empty clipboard: both disabled
-        let mut app = regular_app();
+        let mut app = regularapp();
         app.clipboard = Some(Box::new(FakeClipboard::default()));
         let _ = update(&mut app, Message::EditorMenu(Point::new(30.0, 120.0)));
         let menu = app.editor_menu.as_ref().expect("menu open");
@@ -12830,7 +12877,7 @@ mod clipboard_menu_tests {
         assert!(!menu.clipboard_has_text, "the default fake holds no text");
 
         // a FAILED clipboard read disables Paste, never panics
-        let mut app = regular_app();
+        let mut app = regularapp();
         app.clipboard = Some(Box::new(FakeClipboard {
             fail_get: true,
             text: Some("unreachable".to_string()),
@@ -12843,7 +12890,7 @@ mod clipboard_menu_tests {
 
     #[test]
     fn editor_menu_dismisses_on_any_key_or_backdrop() {
-        let mut app = regular_app();
+        let mut app = regularapp();
         app.clipboard = Some(Box::new(FakeClipboard::default()));
         let _ = update(&mut app, Message::EditorMenu(Point::new(30.0, 120.0)));
         assert!(app.editor_menu.is_some());
@@ -12857,7 +12904,7 @@ mod clipboard_menu_tests {
     #[test]
     fn editor_menu_actions_run() {
         // Copy: selection reaches the system clipboard, menu closes
-        let mut app = regular_app();
+        let mut app = regularapp();
         app.clipboard = Some(Box::new(FakeClipboard::default()));
         select_hello(&mut app);
         let _ = update(&mut app, Message::EditorMenu(Point::new(30.0, 120.0)));
@@ -12866,7 +12913,7 @@ mod clipboard_menu_tests {
         assert_eq!(app.clipboard_text().as_deref(), Some("hello"));
 
         // Cut
-        let mut app = regular_app();
+        let mut app = regularapp();
         app.clipboard = Some(Box::new(FakeClipboard::default()));
         select_hello(&mut app);
         let _ = update(&mut app, Message::EditorMenu(Point::new(30.0, 120.0)));
@@ -12875,7 +12922,7 @@ mod clipboard_menu_tests {
         assert_eq!(app.clipboard_text().as_deref(), Some("hello"));
 
         // Paste
-        let mut app = regular_app();
+        let mut app = regularapp();
         app.clipboard = Some(Box::new(FakeClipboard::with_text("P")));
         let _ = update(&mut app, Message::EditorMenu(Point::new(30.0, 120.0)));
         let _ = update(&mut app, Message::EditorMenuPaste);
@@ -12887,7 +12934,7 @@ mod clipboard_menu_tests {
     fn dragging_then_menu_items_use_the_shared_paths() {
         // a mouse-dragged selection feeds Copy through the same code as
         // shift+arrows: drag, then menu Copy
-        let mut app = regular_app();
+        let mut app = regularapp();
         app.clipboard = Some(Box::new(FakeClipboard::default()));
         let _ = update(&mut app, Message::EditorPressed(local_px(Pos { row: 0, col: 0 })));
         let to = window_px(Pos { row: 0, col: 4 });
@@ -12909,7 +12956,7 @@ mod clipboard_menu_tests {
 
     #[test]
     fn selecting_with_the_mouse_then_typing_replaces_it() {
-        let mut app = regular_app();
+        let mut app = regularapp();
         app.clipboard = Some(Box::new(FakeClipboard::default()));
         let _ = update(&mut app, Message::EditorPressed(local_px(Pos { row: 0, col: 0 })));
         let to = window_px(Pos { row: 0, col: 4 });
@@ -12921,7 +12968,7 @@ mod clipboard_menu_tests {
 
     #[test]
     fn tab_switch_closes_the_editor_menu() {
-        let mut app = two_tab_app();
+        let mut app = two_tabapp();
         app.clipboard = Some(Box::new(FakeClipboard::default()));
         let _ = update(&mut app, Message::EditorMenu(Point::new(30.0, 120.0)));
         assert!(app.editor_menu.is_some());
@@ -12929,9 +12976,9 @@ mod clipboard_menu_tests {
         assert!(app.editor_menu.is_none());
     }
 
-    // a local twin of tab_tests::two_tab_app keeps the modules independent
-    fn two_tab_app() -> App {
-        let mut app = regular_app();
+    // a local twin of tab_tests::two_tabapp keeps the modules independent
+    fn two_tabapp() -> App {
+        let mut app = regularapp();
         app.tabs.push(Tab::with_source("second".into()));
         app
     }
@@ -12940,7 +12987,7 @@ mod clipboard_menu_tests {
     fn the_drag_anchor_clamps_into_the_buffer() {
         // px_to_pos clamps: a press far left of the text anchors at
         // column 0 of the pressed row
-        let mut app = regular_app();
+        let mut app = regularapp();
         let _ = update(
             &mut app,
             Message::EditorPressed(Point::new(2.0, local_px(Pos { row: 1, col: 0 }).y)),
@@ -12971,7 +13018,7 @@ mod undo_redo_tests {
         }
     }
 
-    fn vim_app(source: &str) -> App {
+    fn vimapp(source: &str) -> App {
         let mut app = super::vim(App::default());
         app.editor_mut().set_text(source);
         app.cur_mut().set_source(source);
@@ -12993,7 +13040,7 @@ mod undo_redo_tests {
 
     #[test]
     fn insert_mode_ctrl_z_ctrl_y_roundtrip() {
-        let mut app = vim_app("");
+        let mut app = vimapp("");
         type_in_insert(&mut app, "abc");
         assert_eq!(app.source(), "abc");
         assert_eq!(app.editor().buf.cursor(), (0, 3));
@@ -13046,7 +13093,7 @@ mod undo_redo_tests {
 
     #[test]
     fn toolbar_messages_undo_and_redo_in_vim_normal_mode() {
-        let mut app = vim_app("");
+        let mut app = vimapp("");
         type_in_insert(&mut app, "hello");
         let esc = Message::KeyPressed(KeyCode::Esc, KeyModifiers::NONE);
         let _ = update(&mut app, esc);
@@ -13082,7 +13129,7 @@ mod undo_redo_tests {
     fn ctrl_z_is_not_mapped_in_vim_normal_mode() {
         // vim purists use u; Ctrl+Z stays inert there (only the toolbar
         // buttons undo in normal mode)
-        let mut app = vim_app("");
+        let mut app = vimapp("");
         type_in_insert(&mut app, "hi");
         let esc = Message::KeyPressed(KeyCode::Esc, KeyModifiers::NONE);
         let _ = update(&mut app, esc);
@@ -13093,7 +13140,7 @@ mod undo_redo_tests {
 
     #[test]
     fn can_undo_and_can_redo_track_the_stacks() {
-        let mut app = vim_app("");
+        let mut app = vimapp("");
         assert!(!app.editor().buf.can_undo());
         assert!(!app.editor().buf.can_redo());
 
@@ -13136,7 +13183,7 @@ mod undo_redo_tests {
     fn ctrl_z_right_after_the_ctrl_d_chord_is_not_rollout() {
         // the chord-rollout guard swallows a BARE d/u after ctrl+d/u; the
         // ctrl-modified undo chord must pass through
-        let mut app = vim_app("");
+        let mut app = vimapp("");
         app.window_size = (1400.0, 900.0);
         type_in_insert(&mut app, "ab");
         let _ = update(
@@ -13174,11 +13221,11 @@ mod yank_flash_tests {
 }
 
 #[cfg(test)]
-mod debug_yy_app {
+mod debug_yyapp {
     use super::*;
 
     #[test]
-    fn debug_yy_app_flow() {
+    fn debug_yyapp_flow() {
         let mut app = super::vim(App::with_source("Table t {\n  id integer [pk]\n}\n".into()));
         let _ = update(
             &mut app,
