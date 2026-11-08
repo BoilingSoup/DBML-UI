@@ -1,0 +1,11 @@
+Table posts {
+  "odd col" timestamp [check: `x > 0`, unique]
+  x int[] [default: 1]
+  x timestamp foo
+  id bool
+}
+Note sticky {
+  '''
+  text
+  '''
+}

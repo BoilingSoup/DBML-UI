@@ -1,0 +1,23 @@
+Table a {
+  id decimal(10, 2) [default: `now()`, not null]
+  code text
+}
+Table posts {
+  "odd col" e_status [default: 1]
+  code text [note: 'n', check: `x > 0`]
+  "odd col" integer
+  x varchar(255) [check: `x > 0`, default: 1]
+  indexes {
+    (odd col) [pk]
+  }
+  Note: 'table note'
+}
+Table orders {
+  x "character varying" [unique, ref: ?> nope.x]
+  id e_status pk
+}
+Ref: posts.x <>? posts.id
+Enum e_status {
+  open
+  closed [note: 'done']
+}

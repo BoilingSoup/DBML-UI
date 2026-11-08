@@ -1,0 +1,26 @@
+Table "quoted name" {
+  code text
+  "odd col" int[]
+  id "character varying" [check: `x > 0`, default: 1]
+}
+Table t1 {
+  "odd col" bool [increment, color: #1E69FD]
+  name varchar(255) [null, default: 1]
+  name integer [not null]
+  x varchar(255) [note: 'n']
+  indexes {
+    (x)
+  }
+}
+Table posts {
+  user_id "character varying" [not null, unique]
+  code decimal(10, 2)
+  "odd col" bool
+  indexes {
+    user_id [unique]
+    user_id [pk]
+  }
+}
+Ref r0: posts.odd col <? quoted name.odd col
+Ref: t1.name - t1.x
+TableGroup g { quoted name, t1, posts }

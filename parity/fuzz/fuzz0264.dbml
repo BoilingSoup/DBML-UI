@@ -1,0 +1,11 @@
+Table t1 {
+  id int[] [default: 1, default: 'x', ref: ?<> t1.id]
+  user_id decimal(10, 2) [pk, default: `now()`, ref: <? nope.id]
+  user_id integer pk
+  Note: 'table note'
+}
+Table B {
+  "odd col" "character varying" [note: 'n', default: `now()`]
+}
+Ref: t1.odd col > t1.code
+TableGroup g { t1, B }

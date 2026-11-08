@@ -1,0 +1,20 @@
+Table B {
+  x decimal(10, 2) [color: #1E69FD, not null]
+  code timestamp [note: 'n']
+  x integer [null]
+  x text [note: 'n', not null]
+  records (x) {
+    'a'
+    null
+  }
+}
+Table "quoted name" {
+  code int[] [default: 'x', check: `x > 0`]
+  "odd col" varchar(255) [pk]
+  "odd col" int[] [note: 'n', ref: ?- B.odd col]
+  code e_status [note: 'n', unique]
+  records (code) {
+    ''
+  }
+}
+TableGroup g { B, quoted name }

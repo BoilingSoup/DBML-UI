@@ -1,0 +1,13 @@
+Table _x {
+  x timestamp [default: 'x', null]
+  "odd col" timestamp [note: 'n', null]
+  "odd col" e_status unique
+  x int[] [pk]
+  records (x) {
+    1
+    'a'
+    1
+  }
+}
+Ref r0: _x.odd col <? _x.code
+Ref: _x.x ?- _x.code

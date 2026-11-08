@@ -1,0 +1,14 @@
+Table _x {
+  name e_status [pk]
+  Note: 'table note'
+}
+Table "quoted name" {
+  name bool [null]
+  "odd col" decimal(10, 2) pk
+  "odd col" decimal(10, 2) foo
+}
+Table t1 {
+  id varchar(255) [default: `now()`]
+}
+Ref: _x.user_id ?<> t1.user_id
+Ref: quoted name.name - missing.x

@@ -1,0 +1,14 @@
+Table B {
+  name bool [default: 'x', ref: - nope.name]
+  indexes {
+    name [unique, name: 'ix']
+  }
+}
+Table posts {
+  x int[] [check: `x > 0`, null, ref: > posts.x]
+  id integer
+  "odd col" decimal(10, 2) [default: `now()`, note: 'n']
+}
+Table posts {
+  code e_status [increment, ref: < B.code]
+}

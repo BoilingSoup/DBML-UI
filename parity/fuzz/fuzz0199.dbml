@@ -1,0 +1,17 @@
+Table _x {
+  code e_status [default: 'x', ref: ?<> _x.code]
+  name integer [null, pk]
+  indexes {
+    code [unique, name: 'ix']
+  }
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { _x }
+Note sticky {
+  '''
+  text
+  '''
+}

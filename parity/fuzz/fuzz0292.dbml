@@ -1,0 +1,10 @@
+Table my_table {
+  id varchar(255) [default: `now()`, color: #1E69FD]
+  name timestamp [default: 1, ref: -? nope.name]
+  name bool [null, default: 'x']
+  user_id varchar(255) [color: #1E69FD, default: 1]
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}

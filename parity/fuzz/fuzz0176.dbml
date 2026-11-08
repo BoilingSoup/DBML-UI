@@ -1,0 +1,22 @@
+Table _x {
+  x integer
+}
+Table my_table {
+  user_id varchar(255) [null]
+  x decimal(10, 2)
+  records (user_id) {
+    null
+    'a'
+  }
+}
+Table _x {
+  x varchar(255) [default: `now()`, note: 'n']
+  id e_status [color: #1E69FD, note: 'n']
+  indexes {
+    id [unique, name: 'ix']
+  }
+  records (x) {
+    1
+    'a'
+  }
+}

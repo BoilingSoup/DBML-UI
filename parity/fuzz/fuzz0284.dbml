@@ -1,0 +1,9 @@
+Table orders {
+  "odd col" "character varying" foo
+  user_id int[] [unique, increment]
+  "odd col" int[] [unique]
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}

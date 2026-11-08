@@ -1,0 +1,30 @@
+Table "quoted name" {
+  name bool [color: #1E69FD]
+  id varchar(255) [default: `now()`]
+}
+Table t1 {
+  "odd col" e_status [note: 'n', unique, ref: ?- nope.odd col]
+  "odd col" varchar(255) [color: #1E69FD, note: 'n', ref: -? quoted name.odd col]
+  id int[]
+  id "character varying" [check: `x > 0`, ref: ?<> t1.odd col]
+  indexes {
+    id [pk]
+    (id) [unique, name: 'ix']
+  }
+  Note: 'table note'
+}
+Table users {
+  id "character varying" [note: 'n', null]
+  name varchar(255) [unique, default: 'x']
+  name bool [check: `x > 0`, ref: <>? t1.name]
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { quoted name, t1, users }
+Note sticky {
+  '''
+  text
+  '''
+}

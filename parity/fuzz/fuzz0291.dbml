@@ -1,0 +1,23 @@
+Table orders {
+  user_id timestamp pk
+  id varchar(255)
+}
+Table _x {
+  id varchar(255) [unique, ref: -? nope.id]
+  id "character varying" [default: `now()`]
+  id decimal(10, 2) [unique]
+  indexes {
+    (id) [pk]
+  }
+}
+Table a {
+  user_id e_status [not null, note: 'n']
+  id "character varying" [note: 'n', default: `now()`, ref: -? nope.user_id]
+  id bool [unique]
+  indexes {
+    user_id [unique, name: 'ix']
+  }
+}
+Ref: _x.code ?<> orders.id
+Ref r1: _x.odd col < _x.id
+TableGroup g { orders, _x, a }

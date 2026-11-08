@@ -1,0 +1,28 @@
+Table t1 {
+  x int[] [default: 1, ref: < nope.x]
+  code text [color: #1E69FD, default: 'x']
+  name varchar(255) [default: 1, default: 'x', ref: -? t1.name]
+}
+Table "quoted name" {
+  code decimal(10, 2)
+  id e_status [pk]
+  user_id int[] [increment]
+}
+Table users {
+  user_id varchar(255) [color: #1E69FD, default: 'x', ref: <> users.user_id]
+  user_id decimal(10, 2) [pk, null]
+  records (user_id) {
+    true
+  }
+}
+Table a {
+  id timestamp [pk, color: #1E69FD, ref: <>? nope.id]
+  x bool [note: 'n', unique]
+  "odd col" text [not null]
+}
+Ref: quoted name.id -? a.name
+Ref r1: a.odd col <> t1.odd col
+Enum e_status {
+  open
+  closed [note: 'done']
+}

@@ -1,0 +1,30 @@
+Table orders {
+  "odd col" text [default: 1, note: 'n', ref: <>? nope.odd col]
+  x varchar(255)
+  id decimal(10, 2)
+  indexes {
+    odd col
+    x [pk]
+  }
+}
+Table users {
+  "odd col" text [default: `now()`, ref: <>? orders.odd col]
+}
+Table _x {
+  "odd col" bool [pk]
+}
+Table B {
+  user_id e_status foo
+  user_id "character varying" [default: 1]
+  records (user_id) {
+    'a'
+    2.5
+    2.5
+  }
+}
+TableGroup g { orders, users, _x, B }
+Note sticky {
+  '''
+  text
+  '''
+}

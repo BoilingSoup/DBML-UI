@@ -1,0 +1,19 @@
+Table posts {
+  "odd col" "character varying" [increment, color: #1E69FD]
+  name text [default: 1, default: 'x']
+  name timestamp [pk, color: #1E69FD, ref: ?< nope.odd col]
+}
+Table users {
+  x "character varying" [default: 1]
+  x bool [null]
+  x e_status [pk, default: `now()`, ref: < nope.x]
+  name integer
+  Note: 'table note'
+}
+Table orders {
+  code timestamp
+  x integer [null, pk, ref: <>? users.code]
+  Note: 'table note'
+}
+Ref: users.id - missing.id
+Ref r1: users.code - missing.id

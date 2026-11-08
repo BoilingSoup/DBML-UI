@@ -1,0 +1,13 @@
+Table B {
+  name e_status [unique]
+  name varchar(255)
+  name bool
+  x bool [note: 'n', ref: >? nope.name]
+  Note: 'table note'
+}
+Ref: B.name <>? missing.odd col
+Ref: B.user_id <> missing.name
+Enum e_status {
+  open
+  closed [note: 'done']
+}

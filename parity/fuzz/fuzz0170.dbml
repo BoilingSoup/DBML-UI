@@ -1,0 +1,21 @@
+Table users {
+  x integer [default: 1]
+  "odd col" timestamp [note: 'n', default: 'x']
+  name integer [default: `now()`, null, ref: - users.x]
+  indexes {
+    odd col [pk]
+  }
+  records (x) {
+    2.5
+  }
+}
+Table users {
+  code varchar(255) [not null, ref: <>? users.code]
+  "odd col" timestamp [color: #1E69FD, ref: ?- users.odd col]
+  name timestamp [color: #1E69FD]
+  "odd col" timestamp
+  indexes {
+    odd col [unique, name: 'ix']
+    (odd col)
+  }
+}

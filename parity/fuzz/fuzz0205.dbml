@@ -1,0 +1,21 @@
+Table orders {
+  user_id integer [pk, null, ref: >? orders.user_id]
+  x integer [color: #1E69FD, check: `x > 0`]
+  x e_status [check: `x > 0`]
+  id timestamp [not null, null]
+}
+Table my_table {
+  "odd col" timestamp [null, increment]
+}
+Table users {
+  code decimal(10, 2)
+  "odd col" integer [default: 1, unique, ref: <? nope.code]
+  "odd col" text [increment]
+}
+Ref: my_table.code ?< my_table.odd col
+Ref: users.code ?<> my_table.odd col
+Note sticky {
+  '''
+  text
+  '''
+}

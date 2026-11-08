@@ -1,0 +1,8 @@
+Table users {
+  "odd col" bool foo
+  indexes {
+    (odd col)
+  }
+}
+Ref: users.code - users.x
+TableGroup g { users }

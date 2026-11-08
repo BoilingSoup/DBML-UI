@@ -1,0 +1,49 @@
+Table B {
+  code text pk
+  indexes {
+    code [pk]
+    code [pk]
+  }
+}
+Table posts {
+  x bool [default: 'x', unique]
+  code decimal(10, 2)
+  id varchar(255) [unique, increment]
+  code text [check: `x > 0`, ref: <> posts.code]
+  indexes {
+    code [unique, name: 'ix']
+  }
+}
+Table posts {
+  "odd col" "character varying" [unique]
+  code decimal(10, 2) [increment]
+  user_id varchar(255) [pk, unique]
+  indexes {
+    (code) [unique, name: 'ix']
+  }
+  records (odd col) {
+    true
+  }
+}
+Table a {
+  code timestamp [color: #1E69FD]
+  name varchar(255) pk
+  code varchar(255) [unique, pk]
+  id int[] [default: `now()`]
+  indexes {
+    (code) [unique]
+    code [pk]
+  }
+  records (code) {
+    true
+    'a'
+    1
+  }
+}
+Ref r0: posts.odd col - missing.odd col
+TableGroup g { B, posts, posts, a }
+Note sticky {
+  '''
+  text
+  '''
+}

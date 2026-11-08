@@ -1,0 +1,25 @@
+Table _x {
+  "odd col" e_status [pk]
+  "odd col" int[] [note: 'n', not null]
+  name bool foo
+  x decimal(10, 2) [not null]
+  Note: 'table note'
+}
+Table users {
+  user_id e_status [note: 'n', default: 1]
+  indexes {
+    (user_id) [unique]
+    user_id [unique, name: 'ix']
+  }
+  records (user_id) {
+    null
+  }
+}
+Table orders {
+  "odd col" e_status [increment]
+  id varchar(255) [default: `now()`, default: 1, ref: ?- nope.id]
+  user_id integer [default: 'x']
+  Note: 'table note'
+}
+Ref: orders.name <>? _x.code
+Ref: users.x < missing.odd col

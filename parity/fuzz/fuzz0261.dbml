@@ -1,0 +1,17 @@
+Table posts {
+  "odd col" timestamp [increment, pk, ref: - nope.odd col]
+  "odd col" decimal(10, 2) [default: 1, unique]
+  records (odd col) {
+    ''
+    `x`
+  }
+}
+Table users {
+  id varchar(255) [increment, unique]
+  Note: 'table note'
+  records (id) {
+    2.5
+  }
+}
+Ref: users.code >? posts.odd col
+Ref: users.name -? users.name

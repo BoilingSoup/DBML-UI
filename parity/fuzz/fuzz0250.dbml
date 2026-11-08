@@ -1,0 +1,27 @@
+Table orders {
+  user_id "character varying" [unique]
+  indexes {
+    (user_id) [unique]
+    user_id [unique]
+  }
+  records (user_id) {
+    1
+    null
+  }
+}
+Table users {
+  "odd col" decimal(10, 2) [pk]
+  Note: 'table note'
+  records (odd col) {
+    'a'
+  }
+}
+Table a {
+  user_id "character varying" [default: 1]
+}
+Table posts {
+  id decimal(10, 2) pk
+  name bool [pk, default: `now()`, ref: -? posts.id]
+}
+Ref: orders.code - posts.user_id
+Ref r1: users.code - orders.code

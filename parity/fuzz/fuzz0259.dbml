@@ -1,0 +1,29 @@
+Table B {
+  user_id text [note: 'n', check: `x > 0`]
+  user_id timestamp [null]
+  Note: 'table note'
+}
+Table "quoted name" {
+  "odd col" e_status [default: 1]
+  "odd col" timestamp [default: `now()`, ref: - B.odd col]
+  name bool [unique, check: `x > 0`]
+  indexes {
+    (name)
+    (name) [unique]
+  }
+}
+Table B {
+  code "character varying" [not null, increment, ref: ?< quoted name.code]
+  "odd col" e_status [default: 1, color: #1E69FD, ref: - nope.odd col]
+  "odd col" text pk
+  x "character varying" [default: `now()`, check: `x > 0`]
+  indexes {
+    odd col [pk]
+    (x)
+  }
+}
+Note sticky {
+  '''
+  text
+  '''
+}

@@ -1,0 +1,24 @@
+Table ñT {
+  user_id timestamp [unique, ref: ?<> ñT.user_id]
+  code int[]
+  user_id integer [default: `now()`, ref: ?> ñT.user_id]
+}
+Table _x {
+  x text [note: 'n', default: 'x']
+  user_id bool [pk]
+}
+Table orders {
+  name varchar(255) [unique, increment]
+}
+Table B {
+  x "character varying"
+  code "character varying" [default: `now()`, ref: ?- orders.code]
+  id varchar(255) [null, not null]
+}
+Ref: ñT.code ?- missing.user_id
+TableGroup g { ñT, _x, orders, B }
+Note sticky {
+  '''
+  text
+  '''
+}

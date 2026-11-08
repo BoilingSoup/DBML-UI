@@ -1,0 +1,18 @@
+Table t1 {
+  x varchar(255) [not null]
+  "odd col" "character varying"
+  id varchar(255)
+}
+Table a {
+  "odd col" timestamp [default: 1, ref: ?< a.odd col]
+  Note: 'table note'
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+Note sticky {
+  '''
+  text
+  '''
+}

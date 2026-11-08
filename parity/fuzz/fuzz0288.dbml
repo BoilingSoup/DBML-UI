@@ -1,0 +1,16 @@
+Table a {
+  x varchar(255) [check: `x > 0`, default: `now()`]
+  x varchar(255) [color: #1E69FD, pk]
+  x text
+  user_id decimal(10, 2) [check: `x > 0`, default: 'x']
+}
+Ref r0: a.x - a.name
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+Note sticky {
+  '''
+  text
+  '''
+}

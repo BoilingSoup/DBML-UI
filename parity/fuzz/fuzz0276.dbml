@@ -1,0 +1,34 @@
+Table users {
+  "odd col" timestamp [pk, color: #1E69FD, ref: > users.odd col]
+  x int[] [default: `now()`]
+  indexes {
+    odd col [unique]
+    (odd col) [pk]
+  }
+  records (odd col) {
+    ''
+  }
+}
+Table users {
+  name decimal(10, 2) [default: 'x']
+  indexes {
+    (name) [unique]
+    (name) [pk]
+  }
+}
+Table t1 {
+  "odd col" "character varying" [note: 'n', color: #1E69FD]
+  code timestamp
+  "odd col" bool [color: #1E69FD, default: 1, ref: > users.odd col]
+  name timestamp
+  Note: 'table note'
+}
+Table ñT {
+  name bool
+}
+Ref: users.name <>? t1.user_id
+Note sticky {
+  '''
+  text
+  '''
+}

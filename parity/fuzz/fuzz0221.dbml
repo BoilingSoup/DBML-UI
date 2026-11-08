@@ -1,0 +1,29 @@
+Table ñT {
+  id e_status
+  "odd col" integer [color: #1E69FD, default: 'x', ref: <? nope.id]
+  x text [color: #1E69FD, ref: - ñT.id]
+  indexes {
+    id [unique]
+    odd col [unique, name: 'ix']
+  }
+  records (id) {
+    2.5
+  }
+}
+Table t1 {
+  x "character varying"
+  records (x) {
+    `x`
+    2.5
+  }
+}
+Ref: ñT.name <? t1.code
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+Note sticky {
+  '''
+  text
+  '''
+}

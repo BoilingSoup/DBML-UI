@@ -1,0 +1,18 @@
+Table users {
+  x "character varying" [increment, ref: >? users.x]
+  user_id timestamp unique
+  user_id timestamp [not null, check: `x > 0`]
+}
+Table a {
+  "odd col" bool
+  x integer [increment, ref: ?> users.x]
+  code integer [default: `now()`, check: `x > 0`, ref: -? nope.odd col]
+}
+Table a {
+  user_id bool [unique]
+  id decimal(10, 2)
+  x decimal(10, 2) [default: 'x']
+  x int[] [default: 1]
+}
+Ref: users.name < users.user_id
+Ref: a.id <> users.id

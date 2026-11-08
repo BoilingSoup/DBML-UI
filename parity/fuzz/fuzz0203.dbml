@@ -1,0 +1,11 @@
+Table B {
+  code decimal(10, 2) [null, check: `x > 0`]
+  "odd col" decimal(10, 2) [color: #1E69FD]
+  code varchar(255) [note: 'n']
+  records (code) {
+    `x`
+    'a'
+    true
+  }
+}
+Ref r0: B.id ?- missing.id

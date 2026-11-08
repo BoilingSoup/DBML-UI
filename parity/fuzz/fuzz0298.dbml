@@ -1,0 +1,16 @@
+Table t1 {
+  name e_status [note: 'n', ref: -? nope.name]
+  Note: 'table note'
+}
+Table posts {
+  code bool [note: 'n', ref: -? posts.code]
+  indexes {
+    (code)
+  }
+  Note: 'table note'
+}
+Table t1 {
+  code timestamp [pk, ref: - posts.code]
+}
+Ref: posts.code ?< missing.odd col
+TableGroup g { t1, posts, t1 }

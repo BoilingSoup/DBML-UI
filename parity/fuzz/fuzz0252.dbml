@@ -1,0 +1,29 @@
+Table my_table {
+  code decimal(10, 2) [not null, pk]
+  indexes {
+    code [unique]
+  }
+  records (code) {
+    'a'
+    ''
+    'a'
+  }
+}
+Table "quoted name" {
+  "odd col" int[] [color: #1E69FD, default: 'x', ref: ?< my_table.odd col]
+  id "character varying" [default: `now()`, default: 1]
+  code int[] [null, default: 'x']
+  id varchar(255) [default: 'x', check: `x > 0`]
+  Note: 'table note'
+}
+Table users {
+  code text
+  x integer [color: #1E69FD, default: 1, ref: >? my_table.code]
+  indexes {
+    code [pk]
+  }
+  records (code) {
+    `x`
+  }
+}
+TableGroup g { my_table, quoted name, users }

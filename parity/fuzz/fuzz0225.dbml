@@ -1,0 +1,31 @@
+Table a {
+  name int[] [default: 'x', ref: >? a.name]
+  code int[] [not null, color: #1E69FD]
+  id decimal(10, 2) [not null]
+  user_id decimal(10, 2) [unique]
+  Note: 'table note'
+  records (name) {
+    ''
+    null
+    2.5
+  }
+}
+Table "quoted name" {
+  id integer [default: 'x', note: 'n']
+}
+Table a {
+  x timestamp [increment]
+  "odd col" text [pk, default: `now()`, ref: -? a.x]
+  code "character varying" [default: `now()`, default: 1, ref: ?- nope.x]
+  code int[] [increment, default: 'x']
+  records (x) {
+    null
+    `x`
+    true
+  }
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { a, quoted name, a }

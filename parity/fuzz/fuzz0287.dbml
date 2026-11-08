@@ -1,0 +1,32 @@
+Table B {
+  user_id bool [default: 'x', increment]
+  name text [check: `x > 0`, note: 'n']
+  "odd col" timestamp [null, check: `x > 0`]
+  user_id decimal(10, 2) [not null, ref: -? B.user_id]
+}
+Table a {
+  user_id bool [null, note: 'n']
+  Note: 'table note'
+}
+Table posts {
+  x integer
+  code varchar(255) [default: 1, note: 'n']
+  code "character varying"
+  name bool [default: 'x', not null]
+  indexes {
+    (x)
+    (code) [unique]
+  }
+  records (x) {
+    ''
+    true
+  }
+}
+Table my_table {
+  code e_status [default: `now()`, increment]
+  name e_status
+  records (code) {
+    'a'
+    null
+  }
+}

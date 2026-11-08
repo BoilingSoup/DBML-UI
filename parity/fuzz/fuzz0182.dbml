@@ -1,0 +1,10 @@
+Table orders {
+  "odd col" "character varying" [unique, default: 1]
+  code varchar(255) [default: `now()`, ref: - orders.odd col]
+  "odd col" integer
+}
+Table posts {
+  name bool
+  id text [unique, ref: ?< posts.id]
+  id int[] [note: 'n', default: 'x']
+}

@@ -1,0 +1,27 @@
+Table ñT {
+  user_id varchar(255) [color: #1E69FD, increment]
+  name decimal(10, 2)
+  x decimal(10, 2) [default: 1, default: `now()`]
+  code bool
+  Note: 'table note'
+}
+Table ñT {
+  name varchar(255) [unique, ref: > nope.name]
+  name int[] [null]
+  user_id "character varying" [default: 1]
+  "odd col" "character varying" [null, not null]
+  indexes {
+    (name)
+  }
+  records (name) {
+    ''
+  }
+}
+Ref: ñT.x - ñT.name
+Ref: ñT.odd col <> ñT.x
+TableGroup g { ñT, ñT }
+Note sticky {
+  '''
+  text
+  '''
+}

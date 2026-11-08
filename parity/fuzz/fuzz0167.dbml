@@ -1,0 +1,36 @@
+Table posts {
+  code "character varying"
+  code int[] [increment, note: 'n']
+  x bool [note: 'n', null, ref: > nope.x]
+  Note: 'table note'
+}
+Table "quoted name" {
+  name decimal(10, 2)
+  code int[] [unique, note: 'n']
+}
+Table B {
+  x timestamp [unique]
+  code int[] unique
+  code varchar(255) [default: 1, default: `now()`]
+  indexes {
+    code [unique]
+    x [pk]
+  }
+  Note: 'table note'
+}
+Table ñT {
+  id integer [default: 'x', not null]
+  name text [null, check: `x > 0`, ref: <? nope.id]
+  user_id varchar(255) pk
+}
+Ref: B.code ?<> posts.code
+Ref: posts.odd col ?> missing.id
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+Note sticky {
+  '''
+  text
+  '''
+}

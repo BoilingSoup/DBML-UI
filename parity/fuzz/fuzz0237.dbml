@@ -1,0 +1,24 @@
+Table t1 {
+  "odd col" bool [default: 1]
+  id integer [default: `now()`, note: 'n']
+  x int[] [null, unique, ref: >? nope.odd col]
+  x integer [default: `now()`, ref: -? t1.x]
+  records (odd col) {
+    'a'
+    null
+    null
+  }
+}
+Table users {
+  code bool [check: `x > 0`, null]
+  user_id int[] [null]
+  name varchar(255) [not null]
+  indexes {
+    (name) [unique, name: 'ix']
+    user_id [unique]
+  }
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}

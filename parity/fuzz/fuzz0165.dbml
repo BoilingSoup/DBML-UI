@@ -1,0 +1,10 @@
+Table _x {
+  code decimal(10, 2)
+  "odd col" "character varying" [check: `x > 0`, default: 'x']
+  indexes {
+    odd col [unique, name: 'ix']
+    odd col [unique]
+  }
+}
+Ref: _x.name ?> missing.x
+Ref r1: _x.name <> missing.code

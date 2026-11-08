@@ -1,0 +1,23 @@
+Table ñT {
+  id text [pk, null]
+  user_id e_status [not null]
+  code bool
+  id bool foo
+  indexes {
+    (code) [unique]
+    code [unique, name: 'ix']
+  }
+}
+Table "quoted name" {
+  name timestamp unique
+  "odd col" e_status [default: 1]
+  "odd col" bool [note: 'n', ref: ?> ñT.odd col]
+  records (name) {
+    2.5
+  }
+}
+Table users {
+  x bool foo
+}
+Ref: ñT.name <? ñT.x
+Ref r1: ñT.odd col <> quoted name.id

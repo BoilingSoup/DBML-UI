@@ -1,0 +1,20 @@
+Table my_table {
+  name int[] [color: #1E69FD, default: 1]
+  code varchar(255) [increment, check: `x > 0`, ref: >? nope.name]
+  "odd col" int[] [null]
+  id int[] [null, pk]
+}
+Table B {
+  id int[] [color: #1E69FD]
+  records (id) {
+    2.5
+    true
+    'a'
+  }
+}
+Table users {
+  id int[] [check: `x > 0`, not null]
+}
+Ref r0: my_table.odd col <> missing.name
+Ref: B.name <> users.x
+TableGroup g { my_table, B, users }

@@ -1,0 +1,18 @@
+Table ñT {
+  id e_status [color: #1E69FD, ref: <>? ñT.id]
+  code timestamp [note: 'n', unique, ref: - ñT.code]
+  "odd col" text [increment, default: 'x', ref: <? nope.code]
+}
+Table "quoted name" {
+  name varchar(255)
+  id int[] [pk, ref: -? quoted name.name]
+  indexes {
+    (name) [unique, name: 'ix']
+    (name) [pk]
+  }
+  Note: 'table note'
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}

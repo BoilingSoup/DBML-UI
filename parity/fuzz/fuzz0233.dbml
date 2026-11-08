@@ -1,0 +1,23 @@
+Table B {
+  "odd col" "character varying" [increment, color: #1E69FD, ref: <>? B.odd col]
+  Note: 'table note'
+}
+Table my_table {
+  name timestamp
+  "odd col" integer
+  name e_status
+  id decimal(10, 2) [default: 'x']
+  indexes {
+    id [unique]
+  }
+}
+Ref: B.x ?- missing.code
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+Note sticky {
+  '''
+  text
+  '''
+}

@@ -1,0 +1,37 @@
+Table users {
+  id text [increment, null]
+  x bool [check: `x > 0`, pk]
+}
+Table orders {
+  x "character varying" [pk, note: 'n']
+  indexes {
+    x [pk]
+    x [unique]
+  }
+  records (x) {
+    1
+  }
+}
+Table B {
+  "odd col" integer foo
+  "odd col" "character varying" unique
+  "odd col" "character varying"
+  indexes {
+    odd col [unique, name: 'ix']
+    odd col [unique, name: 'ix']
+  }
+}
+Table posts {
+  x e_status [note: 'n', default: 'x']
+  user_id bool [pk, not null]
+  "odd col" timestamp [unique, note: 'n']
+  indexes {
+    odd col [unique, name: 'ix']
+    x [unique, name: 'ix']
+  }
+}
+Ref r0: users.id ?> B.user_id
+Enum e_status {
+  open
+  closed [note: 'done']
+}

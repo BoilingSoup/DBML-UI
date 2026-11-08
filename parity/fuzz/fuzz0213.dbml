@@ -1,0 +1,23 @@
+Table users {
+  code varchar(255) [unique]
+  Note: 'table note'
+  records (code) {
+    null
+  }
+}
+Table B {
+  x bool [default: 1]
+  x int[] [unique, check: `x > 0`, ref: <>? nope.x]
+}
+Table a {
+  "odd col" integer foo
+  x integer [note: 'n']
+  indexes {
+    odd col [unique, name: 'ix']
+    odd col [unique]
+  }
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}

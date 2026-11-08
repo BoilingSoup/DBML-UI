@@ -1,0 +1,36 @@
+Table ñT {
+  name integer [default: 'x', null, ref: - ñT.name]
+  indexes {
+    name [pk]
+    (name) [unique, name: 'ix']
+  }
+}
+Table a {
+  x varchar(255) [default: 'x', default: `now()`]
+  user_id varchar(255)
+  id decimal(10, 2) [not null]
+  user_id decimal(10, 2) [default: `now()`]
+  indexes {
+    user_id [unique, name: 'ix']
+  }
+}
+Table ñT {
+  code int[] [increment, default: 1, ref: ?< a.code]
+  "odd col" text [null]
+  "odd col" decimal(10, 2) [null, default: `now()`, ref: <> ñT.code]
+  id "character varying" [unique, check: `x > 0`]
+  Note: 'table note'
+}
+Table my_table {
+  id decimal(10, 2) [pk, increment]
+  "odd col" varchar(255)
+  x int[]
+  x timestamp [default: 'x', ref: >? ñT.x]
+  Note: 'table note'
+  records (id) {
+    'a'
+    ''
+    null
+  }
+}
+Ref: a.x ?> my_table.x

@@ -1,0 +1,18 @@
+Table B {
+  code timestamp [not null, note: 'n']
+  records (code) {
+    ''
+    true
+  }
+}
+Ref: B.x <? B.code
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { B }
+Note sticky {
+  '''
+  text
+  '''
+}

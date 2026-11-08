@@ -1,0 +1,30 @@
+Table orders {
+  code text
+  "odd col" "character varying" [unique]
+}
+Table ñT {
+  id text [note: 'n', increment, ref: ?< ñT.id]
+  name varchar(255) [default: `now()`, check: `x > 0`]
+  code text [default: `now()`, color: #1E69FD]
+  Note: 'table note'
+}
+Table users {
+  user_id e_status [not null, null]
+  name "character varying" [null, ref: ?<> ñT.user_id]
+  indexes {
+    (user_id) [unique]
+  }
+  records (user_id) {
+    null
+    'a'
+  }
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+Note sticky {
+  '''
+  text
+  '''
+}

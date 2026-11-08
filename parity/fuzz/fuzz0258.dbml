@@ -1,0 +1,13 @@
+Table my_table {
+  id varchar(255) [increment, ref: ?- my_table.id]
+  code text [unique, default: 'x', ref: - my_table.code]
+  "odd col" e_status [check: `x > 0`]
+  Note: 'table note'
+}
+Table _x {
+  x "character varying" [default: 1, note: 'n']
+  x timestamp [default: 1]
+  x text [pk]
+}
+Ref: my_table.user_id <> my_table.name
+Ref: my_table.code - my_table.code

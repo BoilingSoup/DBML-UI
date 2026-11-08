@@ -1,0 +1,27 @@
+Table my_table {
+  name int[] [increment]
+  indexes {
+    (name) [pk]
+  }
+}
+Table _x {
+  "odd col" int[] [pk, check: `x > 0`, ref: >? nope.odd col]
+  records (odd col) {
+    2.5
+    true
+  }
+}
+Table t1 {
+  x int[] [check: `x > 0`]
+  id timestamp [color: #1E69FD, default: 'x']
+  Note: 'table note'
+}
+Table a {
+  id varchar(255) [default: `now()`, color: #1E69FD]
+  id timestamp [color: #1E69FD, ref: < nope.id]
+  indexes {
+    (id) [unique, name: 'ix']
+    (id) [unique]
+  }
+}
+Ref: my_table.x ?< t1.code

@@ -9,6 +9,8 @@
 
 use dbml_ui::dbml::{self, parser, schema_json};
 
+/// Canonical form for model comparison: keys sorted, token positions
+/// stripped (they are source-relative and shift under formatting).
 fn canonical(v: &serde_json::Value) -> serde_json::Value {
     match v {
         serde_json::Value::Array(a) => {
@@ -17,6 +19,9 @@ fn canonical(v: &serde_json::Value) -> serde_json::Value {
         serde_json::Value::Object(m) => {
             let mut out = serde_json::Map::new();
             for (k, val) in m {
+                if k == "token" {
+                    continue;
+                }
                 out.insert(k.clone(), canonical(val));
             }
             serde_json::Value::Object(out)
@@ -96,8 +101,8 @@ fn formatting_preserves_the_model() {
             "{label}: formatted output does not re-parse: {:?}\n--- formatted ---\n{formatted}",
             reparsed.errors
         );
-        let before = canonical(&schema_json::to_database_json(&parsed.doc));
-        let after = canonical(&schema_json::to_database_json(&reparsed.doc));
+        let before = canonical(&schema_json::to_database_json(&parsed.doc, &src));
+        let after = canonical(&schema_json::to_database_json(&reparsed.doc, &formatted));
         assert_eq!(
             before, after,
             "{label}: formatting changed the model\n--- formatted ---\n{formatted}"

@@ -1,0 +1,9 @@
+Table "quoted name" {
+  "odd col" varchar(255) [color: #1E69FD, ref: < quoted name.odd col]
+  Note: 'table note'
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { quoted name }

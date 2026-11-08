@@ -1,0 +1,17 @@
+Table posts {
+  name decimal(10, 2)
+  "odd col" int[] [check: `x > 0`]
+  "odd col" text [unique]
+  Note: 'table note'
+}
+Table my_table {
+  x decimal(10, 2) [note: 'n', check: `x > 0`, ref: - posts.x]
+  name bool [color: #1E69FD, ref: <? my_table.name]
+  Note: 'table note'
+}
+Ref: posts.id <>? posts.name
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { posts, my_table }

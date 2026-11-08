@@ -1,0 +1,8 @@
+Table my_table {
+  id integer [unique]
+  indexes {
+    id [unique]
+    (id) [pk]
+  }
+}
+Ref: my_table.x ?<> my_table.odd col

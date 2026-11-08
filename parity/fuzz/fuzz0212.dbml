@@ -1,0 +1,23 @@
+Table _x {
+  x timestamp
+  name integer [increment]
+  records (x) {
+    'a'
+    2.5
+    2.5
+  }
+}
+Table t1 {
+  x varchar(255) [default: 1, default: 'x', ref: ?< _x.x]
+  indexes {
+    (x) [pk]
+  }
+  Note: 'table note'
+}
+Ref r0: t1.name <? _x.x
+Ref r1: t1.id - missing.id
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { _x, t1 }

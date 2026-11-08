@@ -1,0 +1,19 @@
+Table "quoted name" {
+  name decimal(10, 2) [not null, color: #1E69FD, ref: <> quoted name.name]
+  indexes {
+    (name) [pk]
+  }
+}
+Table B {
+  id timestamp [not null]
+  "odd col" int[] [unique, ref: <? B.id]
+  id decimal(10, 2) [pk, null, ref: ?<> nope.odd col]
+  code e_status
+  indexes {
+    id
+  }
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}

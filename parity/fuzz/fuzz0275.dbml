@@ -1,0 +1,22 @@
+Table a {
+  x varchar(255) [color: #1E69FD, note: 'n']
+  user_id decimal(10, 2) [note: 'n']
+  Note: 'table note'
+  records (x) {
+    null
+  }
+}
+Table ñT {
+  name int[]
+  id varchar(255) [null, default: `now()`, ref: ?- ñT.name]
+  code decimal(10, 2) [default: 1, null]
+  records (name) {
+    ''
+  }
+}
+Ref: ñT.odd col ?> a.user_id
+Note sticky {
+  '''
+  text
+  '''
+}

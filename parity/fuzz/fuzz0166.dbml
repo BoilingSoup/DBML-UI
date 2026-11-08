@@ -1,0 +1,22 @@
+Table ñT {
+  x text [default: 1, ref: ?- ñT.x]
+  user_id bool [default: 1, pk, ref: ?> ñT.x]
+  user_id decimal(10, 2) [check: `x > 0`, pk]
+  indexes {
+    (user_id) [unique, name: 'ix']
+  }
+}
+Table a {
+  user_id decimal(10, 2) [default: 1, ref: <? nope.user_id]
+  Note: 'table note'
+}
+Ref r0: ñT.x ?< a.x
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+Note sticky {
+  '''
+  text
+  '''
+}

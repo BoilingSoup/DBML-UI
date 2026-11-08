@@ -1,0 +1,34 @@
+Table posts {
+  name int[] [pk, default: `now()`]
+  id "character varying" [default: `now()`, increment, ref: ?> nope.id]
+  "odd col" int[] [default: `now()`, pk, ref: ?< posts.name]
+  user_id text [null]
+  indexes {
+    id [pk]
+    (user_id) [unique, name: 'ix']
+  }
+}
+Table t1 {
+  name integer [not null, default: `now()`]
+  records (name) {
+    2.5
+  }
+}
+Table users {
+  code bool [null]
+  id decimal(10, 2)
+  id int[] [null]
+  name "character varying" [unique]
+}
+Table users {
+  user_id e_status [check: `x > 0`, pk]
+  x text unique
+  "odd col" timestamp [default: 'x', not null, ref: -? posts.user_id]
+  code int[] [default: 1]
+  indexes {
+    user_id [unique, name: 'ix']
+    (x) [unique]
+  }
+}
+Ref: posts.id -? posts.name
+Ref: users.user_id ?<> users.x

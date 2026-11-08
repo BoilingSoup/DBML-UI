@@ -1,0 +1,14 @@
+Table a {
+  id varchar(255) [unique, default: 1, ref: -? a.id]
+  code bool [color: #1E69FD, default: 'x', ref: <? nope.id]
+  indexes {
+    (id) [pk]
+    code [unique, name: 'ix']
+  }
+}
+TableGroup g { a }
+Note sticky {
+  '''
+  text
+  '''
+}

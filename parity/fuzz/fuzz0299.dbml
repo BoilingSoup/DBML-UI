@@ -1,0 +1,27 @@
+Table ñT {
+  name text
+}
+Table "quoted name" {
+  user_id bool
+  code "character varying" [unique]
+  "odd col" int[] [note: 'n']
+  code e_status [note: 'n']
+  Note: 'table note'
+}
+Table my_table {
+  user_id int[]
+  x int[] [default: 1]
+  indexes {
+    (user_id) [unique, name: 'ix']
+    (x) [pk]
+  }
+  records (user_id) {
+    `x`
+  }
+}
+Table B {
+  code decimal(10, 2)
+}
+Ref: ñT.code ?> my_table.name
+Ref: B.x -? B.user_id
+TableGroup g { ñT, quoted name, my_table, B }

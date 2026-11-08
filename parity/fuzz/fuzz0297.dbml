@@ -1,0 +1,35 @@
+Table B {
+  name bool [null]
+}
+Table t1 {
+  name e_status [default: 'x']
+  code timestamp [note: 'n']
+  id text [default: 'x', check: `x > 0`, ref: < nope.code]
+  indexes {
+    name [unique, name: 'ix']
+  }
+}
+Table _x {
+  code timestamp [increment, ref: < nope.code]
+  x e_status [default: 'x', default: 1]
+  user_id varchar(255) [increment, check: `x > 0`]
+  code bool [check: `x > 0`, color: #1E69FD, ref: > t1.code]
+  indexes {
+    (user_id) [unique, name: 'ix']
+  }
+}
+Table _x {
+  x bool [increment, color: #1E69FD]
+  code timestamp
+  code "character varying" [check: `x > 0`, null]
+  indexes {
+    (x) [unique, name: 'ix']
+    code [unique]
+  }
+  Note: 'table note'
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { B, t1, _x, _x }

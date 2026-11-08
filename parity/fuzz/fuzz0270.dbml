@@ -1,0 +1,24 @@
+Table B {
+  user_id integer [default: `now()`, pk]
+  name text [null, ref: ?- B.name]
+}
+Table ñT {
+  x varchar(255) [check: `x > 0`]
+  user_id text unique
+  x text [null]
+  Note: 'table note'
+}
+Table "quoted name" {
+  code bool [default: `now()`, ref: > nope.code]
+}
+Ref: B.x <> quoted name.odd col
+Ref: quoted name.user_id ?< quoted name.x
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+Note sticky {
+  '''
+  text
+  '''
+}

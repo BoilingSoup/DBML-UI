@@ -1,0 +1,35 @@
+Table ñT {
+  name varchar(255) [null, default: 'x', ref: ?< nope.name]
+  indexes {
+    (name) [unique, name: 'ix']
+  }
+}
+Table t1 {
+  name bool
+  x int[]
+  Note: 'table note'
+  records (name) {
+    true
+    true
+  }
+}
+Table _x {
+  name e_status
+  id decimal(10, 2)
+  indexes {
+    (id)
+    name
+  }
+  Note: 'table note'
+}
+Table users {
+  name text
+  x "character varying" [default: 1, null]
+  code bool [color: #1E69FD]
+  indexes {
+    code
+    x
+  }
+}
+Ref r0: ñT.user_id ?- missing.code
+TableGroup g { ñT, t1, _x, users }

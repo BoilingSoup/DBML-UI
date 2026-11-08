@@ -1,0 +1,23 @@
+Table users {
+  code text [default: 1]
+  id text [null, default: 1]
+}
+Table ñT {
+  name integer [null, unique]
+  indexes {
+    (name)
+  }
+}
+Table a {
+  name integer
+  name varchar(255) [default: `now()`, color: #1E69FD]
+  name text [default: 'x']
+  indexes {
+    name [unique]
+  }
+  records (name) {
+    `x`
+    'a'
+    true
+  }
+}

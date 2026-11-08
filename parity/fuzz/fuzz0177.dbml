@@ -1,0 +1,23 @@
+Table a {
+  code int[] [default: 1]
+  "odd col" int[] [increment, pk, ref: - a.code]
+}
+Table users {
+  id "character varying" [check: `x > 0`]
+  "odd col" int[] [increment, default: 'x']
+}
+Table users {
+  user_id int[]
+  user_id "character varying" [pk, not null]
+  user_id int[] [check: `x > 0`, ref: < nope.user_id]
+  user_id text [null, increment]
+}
+Table t1 {
+  id varchar(255) [increment, default: 'x']
+  name text
+  name e_status [increment, ref: -? users.id]
+  name e_status
+}
+Ref r0: t1.name <>? a.odd col
+Ref: users.code < users.name
+TableGroup g { a, users, users, t1 }

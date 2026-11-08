@@ -1,0 +1,10 @@
+Table posts {
+  id bool [note: 'n', ref: ?- posts.id]
+  indexes {
+    (id) [unique, name: 'ix']
+  }
+  records (id) {
+    2.5
+  }
+}
+TableGroup g { posts }

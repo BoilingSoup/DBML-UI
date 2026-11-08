@@ -1,0 +1,8 @@
+Table my_table {
+  name e_status [default: 1]
+  name decimal(10, 2) foo
+  code text [unique, null]
+  "odd col" varchar(255) [not null]
+}
+Ref: my_table.x <? my_table.id
+TableGroup g { my_table }

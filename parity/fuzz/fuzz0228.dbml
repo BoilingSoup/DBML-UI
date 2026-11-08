@@ -1,0 +1,34 @@
+Table orders {
+  x bool foo
+  indexes {
+    x [unique, name: 'ix']
+    x
+  }
+}
+Table "quoted name" {
+  "odd col" text [not null, increment, ref: <>? nope.odd col]
+  name timestamp [check: `x > 0`, pk]
+  Note: 'table note'
+  records (odd col) {
+    'a'
+    null
+  }
+}
+Table my_table {
+  "odd col" varchar(255) [not null, unique]
+  x "character varying" [not null]
+  id e_status [null, note: 'n', ref: > my_table.id]
+}
+Table my_table {
+  user_id decimal(10, 2) [note: 'n']
+  records (user_id) {
+    `x`
+    true
+  }
+}
+Ref: quoted name.user_id -? my_table.code
+Ref: my_table.user_id <> my_table.x
+Enum e_status {
+  open
+  closed [note: 'done']
+}

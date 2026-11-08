@@ -1,0 +1,15 @@
+Table my_table {
+  "odd col" int[] [null]
+  "odd col" timestamp [note: 'n', ref: ?- my_table.odd col]
+}
+Ref: my_table.code <>? my_table.x
+Ref r1: my_table.id <? my_table.name
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+Note sticky {
+  '''
+  text
+  '''
+}

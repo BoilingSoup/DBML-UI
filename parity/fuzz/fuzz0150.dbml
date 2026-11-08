@@ -1,0 +1,37 @@
+Table ñT {
+  "odd col" int[]
+  user_id text [unique, pk]
+  indexes {
+    odd col [unique, name: 'ix']
+  }
+}
+Table posts {
+  "odd col" int[] [pk]
+  id varchar(255) [note: 'n']
+  name timestamp
+  id bool
+}
+Table _x {
+  name "character varying" [note: 'n']
+  id integer
+  user_id e_status [default: 1]
+  indexes {
+    user_id [unique]
+  }
+  records (name) {
+    1
+    'a'
+    null
+  }
+}
+Table "quoted name" {
+  x "character varying" pk
+  x "character varying" [check: `x > 0`, color: #1E69FD]
+  "odd col" bool [null, ref: <? nope.odd col]
+  "odd col" decimal(10, 2) [unique, default: 'x']
+}
+Ref r0: quoted name.x -? quoted name.user_id
+Enum e_status {
+  open
+  closed [note: 'done']
+}

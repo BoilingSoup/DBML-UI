@@ -1,0 +1,7 @@
+Table "quoted name" {
+  "odd col" integer [unique, check: `x > 0`]
+}
+Table orders {
+  user_id bool [check: `x > 0`, increment, ref: ?- orders.user_id]
+}
+Ref: orders.code ?> missing.name

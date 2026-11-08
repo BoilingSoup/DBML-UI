@@ -1,0 +1,40 @@
+Table "quoted name" {
+  user_id e_status [not null, color: #1E69FD]
+  "odd col" integer [unique, check: `x > 0`, ref: ?> nope.user_id]
+  "odd col" integer [note: 'n', default: 1]
+  code varchar(255) [unique, pk]
+  indexes {
+    odd col [unique]
+    code [pk]
+  }
+}
+Table a {
+  "odd col" e_status
+  id timestamp [default: 'x', color: #1E69FD]
+  "odd col" bool [null]
+  user_id e_status [color: #1E69FD, unique, ref: ?< a.id]
+  indexes {
+    (odd col) [unique]
+  }
+  records (odd col) {
+    `x`
+    1
+  }
+}
+Table "quoted name" {
+  user_id varchar(255) [pk]
+  name "character varying" [check: `x > 0`]
+  code decimal(10, 2) [default: `now()`]
+  indexes {
+    (user_id)
+    (name) [unique, name: 'ix']
+  }
+}
+Ref: a.user_id ?< quoted name.x
+Ref r1: a.odd col > quoted name.user_id
+TableGroup g { quoted name, a, quoted name }
+Note sticky {
+  '''
+  text
+  '''
+}

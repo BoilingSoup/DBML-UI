@@ -1,0 +1,25 @@
+Table a {
+  x varchar(255)
+  indexes {
+    (x) [unique]
+    (x) [unique, name: 'ix']
+  }
+}
+Table orders {
+  id e_status [pk, ref: <> nope.id]
+  indexes {
+    (id) [pk]
+  }
+  records (id) {
+    ''
+    `x`
+  }
+}
+Table my_table {
+  id timestamp [null]
+  user_id integer foo
+  id varchar(255) [null]
+  id decimal(10, 2) pk
+}
+Ref: a.x < my_table.odd col
+TableGroup g { a, orders, my_table }

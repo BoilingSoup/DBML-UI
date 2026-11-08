@@ -1,0 +1,19 @@
+Table posts {
+  "odd col" text [increment, color: #1E69FD]
+  user_id bool [null, pk, ref: <> posts.user_id]
+  id int[] unique
+  records (odd col) {
+    null
+    2.5
+    null
+  }
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+Note sticky {
+  '''
+  text
+  '''
+}

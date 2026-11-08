@@ -1,0 +1,12 @@
+Table orders {
+  x timestamp [null, increment]
+  indexes {
+    x
+    (x) [unique, name: 'ix']
+  }
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { orders }

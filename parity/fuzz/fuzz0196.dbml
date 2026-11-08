@@ -1,0 +1,11 @@
+Table _x {
+  code bool
+  user_id integer [check: `x > 0`, unique]
+  id decimal(10, 2) [default: 'x']
+}
+Ref: _x.x - _x.user_id
+Ref: _x.name < missing.x
+Enum e_status {
+  open
+  closed [note: 'done']
+}

@@ -1,0 +1,13 @@
+Table orders {
+  id decimal(10, 2) foo
+  user_id timestamp [default: `now()`, null]
+  id e_status
+  x "character varying" [note: 'n', default: 1, ref: ?> nope.id]
+  Note: 'table note'
+}
+Ref: orders.name <? orders.user_id
+Note sticky {
+  '''
+  text
+  '''
+}

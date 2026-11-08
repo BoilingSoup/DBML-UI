@@ -1,0 +1,9 @@
+Table my_table {
+  code text [increment, default: 'x', ref: ?< my_table.code]
+  id int[]
+  "odd col" text
+  indexes {
+    (id) [unique]
+  }
+}
+Ref: my_table.odd col ?- my_table.user_id

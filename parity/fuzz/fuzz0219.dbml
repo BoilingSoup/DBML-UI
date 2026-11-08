@@ -1,0 +1,12 @@
+Table ñT {
+  name timestamp
+  indexes {
+    (name) [pk]
+  }
+  Note: 'table note'
+}
+Note sticky {
+  '''
+  text
+  '''
+}

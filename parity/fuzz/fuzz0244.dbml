@@ -1,0 +1,28 @@
+Table posts {
+  user_id integer unique
+  id text [increment]
+  id integer [color: #1E69FD, pk]
+  indexes {
+    id [unique, name: 'ix']
+    (user_id)
+  }
+  records (user_id) {
+    true
+  }
+}
+Table _x {
+  id "character varying" unique
+  code integer [unique, not null, ref: ?<> _x.id]
+}
+Table posts {
+  code text
+  code integer
+  indexes {
+    code [pk]
+    code [unique]
+  }
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}

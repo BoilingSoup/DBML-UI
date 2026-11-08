@@ -1,0 +1,21 @@
+Table t1 {
+  name int[] [check: `x > 0`, ref: <> t1.name]
+  code int[]
+  indexes {
+    (name) [unique]
+  }
+}
+Table orders {
+  code int[] [check: `x > 0`]
+  Note: 'table note'
+}
+Table orders {
+  code int[] [default: `now()`, check: `x > 0`]
+  name timestamp [color: #1E69FD]
+  code varchar(255)
+  name text
+  Note: 'table note'
+}
+Ref: orders.odd col < missing.id
+Ref r1: orders.user_id ?> missing.x
+TableGroup g { t1, orders, orders }

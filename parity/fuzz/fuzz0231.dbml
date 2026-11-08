@@ -1,0 +1,47 @@
+Table _x {
+  id bool [pk, default: `now()`]
+  "odd col" decimal(10, 2) [default: `now()`]
+  indexes {
+    id
+    id [unique]
+  }
+}
+Table orders {
+  user_id integer [pk, note: 'n']
+  user_id timestamp [null, check: `x > 0`]
+  Note: 'table note'
+  records (user_id) {
+    true
+    2.5
+  }
+}
+Table "quoted name" {
+  id timestamp [not null]
+  code e_status [default: 1]
+  id int[] [note: 'n', ref: - _x.id]
+  x timestamp [default: `now()`]
+  indexes {
+    (id)
+  }
+  Note: 'table note'
+  records (id) {
+    `x`
+  }
+}
+Table "quoted name" {
+  x bool
+  code integer
+  id text [default: `now()`, note: 'n', ref: ?< quoted name.code]
+  id int[] [unique]
+  indexes {
+    id [pk]
+    x
+  }
+  Note: 'table note'
+  records (x) {
+    ''
+    ''
+    true
+  }
+}
+Ref: _x.user_id < _x.code

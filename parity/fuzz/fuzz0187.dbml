@@ -1,0 +1,31 @@
+Table my_table {
+  x integer [note: 'n', unique]
+  "odd col" integer [increment, null]
+}
+Table "quoted name" {
+  id "character varying" [unique, default: 1, ref: ?- nope.id]
+  id decimal(10, 2) [unique]
+  name varchar(255) [not null, pk, ref: <>? quoted name.name]
+  "odd col" bool [default: 1, not null]
+}
+Table orders {
+  user_id varchar(255) [not null]
+}
+Table _x {
+  user_id e_status [pk]
+  records (user_id) {
+    null
+    true
+    2.5
+  }
+}
+Ref r0: quoted name.odd col -? orders.odd col
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+Note sticky {
+  '''
+  text
+  '''
+}

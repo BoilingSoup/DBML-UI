@@ -1,0 +1,28 @@
+Table t1 {
+  x text [check: `x > 0`, not null]
+  records (x) {
+    null
+    `x`
+  }
+}
+Table a {
+  x "character varying"
+  x timestamp [default: 1, note: 'n']
+  id int[] [default: 'x']
+  Note: 'table note'
+}
+Table B {
+  user_id bool [note: 'n']
+  indexes {
+    user_id [unique]
+  }
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+Note sticky {
+  '''
+  text
+  '''
+}

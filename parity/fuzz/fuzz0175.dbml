@@ -1,0 +1,25 @@
+Table t1 {
+  x decimal(10, 2) [note: 'n', color: #1E69FD]
+  indexes {
+    x
+    x [unique, name: 'ix']
+  }
+}
+Table B {
+  code timestamp [null, ref: < B.code]
+  id bool [default: 1]
+  user_id varchar(255) unique
+  id integer [color: #1E69FD, check: `x > 0`]
+  indexes {
+    code [unique, name: 'ix']
+    id [pk]
+  }
+}
+Table a {
+  id varchar(255)
+}
+Note sticky {
+  '''
+  text
+  '''
+}

@@ -1,0 +1,21 @@
+Table orders {
+  x integer [color: #1E69FD, not null]
+  name decimal(10, 2) [check: `x > 0`]
+  code e_status
+  x timestamp [default: 1]
+  indexes {
+    name
+    (x) [pk]
+  }
+}
+Table my_table {
+  name decimal(10, 2) [increment, null]
+  "odd col" bool [default: `now()`, ref: < nope.odd col]
+  indexes {
+    (odd col) [unique]
+    (odd col) [unique, name: 'ix']
+  }
+}
+Ref r0: orders.odd col <> my_table.x
+Ref: my_table.user_id > orders.id
+TableGroup g { orders, my_table }

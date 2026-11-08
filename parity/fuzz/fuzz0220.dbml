@@ -1,0 +1,15 @@
+Table users {
+  x int[] [check: `x > 0`, default: `now()`, ref: >? nope.x]
+  code decimal(10, 2) [pk, default: 1]
+  x timestamp [color: #1E69FD, check: `x > 0`]
+  x timestamp [default: `now()`]
+  Note: 'table note'
+}
+Table "quoted name" {
+  code timestamp [check: `x > 0`]
+  code decimal(10, 2) [not null, color: #1E69FD, ref: >? nope.code]
+}
+Table _x {
+  "odd col" "character varying" [default: 1, default: `now()`]
+  Note: 'table note'
+}

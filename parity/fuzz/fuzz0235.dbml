@@ -1,0 +1,7 @@
+Table a {
+  x "character varying" [unique, default: 'x']
+  "odd col" integer [not null, ref: -? nope.odd col]
+  code bool [default: 1, ref: > nope.x]
+  "odd col" e_status
+}
+TableGroup g { a }

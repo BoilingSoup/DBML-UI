@@ -1,0 +1,19 @@
+Table my_table {
+  x int[] [increment]
+  user_id e_status
+  user_id decimal(10, 2) pk
+  "odd col" text [check: `x > 0`, pk]
+}
+Table users {
+  name varchar(255) [note: 'n', ref: ?- my_table.name]
+  id "character varying" [default: 'x', default: `now()`]
+  "odd col" integer [default: `now()`, unique]
+  indexes {
+    (odd col) [unique]
+  }
+}
+Note sticky {
+  '''
+  text
+  '''
+}

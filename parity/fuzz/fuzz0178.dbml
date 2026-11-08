@@ -1,0 +1,8 @@
+Table t1 {
+  "odd col" "character varying" [default: `now()`]
+  code decimal(10, 2) [increment, color: #1E69FD, ref: -? nope.odd col]
+  user_id e_status [not null]
+}
+Ref r0: t1.odd col ?<> missing.name
+Ref r1: t1.code ?- missing.code
+TableGroup g { t1 }

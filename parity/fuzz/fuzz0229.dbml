@@ -1,0 +1,21 @@
+Table B {
+  x integer
+  code bool [default: 'x', ref: ?<> nope.code]
+}
+Table B {
+  user_id bool
+  indexes {
+    user_id
+  }
+}
+Table B {
+  id integer [not null, note: 'n', ref: ?<> B.id]
+  user_id timestamp
+  code int[] [color: #1E69FD]
+  indexes {
+    (user_id)
+    code [unique, name: 'ix']
+  }
+  Note: 'table note'
+}
+Ref: B.x <> B.x

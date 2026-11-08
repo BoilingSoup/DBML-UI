@@ -1,0 +1,21 @@
+Table t1 {
+  user_id integer [color: #1E69FD]
+  code "character varying" [unique, note: 'n']
+  id integer [default: 'x', note: 'n']
+  code "character varying" [check: `x > 0`, ref: ?< nope.id]
+}
+Table ñT {
+  x text [increment]
+  user_id varchar(255)
+  x bool [default: 'x', default: `now()`]
+  x e_status
+  indexes {
+    user_id
+  }
+}
+Ref: ñT.x <>? missing.x
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { t1, ñT }

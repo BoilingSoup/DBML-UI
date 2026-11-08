@@ -1,0 +1,22 @@
+Table B {
+  code integer [pk, default: 'x']
+  user_id text [check: `x > 0`]
+  id text
+  id integer unique
+  indexes {
+    (code) [unique, name: 'ix']
+  }
+}
+Table my_table {
+  "odd col" text unique
+  x text [unique, default: 'x']
+  x int[] [default: 1]
+  indexes {
+    x
+  }
+}
+Table users {
+  x varchar(255)
+}
+Ref: users.x < missing.code
+Ref: B.user_id -? B.id

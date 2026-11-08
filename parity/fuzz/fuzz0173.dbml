@@ -1,0 +1,23 @@
+Table "quoted name" {
+  "odd col" e_status [check: `x > 0`]
+  code decimal(10, 2) [default: `now()`, ref: < quoted name.odd col]
+  user_id e_status [unique]
+  code timestamp [null]
+}
+Table B {
+  user_id integer [check: `x > 0`]
+  indexes {
+    user_id [pk]
+  }
+  Note: 'table note'
+}
+Table users {
+  user_id int[] [unique]
+  "odd col" varchar(255) [note: 'n']
+  "odd col" "character varying"
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { quoted name, B, users }

@@ -1,0 +1,21 @@
+Table orders {
+  x timestamp [null, default: `now()`]
+  indexes {
+    x [unique]
+  }
+}
+Table _x {
+  x bool [default: 1, default: 'x']
+  name text [not null, unique]
+  Note: 'table note'
+}
+Table a {
+  name int[] [pk, not null]
+  "odd col" timestamp [unique, default: 'x']
+}
+Ref: a.x ?<> a.user_id
+Ref: a.code -? missing.user_id
+Enum e_status {
+  open
+  closed [note: 'done']
+}

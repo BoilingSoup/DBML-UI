@@ -1,0 +1,29 @@
+Table _x {
+  code bool [default: `now()`, unique]
+  "odd col" integer
+  "odd col" integer [default: `now()`]
+  x varchar(255) [note: 'n', ref: ?- nope.odd col]
+  records (code) {
+    true
+    2.5
+    2.5
+  }
+}
+Table B {
+  user_id varchar(255) [default: `now()`, ref: < B.user_id]
+  records (user_id) {
+    `x`
+  }
+}
+Table orders {
+  user_id e_status [color: #1E69FD, pk]
+  code integer [default: 1, ref: <>? nope.code]
+}
+Table _x {
+  x "character varying" [unique, ref: <> _x.x]
+  indexes {
+    x [pk]
+    x [unique, name: 'ix']
+  }
+}
+Ref r0: _x.id ?- B.x

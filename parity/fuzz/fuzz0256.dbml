@@ -1,0 +1,23 @@
+Table B {
+  code e_status
+  name "character varying" [default: 'x']
+  name varchar(255)
+  Note: 'table note'
+}
+Table _x {
+  x bool [null]
+  code e_status [color: #1E69FD, ref: - nope.x]
+  "odd col" "character varying"
+}
+Table _x {
+  user_id "character varying" [check: `x > 0`, note: 'n']
+  "odd col" integer [default: 1, ref: ?> _x.user_id]
+  Note: 'table note'
+}
+Table my_table {
+  x text [null, default: 'x', ref: ?< nope.x]
+  id varchar(255) [pk, unique, ref: >? my_table.x]
+  x e_status
+  code timestamp [increment, note: 'n']
+  Note: 'table note'
+}

@@ -1,0 +1,30 @@
+Table a {
+  x int[] [note: 'n', ref: - a.x]
+  user_id varchar(255) [default: 'x', pk]
+}
+Table B {
+  name bool [not null]
+  "odd col" decimal(10, 2) [null, increment]
+  user_id "character varying"
+  code bool [default: `now()`, ref: ?> nope.name]
+  indexes {
+    (name)
+  }
+}
+Table B {
+  user_id text [check: `x > 0`, ref: <> B.user_id]
+  x e_status
+  code int[] [increment, unique]
+  id integer [default: 'x', unique]
+}
+Table _x {
+  x "character varying" [default: 1, pk]
+  name int[] [color: #1E69FD]
+  name bool
+  id e_status [unique, ref: ?> _x.id]
+  indexes {
+    (name) [pk]
+    (x) [unique, name: 'ix']
+  }
+}
+TableGroup g { a, B, B, _x }

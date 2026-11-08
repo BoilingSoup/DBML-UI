@@ -1,0 +1,17 @@
+Table orders {
+  id integer [note: 'n']
+  id varchar(255)
+}
+Table "quoted name" {
+  code e_status unique
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { orders, quoted name }
+Note sticky {
+  '''
+  text
+  '''
+}

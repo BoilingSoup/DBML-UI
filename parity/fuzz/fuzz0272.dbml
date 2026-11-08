@@ -1,0 +1,24 @@
+Table B {
+  code text [note: 'n', unique]
+}
+Table users {
+  user_id text
+  user_id int[] [unique, null]
+}
+Table my_table {
+  id decimal(10, 2) [default: `now()`]
+  user_id text
+  x integer [increment, unique]
+  indexes {
+    (id) [pk]
+  }
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+Note sticky {
+  '''
+  text
+  '''
+}

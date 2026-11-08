@@ -1,0 +1,22 @@
+Table users {
+  "odd col" bool [default: 'x', not null, ref: - users.odd col]
+  id timestamp
+  code int[] [check: `x > 0`]
+  indexes {
+    (code) [pk]
+  }
+  Note: 'table note'
+}
+Table users {
+  name e_status [increment]
+  indexes {
+    (name) [unique, name: 'ix']
+    (name) [unique]
+  }
+  records (name) {
+    'a'
+    'a'
+  }
+}
+Ref: users.id ?> users.user_id
+Ref: users.x ?> users.name

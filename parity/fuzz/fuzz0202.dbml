@@ -1,0 +1,24 @@
+Table t1 {
+  code timestamp [pk, note: 'n']
+  indexes {
+    code [unique]
+  }
+  Note: 'table note'
+}
+Table my_table {
+  "odd col" "character varying" [check: `x > 0`]
+  code decimal(10, 2) [note: 'n', ref: <> my_table.code]
+  x integer [default: 'x', default: `now()`, ref: ?> nope.odd col]
+  Note: 'table note'
+}
+Table my_table {
+  x text [note: 'n', pk, ref: - nope.x]
+  id varchar(255) [note: 'n', default: 'x']
+  user_id integer foo
+}
+Table my_table {
+  "odd col" int[] [note: 'n']
+  code bool [default: 1, default: 'x']
+}
+Ref r0: my_table.code -? t1.id
+Ref r1: t1.x < my_table.odd col

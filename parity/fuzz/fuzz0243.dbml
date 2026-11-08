@@ -1,0 +1,37 @@
+Table B {
+  x timestamp [default: `now()`]
+  x timestamp [check: `x > 0`]
+  user_id text [null]
+  user_id timestamp [note: 'n', default: 1]
+  indexes {
+    (user_id) [unique, name: 'ix']
+    user_id [pk]
+  }
+}
+Table _x {
+  code decimal(10, 2) [check: `x > 0`]
+  user_id timestamp
+  name bool
+  code int[] [increment, null]
+}
+Table ñT {
+  name int[] [color: #1E69FD, ref: >? B.name]
+  indexes {
+    (name)
+    name [pk]
+  }
+  Note: 'table note'
+}
+Table t1 {
+  user_id bool [unique, ref: > ñT.user_id]
+  id "character varying"
+  indexes {
+    (id) [pk]
+    id [pk]
+  }
+  records (user_id) {
+    `x`
+    'a'
+    'a'
+  }
+}

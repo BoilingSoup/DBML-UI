@@ -1,0 +1,26 @@
+Table a {
+  id e_status [default: 'x']
+  code e_status [note: 'n', ref: ?- a.id]
+  name e_status unique
+  Note: 'table note'
+}
+Table _x {
+  user_id timestamp [default: 1, ref: ?> nope.user_id]
+  "odd col" varchar(255)
+}
+Table B {
+  user_id varchar(255)
+  name text [not null, ref: <> B.name]
+  x decimal(10, 2) [default: 'x', null, ref: <> _x.x]
+  indexes {
+    x [unique, name: 'ix']
+    (user_id) [unique, name: 'ix']
+  }
+  records (user_id) {
+    true
+    1
+  }
+}
+Table a {
+  "odd col" integer [default: 1, pk]
+}

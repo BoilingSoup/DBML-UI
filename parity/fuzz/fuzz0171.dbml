@@ -1,0 +1,20 @@
+Table posts {
+  name "character varying"
+  id int[]
+  code e_status [not null, pk, ref: - nope.id]
+  code e_status [color: #1E69FD, ref: ?> nope.code]
+}
+Table posts {
+  code decimal(10, 2) [increment, ref: > nope.code]
+  code varchar(255) [color: #1E69FD, null]
+  user_id e_status [pk, default: `now()`, ref: <>? nope.code]
+  indexes {
+    code [unique]
+    code [pk]
+  }
+}
+Ref: posts.code <>? posts.name
+Enum e_status {
+  open
+  closed [note: 'done']
+}

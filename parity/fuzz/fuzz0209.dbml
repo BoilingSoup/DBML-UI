@@ -1,0 +1,31 @@
+Table t1 {
+  user_id decimal(10, 2) [null, color: #1E69FD, ref: ?<> t1.user_id]
+  x decimal(10, 2) [not null]
+  id bool
+  id integer
+  records (user_id) {
+    2.5
+    ''
+  }
+}
+Table my_table {
+  "odd col" "character varying"
+  indexes {
+    odd col [unique]
+    (odd col) [unique]
+  }
+}
+Table posts {
+  name text
+  name integer [pk]
+  name int[]
+  name varchar(255)
+}
+Table ñT {
+  user_id decimal(10, 2) [check: `x > 0`, ref: <> t1.user_id]
+  x int[] [check: `x > 0`, default: 'x']
+  x int[]
+  x "character varying" [increment, ref: <>? nope.x]
+  Note: 'table note'
+}
+Ref: t1.id ?< my_table.odd col

@@ -1,0 +1,17 @@
+Table B {
+  x text [unique]
+  "odd col" decimal(10, 2) [default: 'x']
+  name int[]
+  name e_status [pk, null]
+}
+Table users {
+  x bool [unique, color: #1E69FD]
+  code bool
+  name text [default: `now()`]
+  code decimal(10, 2) [not null, ref: ?- nope.code]
+}
+Table ñT {
+  id integer
+  code "character varying" [default: `now()`, default: 'x', ref: <? B.id]
+  Note: 'table note'
+}

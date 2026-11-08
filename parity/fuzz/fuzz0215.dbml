@@ -1,0 +1,34 @@
+Table _x {
+  name e_status [unique]
+  id bool
+  indexes {
+    id [pk]
+  }
+}
+Table t1 {
+  id int[] [default: 1]
+  x text
+}
+Table my_table {
+  "odd col" int[] [default: `now()`]
+  indexes {
+    (odd col) [unique, name: 'ix']
+    odd col [unique, name: 'ix']
+  }
+  Note: 'table note'
+  records (odd col) {
+    1
+  }
+}
+Table t1 {
+  code e_status [check: `x > 0`, ref: ?> t1.code]
+  "odd col" decimal(10, 2)
+  "odd col" "character varying" [default: `now()`, check: `x > 0`, ref: > _x.odd col]
+  Note: 'table note'
+}
+Ref: _x.odd col < missing.id
+Ref r1: _x.name ?- my_table.x
+Enum e_status {
+  open
+  closed [note: 'done']
+}

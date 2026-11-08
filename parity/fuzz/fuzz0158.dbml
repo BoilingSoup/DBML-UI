@@ -1,0 +1,35 @@
+Table ñT {
+  "odd col" varchar(255)
+  indexes {
+    odd col [unique, name: 'ix']
+    (odd col) [unique, name: 'ix']
+  }
+  records (odd col) {
+    ''
+    'a'
+  }
+}
+Table "quoted name" {
+  name decimal(10, 2) [unique, pk]
+  "odd col" integer [note: 'n']
+  records (name) {
+    `x`
+    2.5
+    true
+  }
+}
+Table ñT {
+  "odd col" bool unique
+  code "character varying" [note: 'n', increment]
+  indexes {
+    (code) [pk]
+  }
+}
+Table a {
+  x "character varying" [check: `x > 0`]
+  indexes {
+    x
+  }
+  Note: 'table note'
+}
+Ref: ñT.code ?< ñT.code

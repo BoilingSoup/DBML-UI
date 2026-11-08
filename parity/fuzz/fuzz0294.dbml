@@ -1,0 +1,28 @@
+Table B {
+  name integer [default: 1, pk]
+  "odd col" e_status [not null, default: 'x']
+  indexes {
+    odd col [unique, name: 'ix']
+    odd col [unique]
+  }
+}
+Table my_table {
+  user_id decimal(10, 2) [null]
+  indexes {
+    user_id [unique]
+  }
+  records (user_id) {
+    2.5
+    'a'
+    `x`
+  }
+}
+Table B {
+  code varchar(255) [default: 1, ref: ?- B.code]
+  x decimal(10, 2) [null, check: `x > 0`]
+  x timestamp [color: #1E69FD, ref: < nope.x]
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}

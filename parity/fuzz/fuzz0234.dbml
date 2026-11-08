@@ -1,0 +1,27 @@
+Table t1 {
+  name decimal(10, 2) [unique, increment]
+  code bool [unique, ref: > nope.code]
+  id e_status [not null, default: `now()`]
+  x integer [pk, ref: ?> nope.name]
+  indexes {
+    name [unique]
+    (name) [unique, name: 'ix']
+  }
+}
+Table "quoted name" {
+  code text [not null, default: 1]
+  name timestamp [default: 1, pk]
+  id e_status [color: #1E69FD, ref: ?<> quoted name.id]
+  x text [color: #1E69FD, unique, ref: - nope.name]
+}
+Table posts {
+  name decimal(10, 2) [default: 1, ref: <> posts.name]
+  name int[] [pk, ref: >? nope.name]
+  "odd col" e_status [default: 'x', increment]
+  name bool [default: `now()`]
+}
+Note sticky {
+  '''
+  text
+  '''
+}

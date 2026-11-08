@@ -1,0 +1,9 @@
+Table t1 {
+  "odd col" int[]
+  x varchar(255) [note: 'n']
+}
+Ref: t1.name < missing.odd col
+Enum e_status {
+  open
+  closed [note: 'done']
+}

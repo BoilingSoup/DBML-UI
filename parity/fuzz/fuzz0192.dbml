@@ -1,0 +1,35 @@
+Table my_table {
+  "odd col" text [default: 'x', default: `now()`]
+  id "character varying" [default: 'x']
+  id "character varying" [default: 1, color: #1E69FD, ref: <> my_table.id]
+  x decimal(10, 2)
+  Note: 'table note'
+  records (odd col) {
+    2.5
+  }
+}
+Table orders {
+  code int[]
+  name e_status [not null]
+}
+Table B {
+  "odd col" decimal(10, 2) [note: 'n', pk]
+}
+Table B {
+  code int[] [default: 1]
+  name "character varying" [default: 1]
+  "odd col" "character varying" [default: 1]
+  indexes {
+    odd col [unique, name: 'ix']
+  }
+}
+Ref: B.odd col ?> orders.odd col
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+Note sticky {
+  '''
+  text
+  '''
+}

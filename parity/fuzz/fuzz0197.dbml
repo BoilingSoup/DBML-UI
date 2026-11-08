@@ -1,0 +1,19 @@
+Table posts {
+  "odd col" e_status [default: 'x']
+  id varchar(255) [increment]
+  x bool
+  "odd col" e_status [increment, ref: <? posts.odd col]
+}
+Table my_table {
+  id "character varying" [default: 'x']
+  indexes {
+    (id) [unique]
+  }
+}
+Ref: posts.code ?< missing.code
+Ref: posts.user_id ?> my_table.name
+Note sticky {
+  '''
+  text
+  '''
+}

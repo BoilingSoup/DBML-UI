@@ -1,0 +1,38 @@
+Table orders {
+  x int[] [default: `now()`]
+  user_id e_status [check: `x > 0`, ref: ?< nope.user_id]
+  code integer [not null, color: #1E69FD]
+  x decimal(10, 2) [color: #1E69FD, ref: <>? orders.user_id]
+  indexes {
+    code
+    user_id [unique, name: 'ix']
+  }
+  records (x) {
+    `x`
+    1
+  }
+}
+Table _x {
+  x timestamp pk
+  id int[] [null, increment]
+  name bool [unique]
+  code integer [check: `x > 0`, ref: >? nope.code]
+  indexes {
+    (id) [unique]
+    name [unique]
+  }
+}
+Table my_table {
+  id text [default: 1, increment]
+  id decimal(10, 2) [increment, check: `x > 0`]
+  records (id) {
+    `x`
+    2.5
+  }
+}
+Table posts {
+  code int[] [unique, pk]
+  code text [pk]
+  "odd col" e_status [pk]
+}
+Ref: _x.user_id >? missing.odd col

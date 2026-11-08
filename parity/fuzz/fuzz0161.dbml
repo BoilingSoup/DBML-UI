@@ -1,0 +1,29 @@
+Table my_table {
+  user_id varchar(255) [increment, pk]
+  user_id timestamp [pk, default: `now()`]
+  indexes {
+    user_id
+    (user_id) [unique]
+  }
+}
+Table ñT {
+  name text [null, increment]
+  name decimal(10, 2) [default: 1, unique]
+  user_id bool [unique, default: 1]
+  Note: 'table note'
+}
+Table my_table {
+  code bool
+  user_id integer [increment, check: `x > 0`, ref: >? nope.code]
+  x e_status [color: #1E69FD]
+  indexes {
+    code [unique]
+    user_id [pk]
+  }
+}
+Table my_table {
+  name integer
+  user_id int[] [null, pk, ref: -? my_table.name]
+  x varchar(255) [not null, ref: ?<> my_table.name]
+  code decimal(10, 2) [increment, default: 'x']
+}

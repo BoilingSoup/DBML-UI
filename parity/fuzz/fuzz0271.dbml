@@ -1,0 +1,21 @@
+Table orders {
+  code decimal(10, 2) [null, color: #1E69FD]
+  x int[] [check: `x > 0`, unique]
+  "odd col" "character varying" [unique, not null]
+  indexes {
+    (code) [unique]
+  }
+}
+Table a {
+  user_id e_status [not null, null]
+  indexes {
+    (user_id) [unique, name: 'ix']
+    (user_id) [pk]
+  }
+  Note: 'table note'
+}
+Ref: a.x > a.x
+Enum e_status {
+  open
+  closed [note: 'done']
+}

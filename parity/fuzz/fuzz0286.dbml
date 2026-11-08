@@ -1,0 +1,20 @@
+Table t1 {
+  x timestamp [color: #1E69FD]
+  id bool foo
+  name int[] [not null, note: 'n', ref: <> nope.id]
+  indexes {
+    (id)
+    (name) [unique, name: 'ix']
+  }
+}
+Table _x {
+  "odd col" e_status
+  user_id varchar(255) [pk]
+  indexes {
+    (odd col) [unique, name: 'ix']
+  }
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}

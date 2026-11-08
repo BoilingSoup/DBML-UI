@@ -1,0 +1,12 @@
+Table posts {
+  user_id text [note: 'n', increment, ref: <>? posts.user_id]
+  x int[] [unique]
+  x timestamp [pk, ref: <>? posts.user_id]
+  id int[] [default: 1, default: `now()`]
+  indexes {
+    user_id [unique]
+  }
+}
+Ref r0: posts.name ?< posts.code
+Ref: posts.odd col <> missing.code
+TableGroup g { posts }

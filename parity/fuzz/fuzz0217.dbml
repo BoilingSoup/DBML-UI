@@ -1,0 +1,18 @@
+Table _x {
+  "odd col" "character varying" [default: 1, check: `x > 0`]
+  "odd col" bool [note: 'n', default: 1]
+  name "character varying" [increment, default: 'x']
+  Note: 'table note'
+}
+Ref: _x.name < missing.id
+Ref r1: _x.user_id ?> missing.id
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { _x }
+Note sticky {
+  '''
+  text
+  '''
+}

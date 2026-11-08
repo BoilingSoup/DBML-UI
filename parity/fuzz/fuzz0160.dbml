@@ -1,0 +1,16 @@
+Table orders {
+  id text
+  code integer [increment]
+  indexes {
+    id [unique]
+    (id) [unique, name: 'ix']
+  }
+}
+Table t1 {
+  name timestamp [unique, default: 'x']
+  records (name) {
+    ''
+    true
+  }
+}
+TableGroup g { orders, t1 }

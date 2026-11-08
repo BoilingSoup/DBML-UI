@@ -1,0 +1,20 @@
+Table "quoted name" {
+  id text [default: `now()`, color: #1E69FD]
+  indexes {
+    id [pk]
+    (id) [unique]
+  }
+  Note: 'table note'
+}
+Table users {
+  id "character varying"
+  "odd col" int[] [unique, ref: - quoted name.id]
+  user_id text [color: #1E69FD]
+  "odd col" "character varying" [null]
+}
+Ref: users.id < missing.user_id
+Ref r1: users.id ?< quoted name.x
+Enum e_status {
+  open
+  closed [note: 'done']
+}

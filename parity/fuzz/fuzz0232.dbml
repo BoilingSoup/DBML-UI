@@ -1,0 +1,22 @@
+Table users {
+  "odd col" "character varying" [increment, default: `now()`]
+  x timestamp
+  "odd col" bool [default: 'x', note: 'n']
+  user_id timestamp pk
+  indexes {
+    odd col [unique, name: 'ix']
+  }
+}
+Table _x {
+  code integer
+  x "character varying" [default: 'x']
+  name int[] [null]
+}
+Table ñT {
+  name decimal(10, 2) [note: 'n']
+  id varchar(255) [note: 'n', increment, ref: - nope.name]
+  id varchar(255)
+  "odd col" bool [color: #1E69FD, increment, ref: <>? nope.id]
+}
+Ref r0: _x.code ?< ñT.name
+TableGroup g { users, _x, ñT }

@@ -1,0 +1,8 @@
+Table users {
+  name "character varying" [null, default: 'x']
+}
+Ref r0: users.x >? users.user_id
+Enum e_status {
+  open
+  closed [note: 'done']
+}

@@ -1,7 +1,7 @@
 {
   "pinnedCommit": "6b0c25b5d87ef8f44236eeb1e9dc149848e1503e",
-  "pass": 148,
-  "fail": 2,
+  "pass": 296,
+  "fail": 4,
   "cases": [
     {
       "name": "fuzz0000",
@@ -609,6 +609,623 @@
     },
     {
       "name": "fuzz0149",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0150",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0151",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0152",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0153",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0154",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0155",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0156",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0157",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0158",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0159",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0160",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0161",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0162",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0163",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0164",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0165",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0166",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0167",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0168",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0169",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0170",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0171",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0172",
+      "status": "divergent",
+      "problems": [
+        ".enums[0].values[1].note.token: ours undefined vs theirs {\"end\":{\"offset\":145},\"start\":{\"offset\":133}}",
+        ".enums[0].values[1].token.end.offset: ours 131 vs theirs 146"
+      ]
+    },
+    {
+      "name": "fuzz0173",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0174",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0175",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0176",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0177",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0178",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0179",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0180",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0181",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0182",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0183",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0184",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0185",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0186",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0187",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0188",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0189",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0190",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0191",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0192",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0193",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0194",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0195",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0196",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0197",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0198",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0199",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0200",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0201",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0202",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0203",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0204",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0205",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0206",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0207",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0208",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0209",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0210",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0211",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0212",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0213",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0214",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0215",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0216",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0217",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0218",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0219",
+      "status": "divergent",
+      "problems": [
+        ".notes[0].token.end.offset: ours 118 vs theirs 117",
+        ".notes[0].token.start.offset: ours 84 vs theirs 83",
+        ".tables[0].fields[0].token.end.offset: ours 28 vs theirs 27",
+        ".tables[0].fields[0].token.start.offset: ours 14 vs theirs 13",
+        ".tables[0].indexes[0].columns[0].token.end.offset: ours 50 vs theirs 49",
+        ".tables[0].indexes[0].columns[0].token.start.offset: ours 46 vs theirs 45",
+        ".tables[0].indexes[0].token.end.offset: ours 56 vs theirs 55",
+        ".tables[0].indexes[0].token.start.offset: ours 45 vs theirs 44",
+        ".tables[0].note.token: ours undefined vs theirs {\"end\":{\"offset\":80},\"start\":{\"offset\":62}}",
+        ".tables[0].token.end.offset: ours 83 vs theirs 82",
+        ".token.end.offset: ours 119 vs theirs 118"
+      ]
+    },
+    {
+      "name": "fuzz0220",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0221",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0222",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0223",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0224",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0225",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0226",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0227",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0228",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0229",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0230",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0231",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0232",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0233",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0234",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0235",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0236",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0237",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0238",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0239",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0240",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0241",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0242",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0243",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0244",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0245",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0246",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0247",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0248",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0249",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0250",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0251",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0252",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0253",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0254",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0255",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0256",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0257",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0258",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0259",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0260",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0261",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0262",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0263",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0264",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0265",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0266",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0267",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0268",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0269",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0270",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0271",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0272",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0273",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0274",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0275",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0276",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0277",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0278",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0279",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0280",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0281",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0282",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0283",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0284",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0285",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0286",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0287",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0288",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0289",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0290",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0291",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0292",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0293",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0294",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0295",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0296",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0297",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0298",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0299",
       "status": "ok-both-null"
     }
   ]

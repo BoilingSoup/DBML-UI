@@ -1,0 +1,5 @@
+Table orders {
+  "odd col" decimal(10, 2) [not null]
+}
+Ref r0: orders.x <> orders.x
+TableGroup g { orders }

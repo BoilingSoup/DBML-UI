@@ -1,0 +1,47 @@
+Table t1 {
+  x varchar(255) [unique, ref: ?- t1.x]
+  code timestamp
+  code text
+  indexes {
+    (x) [unique]
+    x [pk]
+  }
+}
+Table a {
+  "odd col" bool [default: 1]
+  code text [default: 1, pk, ref: ?< a.odd col]
+  records (odd col) {
+    'a'
+    'a'
+    2.5
+  }
+}
+Table _x {
+  user_id decimal(10, 2) foo
+  "odd col" e_status [default: 'x', null]
+  name int[] [check: `x > 0`]
+  name "character varying" [increment]
+  records (user_id) {
+    `x`
+    true
+  }
+}
+Table B {
+  user_id e_status [not null, ref: ?> a.user_id]
+  code bool [check: `x > 0`, default: 1, ref: ?> nope.code]
+  code "character varying"
+  records (user_id) {
+    null
+  }
+}
+Ref: _x.odd col <> missing.code
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { t1, a, _x, B }
+Note sticky {
+  '''
+  text
+  '''
+}

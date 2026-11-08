@@ -1,0 +1,25 @@
+Table my_table {
+  name timestamp [default: 'x']
+  user_id text [check: `x > 0`, note: 'n']
+  name e_status
+  code timestamp [not null, ref: ?- my_table.user_id]
+}
+Table "quoted name" {
+  code "character varying" [color: #1E69FD, null]
+}
+Table users {
+  "odd col" e_status [note: 'n', pk]
+}
+Table _x {
+  x int[] [default: 'x', null]
+  user_id int[] [null]
+  name "character varying" [default: `now()`]
+  name bool [increment, unique, ref: < my_table.x]
+  indexes {
+    name [pk]
+  }
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}

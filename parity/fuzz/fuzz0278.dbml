@@ -1,0 +1,29 @@
+Table orders {
+  user_id int[] [default: `now()`, default: 'x', ref: ?- nope.user_id]
+  x timestamp [color: #1E69FD, ref: <>? orders.x]
+  indexes {
+    (x) [unique]
+  }
+}
+Table _x {
+  x integer unique
+  Note: 'table note'
+}
+Table _x {
+  "odd col" integer [unique, increment, ref: ?< _x.odd col]
+  "odd col" "character varying" [default: 1, ref: <? orders.odd col]
+  user_id bool [default: 'x', ref: <> _x.user_id]
+  x bool
+  Note: 'table note'
+}
+Table B {
+  "odd col" "character varying" [increment, not null, ref: -? B.odd col]
+  id timestamp [increment, default: 1]
+  Note: 'table note'
+}
+Ref: orders.id < orders.code
+Ref: orders.id ?> B.id
+Enum e_status {
+  open
+  closed [note: 'done']
+}

@@ -1,0 +1,18 @@
+Table ñT {
+  id int[]
+  name text [note: 'n', pk]
+  Note: 'table note'
+}
+Table users {
+  user_id text
+  id e_status [unique, increment]
+  Note: 'table note'
+  records (user_id) {
+    ''
+    null
+    'a'
+  }
+}
+Ref: ñT.id ?- missing.id
+Ref: ñT.code ?- missing.name
+TableGroup g { ñT, users }

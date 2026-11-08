@@ -1,0 +1,15 @@
+Table posts {
+  id timestamp
+  indexes {
+    (id) [pk]
+  }
+  records (id) {
+    null
+  }
+}
+Ref r0: posts.x <? missing.name
+Ref r1: posts.odd col < posts.name
+Enum e_status {
+  open
+  closed [note: 'done']
+}
