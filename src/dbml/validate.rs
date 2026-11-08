@@ -293,17 +293,15 @@ pub fn validate_with_parse(
         }
     }
     for r in &doc.refs {
-        // their endpoint resolution checks the columns only when the two
-        // sides carry the same field count (probe: a.(id, nope) > b.x
-        // errs with Unequal fields alone)
-        let equal = r.from.columns.len() == r.to.columns.len();
-        if equal {
-            check_endpoint(doc, &r.from, r.span.start, &mut out);
-            check_endpoint(doc, &r.to, r.span.start, &mut out);
-        }
+        // the endpoint column checks run on BOTH sides regardless of the
+        // tuple lengths (probe g5: a.(id, code) > b.x errs with Unequal
+        // AND the missing 'code'; the earlier mc3 probe stayed silent
+        // only because its 'nope' existed)
+        check_endpoint(doc, &r.from, r.span.start, &mut out);
+        check_endpoint(doc, &r.to, r.span.start, &mut out);
         // their isEqualTupleOperands: composite endpoints must carry the
         // same field count (probe: `a.(id, code) > b.x` errs at the field)
-        if !equal {
+        if r.from.columns.len() != r.to.columns.len() {
             out.push(Diagnostic::plain(
                 r.from.span.start,
                 "Unequal fields in ref endpoints".to_string(),

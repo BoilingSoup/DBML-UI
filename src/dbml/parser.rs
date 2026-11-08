@@ -1729,65 +1729,13 @@ fn ref_stmt(
     // the scratch shares the source pointer, so sub-parsers keep taking
     // the source `base` — their offsets are pointer differences
     let mut ref_binder_errors: Vec<(usize, String)> = Vec::new();
-    // the left endpoint parses FIRST (its application args decide the
-    // shape); args after it = an application-wrapped field: NOT a binary
-    // relationship — their set is must-be-binary @ the field, the per-arg
-    // errors, and the LEFT endpoint's column check; the ref does not bind
-    // (probe: `Ref r0: t1.odd col < t1.x` yields exactly those three)
-    {
-        let mut probe = body_input;
-        let from_res = endpoint(&mut probe, base);
-        ws(&mut probe);
-        sp(&mut probe);
-        let mut middle_args = 0usize;
-        while probe.starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '"' || c == '`') {
-            let junk_start = offset(&mut probe, base);
-            if ident(&mut probe, base).is_err() {
-                break;
-            }
-            // the ref never binds — the doc channel is the only survivor
-            doc_binder_errors.push((
-                junk_start,
-                "A Ref field should only have a single binary relationship".to_string(),
-            ));
-            middle_args += 1;
-            sp(&mut probe);
-        }
-        if from_res.is_ok() && middle_args > 0 {
-            doc_binder_errors.push((
-                body_base,
-                "A Ref field must be a binary relationship".to_string(),
-            ));
-            if let Ok(from) = from_res {
-                broken_refs.push(from);
-            }
-            skip_line(input);
-            return Ok(None);
-        }
-    }
-    let strict_from: R<super::ast::Endpoint> = (|| {
+    // their parse NEVER fails on these shapes — the body always parses
+    // into an expression (their Pratt parser breaks at non-op
+    // juxtapositions, wrapping the rest as application args) — so a
+    // strict-parse failure here means the shape classifier runs below
+    let strict: R<(super::ast::Endpoint, super::ast::Endpoint, Cardinality, bool, bool, usize)> = (|| {
         let from = endpoint(&mut scratch, base)?;
         ws(&mut scratch);
-        sp(&mut scratch);
-        let mut middle_args = 0usize;
-        while scratch.starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '"' || c == '`') {
-            let junk_start = offset(&mut scratch, base);
-            // an unterminated quote fails ident WITHOUT consuming —
-            // breaking here is mandatory or the loop spins forever
-            if ident(&mut scratch, base).is_err() {
-                break;
-            }
-            ref_binder_errors.push((
-                junk_start,
-                "A Ref field should only have a single binary relationship".to_string(),
-            ));
-            middle_args += 1;
-            sp(&mut scratch);
-        }
-        Ok(from)
-    })();
-    let strict: R<(super::ast::Endpoint, super::ast::Endpoint, Cardinality, bool, bool, usize)> = (|| {
-        let from = strict_from?;
         // the op binds to the next expression immediately (their Pratt
         // grammar) — no args can sit between the op and the right endpoint
         let op_offset = offset(&mut scratch, base);
@@ -1837,7 +1785,7 @@ fn ref_stmt(
             // their error set, recover at the line end — binder-class
             // errors, routed to the parse output's binder channel
             let mut shape = Vec::new();
-            ref_shape_errors(&mut body_input.clone(), body_base, &mut shape);
+            ref_shape_errors(&mut body_input.clone(), body_base, &mut shape, broken_refs);
             doc_binder_errors.extend(shape);
             skip_line(input);
             Ok(None)
@@ -1851,6 +1799,8 @@ struct RefChunk {
     kind: RefChunkKind,
     start: usize,
     dotted: usize, // dot-separated part count (0 = not an operand)
+    parts: Vec<String>,
+    tuple_cols: Option<Vec<String>>,
 }
 #[derive(PartialEq, Clone, Copy)]
 enum RefChunkKind {
@@ -1859,11 +1809,39 @@ enum RefChunkKind {
     Other,
 }
 
-fn ref_shape_errors(input: &mut &str, base: usize, out: &mut Vec<(usize, String)>) {
-    // tokenize the body line into chunks
+/// The ref-body shape classifier — a faithful port of their pipeline for
+/// bodies that do not parse as a clean relationship:
+///
+/// their parser NEVER fails here — the body always parses into ONE Pratt
+/// expression (breaking at non-op juxtapositions) wrapped as
+/// `FunctionApplicationNode(callee = first expression, args = the rest)`,
+/// and `ref/validate.ts validateFields` + the field-args walk classify it:
+///
+/// - `must be a binary relationship` when the callee is not a
+///   relationship infix (an application wrapper, a lone dotted operand,
+///   or a lone bare word);
+/// - `Unequal fields in ref endpoints` when `isEqualTupleOperands(callee)`
+///   is false — a BARE-variable callee has no operand sides (undefined →
+///   false → fires: mw3 `b x > a.id`, lone `b`), while a dot-infix callee
+///   with non-tuple sides compares 0 == 0 (silent: lone `a.id`,
+///   `posts.odd col > B.id`); paren tuples with differing lengths fire;
+/// - `Invalid column reference` per side of a RELATIONSHIP callee whose
+///   destructure count (variables + min(tuple, 1)) is under two;
+/// - one `should only have a single binary relationship` per application
+///   argument, anchored at the argument's own expression start;
+/// - the binder still resolves extractable endpoints (the callee's
+///   table.column and the args' relationship right side) and flags their
+///   columns — probes g1–g8, mw3, fuzz0002/0022 verified.
+fn ref_shape_errors(
+    input: &mut &str,
+    base: usize,
+    out: &mut Vec<(usize, String)>,
+    broken_refs: &mut Vec<super::ast::Endpoint>,
+) {
     let mut chunks: Vec<RefChunk> = Vec::new();
     let line_end = input.find('\n').unwrap_or(input.len());
     let body = &input[..line_end];
+    let field_start = base;
     let mut i = 0usize;
     while i < body.len() {
         let c = body[i..].chars().next().unwrap();
@@ -1872,134 +1850,276 @@ fn ref_shape_errors(input: &mut &str, base: usize, out: &mut Vec<(usize, String)
             continue;
         }
         let chunk_start = base + i;
+        // a relationship operator (with its optional ? marks)
         if matches!(c, '>' | '<' | '-') || body[i..].starts_with("<>") {
             let len = if body[i..].starts_with("<>") { 2 } else { 1 };
             let mut end = i + len;
             while body[end..].starts_with('?') {
                 end += 1;
             }
-            chunks.push(RefChunk { kind: RefChunkKind::RelOp, start: chunk_start, dotted: 0 });
+            chunks.push(RefChunk {
+                kind: RefChunkKind::RelOp,
+                start: chunk_start,
+                dotted: 0,
+                parts: Vec::new(),
+                tuple_cols: None,
+            });
             i = end;
             continue;
         }
+        // an operand: ident ( `.(` tuple `)` | `.ident` )* — dots fold in
         if c.is_alphanumeric() || c == '_' || c == '"' || c == '`' {
-            // a dotted chain: ident(.ident)* — quotes allowed per part
-            let mut parts = 0usize;
-            let word_end = |s: &str| -> usize {
-                let b = s.as_bytes();
+            let mut parts: Vec<String> = Vec::new();
+            let mut tuple_cols: Option<Vec<String>> = None;
+            loop {
+                // one dotted part: quoted or bare (unicode ids included)
+                let b = body[i..].as_bytes();
                 if b.is_empty() {
-                    return 0;
+                    break;
                 }
-                let mut k = 0;
                 if b[0] == b'"' {
-                    k = 1;
+                    let mut k = 1;
                     while k < b.len() && b[k] != b'"' {
                         k += 1;
                     }
-                    k + 1
+                    parts.push(body[i + 1..i + k.min(b.len())].to_string());
+                    i += k.min(b.len());
+                    if i < body.len() && body[i..].starts_with('"') {
+                        i += 1;
+                    }
                 } else {
+                    let mut k = 0;
                     while k < b.len()
                         && (b[k].is_ascii_alphanumeric() || b[k] == b'_' || b[k] >= 0x80)
                     {
                         k += 1;
                     }
-                    k.max(1)
+                    if k == 0 {
+                        break;
+                    }
+                    parts.push(body[i..i + k].to_string());
+                    i += k;
                 }
-            };
-            loop {
-                // clamp: an unterminated quote's scan can overshoot
-                let w = word_end(&body[i..]).min(body.len() - i);
-                i += w;
-                parts += 1;
+                // `.ident` continues the chain; `.(a, b)` is a tuple
                 if body[i..].starts_with('.') {
+                    let after_dot = &body[i + 1..];
+                    if after_dot.starts_with('(') {
+                        // the tuple: scan to the matching `)`, collect the
+                        // top-level elements
+                        let mut depth = 0i32;
+                        let mut elem_start = 1usize;
+                        let mut cols = Vec::new();
+                        let mut k = 1usize;
+                        while k < after_dot.len() {
+                            let ch = after_dot.as_bytes()[k];
+                            match ch {
+                                b'(' => depth += 1,
+                                b')' => {
+                                    if depth == 0 {
+                                        let elem = after_dot[elem_start..k].trim();
+                                        if !elem.is_empty() {
+                                            cols.push(elem.to_string());
+                                        }
+                                        k += 1;
+                                        break;
+                                    }
+                                    depth -= 1;
+                                }
+                                b',' if depth == 0 => {
+                                    let elem = after_dot[elem_start..k].trim();
+                                    if !elem.is_empty() {
+                                        cols.push(elem.to_string());
+                                    }
+                                    elem_start = k + 1;
+                                }
+                                _ => {}
+                            }
+                            k += 1;
+                        }
+                        i += 1 + k;
+                        tuple_cols = Some(cols);
+                        break;
+                    }
                     i += 1;
-                } else {
-                    break;
+                    continue;
                 }
+                break;
             }
-            chunks.push(RefChunk { kind: RefChunkKind::Operand, start: chunk_start, dotted: parts });
+            let dotted = parts.len().max(1);
+            chunks.push(RefChunk {
+                kind: RefChunkKind::Operand,
+                start: chunk_start,
+                dotted,
+                parts,
+                tuple_cols,
+            });
             continue;
         }
-        // parens/commas/anything else: one Other chunk
+        // anything else: one Other chunk
         i += c.len_utf8();
-        chunks.push(RefChunk { kind: RefChunkKind::Other, start: chunk_start, dotted: 0 });
+        chunks.push(RefChunk {
+            kind: RefChunkKind::Other,
+            start: chunk_start,
+            dotted: 0,
+            parts: Vec::new(),
+            tuple_cols: None,
+        });
     }
-    let empty_or_one = chunks.len() <= 1;
-    let first = chunks.first().map(|c| (c.kind, c.start, c.dotted));
-    let rel_pos = chunks.iter().position(|c| c.kind == RefChunkKind::RelOp);
-    match (first, rel_pos) {
-        // empty body: their EOF pair + the shape pair (probe: `Ref:` + EOF)
-        (None, _) => {
-            for _ in 0..2 {
-                out.push((base, "Unexpected EOF".to_string()));
+
+    // their Pratt grouping: an expression = Operand (RelOp Operand)* — a
+    // new group starts at an Operand NOT preceded by a RelOp; every RelOp
+    // joins the current group (an infix continuation)
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    for (idx, chunk) in chunks.iter().enumerate() {
+        let prev_is_op = idx > 0 && chunks[idx - 1].kind == RefChunkKind::RelOp;
+        match chunk.kind {
+            RefChunkKind::RelOp => {
+                if let Some(last) = groups.last_mut() {
+                    last.push(idx);
+                } else {
+                    groups.push(vec![idx]);
+                }
             }
-            out.push((base, "A Ref field must be a binary relationship".to_string()));
-            out.push((base, "Unequal fields in ref endpoints".to_string()));
+            _ => {
+                if prev_is_op {
+                    if let Some(last) = groups.last_mut() {
+                        last.push(idx);
+                    } else {
+                        groups.push(vec![idx]);
+                    }
+                } else {
+                    groups.push(vec![idx]);
+                }
+            }
         }
-        // a lone operand (`Ref: a.b`): not a binary relationship
-        (Some((_, fstart, _)), None) if chunks.len() == 1 => {
-            out.push((fstart, "A Ref field must be a binary relationship".to_string()));
-            out.push((fstart, "Unequal fields in ref endpoints".to_string()));
+    }
+
+    // endpoint extraction: a dotted operand (parts ≥ 2) yields
+    // (table = parts[len-2], column = parts[len-1]); a tuple yields the
+    // table part + the tuple columns
+    let endpoint_of = |chunk: &RefChunk| -> Option<super::ast::Endpoint> {
+        if chunk.tuple_cols.is_some() && chunk.parts.len() >= 1 {
+            let table = chunk.parts.last()?;
+            return Some(super::ast::Endpoint {
+                table: table.clone(),
+                schema: None,
+                columns: chunk.tuple_cols.clone().unwrap_or_default(),
+                span: chunk.start..chunk.start,
+            });
         }
-        // an application wrapper: operand followed by non-operator content
-        (Some((_, fstart, _)), _) if rel_pos != Some(1) && chunks.len() > 1 => {
-            out.push((fstart, "A Ref field must be a binary relationship".to_string()));
-            out.push((fstart, "Unequal fields in ref endpoints".to_string()));
-            // the application's first argument anchors the single-field
-            // error (probe: `b x > a.id` errs at `x`)
-            let arg = chunks.get(1).map(|c| c.start).unwrap_or(fstart);
+        if chunk.parts.len() >= 2 {
+            let column = chunk.parts.last()?.clone();
+            let table = chunk.parts[chunk.parts.len() - 2].clone();
+            return Some(super::ast::Endpoint {
+                table,
+                schema: None,
+                columns: vec![column],
+                span: chunk.start..chunk.start,
+            });
+        }
+        None
+    };
+    // their destructure count: variables + min(tuple, 1) — under two is
+    // an invalid column reference
+    let destructure_count = |chunk: &RefChunk| -> usize {
+        let vars = chunk.parts.len().max(if chunk.dotted > 0 { 1 } else { 0 });
+        let tuple = chunk.tuple_cols.as_ref().map(|t| t.len()).unwrap_or(0);
+        vars + tuple.min(1)
+    };
+
+    // a group is a relationship infix when a RelOp sits inside it
+    let is_rel_infix = |g: &[usize]| -> bool {
+        g.len() >= 3 && g.iter().any(|&idx| chunks[idx].kind == RefChunkKind::RelOp)
+    };
+
+    if groups.len() == 1 {
+        let g = &groups[0];
+        let first = &chunks[g[0]];
+        if is_rel_infix(g) {
+            // the ref binds in their pipeline; validateFields still runs:
+            // per-side Invalid column reference + tuple Unequal
+            for (side_idx, &side_chunk) in [g[0], *g.last().unwrap()].iter().enumerate() {
+                let side = &chunks[side_chunk];
+                if destructure_count(side) < 2 {
+                    let at = side.start;
+                    out.push((at, "Invalid column reference".to_string()));
+                }
+                let _ = side_idx;
+            }
+            // their isEqualTupleOperands: only tuple-bearing sides compare
+            let lt = chunks[g[0]].tuple_cols.as_ref().map(|t| t.len());
+            let rt = chunks[*g.last().unwrap()]
+                .tuple_cols
+                .as_ref()
+                .map(|t| t.len());
+            if let (Some(l), Some(r)) = (lt, rt) {
+                if l != r {
+                    out.push((
+                        field_start,
+                        "Unequal fields in ref endpoints".to_string(),
+                    ));
+                }
+            }
+        } else {
+            // a lone non-relationship expression: must-be-binary; Unequal
+            // only for a bare-variable callee (no dot: no operand sides)
             out.push((
-                arg,
-                "A Ref field should only have a single binary relationship".to_string(),
+                first.start,
+                "A Ref field must be a binary relationship".to_string(),
             ));
-        }
-        // a binary infix: side validity + tuple equality
-        (Some(_), Some(pos)) => {
-            let left = &chunks[..pos];
-            let right = &chunks[pos + 1..];
-            let side_ok = |side: &[RefChunk]| -> bool {
-                side.len() == 1
-                    && side[0].kind == RefChunkKind::Operand
-                    && side[0].dotted >= 2
-            };
-            if !side_ok(left) {
-                let at = left.first().map(|c| c.start).unwrap_or(base);
-                out.push((at, "Invalid column reference".to_string()));
-            }
-            if !side_ok(right) {
-                let at = right.first().map(|c| c.start).unwrap_or(base);
-                out.push((at, "Invalid column reference".to_string()));
-            }
-            // junk after the right operand = application args
-            if right.len() > 1 {
-                let at = right[1].start;
+            if first.dotted == 1 && first.tuple_cols.is_none() {
                 out.push((
-                    at,
-                    "A Ref field should only have a single binary relationship".to_string(),
+                    first.start,
+                    "Unequal fields in ref endpoints".to_string(),
                 ));
             }
-            // tuple/chain length mismatch (their isEqualTupleOperands)
-            let tuple_len = |side: &[RefChunk]| -> Option<usize> {
-                if side.len() == 1 && side[0].kind == RefChunkKind::Operand {
-                    Some(side[0].dotted)
-                } else {
-                    None
-                }
-            };
-            if let (Some(l), Some(r)) = (tuple_len(left), tuple_len(right)) {
-                if l != r && l.max(r) > 1 {
-                    let at = chunks[0].start;
-                    out.push((at, "Unequal fields in ref endpoints".to_string()));
-                }
+            // the binder still resolves a dotted callee's columns
+            if let Some(ep) = endpoint_of(first) {
+                broken_refs.push(ep);
             }
-            let _ = empty_or_one;
         }
-        _ => {}
+        return;
+    }
+
+    // the application wrapper: groups[0] = the callee, groups[1..] = args
+    let callee = &chunks[groups[0][0]];
+    out.push((
+        callee.start,
+        "A Ref field must be a binary relationship".to_string(),
+    ));
+    // their isEqualTupleOperands(callee): a bare-variable callee has no
+    // operand sides → false → Unequal fires; a dot-infix callee with
+    // non-tuple sides compares 0 == 0 → silent
+    if callee.dotted == 1 && callee.tuple_cols.is_none() {
+        out.push((
+            callee.start,
+            "Unequal fields in ref endpoints".to_string(),
+        ));
+    }
+    // one error per argument, anchored at each argument's own start
+    for g in &groups[1..] {
+        let arg_start = chunks[g[0]].start;
+        out.push((
+            arg_start,
+            "A Ref field should only have a single binary relationship".to_string(),
+        ));
+    }
+    // the binder still resolves extractable endpoints: the callee's
+    // table.column and the args' relationship right sides
+    if let Some(ep) = endpoint_of(callee) {
+        broken_refs.push(ep);
+    }
+    for g in &groups[1..] {
+        if is_rel_infix(g) {
+            let last = &chunks[*g.last().unwrap()];
+            if let Some(ep) = endpoint_of(last) {
+                broken_refs.push(ep);
+            }
+        }
     }
 }
 
-/// Optional `[delete: cascade, update: no action, color: #aabbcc]`
-/// referential actions + the relationship color.
+
 fn ref_settings(
     input: &mut &str,
     base: usize,
