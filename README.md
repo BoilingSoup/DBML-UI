@@ -5,7 +5,7 @@ A database ER-diagram editor built on
 the ER diagram render live on the right. Native desktop app
 (Rust + [iced](https://iced.rs)).
 
-<img width="1918" height="1014" alt="image" src="https://github.com/user-attachments/assets/e16eef9a-71ce-4139-a390-a7d9ed061e4b" />
+<img width="1919" height="1016" alt="image" src="https://github.com/user-attachments/assets/5ba1600e-9cd7-4395-9737-003e972dcae0" />
 
 
 ## Features
