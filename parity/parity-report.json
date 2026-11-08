@@ -18,9 +18,7 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 12 vs theirs 11",
-        "[9] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"A TableGroup field should only have a single Table name\"",
-        "[10] text: ours \"Table 'name' does not exist\" vs theirs \"Table 'quoted' does not exist in Schema 'public'\""
+        "[10] text: ours \"Table 'quoted' does not exist\" vs theirs \"Table 'quoted' does not exist in Schema 'public'\""
       ]
     },
     {
@@ -43,9 +41,8 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[4] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"A TableGroup field should only have a single Table name\"",
-        "[5] text: ours \"Table 'name' does not exist\" vs theirs \"A TableGroup field should only have a single Table name\"",
-        "[6] text: ours \"Table 'quoted' does not exist\" vs theirs \"Table 'quoted' does not exist in Schema 'public'\""
+        "count: ours 6 vs theirs 7",
+        "[5] text: ours \"Table 'quoted' does not exist\" vs theirs \"A TableGroup field should only have a single Table name\""
       ]
     },
     {
@@ -188,9 +185,7 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 4 vs theirs 3",
-        "[1] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"A TableGroup field should only have a single Table name\"",
-        "[2] text: ours \"Table 'name' does not exist\" vs theirs \"Table 'quoted' does not exist in Schema 'public'\""
+        "[2] text: ours \"Table 'quoted' does not exist\" vs theirs \"Table 'quoted' does not exist in Schema 'public'\""
       ]
     },
     {
@@ -869,9 +864,7 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 5 vs theirs 4",
-        "[2] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"A TableGroup field should only have a single Table name\"",
-        "[3] text: ours \"Table 'name' does not exist\" vs theirs \"Table 'quoted' does not exist in Schema 'public'\""
+        "[3] text: ours \"Table 'quoted' does not exist\" vs theirs \"Table 'quoted' does not exist in Schema 'public'\""
       ]
     },
     {
@@ -940,7 +933,7 @@
         "[6] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Table 'missing' does not exist in Schema 'public'\"",
         "[7] text: ours \"Table 'missing' does not exist in Schema 'public'\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
         "[12] text: ours \"Unequal fields in ref endpoints\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
-        "[13] text: ours \"Table 'name' does not exist\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "[13] text: ours \"A TableGroup field should only have a single Table name\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
         "[13] row: ours 13 vs theirs 8",
         "[14] text: ours \"Table 'quoted' does not exist\" vs theirs \"Unequal fields in ref endpoints\"",
         "[14] row: ours 13 vs theirs 8"
@@ -1113,10 +1106,10 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[7] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "count: ours 9 vs theirs 10",
+        "[7] text: ours \"A TableGroup field should only have a single Table name\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
         "[7] row: ours 26 vs theirs 24",
-        "[8] text: ours \"Table 'name' does not exist\" vs theirs \"A TableGroup field should only have a single Table name\"",
-        "[9] text: ours \"Table 'quoted' does not exist\" vs theirs \"Table 'quoted' does not exist in Schema 'public'\""
+        "[8] text: ours \"Table 'quoted' does not exist\" vs theirs \"A TableGroup field should only have a single Table name\""
       ]
     },
     {
@@ -1144,9 +1137,7 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 9 vs theirs 8",
-        "[6] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"A TableGroup field should only have a single Table name\"",
-        "[7] text: ours \"Table 'name' does not exist\" vs theirs \"Table 'quoted' does not exist in Schema 'public'\""
+        "[7] text: ours \"Table 'quoted' does not exist\" vs theirs \"Table 'quoted' does not exist in Schema 'public'\""
       ]
     },
     {
@@ -1154,9 +1145,7 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 11 vs theirs 10",
-        "[8] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"A TableGroup field should only have a single Table name\"",
-        "[9] text: ours \"Table 'name' does not exist\" vs theirs \"Table 'quoted' does not exist in Schema 'public'\""
+        "[9] text: ours \"Table 'quoted' does not exist\" vs theirs \"Table 'quoted' does not exist in Schema 'public'\""
       ]
     },
     {
@@ -1273,7 +1262,7 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 22 vs theirs 24",
+        "count: ours 21 vs theirs 24",
         "[5] text: ours \"Column 'odd' does not exist in Table 'a'\" vs theirs \"Duplicate column 'odd col'\"",
         "[5] row: ours 11 vs theirs 12",
         "[6] row: ours 12 vs theirs 14",
@@ -1285,10 +1274,9 @@
         "[12] text: ours \"A Ref field must be a binary relationship\" vs theirs \"A Ref field should only have a single binary relationship\"",
         "[13] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Invalid column reference\"",
         "[14] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
-        "[19] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "[19] text: ours \"A TableGroup field should only have a single Table name\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
         "[19] row: ours 35 vs theirs 34",
-        "[20] text: ours \"Table 'name' does not exist\" vs theirs \"A TableGroup field should only have a single Table name\"",
-        "[21] text: ours \"Table 'quoted' does not exist\" vs theirs \"A TableGroup field should only have a single Table name\""
+        "[20] text: ours \"Table 'quoted' does not exist\" vs theirs \"A TableGroup field should only have a single Table name\""
       ]
     },
     {
@@ -1414,9 +1402,7 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 16 vs theirs 15",
-        "[13] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"A TableGroup field should only have a single Table name\"",
-        "[14] text: ours \"Table 'name' does not exist\" vs theirs \"Table 'quoted' does not exist in Schema 'public'\""
+        "[14] text: ours \"Table 'quoted' does not exist\" vs theirs \"Table 'quoted' does not exist in Schema 'public'\""
       ]
     },
     {
@@ -1733,7 +1719,6 @@
       "class": "semantic",
       "problems": [
         "count: ours 4 vs theirs 5",
-        "[2] text: ours \"Table 'name' does not exist\" vs theirs \"A TableGroup field should only have a single Table name\"",
         "[3] text: ours \"Table 'quoted' does not exist\" vs theirs \"Table 'name' does not exist in Schema 'public'\""
       ]
     },

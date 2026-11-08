@@ -7369,7 +7369,7 @@ Table b { a_id integer }
 Table c { b_id integer }
 Ref: b.a_id > a.id
 Ref: c.b_id > b.id
-TableGroup g { a c }
+TableGroup g { a\n                   c }
 "
             .into(),
         );
@@ -11258,7 +11258,7 @@ mod tab_tests {
 
     #[test]
     fn group_picker_splices_color_and_members_inherit() {
-        let src = "Table a { id integer }\nTable b [headercolor: #d35400] { x integer }\n                   TableGroup g { a b }\n";
+        let src = "Table a { id integer }\nTable b [headercolor: #d35400] { x integer }\n                   TableGroup g { a\n                   b }\n";
         let mut app = App::with_source(src.into());
         let (zoom, pan) = (app.cur().zoom, app.cur().pan);
         // the picker icon's zone: the band's RIGHT end, right-aligned to
@@ -11356,7 +11356,7 @@ mod tab_tests {
     #[test]
     fn header_color_on_a_group_member_leaves_siblings_alone() {
         let _g = crate::config::CONFIG_ENV_LOCK.lock();
-        let src = "Table a { id integer }\nTable b { x integer }\nTable c { y integer }\n                   TableGroup g { a b }\n";
+        let src = "Table a { id integer }\nTable b { x integer }\nTable c { y integer }\n                   TableGroup g { a\n                   b }\n";
         let mut app = App::with_source(src.into());
         // color node 0 (table a, a group member): ONLY a is spliced — the
         // cascade is a render-time fallback through the group's [color:],
@@ -12061,7 +12061,7 @@ mod clipboard_menu_tests {
     /// moves nothing (it jumps the editor instead — the click test below).
     #[test]
     fn group_band_drag_moves_all_members_and_click_moves_nothing() {
-        let src = "Table a { id integer }\nTable b { x integer }\n                   TableGroup g { a b }\n";
+        let src = "Table a { id integer }\nTable b { x integer }\n                   TableGroup g { a\n                   b }\n";
         let mut app = App::with_source(src.into());
         let zoom = app.cur().zoom;
         let pan = app.cur().pan;
@@ -12136,7 +12136,7 @@ mod clipboard_menu_tests {
     /// MOVED release is the member-shifting drag and never jumps.
     #[test]
     fn group_band_click_jumps_editor_to_the_group_definition() {
-        let src = "Table a { id integer }\nTable b { x integer }\n                   TableGroup g { a b }\n";
+        let src = "Table a { id integer }\nTable b { x integer }\n                   TableGroup g { a\n                   b }\n";
         let mut app = App::with_source(src.into());
         let (zoom, pan) = (app.cur().zoom, app.cur().pan);
         let before = app.editor().buf.cursor();
@@ -12181,7 +12181,7 @@ mod clipboard_menu_tests {
     /// clamping is needed — pinned as a regression test.
     #[test]
     fn dragging_a_member_out_grows_the_region() {
-        let src = "Table a { id integer }\nTable b { x integer }\n                   TableGroup g { a b }\n";
+        let src = "Table a { id integer }\nTable b { x integer }\n                   TableGroup g { a\n                   b }\n";
         let mut app = App::with_source(src.into());
         let zoom = app.cur().zoom;
         let pan = app.cur().pan;

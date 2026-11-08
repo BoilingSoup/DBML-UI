@@ -2293,6 +2293,34 @@ fn table_group(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<T
                 if first_member.is_none() {
                     first_member = Some(member_start);
                 }
+                // the juxtaposition form: a same-line bare word after the
+                // member = an application — the member stays the CALLEE
+                // (membership-checked) and everything to the line end is
+                // the argument list, erring once at its start (probe:
+                // `{ quoted name, a, t1 }` → single-name @ name + the
+                // membership on `quoted` only)
+                sp(input);
+                if input.starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '"' || c == '`') {
+                    let arg_start = offset(input, base);
+                    g.tables.push(sc.map_or(n.clone(), |s| format!("{s}.{n}")));
+                    // consume the argument list to the line end or `}`
+                    while !input.is_empty()
+                        && !input.starts_with('\n')
+                        && !input.starts_with('\r')
+                        && !input.starts_with('}')
+                    {
+                        let c = input.chars().next().unwrap();
+                        *input = &input[c.len_utf8()..];
+                    }
+                    errs.push(err_at(
+                        arg_start,
+                        "A TableGroup field should only have a single Table name",
+                    ));
+                    if eat(input, "}") {
+                        break;
+                    }
+                    continue;
+                }
                 g.tables.push(sc.map_or(n.clone(), |s| format!("{s}.{n}")));
                 // the comma-separated member list reports ONCE, anchored at
                 // the first member (their `TableGroup g { a, b }` probe —
