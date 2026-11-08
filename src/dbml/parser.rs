@@ -667,6 +667,7 @@ fn settings_list_occs(
                 // "Expect a comma ','" (their settings consume) — the
                 // endpoint still binds; the single-binary error belongs to
                 // STANDALONE ref lines only (probe mw1 vs mw2)
+                ws(input);
                 // endpoint settings bracket: `ref: > t.c [color: …]` —
                 // the relationship's color lives there (only `color` is
                 // interpreted; other keys ride along unused)
