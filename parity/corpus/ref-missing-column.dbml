@@ -1,0 +1,3 @@
+Table a { id integer }
+Table b { x integer }
+Ref: a.id > b.nope

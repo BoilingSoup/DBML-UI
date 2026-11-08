@@ -1,0 +1,3 @@
+Table a { id integer }
+Table b { id integer }
+TableGroup g { a, b }

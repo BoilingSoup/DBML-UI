@@ -1,0 +1,2 @@
+Table a { id integer }
+Table a { x integer }

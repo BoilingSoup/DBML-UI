@@ -1,0 +1,7 @@
+Table parent { id integer [pk]
+  code integer
+}
+Table child { parent_id integer [not null]
+  code integer [not null]
+}
+Ref: parent.(id, code) > child.(parent_id, code)

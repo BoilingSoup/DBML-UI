@@ -1,0 +1,2 @@
+Table a { id integer }
+TableGroup g { a, nope }

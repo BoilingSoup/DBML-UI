@@ -1,0 +1,5 @@
+Table parent { id integer
+[pk]
+}
+Table child { parent_id integer [not null] ref: > parent.id
+}

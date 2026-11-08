@@ -1,0 +1,8 @@
+Table users { id integer [pk]
+}
+Table posts { id integer [pk]
+  author_id integer [not null, ref: > users.id]
+  records (id, author_id) {
+    1, ''
+  }
+}

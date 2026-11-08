@@ -1,0 +1,2 @@
+Table a { id integer }
+Ref: a.id > missing.id
