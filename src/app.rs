@@ -3060,6 +3060,12 @@ fn pick_file_blocking(kind: PickerKind) -> PickOutcome {
     };
     // the picker filters to what the app actually opens: DBML diagrams
     // and SQL dumps (the importer routes .sql through dialect detection)
+    // every dialog this function can open shares one title — zenity's
+    // --title, kdialog's, rfd's set_title, and the portal chooser's — so
+    // one raise pass covers all of them (and all the packaging builds:
+    // the flatpak's runtime has no zenity/kdialog, so its dialog is the
+    // portal's own window, which the X11 raise adopts like any other)
+    crate::platform::raise_dialog("Open DBML file");
     let mut zenity_args = vec!["--file-selection", "--title=Open DBML file"];
     zenity_args.extend(picker_filters(kind));
     let kdialog_filter = match kind {
@@ -3071,7 +3077,10 @@ fn pick_file_blocking(kind: PickerKind) -> PickOutcome {
     };
     for (tool, args) in [
         ("zenity", zenity_args),
-        ("kdialog", vec!["--getopenfilename", ".", kdialog_filter]),
+        (
+            "kdialog",
+            vec!["--getopenfilename", ".", kdialog_filter, "--title", "Open DBML file"],
+        ),
     ] {
         if let Some(out) = run(tool, &args) {
             if out.status.success() {
