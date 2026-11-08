@@ -1,8 +1,8 @@
 # dbml-ui
 
-A database ER-diagram editor built on
+A database schema diagram editor built on
 [DBML](https://dbml.dbdiagram.io/docs/): edit DBML on the left, watch
-the ER diagram render live on the right. Native desktop app
+the database diagram render live on the right. Native desktop app
 (Rust + [iced](https://iced.rs)).
 
 <img width="1919" height="1016" alt="image" src="https://github.com/user-attachments/assets/7fdc8995-9e6b-4246-83fe-f0250d3e26ac" />
