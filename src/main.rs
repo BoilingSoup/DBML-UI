@@ -25,6 +25,10 @@ fn window_icon() -> Option<iced::window::Icon> {
 }
 
 fn main() -> Result<(), iced::Error> {
+    // bring our own window to the front once it maps — a slow cold start
+    // can outlive the WM's launch grace and map us behind the user's
+    // next window (X11 no-op elsewhere; see platform::raise_self)
+    crate::platform::raise_self();
     let run = || -> Result<(), iced::Error> {
         // dbml-ui [FILE]
         // iced/wgpu boot diagnostics (adapter selection, renderer

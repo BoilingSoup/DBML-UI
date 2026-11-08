@@ -11,3 +11,5 @@ pub fn ctrl_held() -> Option<bool> {
 }
 
 pub fn raise_dialog(_title: &str) {}
+
+pub fn raise_self() {}

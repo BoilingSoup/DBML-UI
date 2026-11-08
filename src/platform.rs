@@ -209,6 +209,37 @@ fn mark_ctrl(keycodes: &[u16], raw_down: &AtomicU32, detail: u32, down: bool) {
 /// pid-matching (`_NET_WM_PID`), non-override-redirect toplevel whose
 /// name does not carry `except` (the dialog itself belongs to our pid
 /// too). None off X11 or when nothing matches.
+/// EWMH activation with pager source (source 2 bypasses the WM's
+/// focus-stealing prevention — application source is advisory), plus
+/// input focus and a plain raise as belt-and-suspenders.
+fn ewmh_activate(
+    conn: &x11rb::rust_connection::RustConnection,
+    root: u32,
+    active_w: u32,
+    w: u32,
+) {
+    use x11rb::connection::Connection as _;
+    use x11rb::protocol::xproto::ConnectionExt as _;
+    use x11rb::protocol::xproto::EventMask;
+    let data = x11rb::protocol::xproto::ClientMessageData::from([w, 2u32, 0, 0, 0]);
+    let msg = x11rb::protocol::xproto::ClientMessageEvent::new(
+        32u8, w, active_w, data,
+    );
+    let _ = conn.send_event(
+        false,
+        root,
+        EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+        msg,
+    );
+    let _ = conn.set_input_focus(x11rb::protocol::xproto::InputFocus::PARENT, w, 0u8);
+    let _ = conn.configure_window(
+        w,
+        &x11rb::protocol::xproto::ConfigureWindowAux::new()
+            .stack_mode(x11rb::protocol::xproto::StackMode::ABOVE),
+    );
+    let _ = conn.flush();
+}
+
 fn own_window_xid(
     conn: &x11rb::rust_connection::RustConnection,
     root: u32,
@@ -273,7 +304,12 @@ fn own_window_xid(
 /// dialog. X11 only — Wayland compositors place the dialog themselves.
 /// Detached thread, self-terminating.
 pub fn raise_dialog(title: &str) {
-    if std::env::var("XDG_SESSION_TYPE").as_deref() != Ok("x11") {
+    // a sandbox (flatpak) may not pass XDG_SESSION_TYPE through; an X
+    // connection existing is the real precondition
+    let session = std::env::var("XDG_SESSION_TYPE").ok();
+    let is_x11 = session.as_deref() == Some("x11")
+        || (session.is_none() && std::env::var("DISPLAY").is_ok());
+    if !is_x11 {
         return;
     }
     let needle = title.to_string();
@@ -315,48 +351,44 @@ pub fn raise_dialog(title: &str) {
         let mut adopted = false;
         let mut app_xid: Option<u32> = None;
         let mut center_attempts = 0u8;
-        // Chrome-like dialog placement: centered over the app window. A
-        // client configure of x/y is the request gtk_window_move makes —
-        // the WM relocates the frame to honor it — so this works for
-        // zenity, rfd's GTK chooser and the flatpak's portal window
-        // alike (here they are all just X11 windows with the needle's
-        // title). Overshooting is impossible: the size comes from the
-        // dialog's own mapped geometry.
+        // Chrome-like dialog placement: centered over the app window.
+        // Probe-verified under Mutter: a plain ConfigureWindow moves the
+        // window (x lands exactly; the WM constrains the result on-screen,
+        // which is desirable). _NET_MOVERESIZE_WINDOW was ignored in every
+        // source/gravity encoding — it is NOT the way on GNOME. The
+        // parent-relative math reduces to raw root coords for CSD dialogs
+        // (frame offset 0) and stays correct when a frame offset exists.
         fn center_over_app<C: x11rb::connection::Connection>(
             conn: &C,
             root: u32,
             w: u32,
             app: u32,
         ) -> Option<()> {
-                let g = conn.get_geometry(w).ok()?.reply().ok()?;
-                let abs = conn
-                    .translate_coordinates(w, root, 0i16, 0i16)
-                    .ok()?
-                    .reply()
-                    .ok()?;
-                let ag = conn.get_geometry(app).ok()?.reply().ok()?;
-                let aabs = conn
-                    .translate_coordinates(app, root, 0i16, 0i16)
-                    .ok()?
-                    .reply()
-                    .ok()?;
-                let tx =
-                    (i32::from(aabs.dst_x) + (i32::from(ag.width) - i32::from(g.width)) / 2)
-                        .max(0);
-                let ty =
-                    (i32::from(aabs.dst_y) + (i32::from(ag.height) - i32::from(g.height)) / 2)
-                        .max(0);
-                // the configure's x/y are frame-relative: shift by how far
-                // the client currently sits inside its frame
-                let _ = conn.configure_window(
-                    w,
-                    &x11rb::protocol::xproto::ConfigureWindowAux::new()
-                        .x(i32::from(g.x) + tx - i32::from(abs.dst_x))
-                        .y(i32::from(g.y) + ty - i32::from(abs.dst_y)),
-                );
-                let _ = conn.flush();
-                Some(())
-                    }
+            let g = conn.get_geometry(w).ok()?.reply().ok()?;
+            let abs = conn
+                .translate_coordinates(w, root, 0i16, 0i16)
+                .ok()?
+                .reply()
+                .ok()?;
+            let ag = conn.get_geometry(app).ok()?.reply().ok()?;
+            let aabs = conn
+                .translate_coordinates(app, root, 0i16, 0i16)
+                .ok()?
+                .reply()
+                .ok()?;
+            let tx = (i32::from(aabs.dst_x) + (i32::from(ag.width) - i32::from(g.width)) / 2)
+                .max(0);
+            let ty = (i32::from(aabs.dst_y) + (i32::from(ag.height) - i32::from(g.height)) / 2)
+                .max(0);
+            let _ = conn.configure_window(
+                w,
+                &x11rb::protocol::xproto::ConfigureWindowAux::new()
+                    .x(i32::from(g.x) + tx - i32::from(abs.dst_x))
+                    .y(i32::from(g.y) + ty - i32::from(abs.dst_y)),
+            );
+            let _ = conn.flush();
+            Some(())
+        }
         for _ in 0..40 {
             std::thread::sleep(std::time::Duration::from_millis(150));
             let Some(tree) = conn.query_tree(root).ok().and_then(|c| c.reply().ok())
@@ -392,28 +424,8 @@ pub fn raise_dialog(title: &str) {
                         &[app],
                     );
                 }
-                // EWMH activate (source 1 = the application)
-                let data = x11rb::protocol::xproto::ClientMessageData::from([
-                    w, 1u32, 0u32, 0u32, 0u32,
-                ]);
-                let msg = x11rb::protocol::xproto::ClientMessageEvent::new(
-                    32u8,
-                    w,
-                    active_w,
-                    data,
-                );
-                use x11rb::protocol::xproto::EventMask;
-                let _ = conn.send_event(
-                    false,
-                    root,
-                    EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
-                    msg,
-                );
-                let _ = conn.set_input_focus(
-                    x11rb::protocol::xproto::InputFocus::PARENT,
-                    w,
-                    0u8,
-                );
+                // EWMH activate (pager source, see ewmh_activate)
+                ewmh_activate(&conn, root, active_w, w);
             }
             // and the placement — centered over the app window
             if let Some(app) = app_xid {
@@ -497,4 +509,51 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
     }
+}
+
+
+/// Raise the app's own window at launch. A slow cold start (shader
+/// compile, font load) can outlive the WM's "recently launched" grace
+/// window; mutter then maps the window BEHIND whatever the user switched
+/// to while waiting. One pager-source activation of our own window once
+/// it maps, re-asserted once against WM placement races — the same EWMH
+/// trick the dialog raise uses, pointed at ourselves. X11 only; Wayland
+/// compositors decide activation themselves. Detached, self-terminating.
+pub fn raise_self() {
+    let session = std::env::var("XDG_SESSION_TYPE").ok();
+    let is_x11 = session.as_deref() == Some("x11")
+        || (session.is_none() && std::env::var("DISPLAY").is_ok());
+    if !is_x11 {
+        return;
+    }
+    std::thread::spawn(move || {
+        let Ok((conn, screen)) = x11rb::connect(None) else {
+            return;
+        };
+        use x11rb::connection::Connection as _;
+        use x11rb::protocol::xproto::ConnectionExt as _;
+        let root = conn.setup().roots[screen].root;
+        let Some((active_w, wm_name_w, net_wm_name_w, net_wm_pid_w)) = (|| {
+            Some((
+                conn.intern_atom(false, b"_NET_ACTIVE_WINDOW").ok()?.reply().ok()?.atom,
+                conn.intern_atom(false, b"WM_NAME").ok()?.reply().ok()?.atom,
+                conn.intern_atom(false, b"_NET_WM_NAME").ok()?.reply().ok()?.atom,
+                conn.intern_atom(false, b"_NET_WM_PID").ok()?.reply().ok()?.atom,
+            ))
+        })() else {
+            return;
+        };
+        let pid = std::process::id();
+        for _ in 0..40 {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            if let Some(w) = own_window_xid(
+                &conn, root, net_wm_pid_w, wm_name_w, net_wm_name_w, "", pid,
+            ) {
+                ewmh_activate(&conn, root, active_w, w);
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                ewmh_activate(&conn, root, active_w, w);
+                return;
+            }
+        }
+    });
 }
