@@ -9,9 +9,14 @@ fn dump_path(path: &str) -> Value {
     let src = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
     let out = dbml_ui::dbml::parser::parse(&src);
     let blocked = !out.errors.is_empty()
-        || dbml_ui::dbml::validate::validate(&out.doc, &src)
-            .iter()
-            .any(|d| d.severity == dbml_ui::dbml::validate::Severity::Error);
+        || dbml_ui::dbml::validate::validate_with_parse(
+            &out.doc,
+            &src,
+            &out.binder_errors,
+            &out.binder_chains,
+        )
+        .iter()
+        .any(|d| d.severity == dbml_ui::dbml::validate::Severity::Error);
     let database = if blocked {
         Value::Null
     } else {

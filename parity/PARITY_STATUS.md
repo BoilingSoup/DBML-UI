@@ -79,10 +79,23 @@ harness stripped them).
 - symbol-keyed same-endpoint/pair machinery (duplicates resolve to the
   last declaration; unresolved sides stay out of the pair map).
 
-Known residual classes (each with the probes narrowed): anchor-row
-deltas on inline refs in multi-error files, duplicate-column
-multiplicity on the first-twin re-flag, and the settings-entry tokens
-(2 schema cases).
+CONVERGED: the diagnostic gates are at FULL parity — corpus 75/75 and
+the 300-case fuzz corpus 300/300. The path there: (1) the records
+header ports their tupleExpression exactly (one element, then a
+comma-terminated loop; a missing comma errs once at the offending
+token and synchronizeTuple skips silently to the next `,`/`)`; the
+header column carries its span — their binder anchors the missing-
+column error at the `columnBindee`), (2) the ref-body pipeline became
+a real port of their grammar: the lexer (operator munching, unicode
+identifiers), the Pratt expression parser with their binding powers,
+the application wrapper, validateFields (must-be-binary / per-side
+Invalid column reference / Unequal / the args walk), and bindFields'
+bindee scan feeding structured binder chains resolved per
+nodeRefereeOfRefEndpoint (schema/table/column contexts, the
+unresolved-left silences), and (3) the TableGroup body parses through
+the same application parser with the group binder's one-pop rule and
+its own resolver (nodeRefereeOfTableGroupField, the unresolved-left
+fall-through to a schema lookup).
 
 ## The schema gate (M-P) — live
 
@@ -98,23 +111,27 @@ into a synthetic composite pk index (flags reset, `{-1,-1}` sentinel
 token), inline refs stored as the reversed ref, and the empty-string-
 in-a-non-string-column null rule.
 
-Token positions joined the contract as OFFSETS ONLY (their Position is
-UTF-16-indexed; the offset is the language-neutral part) — table,
-column, index (columns included), ref endpoints (inline refs carry
-their attribute span; the host endpoint carries the column span),
-enum values, groups, sticky notes, records and record values.
-Known residual (fuzz-only): custom-metadata entries, enum-value notes
-and column checks carry their settings-entry tokens on their side —
-our occurrences track key offsets but not the full `key: value` span
-yet.
+Token positions joined the contract — table, column, index (columns
+included), ref endpoints (inline refs carry their attribute span; the
+host endpoint carries the column span), enum values, groups, sticky
+notes, records and record values, PLUS the settings-entry tokens:
+custom metadata entries, enum-value notes, column checks, and the
+table/group `Note:` blocks all carry their attribute spans. Their
+Position indexes UTF-16 CODE UNITS, so our byte offsets convert
+per-char at emission (a multi-byte char like `ñ` is one unit there,
+two bytes here — caught by the fuzz corpus).
 
-## Next: the schema gate (M-P)
+CONVERGED: the schema gates are at FULL parity too — corpus 75/75 and
+the fuzz corpus 300/300.
 
-The parser's OUTPUT is not yet gated — only its errors and the
-semantic findings are. `interpretFile` returns the full `Database`
-JSON (the object dbdiagram renders from); the plan is a second
-runner gate diffing a normalized `Database` per corpus case
-(`parity/driver/theirs-schema-many.ts` already dumps their side), plus
-a parser-focused corpus section (quoted identifiers, schemas, aliases,
-type args, notes, records forms). Token positions join the contract
-once structural parity is green.
+## Standing state
+
+Both gates green end to end: diagnostics 75/75 + 300/300, schema
+75/75 + 300/300, and the Rust suites (624 tests) all pass. The app
+now feeds the FULL diagnostic pipeline (validate_with_parse with the
+binder channels) — the editor's panel matches the gate. Remaining
+follow-ups beyond parity: ref settings rules (`[delete: cascade,
+delete: restrict]` duplicates/values — their validateFieldSettings)
+are still unported; the strict ref path's trailing junk args only
+catch word-starting tokens (op-leading args fall to the top-level
+recovery).

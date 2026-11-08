@@ -197,7 +197,7 @@ pub fn validate_with_parse(
     doc: &Document,
     src: &str,
     parse_binder: &[(usize, String)],
-    broken_refs: &[super::ast::Endpoint],
+    binder_chains: &[super::ast::BinderChain],
 ) -> Vec<Diagnostic> {
     // the trimmed source line containing `offset` — their explanation
     // quotes the ref statement and the column definition as written
@@ -532,19 +532,6 @@ pub fn validate_with_parse(
     }
     for (anchor, msg) in endpoint_errors {
         out.push(Diagnostic::plain(anchor, msg));
-    }
-
-    // TableGroup members must name a table (or its alias)
-    for g in &doc.table_groups {
-        for m in &g.tables {
-            if doc.tables.iter().any(|t| t.matches(m)) {
-                continue;
-            }
-            out.push(Diagnostic::plain(
-                g.span.start,
-                format!("Table '{}' does not exist in Schema 'public'", m),
-            ));
-        }
     }
 
     // index columns must exist when they are plain identifiers
@@ -1299,18 +1286,178 @@ pub fn validate_with_parse(
         }
     }
 
-    // the parse-side binder findings (broken-ref shape sets)
+    /// their nodeRefereeOfRefEndpoint / nodeRefereeOfTableGroupField over
+    /// a dotted chain: fragment 1 resolves as a schema when the chain is
+    /// 3+ deep (refs) or 2+ deep (groups), else as a table (by name or
+    /// alias); a fragment right of a schema resolves as a table or
+    /// schema; a fragment right of a table resolves as a column with the
+    /// schema-qualified fullname; an unresolved left link stays silent
+    /// (refs) or falls through to a schema lookup (groups). Each
+    /// fragment resolves as its own nodeReferee call with QUIET left
+    /// contexts — the lefts' errors surface only through the fragments
+    /// bindFields lists explicitly.
+    fn schema_exists(doc: &Document, name: &str) -> bool {
+        name == "public"
+            || doc.tables.iter().any(|t| t.schema.as_deref() == Some(name))
+            || doc.enums.iter().any(|e| e.schema.as_deref() == Some(name))
+    }
+
+    enum Sym<'a> {
+        Schema(&'a str),
+        Table(&'a super::ast::Table),
+        Column,
+    }
+
+    fn resolve_prefix<'a>(
+        doc: &'a Document,
+        vars: &'a [(String, usize)],
+        k: usize,
+        full_len: usize,
+        group: bool,
+        emit: bool,
+        out: &mut Vec<Diagnostic>,
+    ) -> Option<Sym<'a>> {
+        if k == 0 {
+            return Some(Sym::Schema("public"));
+        }
+        let (name, off) = &vars[k - 1];
+        if k == 1 {
+            if full_len >= 3 || (group && full_len >= 2) {
+                // the left-of-access context: a schema lookup
+                if schema_exists(doc, name) {
+                    return Some(Sym::Schema(name));
+                }
+                if emit {
+                    out.push(Diagnostic::plain(
+                        *off,
+                        format!("Schema '{}' does not exist", name),
+                    ));
+                }
+                return None;
+            }
+            // the standalone context: a table lookup (name or alias)
+            return match doc.tables.iter().find(|t| t.matches(name)) {
+                Some(t) => Some(Sym::Table(t)),
+                None => {
+                    if emit {
+                        out.push(Diagnostic::plain(
+                            *off,
+                            format!("Table '{}' does not exist in Schema 'public'", name),
+                        ));
+                    }
+                    None
+                }
+            };
+        }
+        let left = resolve_prefix(doc, vars, k - 1, full_len, group, false, &mut Vec::new());
+        match left {
+            Some(Sym::Schema(s)) => {
+                if let Some(t) = doc
+                    .tables
+                    .iter()
+                    .find(|t| t.schema.as_deref() == Some(s) && t.matches(name))
+                {
+                    Some(Sym::Table(t))
+                } else if schema_exists(doc, name) {
+                    Some(Sym::Schema(name))
+                } else {
+                    if emit {
+                        out.push(Diagnostic::plain(
+                            *off,
+                            format!("Table or schema '{}' does not exist", name),
+                        ));
+                    }
+                    None
+                }
+            }
+            Some(Sym::Table(t)) => {
+                if t.columns.iter().any(|c| c.name == *name) {
+                    Some(Sym::Column)
+                } else {
+                    let schema = t.schema.as_deref().unwrap_or("public");
+                    if emit {
+                        out.push(Diagnostic::plain(
+                            *off,
+                            format!(
+                                "Column '{}' does not exist in Table '{}.{}'",
+                                name, schema, t.name
+                            ),
+                        ));
+                    }
+                    None
+                }
+            }
+            // right of a column (or an unresolved left in a REF chain):
+            // silent — except the group fall-through, which retries the
+            // fragment as a schema
+            _ if group && left.is_none() => {
+                if schema_exists(doc, name) {
+                    Some(Sym::Schema(name))
+                } else {
+                    if emit {
+                        out.push(Diagnostic::plain(
+                            *off,
+                            format!("Schema '{}' does not exist", name),
+                        ));
+                    }
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn bind_chain(doc: &Document, chain: &super::ast::BinderChain, out: &mut Vec<Diagnostic>) {
+        let n = chain.vars.len();
+        if n == 0 {
+            return;
+        }
+        if chain.group {
+            // their group binder resolves ONLY the popped tableBindee —
+            // the chain's last fragment
+            resolve_prefix(doc, &chain.vars, n, n, true, true, out);
+            return;
+        }
+        if chain.tuple.is_empty() {
+            // the plain chain: every fragment is its own nodeReferee call
+            // in bindFields' [schemas..., table, column] walk
+            for idx in 1..=n {
+                resolve_prefix(doc, &chain.vars, idx, n, false, true, out);
+            }
+        } else {
+            // the tuple form t.(a, b): the table fragment resolves with
+            // the chain, each tuple column resolves against it quietly
+            // (their standalone-column branch reads the symbol via
+            // getFiltered — no error re-emission)
+            resolve_prefix(doc, &chain.vars, n, n + 1, false, true, out);
+            if let Some(Sym::Table(t)) =
+                resolve_prefix(doc, &chain.vars, n, n + 1, false, false, &mut Vec::new())
+            {
+                let schema = t.schema.as_deref().unwrap_or("public");
+                for (cname, coff) in &chain.tuple {
+                    if !t.columns.iter().any(|c| c.name == *cname) {
+                        out.push(Diagnostic::plain(
+                            *coff,
+                            format!(
+                                "Column '{}' does not exist in Table '{}.{}'",
+                                cname, schema, t.name
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    // the parse-side binder findings (ref-body shape sets)
     for (offset, msg) in parse_binder {
         out.push(Diagnostic::plain(*offset, msg.clone()));
     }
-    // their binder still resolves the LEFT endpoint of an
-    // application-wrapped ref and flags its columns (probe: t1.odd col <
-    // t1.x flags 'odd' against public.t1)
-    for ep in broken_refs {
-        if ep.table.is_empty() {
-            continue;
-        }
-        check_endpoint(doc, ep, ep.span.start, &mut out);
+    // the ref-body binder chains (their bindFields scan →
+    // nodeRefereeOfRefEndpoint): resolve each dotted chain against the
+    // document with their context rules
+    for chain in binder_chains {
+        bind_chain(doc, chain, &mut out);
     }
     // the column-parse binder findings (their validateNode class)
     for t in &doc.tables {
@@ -1423,9 +1570,14 @@ mod tests {
 
     #[test]
     fn group_members_and_index_columns_resolve() {
-        let d = diags(
-            "Table a { id integer }\nTableGroup g {\n  nope\n}\nTable c {\n  x integer\n  indexes {\n    (zzz) [unique]\n  }\n}\n",
-        );
+        // the group member check flows through the binder-chain channel
+        // (their tableGroup binder), so this test runs the full pipeline
+        let src = "Table a { id integer }\nTableGroup g {\n  nope\n}\nTable c {\n  x integer\n  indexes {\n    (zzz) [unique]\n  }\n}\n";
+        let out = super::super::parser::parse(src);
+        let d: Vec<String> = validate_with_parse(&out.doc, src, &out.binder_errors, &out.binder_chains)
+            .into_iter()
+            .map(|x| x.message)
+            .collect();
         assert!(
             d.contains(&"Table 'nope' does not exist in Schema 'public'".to_string()),
             "{d:?}"

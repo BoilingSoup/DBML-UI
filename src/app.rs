@@ -741,7 +741,12 @@ impl Tab {
         // interpretFile().getErrors() — parse + binder + interpret errors
         // ALL flow, always; infos exist only where interpretation
         // succeeded (broken constructs never produce them)
-        self.diagnostics = dbml::validate::validate(&out.doc, src);
+        self.diagnostics = dbml::validate::validate_with_parse(
+            &out.doc,
+            src,
+            &out.binder_errors,
+            &out.binder_chains,
+        );
     }
 
     /// Unsaved changes: the buffer differs from the last save/open.

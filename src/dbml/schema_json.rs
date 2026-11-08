@@ -9,9 +9,25 @@ use serde_json::{json, Map, Value};
 use super::ast::{self, Document, RecordValue};
 
 
-/// their TokenPosition with offsets only: `{"start": {"offset": N}, "end": {"offset": M}}`
-fn token_json(span: std::ops::Range<usize>) -> Value {
-    json!({"start": {"offset": span.start}, "end": {"offset": span.end}})
+/// their TokenPosition with offsets only: `{"start": {"offset": N}, "end": {"offset": M}}`.
+/// Their Position indexes UTF-16 code units, so byte offsets convert
+/// per-char (a multi-byte char like `ñ` is ONE unit there, two bytes here).
+fn token_json(src: &str, span: std::ops::Range<usize>) -> Value {
+    let u16_at = |b: usize| -> usize {
+        let b = b.min(src.len());
+        let mut off = 0usize;
+        for (i, c) in src.char_indices() {
+            if i >= b {
+                break;
+            }
+            off += c.len_utf16();
+        }
+        off
+    };
+    json!({
+        "start": {"offset": u16_at(span.start)},
+        "end": {"offset": u16_at(span.end)},
+    })
 }
 
 /// The declaration content end: our spans can carry trailing same-line
@@ -22,7 +38,7 @@ fn trimmed_end(src: &str, end: usize) -> usize {
 
 pub fn to_database_json(doc: &Document, src: &str) -> Value {
     let mut db = Map::new();
-    db.insert("token".into(), token_json(0..src.len()));
+    db.insert("token".into(), token_json(src, 0..src.len()));
     db.insert("schemas".into(), json!([]));
     db.insert(
         "tables".into(),
@@ -30,7 +46,7 @@ pub fn to_database_json(doc: &Document, src: &str) -> Value {
     );
     db.insert(
         "notes".into(),
-        Value::Array(doc.notes.iter().map(note_json).collect()),
+        Value::Array(doc.notes.iter().map(|n| note_json(n, src)).collect()),
     );
     db.insert(
         "refs".into(),
@@ -39,11 +55,11 @@ pub fn to_database_json(doc: &Document, src: &str) -> Value {
     db.insert("deps".into(), json!([]));
     db.insert(
         "enums".into(),
-        Value::Array(doc.enums.iter().map(enum_json).collect()),
+        Value::Array(doc.enums.iter().map(|e| enum_json(e, src)).collect()),
     );
     db.insert(
         "tableGroups".into(),
-        Value::Array(doc.table_groups.iter().map(group_json).collect()),
+        Value::Array(doc.table_groups.iter().map(|g| group_json(g, src)).collect()),
     );
     // their aliases: one entry per table alias
     let aliases: Vec<Value> = doc
@@ -93,7 +109,7 @@ pub fn to_database_json(doc: &Document, src: &str) -> Value {
 
 fn table_json(t: &ast::Table, src: &str) -> Value {
     let mut m = Map::new();
-    m.insert("token".into(), token_json(t.span.start..trimmed_end(src, t.span.end)));
+    m.insert("token".into(), token_json(src, t.span.start..trimmed_end(src, t.span.end)));
     m.insert("name".into(), json!(t.name));
     m.insert("schemaName".into(), json!(t.schema));
     m.insert("alias".into(), json!(t.alias));
@@ -136,7 +152,7 @@ fn table_json(t: &ast::Table, src: &str) -> Value {
                 .iter()
                 .map(|c| {
                     json!({
-                        "token": token_json(c.span.clone()),
+                        "token": token_json(src, c.span.clone()),
                         "value": c.name,
                         "type": "column",
                     })
@@ -146,19 +162,24 @@ fn table_json(t: &ast::Table, src: &str) -> Value {
         }));
     }
     m.insert("indexes".into(), json!(indexes));
-    m.insert("metadata".into(), custom_json(&t.custom));
+    m.insert("metadata".into(), custom_json_spans(&t.custom, src, &t.custom_spans));
     if let Some(h) = &t.header_color {
         m.insert("headerColor".into(), json!(h));
     }
     if let Some(n) = &t.note {
-        m.insert("note".into(), json!({"value": n}));
+        let mut nm = Map::new();
+        nm.insert("value".into(), json!(n));
+        if let Some(sp) = &t.note_span {
+            nm.insert("token".into(), token_json(src, sp.clone()));
+        }
+        m.insert("note".into(), Value::Object(nm));
     }
     Value::Object(m)
 }
 
 fn column_json(c: &ast::Column, pk_reset: bool, src: &str) -> Value {
     let mut m = Map::new();
-    m.insert("token".into(), token_json(c.span.start..trimmed_end(src, c.span.end)));
+    m.insert("token".into(), token_json(src, c.span.start..trimmed_end(src, c.span.end)));
     m.insert("name".into(), json!(c.name));
     let (schema, type_name, args) = split_type(&c.ty);
     let mut ty = Map::new();
@@ -180,7 +201,19 @@ fn column_json(c: &ast::Column, pk_reset: bool, src: &str) -> Value {
     if let Some(n) = &c.settings.note {
         m.insert("note".into(), json!({"value": n}));
     }
-    m.insert("metadata".into(), custom_json(&c.settings.custom));
+    m.insert(
+        "metadata".into(),
+        custom_json_spans(
+            &c.settings.custom,
+            src,
+            &c.settings
+                .occurrences
+                .iter()
+                .filter(|o| c.settings.custom.iter().any(|(k, _)| *k == o.key))
+                .map(|o| (o.key.clone(), o.offset..o.end))
+                .collect::<Vec<_>>(),
+        ),
+    );
     let inline_refs: Vec<Value> = c
         .settings
         .inline_ref
@@ -188,7 +221,7 @@ fn column_json(c: &ast::Column, pk_reset: bool, src: &str) -> Value {
         .map(|ir| {
             let op = super::validate::written_op(ir.card, ir.left_optional, ir.right_optional);
             vec![json!({
-                "token": token_json(ir.attr_start..ir.to.span.end),
+                "token": token_json(src, ir.attr_start..ir.to.span.end),
                 "schemaName": ir.to.schema,
                 "tableName": ir.to.table,
                 "fieldNames": ir.to.columns,
@@ -204,9 +237,17 @@ fn column_json(c: &ast::Column, pk_reset: bool, src: &str) -> Value {
         .as_ref()
         .map(|e| {
             // the stored form keeps the backticks for the formatter; the
-            // contract carries the bare expression
+            // contract carries the bare expression + the entry's token
             let bare = e.trim_start_matches('`').trim_end_matches('`');
-            vec![json!({"expression": bare})]
+            let mut cm = Map::new();
+            cm.insert("expression".into(), json!(bare));
+            if let Some(o) = c.settings.occurrences.iter().find(|o| o.key == "check") {
+                cm.insert(
+                    "token".into(),
+                    token_json(src, o.offset..o.end),
+                );
+            }
+            vec![Value::Object(cm)]
         })
         .unwrap_or_default();
     m.insert("checks".into(), json!(checks));
@@ -215,7 +256,7 @@ fn column_json(c: &ast::Column, pk_reset: bool, src: &str) -> Value {
 
 fn index_json(ix: &ast::Index, src: &str) -> Value {
     let mut m = Map::new();
-    m.insert("token".into(), token_json(ix.span.start..trimmed_end(src, ix.span.end)));
+    m.insert("token".into(), token_json(src, ix.span.start..trimmed_end(src, ix.span.end)));
     let columns: Vec<Value> = ix
         .columns
         .iter()
@@ -223,7 +264,7 @@ fn index_json(ix: &ast::Index, src: &str) -> Value {
         .zip(ix.column_spans.iter())
         .map(|((c, is_expr), span)| {
             json!({
-                "token": token_json(span.clone()),
+                "token": token_json(src, span.clone()),
                 "value": c,
                 "type": if *is_expr { "expression" } else { "column" },
             })
@@ -255,15 +296,15 @@ fn refs_json(doc: &Document, src: &str) -> Vec<Value> {
             r.right_optional,
         ));
         let mut m = Map::new();
-        m.insert("token".into(), token_json(r.span.clone()));
+        m.insert("token".into(), token_json(src, r.span.clone()));
         m.insert("name".into(), json!(r.name));
         m.insert("schemaName".into(), json!(r.from.schema.clone()));
         m.insert(
             "endpoints".into(),
             json!([
-                {"token": token_json(r.from.span.clone()), "schemaName": r.from.schema, "tableName": r.from.table,
+                {"token": token_json(src, r.from.span.clone()), "schemaName": r.from.schema, "tableName": r.from.table,
                  "fieldNames": r.from.columns, "relation": card_str(l)},
-                {"token": token_json(r.to.span.clone()), "schemaName": r.to.schema, "tableName": r.to.table,
+                {"token": token_json(src, r.to.span.clone()), "schemaName": r.to.schema, "tableName": r.to.table,
                  "fieldNames": r.to.columns, "relation": card_str(rt)},
             ]),
         );
@@ -294,14 +335,14 @@ fn refs_json(doc: &Document, src: &str) -> Vec<Value> {
             let mut ir_m = Map::new();
             ir_m.insert(
                 "token".into(),
-                token_json(ir.attr_start..ir.to.span.end),
+                token_json(src, ir.attr_start..ir.to.span.end),
             );
             ir_m.insert(
                 "endpoints".into(),
                 json!([
-                    {"token": token_json(ir.attr_start..ir.to.span.end), "schemaName": ir.to.schema, "tableName": ir.to.table,
+                    {"token": token_json(src, ir.attr_start..ir.to.span.end), "schemaName": ir.to.schema, "tableName": ir.to.table,
                      "fieldNames": ir.to.columns, "relation": card_str(rt)},
-                    {"token": token_json(c.span.start..trimmed_end(src, c.span.end)), "schemaName": t.schema, "tableName": t.name,
+                    {"token": token_json(src, c.span.start..trimmed_end(src, c.span.end)), "schemaName": t.schema, "tableName": t.name,
                      "fieldNames": [c.name], "relation": card_str(l)},
                 ]),
             );
@@ -311,29 +352,35 @@ fn refs_json(doc: &Document, src: &str) -> Vec<Value> {
     out
 }
 
-fn enum_json(e: &ast::Enum) -> Value {
+fn enum_json(e: &ast::Enum, src: &str) -> Value {
     let values: Vec<Value> = e
         .values
         .iter()
         .map(|v| {
             let mut m = Map::new();
-            m.insert("token".into(), token_json(v.name_span.clone()));
+            // their enum-field token spans the value's settings list
+            m.insert("token".into(), token_json(src, v.name_span.start..v.full_end));
             m.insert("name".into(), json!(v.name));
             if let Some(n) = &v.note {
-                m.insert("note".into(), json!({"value": n}));
+                let mut nm = Map::new();
+                nm.insert("value".into(), json!(n));
+                if let Some(sp) = &v.note_span {
+                    nm.insert("token".into(), token_json(src, sp.clone()));
+                }
+                m.insert("note".into(), Value::Object(nm));
             }
             Value::Object(m)
         })
         .collect();
     let mut m = Map::new();
-    m.insert("token".into(), token_json(e.span.clone()));
+    m.insert("token".into(), token_json(src, e.span.clone()));
     m.insert("name".into(), json!(e.name));
     m.insert("schemaName".into(), json!(e.schema));
     m.insert("values".into(), json!(values));
     Value::Object(m)
 }
 
-fn group_json(g: &ast::TableGroup) -> Value {
+fn group_json(g: &ast::TableGroup, src: &str) -> Value {
     let tables: Vec<Value> = g
         .tables
         .iter()
@@ -343,7 +390,7 @@ fn group_json(g: &ast::TableGroup) -> Value {
         })
         .collect();
     let mut m = Map::new();
-    m.insert("token".into(), token_json(g.span.clone()));
+    m.insert("token".into(), token_json(src, g.span.clone()));
     m.insert("tables".into(), json!(tables));
     m.insert("name".into(), json!(g.name));
     m.insert("schemaName".into(), json!(Value::Null));
@@ -351,14 +398,19 @@ fn group_json(g: &ast::TableGroup) -> Value {
         m.insert("color".into(), json!(c));
     }
     if let Some(n) = &g.note {
-        m.insert("note".into(), json!({"value": n}));
+        let mut nm = Map::new();
+        nm.insert("value".into(), json!(n));
+        if let Some(sp) = &g.note_span {
+            nm.insert("token".into(), token_json(src, sp.clone()));
+        }
+        m.insert("note".into(), Value::Object(nm));
     }
-    m.insert("metadata".into(), custom_json(&g.custom));
+    m.insert("metadata".into(), custom_json_spans(&g.custom, src, &g.custom_spans));
     Value::Object(m)
 }
 
-fn note_json(n: &ast::StickyNote) -> Value {
-    json!({"token": token_json(n.span.clone()), "name": n.name, "content": n.text, "metadata": {}})
+fn note_json(n: &ast::StickyNote, src: &str) -> Value {
+    json!({"token": token_json(src, n.span.clone()), "name": n.name, "content": n.text, "metadata": {}})
 }
 
 fn record_json(t: &ast::Table, r: &ast::TableRecords, doc: &Document, src: &str) -> Value {
@@ -397,7 +449,7 @@ fn record_json(t: &ast::Table, r: &ast::TableRecords, doc: &Document, src: &str)
                         let mut val = record_value(v, &ty, is_enum);
                         if let Some(sp) = spans.get(i) {
                             if let serde_json::Value::Object(m) = &mut val {
-                                m.insert("token".into(), token_json(sp.clone()));
+                                m.insert("token".into(), token_json(src, sp.clone()));
                             }
                         }
                         val
@@ -407,7 +459,7 @@ fn record_json(t: &ast::Table, r: &ast::TableRecords, doc: &Document, src: &str)
         })
         .collect();
     let mut m = Map::new();
-    m.insert("token".into(), token_json(r.span.start..trimmed_end(src, r.span.end)));
+    m.insert("token".into(), token_json(src, r.span.start..trimmed_end(src, r.span.end)));
     m.insert("schemaName".into(), json!(t.schema));
     m.insert("tableName".into(), json!(t.name));
     m.insert("columns".into(), json!(columns));
@@ -796,6 +848,7 @@ fn typed_value(raw: &str) -> Value {
 }
 
 /// their CustomMetadataValueType: color for #hex, else the literal kind.
+/// Each entry carries its settings-entry token when the span is known.
 fn custom_json(custom: &[(String, String)]) -> Value {
     let mut m = Map::new();
     for (k, v) in custom {
@@ -820,6 +873,44 @@ fn custom_json(custom: &[(String, String)]) -> Value {
             json!(v)
         };
         m.insert(k.clone(), json!({"value": value, "type": ty}));
+    }
+    Value::Object(m)
+}
+
+fn custom_json_spans(
+    custom: &[(String, String)],
+    src: &str,
+    spans: &[(String, std::ops::Range<usize>)],
+) -> Value {
+    let mut m = Map::new();
+    for (k, v) in custom {
+        let ty = if v.starts_with('#') {
+            "color"
+        } else if v.starts_with('\'') {
+            "string"
+        } else if v == "true" || v == "false" {
+            "bool"
+        } else if v.parse::<f64>().is_ok() {
+            "number"
+        } else {
+            "string"
+        };
+        let value = if ty == "string" {
+            json!(v.trim_matches('\''))
+        } else if ty == "number" {
+            json!(v.parse::<f64>().unwrap_or(0.0))
+        } else if ty == "bool" {
+            json!(v == "true")
+        } else {
+            json!(v)
+        };
+        let mut e = Map::new();
+        e.insert("value".into(), value);
+        e.insert("type".into(), json!(ty));
+        if let Some((_, sp)) = spans.iter().find(|(sk, _)| sk == k) {
+            e.insert("token".into(), token_json(src, sp.clone()));
+        }
+        m.insert(k.clone(), Value::Object(e));
     }
     Value::Object(m)
 }

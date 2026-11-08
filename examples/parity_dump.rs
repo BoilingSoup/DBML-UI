@@ -59,7 +59,12 @@ fn dump_path(path: &str) -> Case {
     // binder + interpret CompileErrors, ALL of them, always. The infos
     // vanish only because broken constructs never produce them (their
     // interpretation skips what failed to bind) — no suppression gate.
-    let ds = dbml_ui::dbml::validate::validate_with_parse(&out.doc, &src, &out.binder_errors, &out.broken_refs);
+    let ds = dbml_ui::dbml::validate::validate_with_parse(
+        &out.doc,
+        &src,
+        &out.binder_errors,
+        &out.binder_chains,
+    );
     let mut diagnostics: Vec<Diagnostic> = out
         .errors
         .iter()

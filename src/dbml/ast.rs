@@ -36,6 +36,8 @@ pub struct Table {
     pub name_span: Span,
     pub header_color: Option<String>,
     pub note: Option<String>,
+    /// The `Note:` block-entry token (their attribute node).
+    pub note_span: Option<Span>,
     pub columns: Vec<Column>,
     pub indexes: Vec<Index>,
     /// `Checks { ... }` block content, verbatim (their importer emits it).
@@ -49,6 +51,8 @@ pub struct Table {
     /// `Table t [owner: "data-team", ...]` — dbdiagram custom properties,
     /// shown on the header hover card.
     pub custom: Vec<(String, String)>,
+    /// Each custom entry's attribute span (key..value end).
+    pub custom_spans: Vec<(String, Span)>,
 }
 
 /// One `records` block: sample rows laid out against `columns` (a table's
@@ -156,6 +160,9 @@ pub struct SettingOcc {
     pub key: String,
     /// Byte offset of the key token.
     pub offset: usize,
+    /// Offset just past the attribute (their getTokenPosition end —
+    /// the settings-entry tokens).
+    pub end: usize,
     pub has_value: bool,
     /// The verbatim value text (quotes kept) when the value parsed as a
     /// plain string.
@@ -263,6 +270,22 @@ pub struct Endpoint {
     pub span: Span,
 }
 
+/// A ref-body binder request: a dotted chain (schema..., table, column)
+/// with each fragment's source anchor, plus optional tuple columns at
+/// the chain end (`t.(a, b)`). Emitted by the ref-body pipeline's
+/// bindFields scan; validate.rs resolves the chain against the document
+/// per their nodeRefereeOfRefEndpoint.
+#[derive(Debug, Clone)]
+pub struct BinderChain {
+    pub vars: Vec<(String, usize)>,
+    pub tuple: Vec<(String, usize)>,
+    /// TableGroup members resolve with their own nodeReferee
+    /// (nodeRefereeOfTableGroupField): one fragment per bindee, the
+    /// schema context from depth 2, and the unresolved-left fall-through
+    /// to a schema lookup
+    pub group: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct Enum {
     pub name: String,
@@ -279,6 +302,11 @@ pub struct EnumValue {
     /// Just the value token; the jump target when clicking an enum row.
     pub name_span: Span,
     pub note: Option<String>,
+    /// The note's settings-entry token (their attribute node).
+    pub note_span: Option<Span>,
+    /// The value's full extent: through the settings list when present
+    /// (their enum-field token spans it).
+    pub full_end: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -290,9 +318,14 @@ pub struct TableGroup {
     pub color: Option<String>,
     /// `Note: '''...'''` inside the block, shown on label hover.
     pub note: Option<String>,
+    /// The `Note:` block-entry token.
+    pub note_span: Option<Span>,
     /// Any other `key: "value"` header settings — dbdiagram custom
     /// properties, in order.
     pub custom: Vec<(String, String)>,
+    /// Each custom entry's attribute span (key..value end), keyed — the
+    /// settings-entry tokens the schema contract carries.
+    pub custom_spans: Vec<(String, Span)>,
 }
 
 /// A top-level sticky note: `Note name { '''text''' }` — renders as a

@@ -19,10 +19,9 @@ pub struct ParseOutput {
     /// Their validateNode-class findings raised while parsing (broken-ref
     /// shape sets) — binder-class, gate the interpretation layer.
     pub binder_errors: Vec<(usize, String)>,
-    /// Left endpoints of application-wrapped refs (their field is not a
-    /// binary relationship, but the binder still resolves the left
-    /// endpoint's columns and flags them).
-    pub broken_refs: Vec<super::ast::Endpoint>,
+    /// The ref-body binder requests (their bindFields scan) — resolved
+    /// against the document in validate.rs.
+    pub binder_chains: Vec<super::ast::BinderChain>,
 }
 
 struct Fail {
@@ -786,6 +785,7 @@ fn settings_list_occs(
         occs.push(super::ast::SettingOcc {
             key: occ_key,
             offset: key_start,
+            end: offset(input, base),
             has_value: occ_before_value != input.len(),
             quoted: val_quoted,
             value: last_val,
@@ -1410,16 +1410,35 @@ fn records_block(
                 break;
             }
             errs.push(err_at(offset(input, base), "Expect a comma ','"));
-            // synchronize: skip until a `,`/`)` WITHOUT consuming — the
+            // their canHandle (parser.ts): the tuple recovers locally only
+            // when its own handler context is the current one — findHandler
+            // Context scans forward for a `,`/`)` (group context) BEFORE
+            // any `}` (a block close means the error belongs to the block
+            // handler and PROPAGATES, leaving the rest for the caller's
+            // recovery). Skip until the `,`/`)` WITHOUT consuming — the
             // next iteration's comma consume takes the `,`, the outer
-            // loop's closing check takes the `)`
-            loop {
-                sp(input);
-                if input.is_empty() || input.starts_with(')') || input.starts_with(',') {
-                    break;
-                }
-                if consume_one_token(input).is_none() {
-                    break;
+            // loop's closing check takes the `)`.
+            let to_comma = input.find(',');
+            let to_rparen = input.find(')');
+            let block_close = input.find('}');
+            let sync_local = match (to_comma, to_rparen, block_close) {
+                (Some(c), Some(p), Some(b)) => c.min(p) < b,
+                (Some(c), Some(p), None) => true,
+                (Some(c), None, Some(b)) => c < b,
+                (Some(c), None, None) => true,
+                (None, Some(p), Some(b)) => p < b,
+                (None, Some(p), None) => true,
+                (None, None, _) => false,
+            };
+            if sync_local {
+                loop {
+                    sp(input);
+                    if input.is_empty() || input.starts_with(')') || input.starts_with(',') {
+                        break;
+                    }
+                    if consume_one_token(input).is_none() {
+                        break;
+                    }
                 }
             }
         }
@@ -1500,16 +1519,16 @@ fn top_item(
     base: usize,
     errs: &mut Vec<ParseError>,
     doc_binder_errors: &mut Vec<(usize, String)>,
-    broken_refs: &mut Vec<super::ast::Endpoint>,
+    binder_chains: &mut Vec<super::ast::BinderChain>,
 ) -> R<Item> {
     if peek_kw(input, "TableGroup") {
-        table_group(input, base, errs).map(Item::Grp)
+        table_group(input, base, errs, doc_binder_errors, binder_chains).map(Item::Grp)
     } else if peek_kw(input, "Table") {
         table(input, base, errs).map(Item::Tbl)
     } else if peek_kw(input, "Project") {
         project(input, base, errs).map(Item::Prj)
     } else if peek_kw(input, "Ref") {
-        ref_stmt(input, base, errs, doc_binder_errors, broken_refs).map(|r| r.map_or(Item::Skip, Item::Ref))
+        ref_stmt(input, base, errs, doc_binder_errors, binder_chains).map(|r| r.map_or(Item::Skip, Item::Ref))
     } else if peek_kw(input, "Enum") {
         enum_def(input, base, errs).map(Item::Enm)
     } else if peek_kw(input, "Note") {
@@ -1579,6 +1598,8 @@ fn table(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Table> 
         check_entries: Vec::new(),
         records: None,
         custom: Vec::new(),
+        custom_spans: Vec::new(),
+        note_span: None,
     };
     if peek_kw(input, "as") {
         let _ = eat(input, "as");
@@ -1587,14 +1608,19 @@ fn table(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Table> 
         ws(input);
     }
     if peek_is(input, "[") {
-        let kvs = settings_list(input, base, errs)?;
+        let (kvs, occs) = settings_list_occs(input, base, errs)?;
         for (key, val) in kvs {
             if let Some(SettingVal::Str(v)) = val {
                 match key.as_str() {
                     "note" => t.note = Some(v),
                     "headercolor" => t.header_color = Some(v),
                     // any other key:value is a dbdiagram custom property
-                    _ => t.custom.push((key, v)),
+                    _ => {
+                        if let Some(o) = occs.iter().find(|o| o.key == key) {
+                            t.custom_spans.push((key.clone(), o.offset..o.end));
+                        }
+                        t.custom.push((key, v));
+                    }
                 }
             }
         }
@@ -1613,12 +1639,16 @@ fn table(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Table> 
             break;
         }
         if peek_kw_then(input, "Note", ':') {
+            let note_start = offset(input, base);
             let _ = eat(input, "Note");
             ws(input);
             let _ = eat(input, ":");
             ws(input);
             match note_value(input, base) {
-                Ok(n) => t.note = Some(n),
+                Ok(n) => {
+                    t.note = Some(n);
+                    t.note_span = Some(note_start..offset(input, base));
+                }
                 Err(e) => {
                     errs.push(err_at(e.offset, &e.message));
                     skip_line(input);
@@ -1710,7 +1740,7 @@ fn ref_stmt(
     base: usize,
     errs: &mut Vec<ParseError>,
     doc_binder_errors: &mut Vec<(usize, String)>,
-    broken_refs: &mut Vec<super::ast::Endpoint>,
+    binder_chains: &mut Vec<super::ast::BinderChain>,
 ) -> R<Option<Ref>> {
     let start = offset(input, base);
     if !eat(input, "Ref") {
@@ -1821,7 +1851,7 @@ fn ref_stmt(
             // their error set, recover at the line end — binder-class
             // errors, routed to the parse output's binder channel
             let mut shape = Vec::new();
-            ref_shape_errors(&mut body_input.clone(), body_base, &mut shape, broken_refs);
+            ref_body_pipeline(&mut body_input.clone(), body_base, errs, &mut shape, binder_chains);
             doc_binder_errors.extend(shape);
             skip_line(input);
             Ok(None)
@@ -1829,332 +1859,934 @@ fn ref_stmt(
     }
 }
 
-/// One chunk of a ref body: a dotted operand chain, a relationship
-/// operator, a paren tuple, or a bare word.
-struct RefChunk {
-    kind: RefChunkKind,
-    start: usize,
-    dotted: usize, // dot-separated part count (0 = not an operand)
-    parts: Vec<String>,
-    tuple_cols: Option<Vec<String>>,
-}
-#[derive(PartialEq, Clone, Copy)]
-enum RefChunkKind {
-    Operand,
-    RelOp,
-    Other,
+// ==== their ref-body pipeline: for bodies the strict parse rejects,
+// their parser NEVER fails — the body parses into ONE application tree
+// (parser.ts expression()/expression_bp()), and the diagnostics come
+// from local_modules/ref/validate.ts validateFields + global_modules/
+// ref/bind.ts bindFields + nodeRefereeOfRefEndpoint. Ported node for
+// node; every rule below cites its TS source. ====
+
+#[derive(Debug, Clone, PartialEq)]
+enum RNode {
+    /// PrimaryExpression(VariableNode) — identifier or quoted variable
+    Var { name: String, start: usize },
+    /// PrimaryExpression(LiteralNode) — number/string/color literal
+    Lit { start: usize },
+    Wildcard { start: usize },
+    /// backtick function expression
+    Func { start: usize },
+    /// any infix op (`.` included — the member access IS an infix)
+    Infix { op: String, left: Box<RNode>, right: Box<RNode>, start: usize },
+    Prefix { op: String, expr: Box<RNode>, start: usize },
+    /// (a, b, ...) — TupleExpressionNode (2+ elements)
+    Tuple { elems: Vec<RNode>, start: usize },
+    /// (a) — GroupExpressionNode (a TupleExpressionNode with 1 element)
+    Group { inner: Box<RNode>, start: usize },
+    /// a(x, y) — CallExpressionNode (postfix `(`)
+    Call { callee: Box<RNode>, args: Vec<RNode>, start: usize },
+    /// FunctionApplicationNode — the juxtaposition wrapper
+    App { callee: Box<RNode>, args: Vec<RNode>, start: usize },
+    /// `[...]` consumed as an expression — ListExpressionNode
+    Array { start: usize },
+    Block { start: usize },
+    /// CommaExpressionNode (CSV-like, empty fields = Empty)
+    Comma { elems: Vec<RNode>, start: usize },
+    /// EmptyNode — invalid operand / leading comma field
+    Empty { start: usize },
 }
 
-/// The ref-body shape classifier — a faithful port of their pipeline for
-/// bodies that do not parse as a clean relationship:
-///
-/// their parser NEVER fails here — the body always parses into ONE Pratt
-/// expression (breaking at non-op juxtapositions) wrapped as
-/// `FunctionApplicationNode(callee = first expression, args = the rest)`,
-/// and `ref/validate.ts validateFields` + the field-args walk classify it:
-///
-/// - `must be a binary relationship` when the callee is not a
-///   relationship infix (an application wrapper, a lone dotted operand,
-///   or a lone bare word);
-/// - `Unequal fields in ref endpoints` when `isEqualTupleOperands(callee)`
-///   is false — a BARE-variable callee has no operand sides (undefined →
-///   false → fires: mw3 `b x > a.id`, lone `b`), while a dot-infix callee
-///   with non-tuple sides compares 0 == 0 (silent: lone `a.id`,
-///   `posts.odd col > B.id`); paren tuples with differing lengths fire;
-/// - `Invalid column reference` per side of a RELATIONSHIP callee whose
-///   destructure count (variables + min(tuple, 1)) is under two;
-/// - one `should only have a single binary relationship` per application
-///   argument, anchored at the argument's own expression start;
-/// - the binder still resolves extractable endpoints (the callee's
-///   table.column and the args' relationship right side) and flags their
-///   columns — probes g1–g8, mw3, fuzz0002/0022 verified.
-fn ref_shape_errors(
-    input: &mut &str,
-    base: usize,
-    out: &mut Vec<(usize, String)>,
-    broken_refs: &mut Vec<super::ast::Endpoint>,
-) {
-    let mut chunks: Vec<RefChunk> = Vec::new();
-    let line_end = input.find('\n').unwrap_or(input.len());
-    let body = &input[..line_end];
-    let field_start = base;
+impl RNode {
+    fn start(&self) -> usize {
+        match self {
+            RNode::Var { start, .. }
+            | RNode::Lit { start }
+            | RNode::Wildcard { start }
+            | RNode::Func { start }
+            | RNode::Infix { start, .. }
+            | RNode::Prefix { start, .. }
+            | RNode::Tuple { start, .. }
+            | RNode::Group { start, .. }
+            | RNode::Call { start, .. }
+            | RNode::App { start, .. }
+            | RNode::Array { start }
+            | RNode::Block { start }
+            | RNode::Comma { start, .. }
+            | RNode::Empty { start } => *start,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum RTKind {
+    Ident,
+    Quoted,
+    Num,
+    Str,
+    Color,
+    Func,
+    Op,
+    Comma,
+    LParen,
+    RParen,
+    LBracket,
+    RBracket,
+    LBrace,
+    RBrace,
+    Colon,
+    Wildcard,
+    Unknown,
+    Eof,
+}
+
+#[derive(Debug, Clone)]
+struct RTok {
+    kind: RTKind,
+    value: String,
+    start: usize,
+    end: usize,
+    /// hasTrailingSpaces(previous) — a space/tab directly after the token
+    space_after: bool,
+}
+
+/// Their lexer over a single ref-body line: punctuation singles, the
+/// operator munching table (lexer.ts operator()), unicode identifiers
+/// (chars.ts: \p{L}|_|\p{M}), quoted variables, function expressions,
+/// numeric literals with e-notation.
+fn ref_tokens(body: &str, base: usize) -> Vec<RTok> {
+    let b = body.as_bytes();
+    let mut toks = Vec::new();
     let mut i = 0usize;
-    while i < body.len() {
-        let c = body[i..].chars().next().unwrap();
-        if c.is_whitespace() {
-            i += c.len_utf8();
-            continue;
-        }
-        let chunk_start = base + i;
-        // a relationship operator (with its optional ? marks)
-        if matches!(c, '>' | '<' | '-') || body[i..].starts_with("<>") {
-            let len = if body[i..].starts_with("<>") { 2 } else { 1 };
-            let mut end = i + len;
-            while body[end..].starts_with('?') {
-                end += 1;
+    while i < b.len() {
+        let c = b[i];
+        let start = i;
+        let mut kind = None;
+        let mut value = String::new();
+        let mut end = i + 1;
+        match c {
+            b' ' | b'\t' | b'\r' => {
+                i += 1;
+                continue;
             }
-            chunks.push(RefChunk {
-                kind: RefChunkKind::RelOp,
-                start: chunk_start,
-                dotted: 0,
-                parts: Vec::new(),
-                tuple_cols: None,
-            });
-            i = end;
-            continue;
-        }
-        // an operand: ident ( `.(` tuple `)` | `.ident` )* — dots fold in
-        if c.is_alphanumeric() || c == '_' || c == '"' || c == '`' {
-            let mut parts: Vec<String> = Vec::new();
-            let mut tuple_cols: Option<Vec<String>> = None;
-            loop {
-                // one dotted part: quoted or bare (unicode ids included)
-                let b = body[i..].as_bytes();
-                if b.is_empty() {
-                    break;
+            b'\n' => break,
+            b',' => kind = Some(RTKind::Comma),
+            b'(' => kind = Some(RTKind::LParen),
+            b')' => kind = Some(RTKind::RParen),
+            b'[' => kind = Some(RTKind::LBracket),
+            b']' => kind = Some(RTKind::RBracket),
+            b'{' => kind = Some(RTKind::LBrace),
+            b'}' => kind = Some(RTKind::RBrace),
+            b':' => kind = Some(RTKind::Colon),
+            b'\'' => {
+                let mut k = i + 1;
+                while k < b.len() && b[k] != b'\'' && b[k] != b'\n' {
+                    k += 1;
                 }
-                if b[0] == b'"' {
-                    let mut k = 1;
-                    while k < b.len() && b[k] != b'"' {
+                if k < b.len() && b[k] == b'\'' {
+                    k += 1;
+                }
+                kind = Some(RTKind::Str);
+                value = body[start..k.min(body.len())].to_string();
+                end = k;
+            }
+            b'"' => {
+                let mut k = i + 1;
+                while k < b.len() && b[k] != b'"' && b[k] != b'\n' {
+                    k += 1;
+                }
+                value = body[start + 1..k.min(body.len())].to_string();
+                if k < b.len() && b[k] == b'"' {
+                    k += 1;
+                }
+                kind = Some(RTKind::Quoted);
+                end = k;
+            }
+            b'`' => {
+                let mut k = i + 1;
+                while k < b.len() && b[k] != b'`' && b[k] != b'\n' {
+                    k += 1;
+                }
+                if k < b.len() && b[k] == b'`' {
+                    k += 1;
+                }
+                kind = Some(RTKind::Func);
+                value = body[start..k.min(body.len())].to_string();
+                end = k;
+            }
+            b'#' => {
+                let mut k = i + 1;
+                while k < b.len() && b[k].is_ascii_alphanumeric() {
+                    k += 1;
+                }
+                kind = Some(RTKind::Color);
+                value = body[start..k].to_string();
+                end = k;
+            }
+            b'*' => kind = Some(RTKind::Wildcard),
+            _ if is_op_char(c) => {
+                // their operator() munching table
+                let mut k = i + 1;
+                match c {
+                    b'<' => {
+                        if b.get(k) == Some(&b'=') {
+                            k += 1; // <=
+                        } else if b.get(k) == Some(&b'>') {
+                            k += 1; // <>
+                            if b.get(k) == Some(&b'?') {
+                                k += 1; // <>?
+                            }
+                        } else if b.get(k) == Some(&b'?') {
+                            k += 1; // <?
+                        } else if b.get(k) == Some(&b'-') {
+                            k += 1; // <-
+                        }
+                    }
+                    b'>' => {
+                        if b.get(k) == Some(&b'=') {
+                            k += 1; // >=
+                        } else if b.get(k) == Some(&b'?') {
+                            k += 1; // >?
+                        }
+                    }
+                    b'-' => {
+                        if b.get(k) == Some(&b'>') {
+                            k += 1; // ->
+                        } else if b.get(k) == Some(&b'?') {
+                            k += 1; // -?
+                        }
+                    }
+                    b'?' => {
+                        if b.get(k) == Some(&b'-') {
+                            k += 1; // ?-
+                            if b.get(k) == Some(&b'?') {
+                                k += 1; // ?-?
+                            }
+                        } else if b.get(k) == Some(&b'<') {
+                            k += 1; // ?<
+                            if b.get(k) == Some(&b'>') {
+                                k += 1; // ?<>
+                                if b.get(k) == Some(&b'?') {
+                                    k += 1; // ?<>?
+                                }
+                            } else if b.get(k) == Some(&b'?') {
+                                k += 1; // ?<?
+                            }
+                        } else if b.get(k) == Some(&b'>') {
+                            k += 1; // ?>
+                            if b.get(k) == Some(&b'?') {
+                                k += 1; // ?>?
+                            }
+                        }
+                    }
+                    b'=' => {
+                        if b.get(k) == Some(&b'=') {
+                            k += 1; // ==
+                        }
+                    }
+                    b'!' => {
+                        if b.get(k) == Some(&b'=') {
+                            k += 1; // !=
+                        }
+                    }
+                    _ => {}
+                }
+                kind = Some(RTKind::Op);
+                value = body[start..k].to_string();
+                end = k;
+            }
+            _ if c.is_ascii_digit() => {
+                // numericLiteralOrIdentifier: digits, ONE dot, e-notation
+                let mut k = i;
+                let mut dots = 0usize;
+                while k < b.len() {
+                    let ch = b[k];
+                    if ch.is_ascii_digit() {
                         k += 1;
-                    }
-                    parts.push(body[i + 1..i + k.min(b.len())].to_string());
-                    i += k.min(b.len());
-                    if i < body.len() && body[i..].starts_with('"') {
-                        i += 1;
-                    }
-                } else {
-                    let mut k = 0;
-                    while k < b.len()
-                        && (b[k].is_ascii_alphanumeric() || b[k] == b'_' || b[k] >= 0x80)
+                    } else if ch == b'.' && dots == 0 {
+                        dots += 1;
+                        k += 1;
+                    } else if (ch == b'e' || ch == b'E')
+                        && k + 1 < b.len()
+                        && (b[k + 1].is_ascii_digit()
+                            || ((b[k + 1] == b'+' || b[k + 1] == b'-')
+                                && k + 2 < b.len()
+                                && b[k + 2].is_ascii_digit()))
                     {
                         k += 1;
-                    }
-                    if k == 0 {
-                        break;
-                    }
-                    parts.push(body[i..i + k].to_string());
-                    i += k;
-                }
-                // `.ident` continues the chain; `.(a, b)` is a tuple
-                if body[i..].starts_with('.') {
-                    let after_dot = &body[i + 1..];
-                    if after_dot.starts_with('(') {
-                        // the tuple: scan to the matching `)`, collect the
-                        // top-level elements
-                        let mut depth = 0i32;
-                        let mut elem_start = 1usize;
-                        let mut cols = Vec::new();
-                        let mut k = 1usize;
-                        while k < after_dot.len() {
-                            let ch = after_dot.as_bytes()[k];
-                            match ch {
-                                b'(' => depth += 1,
-                                b')' => {
-                                    if depth == 0 {
-                                        let elem = after_dot[elem_start..k].trim();
-                                        if !elem.is_empty() {
-                                            cols.push(elem.to_string());
-                                        }
-                                        k += 1;
-                                        break;
-                                    }
-                                    depth -= 1;
-                                }
-                                b',' if depth == 0 => {
-                                    let elem = after_dot[elem_start..k].trim();
-                                    if !elem.is_empty() {
-                                        cols.push(elem.to_string());
-                                    }
-                                    elem_start = k + 1;
-                                }
-                                _ => {}
-                            }
+                        if k < b.len() && (b[k] == b'+' || b[k] == b'-') {
                             k += 1;
                         }
-                        i += 1 + k;
-                        tuple_cols = Some(cols);
+                        while k < b.len() && b[k].is_ascii_digit() {
+                            k += 1;
+                        }
+                    } else {
                         break;
                     }
-                    i += 1;
-                    continue;
                 }
+                kind = Some(RTKind::Num);
+                value = body[start..k].to_string();
+                end = k;
+            }
+            _ if c.is_ascii_alphabetic() || c == b'_' || c >= 0x80 => {
+                // identifier(): \p{L}|_|\p{M} start, then alphanumeric run
+                let mut k = i;
+                while k < b.len()
+                    && (b[k].is_ascii_alphanumeric() || b[k] == b'_' || b[k] >= 0x80)
+                {
+                    k += 1;
+                }
+                kind = Some(RTKind::Ident);
+                value = body[start..k].to_string();
+                end = k;
+            }
+            _ => kind = Some(RTKind::Unknown),
+        }
+        let kind = kind.unwrap();
+        let space_after = b.get(end) == Some(&b' ') || b.get(end) == Some(&b'\t');
+        toks.push(RTok {
+            kind,
+            value,
+            start: base + start,
+            end: base + end,
+            space_after,
+        });
+        i = end;
+    }
+    toks.push(RTok {
+        kind: RTKind::Eof,
+        value: String::new(),
+        start: base + b.len(),
+        end: base + b.len(),
+        space_after: false,
+    });
+    toks
+}
+
+fn is_op_char(c: u8) -> bool {
+    matches!(
+        c,
+        b'+' | b'-' | b'/' | b'%' | b'<' | b'>' | b'=' | b'!' | b'?' | b'.' | b'&' | b'|' | b'~'
+    )
+}
+
+/// infixBpMap (parser.ts): (left, right) binding powers; None = not an
+/// infix op.
+fn infix_bp(op: &str) -> Option<(u8, u8)> {
+    let lb = |l: u8| Some((l, l + 1));
+    match op {
+        "." => lb(16),       // Prec.Member
+        "/" | "%" => lb(11), // Prec.Multiplicity
+        "+" => lb(9),        // Prec.Additive
+        "=" => lb(2),        // Prec.Assign
+        "==" | "!=" => lb(4), // Prec.Equality
+        // the one-to-one `-` family binds like `-` (Additive)
+        "-" | "-?" | "?-" | "?-?" => lb(9),
+        // every other relationship op binds like a comparison
+        "<" | "<=" | ">" | ">=" | "<>" | "?>" | ">?" | "?<" | "<?" | "?>?" | "?<?" | "?<>"
+        | "<>?" | "?<>?" | "->" | "<-" => lb(7), // Prec.Comparison
+        _ => None,
+    }
+}
+
+/// prefixBpMap: the right binding power of prefix ops
+fn prefix_bp(op: &str) -> Option<u8> {
+    match op {
+        "+" | "-" | "<" | ">" | "<>" | "-?" | "?-" | "?-?" | "?>" | ">?" | "?<" | "<?" | "?>?"
+        | "?<?" | "?<>" | "<>?" | "?<>?" | "->" | "<-" | "!" | "~" => Some(15), // Prec.Prefix
+        _ => None,
+    }
+}
+
+struct RParser<'a> {
+    toks: Vec<RTok>,
+    pos: usize,
+    errs: &'a mut Vec<ParseError>,
+}
+
+impl RParser<'_> {
+    fn peek(&self) -> &RTok {
+        &self.toks[self.pos.min(self.toks.len() - 1)]
+    }
+    fn prev(&self) -> &RTok {
+        &self.toks[self.pos.saturating_sub(1).min(self.toks.len() - 1)]
+    }
+    fn advance(&mut self) -> RTok {
+        let t = self.peek().clone();
+        if self.pos + 1 < self.toks.len() {
+            self.pos += 1;
+        }
+        t
+    }
+    fn check(&self, k: &RTKind) -> bool {
+        self.peek().kind == *k
+    }
+    fn at_end(&self) -> bool {
+        self.check(&RTKind::Eof)
+    }
+    fn consume(&mut self, msg: &str, k: RTKind) -> Result<RTok, ()> {
+        if self.check(&k) {
+            Ok(self.advance())
+        } else {
+            self.errs.push(err_at(self.peek().start, msg));
+            Err(())
+        }
+    }
+
+    /// shouldStopFunctionApplication (parser.ts)
+    fn should_stop(&self) -> bool {
+        self.at_end()
+            || matches!(
+                self.peek().kind,
+                RTKind::RBrace | RTKind::RBracket | RTKind::RParen | RTKind::Comma | RTKind::Colon
+            )
+    }
+
+    /// shouldStopCommaExpression (parser.ts)
+    fn should_stop_comma(&self) -> bool {
+        self.at_end()
+            || matches!(
+                self.peek().kind,
+                RTKind::RBrace
+                    | RTKind::LBrace
+                    | RTKind::RBracket
+                    | RTKind::LBracket
+                    | RTKind::RParen
+                    | RTKind::LParen
+                    | RTKind::Colon
+            )
+    }
+
+    /// expression() — the application loop: callee then juxtaposed args.
+    /// Their parse ALWAYS returns a FunctionApplicationNode (even for a
+    /// lone expression — callee only, empty args)
+    fn application(&mut self) -> RNode {
+        let start = self.peek().start;
+        let callee = self.comma_expression();
+        let mut args = Vec::new();
+        while !self.should_stop() {
+            args.push(self.comma_expression());
+        }
+        RNode::App {
+            callee: Box::new(callee),
+            args,
+            start,
+        }
+    }
+
+    /// commaExpression (parser.ts)
+    fn comma_expression(&mut self) -> RNode {
+        let start = self.peek().start;
+        let first = if self.check(&RTKind::Comma) {
+            RNode::Empty { start }
+        } else {
+            self.normal_expression()
+        };
+        if !self.check(&RTKind::Comma) {
+            return first;
+        }
+        let mut elems = vec![first];
+        loop {
+            self.advance(); // the comma
+            if self.should_stop_comma() {
+                elems.push(RNode::Empty {
+                    start: self.prev().end,
+                });
                 break;
             }
-            let dotted = parts.len().max(1);
-            chunks.push(RefChunk {
-                kind: RefChunkKind::Operand,
-                start: chunk_start,
-                dotted,
-                parts,
-                tuple_cols,
-            });
-            continue;
+            if self.check(&RTKind::Comma) {
+                elems.push(RNode::Empty {
+                    start: self.prev().end,
+                });
+                continue;
+            }
+            elems.push(self.normal_expression());
+            if self.should_stop_comma() || !self.check(&RTKind::Comma) {
+                break;
+            }
         }
-        // anything else: one Other chunk
-        i += c.len_utf8();
-        chunks.push(RefChunk {
-            kind: RefChunkKind::Other,
-            start: chunk_start,
-            dotted: 0,
-            parts: Vec::new(),
-            tuple_cols: None,
-        });
+        RNode::Comma { elems, start }
     }
 
-    // their Pratt grouping: an expression = Operand (RelOp Operand)* — a
-    // new group starts at an Operand NOT preceded by a RelOp; every RelOp
-    // joins the current group (an infix continuation)
-    let mut groups: Vec<Vec<usize>> = Vec::new();
-    for (idx, chunk) in chunks.iter().enumerate() {
-        let prev_is_op = idx > 0 && chunks[idx - 1].kind == RefChunkKind::RelOp;
-        match chunk.kind {
-            RefChunkKind::RelOp => {
-                if let Some(last) = groups.last_mut() {
-                    last.push(idx);
+    fn normal_expression(&mut self) -> RNode {
+        self.expression_bp(0)
+    }
+
+    /// expression_bp — Pratt (parser.ts)
+    fn expression_bp(&mut self, mbp: u8) -> RNode {
+        let mut left = self.left_expression_bp();
+        loop {
+            if self.at_end() {
+                break;
+            }
+            let t = self.peek().clone();
+            if t.kind == RTKind::LParen {
+                // call expression; `(` at the start of a line breaks, but
+                // the body slice is single-line so that cannot occur here
+                let tuple = self.tuple_expression();
+                let start = left.start();
+                let args = match tuple {
+                    RNode::Tuple { elems, .. } => elems,
+                    RNode::Group { inner, .. } => vec![*inner],
+                    other => vec![other],
+                };
+                left = RNode::Call {
+                    callee: Box::new(left),
+                    args,
+                    start,
+                };
+            } else if t.kind == RTKind::LBracket {
+                // a space before `[` starts a settings list — break out
+                if t.space_after {
+                    break;
+                }
+                let _ = self.list_expression();
+                let start = left.start();
+                left = RNode::Array { start };
+            } else if !matches!(t.kind, RTKind::Op | RTKind::Unknown) {
+                break;
+            } else {
+                let Some(p) = infix_bp(&t.value) else {
+                    break;
+                };
+                if p.0 <= mbp {
+                    break;
+                }
+                self.advance();
+                let right = if t.value == "." {
+                    self.extract_operand()
                 } else {
-                    groups.push(vec![idx]);
+                    self.expression_bp(p.1)
+                };
+                let start = left.start();
+                left = RNode::Infix {
+                    op: t.value.clone(),
+                    left: Box::new(left),
+                    right: Box::new(right),
+                    start,
+                };
+            }
+        }
+        left
+    }
+
+    /// leftExpression_bp (parser.ts)
+    fn left_expression_bp(&mut self) -> RNode {
+        if matches!(self.peek().kind, RTKind::Op | RTKind::Unknown) {
+            let op = self.peek().clone();
+            let Some(right) = prefix_bp(&op.value) else {
+                // UNKNOWN_PREFIX_OP: their logError + Empty partial; the
+                // rethrow abandons the rest of the line
+                self.errs.push(err_at(
+                    op.start,
+                    &format!("Unexpected '{}' in an expression", op.value),
+                ));
+                while !self.at_end() {
+                    self.advance();
+                }
+                return RNode::Empty { start: op.start };
+            };
+            self.advance();
+            let expr = self.expression_bp(right);
+            let start = op.start;
+            return RNode::Prefix {
+                op: op.value.clone(),
+                expr: Box::new(expr),
+                start,
+            };
+        }
+        self.extract_operand()
+    }
+
+    /// extractOperand (parser.ts)
+    fn extract_operand(&mut self) -> RNode {
+        let t = self.peek().clone();
+        match t.kind {
+            RTKind::Wildcard => {
+                self.advance();
+                RNode::Wildcard { start: t.start }
+            }
+            RTKind::Num | RTKind::Str | RTKind::Color => {
+                self.advance();
+                RNode::Lit { start: t.start }
+            }
+            RTKind::Quoted | RTKind::Ident => {
+                self.advance();
+                RNode::Var {
+                    name: t.value.clone(),
+                    start: t.start,
                 }
             }
+            RTKind::Func => {
+                self.advance();
+                RNode::Func { start: t.start }
+            }
+            RTKind::LBracket => {
+                let _ = self.list_expression();
+                RNode::Array { start: t.start }
+            }
+            RTKind::LBrace => {
+                let _ = self.block_expression();
+                RNode::Block { start: t.start }
+            }
+            RTKind::LParen => self.tuple_expression(),
             _ => {
-                if prev_is_op {
-                    if let Some(last) = groups.last_mut() {
-                        last.push(idx);
-                    } else {
-                        groups.push(vec![idx]);
-                    }
+                if self.at_end() {
+                    self.errs.push(err_at(t.start, "Unexpected EOF"));
                 } else {
-                    groups.push(vec![idx]);
+                    self.errs.push(err_at(
+                        t.start,
+                        &format!("Invalid start of operand \"{}\"", t.value),
+                    ));
+                    self.advance();
                 }
+                RNode::Empty { start: t.start }
             }
         }
     }
 
-    // endpoint extraction: a dotted operand (parts ≥ 2) yields
-    // (table = parts[len-2], column = parts[len-1]); a tuple yields the
-    // table part + the tuple columns
-    let endpoint_of = |chunk: &RefChunk| -> Option<super::ast::Endpoint> {
-        if chunk.tuple_cols.is_some() && chunk.parts.len() >= 1 {
-            let table = chunk.parts.last()?;
-            return Some(super::ast::Endpoint {
-                table: table.clone(),
-                schema: None,
-                columns: chunk.tuple_cols.clone().unwrap_or_default(),
-                span: chunk.start..chunk.start,
-            });
+    /// tupleExpression (parser.ts) — with their synchronizeTuple recovery
+    fn tuple_expression(&mut self) -> RNode {
+        let start = self.peek().start;
+        let _ = self.consume("Expect an opening parenthesis '('", RTKind::LParen);
+        let mut elems: Vec<RNode> = Vec::new();
+        if !self.at_end() && !self.check(&RTKind::RParen) {
+            elems.push(self.normal_expression());
         }
-        if chunk.parts.len() >= 2 {
-            let column = chunk.parts.last()?.clone();
-            let table = chunk.parts[chunk.parts.len() - 2].clone();
-            return Some(super::ast::Endpoint {
-                table,
-                schema: None,
-                columns: vec![column],
-                span: chunk.start..chunk.start,
-            });
-        }
-        None
-    };
-    // their destructure count: variables + min(tuple, 1) — under two is
-    // an invalid column reference
-    let destructure_count = |chunk: &RefChunk| -> usize {
-        let vars = chunk.parts.len().max(if chunk.dotted > 0 { 1 } else { 0 });
-        let tuple = chunk.tuple_cols.as_ref().map(|t| t.len()).unwrap_or(0);
-        vars + tuple.min(1)
-    };
-
-    // a group is a relationship infix when a RelOp sits inside it
-    let is_rel_infix = |g: &[usize]| -> bool {
-        g.len() >= 3 && g.iter().any(|&idx| chunks[idx].kind == RefChunkKind::RelOp)
-    };
-
-    if groups.len() == 1 {
-        let g = &groups[0];
-        let first = &chunks[g[0]];
-        if is_rel_infix(g) {
-            // the ref binds in their pipeline; validateFields still runs:
-            // per-side Invalid column reference + tuple Unequal
-            for (side_idx, &side_chunk) in [g[0], *g.last().unwrap()].iter().enumerate() {
-                let side = &chunks[side_chunk];
-                if destructure_count(side) < 2 {
-                    let at = side.start;
-                    out.push((at, "Invalid column reference".to_string()));
+        while !self.at_end() && !self.check(&RTKind::RParen) {
+            if self.consume("Expect a comma ','", RTKind::Comma).is_ok() {
+                // their loop pushes an element unconditionally — a `)`
+                // right after the comma errors as an invalid operand
+                elems.push(self.normal_expression());
+            } else {
+                // synchronizeTuple: skip to the next `,`/`)` unmarked
+                while !self.at_end()
+                    && !self.check(&RTKind::RParen)
+                    && !self.check(&RTKind::Comma)
+                {
+                    self.advance();
                 }
-                let _ = side_idx;
             }
-            // their isEqualTupleOperands: only tuple-bearing sides compare
-            let lt = chunks[g[0]].tuple_cols.as_ref().map(|t| t.len());
-            let rt = chunks[*g.last().unwrap()]
-                .tuple_cols
-                .as_ref()
-                .map(|t| t.len());
-            if let (Some(l), Some(r)) = (lt, rt) {
-                if l != r {
-                    out.push((
-                        field_start,
-                        "Unequal fields in ref endpoints".to_string(),
-                    ));
-                }
+        }
+        let _ = self.consume("Expect a closing parenthesis ')'", RTKind::RParen);
+        if elems.len() == 1 {
+            let inner = elems.pop().unwrap();
+            RNode::Group {
+                inner: Box::new(inner),
+                start,
             }
         } else {
-            // a lone non-relationship expression: must-be-binary; Unequal
-            // only for a bare-variable callee (no dot: no operand sides)
-            out.push((
-                first.start,
-                "A Ref field must be a binary relationship".to_string(),
-            ));
-            if first.dotted == 1 && first.tuple_cols.is_none() {
-                out.push((
-                    first.start,
-                    "Unequal fields in ref endpoints".to_string(),
-                ));
-            }
-            // the binder still resolves a dotted callee's columns
-            if let Some(ep) = endpoint_of(first) {
-                broken_refs.push(ep);
-            }
+            RNode::Tuple { elems, start }
         }
-        return;
     }
 
-    // the application wrapper: groups[0] = the callee, groups[1..] = args
-    let callee = &chunks[groups[0][0]];
-    out.push((
-        callee.start,
-        "A Ref field must be a binary relationship".to_string(),
-    ));
-    // their isEqualTupleOperands(callee): a bare-variable callee has no
-    // operand sides → false → Unequal fires; a dot-infix callee with
-    // non-tuple sides compares 0 == 0 → silent
-    if callee.dotted == 1 && callee.tuple_cols.is_none() {
+    /// listExpression — attributes are not modeled; scan to the
+    /// matching bracket
+    fn list_expression(&mut self) -> RNode {
+        let start = self.peek().start;
+        let _ = self.consume("Expect an opening bracket '['", RTKind::LBracket);
+        let mut depth = 1usize;
+        while !self.at_end() && depth > 0 {
+            match self.peek().kind {
+                RTKind::LBracket => {
+                    self.advance();
+                    depth += 1;
+                }
+                RTKind::RBracket => {
+                    self.advance();
+                    depth -= 1;
+                }
+                _ => {
+                    self.advance();
+                }
+            }
+        }
+        RNode::Array { start }
+    }
+
+    /// blockExpression — scan to the matching brace
+    fn block_expression(&mut self) -> RNode {
+        let start = self.peek().start;
+        let _ = self.consume("Expect an opening brace '{'", RTKind::LBrace);
+        let mut depth = 1usize;
+        while !self.at_end() && depth > 0 {
+            match self.peek().kind {
+                RTKind::LBrace => {
+                    self.advance();
+                    depth += 1;
+                }
+                RTKind::RBrace => {
+                    self.advance();
+                    depth -= 1;
+                }
+                _ => {
+                    self.advance();
+                }
+            }
+        }
+        RNode::Block { start }
+    }
+}
+
+// ---- the binding scan (core/utils/expression.ts + global_modules/utils.ts)
+// -----------------------------------------------------------------------
+
+/// One bindee: the variables stack (schema..., table, column) plus the
+/// tuple elements when the chain ends in `.(a, b)`.
+#[derive(Default, Debug, Clone)]
+struct Bindee {
+    variables: Vec<RNode>,
+    tuple: Vec<RNode>,
+}
+
+/// destructureMemberAccessExpression: flatten the `.` chain
+fn destructure_member_access(n: &RNode, out: &mut Vec<RNode>) {
+    if let RNode::Infix {
+        op,
+        left,
+        right,
+        ..
+    } = n
+    {
+        if op == "." {
+            destructure_member_access(left, out);
+            out.push((**right).clone());
+            return;
+        }
+    }
+    out.push(n.clone());
+}
+
+fn is_var(n: &RNode) -> bool {
+    matches!(n, RNode::Var { .. })
+}
+
+/// isTupleOfVariables: every element a variable
+fn is_tuple_of_variables(elems: &[RNode]) -> bool {
+    !elems.is_empty() && elems.iter().all(is_var)
+}
+
+/// destructureComplexVariableTuple (expression.ts)
+fn destructure_cvt(n: &RNode) -> Option<Bindee> {
+    let mut fragments = Vec::new();
+    destructure_member_access(n, &mut fragments);
+    if fragments.is_empty() {
+        return None;
+    }
+    let mut tuple = Vec::new();
+    if !fragments.last().map(is_var).unwrap_or(false) {
+        let top = fragments.pop()?;
+        match top {
+            RNode::Tuple { elems, .. } if is_tuple_of_variables(&elems) => tuple = elems,
+            RNode::Group { inner, .. } if is_var(&inner) => tuple = vec![*inner],
+            _ => return None,
+        }
+    }
+    if !fragments.iter().all(is_var) {
+        return None;
+    }
+    Some(Bindee {
+        variables: fragments,
+        tuple,
+    })
+}
+
+/// destructureComplexVariable (expression.ts): the `.` chain flattened,
+/// every fragment a plain variable — else undefined
+fn destructure_complex_variable(n: &RNode) -> Option<Vec<String>> {
+    let mut fragments = Vec::new();
+    destructure_member_access(n, &mut fragments);
+    let mut names = Vec::new();
+    for f in &fragments {
+        match f {
+            RNode::Var { name, .. } => names.push(name.clone()),
+            _ => return None,
+        }
+    }
+    Some(names)
+}
+
+/// scanNonListNodeForBinding (global_modules/utils.ts)
+fn scan_binding(n: &RNode, out: &mut Vec<Bindee>) {
+    match n {
+        RNode::Var { .. } => out.push(Bindee {
+            variables: vec![n.clone()],
+            tuple: Vec::new(),
+        }),
+        RNode::Infix { left, right, .. } => {
+            if let Some(b) = destructure_cvt(n) {
+                out.push(b);
+            } else {
+                scan_binding(left, out);
+                scan_binding(right, out);
+            }
+        }
+        RNode::Prefix { expr, .. } => scan_binding(expr, out),
+        RNode::Tuple { elems, .. } => {
+            if let Some(b) = destructure_cvt(n) {
+                out.push(b);
+            } else {
+                for e in elems {
+                    scan_binding(e, out);
+                }
+            }
+        }
+        RNode::Group { inner, .. } => {
+            if let Some(b) = destructure_cvt(n) {
+                out.push(b);
+            } else {
+                scan_binding(inner, out);
+            }
+        }
+        // CallExpression, ListExpression, CommaExpression, literals,
+        // blocks, Empty: nothing binds
+        _ => {}
+    }
+}
+
+// ---- validateFields (local_modules/ref/validate.ts) -------------------
+
+/// isRelationshipOp (types/relation.ts RELATIONSHIP_OPS)
+fn is_relationship_op(op: &str) -> bool {
+    matches!(
+        op,
+        ">" | "<" | "-" | "<>" | ">?" | "<?" | "?>" | "?<" | "-?" | "?-" | ">=" | "<="
+            | "?>?" | "?<?" | "?<>" | "<>?" | "?<>?" | "?-?"
+    )
+}
+
+/// isBinaryRelationship (utils/validate.ts)
+fn is_binary_relationship(n: &RNode) -> bool {
+    match n {
+        RNode::Infix { op, left, right, .. } => {
+            is_relationship_op(op)
+                && destructure_cvt(left).is_some()
+                && destructure_cvt(right).is_some()
+        }
+        _ => false,
+    }
+}
+
+/// isEqualTupleOperands (utils/validate.ts) — a non-infix callee has no
+/// operand sides (their value.leftExpression is undefined) → false
+fn is_equal_tuple_operands(n: &RNode) -> bool {
+    match n {
+        RNode::Infix { left, right, .. } => {
+            match (destructure_cvt(left), destructure_cvt(right)) {
+                (Some(l), Some(r)) => l.tuple.len() == r.tuple.len(),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// validateFields (local_modules/ref/validate.ts) + nodeSettings' args
+/// walk (local_modules/ref/index.ts): must-be-binary, per-side Invalid
+/// column reference, Unequal, and one single-binary per non-settings arg
+fn validate_fields(callee: &RNode, args: &[RNode], out: &mut Vec<(usize, String)>) {
+    if !is_binary_relationship(callee) {
         out.push((
-            callee.start,
+            callee.start(),
+            "A Ref field must be a binary relationship".to_string(),
+        ));
+    } else if let RNode::Infix { left, right, .. } = callee {
+        // their per-side destructure counts
+        for side in [left.as_ref(), right.as_ref()] {
+            let frag = destructure_cvt(side).unwrap_or_default();
+            if frag.variables.len() + frag.tuple.len().min(1) < 2 {
+                out.push((side.start(), "Invalid column reference".to_string()));
+            }
+        }
+    }
+    if !is_equal_tuple_operands(callee) {
+        out.push((
+            callee.start(),
             "Unequal fields in ref endpoints".to_string(),
         ));
     }
-    // one error per argument, anchored at each argument's own start
-    for g in &groups[1..] {
-        let arg_start = chunks[g[0]].start;
+    // nodeSettings: a trailing or leading `[...]` is the settings list;
+    // every other arg errs once
+    let mut rest: Vec<&RNode> = args.iter().collect();
+    if matches!(rest.last(), Some(RNode::Array { .. })) {
+        rest.pop();
+    } else if matches!(rest.first(), Some(RNode::Array { .. })) {
+        rest.remove(0);
+    }
+    for a in rest {
         out.push((
-            arg_start,
+            a.start(),
             "A Ref field should only have a single binary relationship".to_string(),
         ));
     }
-    // the binder still resolves extractable endpoints: the callee's
-    // table.column and the args' relationship right sides
-    if let Some(ep) = endpoint_of(callee) {
-        broken_refs.push(ep);
+}
+
+// ---- bindFields (global_modules/ref/bind.ts): scan [callee, ...args],
+// skip bindees whose table or column fragment is absent, and hand the
+// surviving chains to validate.rs for their nodeReferee resolution (the
+// document may declare the tables after the ref, so resolution happens
+// at validate time)
+fn var_pair(v: &RNode) -> (String, usize) {
+    match v {
+        RNode::Var { name, start } => (name.clone(), *start),
+        other => (String::new(), other.start()),
     }
-    for g in &groups[1..] {
-        if is_rel_infix(g) {
-            let last = &chunks[*g.last().unwrap()];
-            if let Some(ep) = endpoint_of(last) {
-                broken_refs.push(ep);
+}
+
+fn bind_fields(callee: &RNode, args: &[RNode], chains: &mut Vec<super::ast::BinderChain>) {
+    let mut bindees = Vec::new();
+    scan_binding(callee, &mut bindees);
+    for a in args {
+        scan_binding(a, &mut bindees);
+    }
+    for b in bindees {
+        if !b.tuple.is_empty() {
+            // columnBindees = tupleElements; tableBindee = variables.pop()
+            if b.variables.is_empty() {
+                continue;
             }
+            chains.push(super::ast::BinderChain {
+                vars: b.variables.iter().map(var_pair).collect(),
+                tuple: b.tuple.iter().map(var_pair).collect(),
+                group: false,
+            });
+        } else {
+            // columnBindees = variables.pop(); tableBindee = variables.pop()
+            if b.variables.len() < 2 {
+                continue;
+            }
+            chains.push(super::ast::BinderChain {
+                vars: b.variables.iter().map(var_pair).collect(),
+                tuple: Vec::new(),
+                group: false,
+            });
         }
     }
 }
 
+/// The pipeline entry: parse the body line into their application tree,
+/// run validateFields for the shape errors, bindFields for the binder
+/// chains. Their parse never fails here, so this always yields their
+/// exact diagnostic set.
+fn ref_body_pipeline(
+    input: &mut &str,
+    base: usize,
+    errs: &mut Vec<ParseError>,
+    out: &mut Vec<(usize, String)>,
+    chains: &mut Vec<super::ast::BinderChain>,
+) {
+    let line_end = input.find('\n').unwrap_or(input.len());
+    let body = &input[..line_end];
+    let toks = ref_tokens(body, base);
+    let mut p = RParser {
+        toks,
+        pos: 0,
+        errs,
+    };
+    let tree = p.application();
+    if let RNode::App { callee, args, .. } = &tree {
+        validate_fields(callee, args, out);
+        bind_fields(callee, args, chains);
+    }
+}
 
 fn ref_settings(
     input: &mut &str,
@@ -2225,9 +2857,24 @@ fn enum_def(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Enum
                 let v_end = offset(input, base);
                 sp(input);
                 let mut note = None;
+                let mut note_span = None;
+                let mut full_end = v_end;
                 if peek_is(input, "[") {
-                    let kvs = match settings_list(input, base, errs) {
-                        Ok(kvs) => kvs,
+                    match settings_list_occs(input, base, errs) {
+                        Ok((kvs, occs)) => {
+                            // their enum-field token spans the settings
+                            // list; the note carries its entry's token
+                            full_end = offset(input, base);
+                            for occ in &occs {
+                                if occ.key == "note" {
+                                    if let Some(v) = &occ.value {
+                                        note = Some(v.clone());
+                                    }
+                                    note_span = Some(occ.offset..occ.end);
+                                }
+                            }
+                            let _ = kvs;
+                        }
                         Err(err) => {
                             errs.push(err_at(err.offset, &err.message));
                             skip_line(input);
@@ -2235,15 +2882,10 @@ fn enum_def(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Enum
                                 name: vname,
                                 name_span: v_off..v_end,
                                 note: None,
+                                note_span: None,
+                                full_end: v_end,
                             });
                             continue;
-                        }
-                    };
-                    for (key, val) in kvs {
-                        if key == "note" {
-                            if let Some(SettingVal::Str(v)) = val {
-                                note = Some(v);
-                            }
                         }
                     }
                 }
@@ -2251,6 +2893,8 @@ fn enum_def(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Enum
                     name: vname,
                     name_span: v_off..v_end,
                     note,
+                    note_span,
+                    full_end,
                 });
             }
             Err(err) => {
@@ -2263,7 +2907,13 @@ fn enum_def(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Enum
     Ok(e)
 }
 
-fn table_group(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<TableGroup> {
+fn table_group(
+    input: &mut &str,
+    base: usize,
+    errs: &mut Vec<ParseError>,
+    doc_binder_errors: &mut Vec<(usize, String)>,
+    binder_chains: &mut Vec<super::ast::BinderChain>,
+) -> R<TableGroup> {
     let start = offset(input, base);
     if !eat(input, "TableGroup") {
         return fail(offset(input, base), "expected 'TableGroup'");
@@ -2275,12 +2925,16 @@ fn table_group(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<T
     // other `key: "value"` pairs — dbdiagram custom properties, in order
     let mut color = None;
     let mut custom: Vec<(String, String)> = Vec::new();
+    let mut custom_spans: Vec<(String, Span)> = Vec::new();
     if peek_is(input, "[") {
-        if let Ok(kvs) = settings_list(input, base, errs) {
+        if let Ok((kvs, occs)) = settings_list_occs(input, base, errs) {
             for (k, v) in kvs {
                 if let (Some(SettingVal::Str(sv)), "color") = (&v, k.as_str()) {
                     color = Some(sv.clone());
                 } else if let Some(SettingVal::Str(sv)) = &v {
+                    if let Some(o) = occs.iter().find(|o| o.key == k) {
+                        custom_spans.push((k.clone(), o.offset..o.end));
+                    }
                     custom.push((k, sv.clone()));
                 }
             }
@@ -2297,8 +2951,10 @@ fn table_group(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<T
         color,
         note: None,
         custom,
+        custom_spans: Vec::new(),
+        note_span: None,
     };
-    let mut first_member: Option<usize> = None;
+    let mut out_group_errors: Vec<(usize, String)> = Vec::new();
     loop {
         ws(input);
         if input.is_empty() {
@@ -2308,14 +2964,18 @@ fn table_group(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<T
         if eat(input, "}") {
             break;
         }
-        // `Note: '''...'''` — the group's note (label-hover tooltip)
+        // `Note: ...` — the group's note (label-hover tooltip)
         if peek_kw_then(input, "Note", ':') {
             let _ = eat(input, "Note");
             ws(input);
             let _ = eat(input, ":");
             ws(input);
+            let note_start = offset(input, base);
             match note_value(input, base) {
-                Ok(n) => g.note = Some(n),
+                Ok(n) => {
+                    g.note = Some(n);
+                    g.note_span = Some(note_start..offset(input, base));
+                }
                 Err(e) => {
                     errs.push(err_at(e.offset, &e.message));
                     skip_line(input);
@@ -2323,106 +2983,82 @@ fn table_group(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<T
             }
             continue;
         }
-        let member_start = offset(input, base);
-        match qualified_name(input, base) {
-            Ok((sc, n)) => {
-                if first_member.is_none() {
-                    first_member = Some(member_start);
-                }
-                // the juxtaposition form: a same-line bare word after the
-                // member = an application — the member stays the CALLEE
-                // (membership-checked) and everything to the line end is
-                // the argument list, erring once at its start (probe:
-                // `{ quoted name, a, t1 }` → single-name @ name + the
-                // membership on `quoted` only)
-                sp(input);
-                if input.starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '"' || c == '`') {
-                    g.tables.push(sc.map_or(n.clone(), |s| format!("{s}.{n}")));
-                    // consume the argument list to the line end or `}`; the
-                    // single-name error fires per JUXTAPOSED word (a word
-                    // directly following another — probe: `quoted name,
-                    // quoted name, a` errs at both `name`s, not at the
-                    // comma-separated elements)
-                    // the callee's own word directly precedes the first
-                    // argument. BOUNDED: one iteration per source char —
-                    // structurally incapable of spinning.
-                    let mut after_word = true;
-                    let bound = input.len() + 2;
-                    for _ in 0..bound {
-                        if input.is_empty()
-                            || input.starts_with('\n')
-                            || input.starts_with('\r')
-                            || input.starts_with('}')
-                        {
-                            break;
-                        }
-                        let c = input.chars().next().unwrap();
-                        if c.is_whitespace() {
-                            *input = &input[c.len_utf8()..];
-                            continue;
-                        }
-                        if c == ',' {
-                            after_word = false;
-                            *input = &input[c.len_utf8()..];
-                            continue;
-                        }
-                        if c.is_alphanumeric() || c == '_' || c == '"' || c == '`' {
-                            let word_start = offset(input, base);
-                            if after_word {
-                                errs.push(err_at(
-                                    word_start,
-                                    "A TableGroup field should only have a single Table name",
-                                ));
-                            }
-                            while input.starts_with(|c: char| {
-                                c.is_alphanumeric() || c == '_' || c == '"' || c == '`'
-                            }) {
-                                let ch = input.chars().next().unwrap();
-                                *input = &input[ch.len_utf8()..];
-                            }
-                            after_word = true;
-                            continue;
-                        }
-                        *input = &input[c.len_utf8()..];
-                    }
-                    if eat(input, "}") {
-                        break;
-                    }
+        // one member line = their application parse (the same lexer +
+        // Pratt tree as ref bodies): callee = the comma expression of
+        // comma-separated members, args = the juxtaposed words after the
+        // last comma element. validateFields-group + the group binder
+        // run on the line (probe4/p12 verified against their engine).
+        let line_start = offset(input, base);
+        let line_end = input.find('\n').unwrap_or(input.len());
+        // a `}` on this line ends the block: the body slice stops there
+        let brace = input[..line_end].find('}');
+        let slice_end = brace.unwrap_or(line_end);
+        let line = &input[..slice_end];
+        let line_toks = ref_tokens(line, line_start);
+        let mut lp = RParser {
+            toks: line_toks,
+            pos: 0,
+            errs,
+        };
+        let tree = lp.application();
+        if let RNode::App { callee, args, .. } = &tree {
+            // validateFields-group: the callee must destructure to plain
+            // variables; every arg errs once
+            if destructure_complex_variable(callee).is_none() {
+                out_group_errors.push((
+                    callee.start(),
+                    "A TableGroup field must be of the form <table> or <schema>.<table>"
+                        .to_string(),
+                ));
+            }
+            for a in args {
+                out_group_errors.push((
+                    a.start(),
+                    "A TableGroup field should only have a single Table name".to_string(),
+                ));
+            }
+            // the group binder: tableBindee = variables.pop() — ONE pop,
+            // so lone words bind too; chains resolve in validate.rs
+            let mut bindees = Vec::new();
+            scan_binding(callee, &mut bindees);
+            for a in args {
+                scan_binding(a, &mut bindees);
+            }
+            for b in bindees {
+                if b.variables.is_empty() {
                     continue;
                 }
-                g.tables.push(sc.map_or(n.clone(), |s| format!("{s}.{n}")));
-                // the comma-separated member list reports ONCE, anchored at
-                // the first member (their `TableGroup g { a, b }` probe —
-                // one error, no membership findings)
-                sp(input);
-                if peek_is(input, ",") {
-                    errs.push(err_at(
-                        first_member.unwrap_or(member_start),
-                        "A TableGroup field must be of the form <table> or <schema>.<table>",
-                    ));
-                    match input.find(['\n', '}']) {
-                        Some(k) if input.as_bytes()[k] == b'}' => {
-                            *input = &input[k + 1..];
-                            break;
+                binder_chains.push(super::ast::BinderChain {
+                    vars: b.variables.iter().map(var_pair).collect(),
+                    tuple: Vec::new(),
+                    group: true,
+                });
+            }
+            // the model keeps the plain variable members (the callee's
+            // comma elements / lone callee)
+            match &**callee {
+                RNode::Comma { elems, .. } => {
+                    for e in elems {
+                        if let RNode::Var { name, .. } = e {
+                            g.tables.push(name.clone());
                         }
-                        Some(k) => *input = &input[k + 1..],
-                        None => break,
                     }
                 }
-            }
-            Err(e) => {
-                // dbdiagram's phrasing for a member that is not a table
-                // reference (a comma, a setting, stray punctuation...)
-                let msg = if e.message.contains("identifier") {
-                    "A TableGroup field must be of the form <table> or <schema>.<table>".to_string()
-                } else {
-                    e.message
-                };
-                errs.push(err_at(e.offset, &msg));
-                skip_line(input);
+                RNode::Var { name, .. } => g.tables.push(name.clone()),
+                _ => {}
             }
         }
+        // advance past the consumed slice (the parser worked on a copy)
+        *input = &input[slice_end..];
+        if brace.is_some() {
+            let _ = eat(input, "}");
+            break;
+        }
+        if input.is_empty() {
+            break;
+        }
     }
+    doc_binder_errors.extend(out_group_errors);
     g.span = start..offset(input, base);
     Ok(g)
 }
@@ -2538,7 +3174,7 @@ pub fn parse(src: &str) -> ParseOutput {
             continue;
         }
         let mut attempt = rest;
-        match top_item(&mut attempt, base, &mut out.errors, &mut out.binder_errors, &mut out.broken_refs) {
+        match top_item(&mut attempt, base, &mut out.errors, &mut out.binder_errors, &mut out.binder_chains) {
             Ok(item) => {
                 rest = attempt;
                 match item {
