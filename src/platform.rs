@@ -313,6 +313,50 @@ pub fn raise_dialog(title: &str) {
         // then keep the dialog on top briefly (a WM that processes the
         // activate after our configure can re-bury it)
         let mut adopted = false;
+        let mut app_xid: Option<u32> = None;
+        let mut center_attempts = 0u8;
+        // Chrome-like dialog placement: centered over the app window. A
+        // client configure of x/y is the request gtk_window_move makes —
+        // the WM relocates the frame to honor it — so this works for
+        // zenity, rfd's GTK chooser and the flatpak's portal window
+        // alike (here they are all just X11 windows with the needle's
+        // title). Overshooting is impossible: the size comes from the
+        // dialog's own mapped geometry.
+        fn center_over_app<C: x11rb::connection::Connection>(
+            conn: &C,
+            root: u32,
+            w: u32,
+            app: u32,
+        ) -> Option<()> {
+                let g = conn.get_geometry(w).ok()?.reply().ok()?;
+                let abs = conn
+                    .translate_coordinates(w, root, 0i16, 0i16)
+                    .ok()?
+                    .reply()
+                    .ok()?;
+                let ag = conn.get_geometry(app).ok()?.reply().ok()?;
+                let aabs = conn
+                    .translate_coordinates(app, root, 0i16, 0i16)
+                    .ok()?
+                    .reply()
+                    .ok()?;
+                let tx =
+                    (i32::from(aabs.dst_x) + (i32::from(ag.width) - i32::from(g.width)) / 2)
+                        .max(0);
+                let ty =
+                    (i32::from(aabs.dst_y) + (i32::from(ag.height) - i32::from(g.height)) / 2)
+                        .max(0);
+                // the configure's x/y are frame-relative: shift by how far
+                // the client currently sits inside its frame
+                let _ = conn.configure_window(
+                    w,
+                    &x11rb::protocol::xproto::ConfigureWindowAux::new()
+                        .x(i32::from(g.x) + tx - i32::from(abs.dst_x))
+                        .y(i32::from(g.y) + ty - i32::from(abs.dst_y)),
+                );
+                let _ = conn.flush();
+                Some(())
+                    }
         for _ in 0..40 {
             std::thread::sleep(std::time::Duration::from_millis(150));
             let Some(tree) = conn.query_tree(root).ok().and_then(|c| c.reply().ok())
@@ -335,9 +379,10 @@ pub fn raise_dialog(title: &str) {
                 // relationship that makes every WM keep a dialog above
                 // its parent (and groups it, so FSP stops treating it
                 // as an unrelated new window)
-                if let Some(app) = own_window_xid(
+                app_xid = own_window_xid(
                     &conn, root, net_wm_pid_w, wm_name_w, net_wm_name_w, &needle, pid,
-                ) {
+                );
+                if let Some(app) = app_xid {
                     use x11rb::wrapper::ConnectionExt as _;
                     let _ = conn.change_property32(
                         x11rb::protocol::xproto::PropMode::REPLACE,
@@ -370,6 +415,10 @@ pub fn raise_dialog(title: &str) {
                     0u8,
                 );
             }
+            // and the placement — centered over the app window
+            if let Some(app) = app_xid {
+                let _ = center_over_app(&conn, root, w, app);
+            }
             // the plain raise: re-asserted for a few seconds so a WM's
             // async re-stack cannot win
             let _ = conn.map_window(w);
@@ -389,6 +438,14 @@ pub fn raise_dialog(title: &str) {
                         &x11rb::protocol::xproto::ConfigureWindowAux::new()
                             .stack_mode(x11rb::protocol::xproto::StackMode::ABOVE),
                     );
+                    // the dialog's size may have settled only after the
+                    // first centering — retry the placement twice
+                    if center_attempts < 2 {
+                        center_attempts += 1;
+                        if let Some(app) = app_xid {
+                            let _ = center_over_app(&conn, root, w, app);
+                        }
+                    }
                     let _ = conn.flush();
                 }
                 return;
