@@ -372,6 +372,9 @@ pub fn raise_dialog(title: &str) {
         let mut adopted = false;
         let mut app_xid: Option<u32> = None;
         let mut center_attempts = 0u8;
+        // (the poll cadence lives in the loop below: fast at first — the
+        // dialog is findable in the tree before its first paint, so a
+        // 30ms cadence moves it before mutter's placement is ever seen)
         // Chrome-like dialog placement: centered over the app window.
         // Probe-verified under Mutter: a plain ConfigureWindow moves the
         // window (x lands exactly; the WM constrains the result on-screen,
@@ -410,8 +413,12 @@ pub fn raise_dialog(title: &str) {
             let _ = conn.flush();
             Some(())
         }
-        for _ in 0..40 {
-            std::thread::sleep(std::time::Duration::from_millis(150));
+        for pass in 0..44 {
+            // first ~1.5s: 30ms cadence (beat the first paint — no
+            // visible jump from mutter's initial spot); then 150ms
+            std::thread::sleep(std::time::Duration::from_millis(
+                if pass < 22 { 30 } else { 150 },
+            ));
             let toplevels = wm_toplevels(&conn, root);
             if toplevels.is_empty() {
                 return;
@@ -565,8 +572,12 @@ pub fn raise_self() {
             return;
         };
         let pid = std::process::id();
-        for _ in 0..40 {
-            std::thread::sleep(std::time::Duration::from_millis(150));
+        for pass in 0..44 {
+            // first ~1.5s: 30ms cadence (beat the first paint — no
+            // visible jump from mutter's initial spot); then 150ms
+            std::thread::sleep(std::time::Duration::from_millis(
+                if pass < 22 { 30 } else { 150 },
+            ));
             if let Some(w) = own_window_xid(
                 &conn, root, net_wm_pid_w, wm_name_w, net_wm_name_w, "", pid,
             ) {
