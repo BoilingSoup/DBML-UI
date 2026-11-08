@@ -5,8 +5,8 @@ use serde::Serialize;
 
 #[derive(Serialize)]
 struct QuickFix {
-    short_title: String,
-    new_text: String,
+    shortTitle: String,
+    newText: String,
 }
 
 #[derive(Serialize)]
@@ -55,8 +55,8 @@ fn dump_path(path: &str) -> Case {
                 .quick_fixes
                 .iter()
                 .map(|q| QuickFix {
-                    short_title: q.short_title.clone(),
-                    new_text: q.new_text.clone(),
+                    shortTitle: q.short_title.clone(),
+                    newText: q.new_text.clone(),
                 })
                 .collect(),
         });

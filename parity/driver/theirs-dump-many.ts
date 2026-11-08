@@ -6,20 +6,16 @@ import {
 } from '../upstream/dbml/packages/dbml-parse/src/index.js';
 
 const cases: { name: string; path: string }[] = JSON.parse(readFileSync(process.argv[2], 'utf8'));
+// the contract shape (parity/PARITY_SPEC.md): {type, text, row,
+// quickFixes: [{shortTitle, newText}]} — their row/col spans and
+// multi-edit fixes normalize to row + the joined edit text
 const dump = (ds: any[]) => ds.map((d: any) => ({
   type: d.type,
   text: d.text,
-  startRow: d.startRow,
-  startColumn: d.startColumn,
-  endRow: d.endRow,
-  endColumn: d.endColumn,
-  category: d.category ?? null,
-  explanation: d.explanation ?? null,
+  row: d.startRow,
   quickFixes: (d.quickFixes ?? []).map((q: any) => ({
-    title: q.title,
-    shortTitle: q.shortTitle ?? null,
-    isPreferred: q.isPreferred ?? null,
-    edits: q.edits,
+    shortTitle: q.shortTitle ?? q.title ?? null,
+    newText: (q.edits ?? []).map((e: any) => e.newText).join(' | '),
   })),
 }));
 const layout = new MemoryProjectLayout();
