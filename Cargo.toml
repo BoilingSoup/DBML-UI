@@ -20,6 +20,9 @@ iced_tiny_skia = { path = "vendor/iced_tiny_skia" }
 iced_wgpu = { path = "vendor/iced_wgpu" }
 
 [dependencies]
+# measured text widths for the diagram's icon clusters: shape through the
+# same stack iced renders with (version pinned to iced's own copy)
+cosmic-text = "0.12.1"
 anyhow = "1.0.104"
 # The popups' text renders through widget paragraphs (PopupTextLayer)
 # because canvas geometry text does not render inside `with_layer` layers

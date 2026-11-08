@@ -17,6 +17,8 @@
 
 use crate::app::RaisedItem;
 use crate::theme;
+use std::collections::HashMap;
+
 use dbml_ui::layout::{many_ends, row_icon_path, wrap_chars, EdgeRoute, Layout, NoteBox, Row, RowIcon, NOTE_ICON, TableBox};
 use iced::widget::canvas::{self, Path, Stroke, Text};
 use iced::{font, Color, Font, Point, Rectangle, Size, Vector};
@@ -119,18 +121,100 @@ pub fn hit_topmost<'a>(
 /// Monospace character advance for row text at `zoom` (mono glyphs are
 /// ~0.6 em wide), used to find where a column name ends.
 /// The name's end x in frame px (the row text is drawn at this size).
+// ---- measured row-name widths -------------------------------
+// The icon cluster after each row's name needs the TRUE text end:
+// per-character estimates render uneven gaps (bold pk rows, narrow vs
+// wide letters). Shaping the exact string through cosmic-text — the
+// same stack iced renders with — gives the advance iced will paint, so
+// the gap is identical for every row.
+
+struct TextShaper {
+    font_system: cosmic_text::FontSystem,
+    /// (text, bold) -> advance width px at the reference size 20.0
+    /// (glyph advances are linear in font size; scale by size/20)
+    cache: HashMap<(String, bool), f32>,
+}
+
+const SHAPE_REFERENCE_SIZE: f32 = 20.0;
+
+fn shaper() -> std::sync::MutexGuard<'static, TextShaper> {
+    static SHAPER: std::sync::OnceLock<std::sync::Mutex<TextShaper>> = std::sync::OnceLock::new();
+    let mutex = SHAPER.get_or_init(|| {
+        // replicate the fontdb iced builds at boot: the four app blobs in
+        // Settings.fonts order, then the system scan FontSystem::new()
+        // performs — family/weight resolution therefore matches the
+        // renderer's exactly
+        let mut font_system = cosmic_text::FontSystem::new();
+        for bytes in [
+            dbml_ui::MONO_TTF,
+            dbml_ui::MONO_TTF_BOLD,
+            dbml_ui::FIRA_SANS_BOLD,
+            dbml_ui::FIRA_SANS_SEMIBOLD,
+        ] {
+            font_system
+                .db_mut()
+                .load_font_source(cosmic_text::fontdb::Source::Binary(
+                    std::sync::Arc::new(bytes.to_vec()),
+                ));
+        }
+        std::sync::Mutex::new(TextShaper {
+            font_system,
+            cache: HashMap::new(),
+        })
+    });
+    match mutex.lock() {
+        Ok(g) => g,
+        Err(e) => e.into_inner(),
+    }
+}
+
+fn shape_width_px(
+    font_system: &mut cosmic_text::FontSystem,
+    text: &str,
+    bold: bool,
+    size: f32,
+) -> f32 {
+    use cosmic_text::{Attrs, Buffer, Family, Metrics, Shaping, Weight};
+    let mut buffer = Buffer::new(
+        font_system,
+        Metrics { font_size: size, line_height: size },
+    );
+    let attrs = Attrs::new()
+        .family(Family::SansSerif)
+        .weight(if bold { Weight::BOLD } else { Weight::NORMAL });
+    buffer.set_text(font_system, text, attrs, Shaping::Advanced);
+    buffer.shape_until_scroll(font_system, true);
+    let mut end = 0.0f32;
+    for run in buffer.layout_runs() {
+        for glyph in run.glyphs {
+            end = end.max(glyph.x + glyph.w);
+        }
+    }
+    end
+}
+
+/// The row name's advance width in px at the row's font size, in the
+/// font iced actually renders it with.
+fn measured_name_px(text: &str, bold: bool, size: f32) -> f32 {
+    let mut shaper = shaper();
+    let key = (text.to_string(), bold);
+    if !shaper.cache.contains_key(&key) {
+        let w = shape_width_px(&mut shaper.font_system, text, bold, SHAPE_REFERENCE_SIZE);
+        shaper.cache.insert(key.clone(), w);
+    }
+    let w20 = shaper.cache.get(&key).copied().unwrap_or_default();
+    w20 * (size / SHAPE_REFERENCE_SIZE)
+}
+
 fn row_name_end_px(b: &TableBox, row: usize, zoom: f32, pan: Vector) -> f32 {
     let top_left = to_px(b.x, b.y, zoom, pan);
     let s = cell_size(zoom);
-    // the shared per-character estimator (layout::Row::est_width): the old
-    // uniform 0.58/char factor overshot narrow names like "author_id" and
-    // left a dead gap before the row's first icon.
-    // pk names draw BOLD (dbdiagram parity) — bold runs past the regular
-    // estimate (the popup chrome carries the same 1.18 semibold factor),
-    // and the estimate must clear the ink: "channel" put the pk glyph ON
-    // the name. Overshooting only widens the gap, so 1.2 with headroom.
-    let ems = Row::est_width(&b.rows[row].name) * if b.rows[row].pk { 1.2 } else { 1.0 };
-    top_left.x + 1.0 * s.width + ems * s.width
+    // the name's true advance width, shaped in the exact font/weight the
+    // draw pass uses (pk rows bold, see draw_rows) — the gap after it is
+    // therefore IDENTICAL for every row, which estimates could never be
+    let row_size = 0.55 * s.height;
+    top_left.x + 1.0 * s.width
+        + measured_name_px(&b.rows[row].name, b.rows[row].pk, row_size)
 }
 
 /// The box's frame-px rect (the paint bounds, shadows excluded).
