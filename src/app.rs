@@ -736,24 +736,12 @@ impl Tab {
         if self.edge_anim.len() < self.diagram.edges.len() {
             self.edge_anim.resize(self.diagram.edges.len(), 0.0);
         }
-        let has_errors = !out.errors.is_empty();
         self.parse_errors = out.errors;
-        // dbdiagram-style diagnostics (their provider): parse + bind
-        // errors always surface; the interpret-class infos come from
-        // their interpretFile, which refuses while ANY error stands — so
-        // infos vanish but binder-class errors do not
-        use dbml::validate::Severity;
-        let all = dbml::validate::validate(&out.doc, src);
-        let bind_errors: Vec<_> = all
-            .iter()
-            .filter(|d| d.severity == Severity::Error)
-            .cloned()
-            .collect();
-        self.diagnostics = if has_errors || !bind_errors.is_empty() {
-            bind_errors
-        } else {
-            all
-        };
+        // dbdiagram-style diagnostics: their provideErrors is
+        // interpretFile().getErrors() — parse + binder + interpret errors
+        // ALL flow, always; infos exist only where interpretation
+        // succeeded (broken constructs never produce them)
+        self.diagnostics = dbml::validate::validate(&out.doc, src);
     }
 
     /// Unsaved changes: the buffer differs from the last save/open.
@@ -9967,7 +9955,12 @@ mod diagnostics_panel_tests {
         app.cur_mut()
             .set_source("Table t {\n  id integer\n  indexes {\n    (id), unique\n  }\n}\n");
         assert!(app.cur().parse_errors.is_empty());
-        assert!(app.all_diagnostics().iter().any(|d| d.severity == dbml::validate::Severity::Info));
+        // the comma-form finding is their validateNode class — an ERROR
+        assert!(
+            app.all_diagnostics()
+                .iter()
+                .any(|d| d.severity == dbml::validate::Severity::Error)
+        );
     }
 
     #[test]

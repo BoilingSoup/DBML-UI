@@ -112,6 +112,10 @@ pub struct Column {
     pub ty: String,
     pub span: Span,
     pub settings: ColumnSettings,
+    /// Their validateNode-class findings raised while parsing this
+    /// column (the inline-settings field errors) — they gate the
+    /// interpretation layer like every binder error.
+    pub binder_errors: Vec<(usize, String)>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -125,6 +129,10 @@ pub struct ColumnSettings {
     pub note: Option<String>,
     /// `[check: \`expr\`]` — kept verbatim (backticks included).
     pub check: Option<String>,
+    /// Their validateNode-class findings raised while parsing this
+    /// column (the inline-settings field errors) — they gate the
+    /// interpretation layer like every binder error.
+    pub binder_errors: Vec<(usize, String)>,
     pub inline_ref: Option<InlineRef>,
     /// Arbitrary `key: "value"` pairs dbdiagram calls custom properties
     /// (`[masking: "partial"]`): any unrecognized key with a value, shown

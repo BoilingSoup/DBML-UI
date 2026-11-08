@@ -794,6 +794,7 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
     // list ends the fields.
     let mut inline_pk = false;
     let mut inline_unique = false;
+    let mut binder_errors: Vec<(usize, String)> = Vec::new();
     loop {
         sp(input);
         if input.is_empty() || input.starts_with(['\n', '\r', '}', '#']) || peek_is(input, "[") {
@@ -807,18 +808,20 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
         };
         sp(input);
         if peek_is(input, "{") {
+            // their validateNode class — these gate the interpretation
+            // layer, so they ride the column for validate() to emit
             let msg = "These fields must be some inline settings optionally ended with a setting list";
-            errs.push(err_at(off, msg));
-            errs.push(err_at(offset(input, base), msg));
+            binder_errors.push((off, msg.to_string()));
+            binder_errors.push((offset(input, base), msg.to_string()));
             swallow_balanced_braces(input);
             break;
         }
         match word.to_ascii_lowercase().as_str() {
             "pk" => inline_pk = true,
             "unique" => inline_unique = true,
-            _ => errs.push(err_at(
+            _ => binder_errors.push((
                 off,
-                "Inline column settings can only be `pk` or `unique`",
+                "Inline column settings can only be `pk` or `unique`".to_string(),
             )),
         }
     }
@@ -830,8 +833,8 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
         sp(input);
         if peek_is(input, "[") {
             let msg = "These fields must be some inline settings optionally ended with a setting list";
-            errs.push(err_at(settings_start, msg));
-            errs.push(err_at(offset(input, base), msg));
+            binder_errors.push((settings_start, msg.to_string()));
+            binder_errors.push((offset(input, base), msg.to_string()));
             swallow_balanced_braces(input);
         }
         let mut s = column_settings_from(kvs);
@@ -848,6 +851,7 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
         name_span: name_off..name_end,
         ty,
         span: start..offset(input, base),
+        binder_errors,
         settings,
     })
 }
@@ -1373,6 +1377,7 @@ enum Item {
     Ref(Ref),
     Enm(Enum),
     Grp(TableGroup),
+    Skip,
     Note(StickyNote),
 }
 
@@ -1384,7 +1389,7 @@ fn top_item(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Item
     } else if peek_kw(input, "Project") {
         project(input, base, errs).map(Item::Prj)
     } else if peek_kw(input, "Ref") {
-        ref_stmt(input, base).map(Item::Ref)
+        ref_stmt(input, base, errs).map(|r| r.map_or(Item::Skip, Item::Ref))
     } else if peek_kw(input, "Enum") {
         enum_def(input, base, errs).map(Item::Enm)
     } else if peek_kw(input, "Note") {
@@ -1580,7 +1585,7 @@ fn table(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Table> 
     Ok(t)
 }
 
-fn ref_stmt(input: &mut &str, base: usize) -> R<Ref> {
+fn ref_stmt(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Option<Ref>> {
     let start = offset(input, base);
     if !eat(input, "Ref") {
         return fail(offset(input, base), "expected 'Ref'");
@@ -1606,7 +1611,7 @@ fn ref_stmt(input: &mut &str, base: usize) -> R<Ref> {
             return fail(offset(input, base), "expected '}' after ref body");
         }
         let (on_delete, on_update, color) = ref_settings(input, base);
-        return Ok(Ref {
+        return Ok(Some(Ref {
             name,
             span: start..offset(input, base),
             from,
@@ -1618,32 +1623,208 @@ fn ref_stmt(input: &mut &str, base: usize) -> R<Ref> {
             on_delete,
             on_update,
             color,
-        });
+        }));
     }
     if !eat(input, ":") {
         return fail(offset(input, base), "expected ':' after Ref");
     }
     ws(input);
-    let from = endpoint(input, base)?;
-    ws(input);
-    let op_offset = offset(input, base);
-    let (card, l_opt, r_opt) = cardinality_full(input, base)?;
-    ws(input);
-    let to = endpoint(input, base)?;
-    let (on_delete, on_update, color) = ref_settings(input, base);
-    Ok(Ref {
-        name,
-        span: start..offset(input, base),
-        from,
-        to,
-        card,
-        op_offset,
-        left_optional: l_opt,
-        right_optional: r_opt,
-        on_delete,
-        on_update,
-        color,
-    })
+    let body_input = *input;
+    let body_base = offset(input, base);
+    // the strict attempt runs on a scratch copy so the fallback sees the
+    // original body
+    let mut scratch = body_input;
+    // the scratch shares the source pointer, so sub-parsers keep taking
+    // the source `base` — their offsets are pointer differences
+    let strict: R<(super::ast::Endpoint, super::ast::Endpoint, Cardinality, bool, bool, usize)> = (|| {
+        let from = endpoint(&mut scratch, base)?;
+        ws(&mut scratch);
+        let op_offset = offset(&mut scratch, base);
+        let (card, l_opt, r_opt) = cardinality_full(&mut scratch, base)?;
+        ws(&mut scratch);
+        let to = endpoint(&mut scratch, base)?;
+        Ok((from, to, card, l_opt, r_opt, op_offset))
+    })();
+    match strict {
+        Ok((from, to, card, l_opt, r_opt, op_offset)) => {
+            *input = scratch;
+            let (on_delete, on_update, color) = ref_settings(input, base);
+            Ok(Some(Ref {
+                name,
+                span: start..offset(input, base),
+                from,
+                to,
+                card,
+                op_offset,
+                left_optional: l_opt,
+                right_optional: r_opt,
+                on_delete,
+                on_update,
+                color,
+            }))
+        }
+        Err(_) => {
+            // their ref-field shape rules (ref/validate.ts validateFields
+            // + the field-args walk): classify the broken body, emit
+            // their error set, recover at the line end
+            ref_shape_errors(&mut body_input.clone(), body_base, errs);
+            skip_line(input);
+            Ok(None)
+        }
+    }
+}
+
+/// One chunk of a ref body: a dotted operand chain, a relationship
+/// operator, a paren tuple, or a bare word.
+struct RefChunk {
+    kind: RefChunkKind,
+    start: usize,
+    dotted: usize, // dot-separated part count (0 = not an operand)
+}
+#[derive(PartialEq, Clone, Copy)]
+enum RefChunkKind {
+    Operand,
+    RelOp,
+    Other,
+}
+
+fn ref_shape_errors(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) {
+    // tokenize the body line into chunks
+    let mut chunks: Vec<RefChunk> = Vec::new();
+    let line_end = input.find('\n').unwrap_or(input.len());
+    let body = &input[..line_end];
+    let mut i = 0usize;
+    while i < body.len() {
+        let c = body[i..].chars().next().unwrap();
+        if c.is_whitespace() {
+            i += c.len_utf8();
+            continue;
+        }
+        let chunk_start = base + i;
+        if matches!(c, '>' | '<' | '-') || body[i..].starts_with("<>") {
+            let len = if body[i..].starts_with("<>") { 2 } else { 1 };
+            let mut end = i + len;
+            while body[end..].starts_with('?') {
+                end += 1;
+            }
+            chunks.push(RefChunk { kind: RefChunkKind::RelOp, start: chunk_start, dotted: 0 });
+            i = end;
+            continue;
+        }
+        if c.is_alphanumeric() || c == '_' || c == '"' || c == '`' {
+            // a dotted chain: ident(.ident)* — quotes allowed per part
+            let mut parts = 0usize;
+            let word_end = |s: &str| -> usize {
+                let b = s.as_bytes();
+                if b.is_empty() {
+                    return 0;
+                }
+                let mut k = 0;
+                if b[0] == b'"' {
+                    k = 1;
+                    while k < b.len() && b[k] != b'"' {
+                        k += 1;
+                    }
+                    k + 1
+                } else {
+                    while k < b.len()
+                        && (b[k].is_ascii_alphanumeric() || b[k] == b'_' || b[k] >= 0x80)
+                    {
+                        k += 1;
+                    }
+                    k.max(1)
+                }
+            };
+            loop {
+                // clamp: an unterminated quote's scan can overshoot
+                let w = word_end(&body[i..]).min(body.len() - i);
+                i += w;
+                parts += 1;
+                if body[i..].starts_with('.') {
+                    i += 1;
+                } else {
+                    break;
+                }
+            }
+            chunks.push(RefChunk { kind: RefChunkKind::Operand, start: chunk_start, dotted: parts });
+            continue;
+        }
+        // parens/commas/anything else: one Other chunk
+        i += c.len_utf8();
+        chunks.push(RefChunk { kind: RefChunkKind::Other, start: chunk_start, dotted: 0 });
+    }
+    let empty_or_one = chunks.len() <= 1;
+    let first = chunks.first().map(|c| (c.kind, c.start, c.dotted));
+    let rel_pos = chunks.iter().position(|c| c.kind == RefChunkKind::RelOp);
+    match (first, rel_pos) {
+        // empty body: their EOF pair + the shape pair (probe: `Ref:` + EOF)
+        (None, _) => {
+            for _ in 0..2 {
+                errs.push(err_at(base, "Unexpected EOF"));
+            }
+            errs.push(err_at(base, "A Ref field must be a binary relationship"));
+            errs.push(err_at(base, "Unequal fields in ref endpoints"));
+        }
+        // a lone operand (`Ref: a.b`): not a binary relationship
+        (Some((_, fstart, _)), None) if chunks.len() == 1 => {
+            errs.push(err_at(fstart, "A Ref field must be a binary relationship"));
+            errs.push(err_at(fstart, "Unequal fields in ref endpoints"));
+        }
+        // an application wrapper: operand followed by non-operator content
+        (Some((_, fstart, _)), _) if rel_pos != Some(1) && chunks.len() > 1 => {
+            errs.push(err_at(fstart, "A Ref field must be a binary relationship"));
+            errs.push(err_at(fstart, "Unequal fields in ref endpoints"));
+            // the application's first argument anchors the single-field
+            // error (probe: `b x > a.id` errs at `x`)
+            let arg = chunks.get(1).map(|c| c.start).unwrap_or(fstart);
+            errs.push(err_at(
+                arg,
+                "A Ref field should only have a single binary relationship",
+            ));
+        }
+        // a binary infix: side validity + tuple equality
+        (Some(_), Some(pos)) => {
+            let left = &chunks[..pos];
+            let right = &chunks[pos + 1..];
+            let side_ok = |side: &[RefChunk]| -> bool {
+                side.len() == 1
+                    && side[0].kind == RefChunkKind::Operand
+                    && side[0].dotted >= 2
+            };
+            if !side_ok(left) {
+                let at = left.first().map(|c| c.start).unwrap_or(base);
+                errs.push(err_at(at, "Invalid column reference"));
+            }
+            if !side_ok(right) {
+                let at = right.first().map(|c| c.start).unwrap_or(base);
+                errs.push(err_at(at, "Invalid column reference"));
+            }
+            // junk after the right operand = application args
+            if right.len() > 1 {
+                let at = right[1].start;
+                errs.push(err_at(
+                    at,
+                    "A Ref field should only have a single binary relationship",
+                ));
+            }
+            // tuple/chain length mismatch (their isEqualTupleOperands)
+            let tuple_len = |side: &[RefChunk]| -> Option<usize> {
+                if side.len() == 1 && side[0].kind == RefChunkKind::Operand {
+                    Some(side[0].dotted)
+                } else {
+                    None
+                }
+            };
+            if let (Some(l), Some(r)) = (tuple_len(left), tuple_len(right)) {
+                if l != r && l.max(r) > 1 {
+                    let at = chunks[0].start;
+                    errs.push(err_at(at, "Unequal fields in ref endpoints"));
+                }
+            }
+            let _ = empty_or_one;
+        }
+        _ => {}
+    }
 }
 
 /// Optional `[delete: cascade, update: no action, color: #aabbcc]`
@@ -1974,6 +2155,7 @@ pub fn parse(src: &str) -> ParseOutput {
                 match item {
                     Item::Prj(p) => out.doc.project = Some(p),
                     Item::Tbl(t) => out.doc.tables.push(t),
+                    Item::Skip => {}
                     Item::Ref(r) => out.doc.refs.push(r),
                     Item::Enm(e) => out.doc.enums.push(e),
                     Item::Grp(g) => out.doc.table_groups.push(g),

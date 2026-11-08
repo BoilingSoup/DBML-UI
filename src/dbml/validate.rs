@@ -285,6 +285,14 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
     for r in &doc.refs {
         check_endpoint(doc, &r.from, r.span.start, &mut out);
         check_endpoint(doc, &r.to, r.span.start, &mut out);
+        // their isEqualTupleOperands: composite endpoints must carry the
+        // same field count (probe: `a.(id, code) > b.x` errs at the field)
+        if r.from.columns.len() != r.to.columns.len() {
+            out.push(Diagnostic::plain(
+                r.from.span.start,
+                "Unequal fields in ref endpoints".to_string(),
+            ));
+        }
     }
     for t in &doc.tables {
         for c in &t.columns {
@@ -498,7 +506,7 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
                 out.push(Diagnostic {
                     offset: ix.span.start,
                     message: "An index field must be an identifier, a quoted identifier, a functional expression or a tuple of such".to_string(),
-                    severity: Severity::Info,
+                    severity: Severity::Error,
                     category: Some("Index settings".to_string()),
                     explanation: vec![
                         format!("Settings belong inside the brackets: `({list}) [unique]`, not after a comma."),
@@ -1205,7 +1213,23 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
         }
     }
 
+    // the column-parse binder findings (their validateNode class)
+    for t in &doc.tables {
+        for c in &t.columns {
+            for (offset, msg) in &c.binder_errors {
+                out.push(Diagnostic::plain(*offset, msg.clone()));
+            }
+        }
+    }
+
     out.sort_by_key(|d| d.offset);
+    // their shouldInterpretNode (core/global_modules/utils.ts): the
+    // interpretation layer runs only while bindFile reports no errors —
+    // binder-class (Error-severity) findings suppress the infos; raw
+    // parse errors do not gate anything
+    if out.iter().any(|d| d.severity == Severity::Error) {
+        out.retain(|d| d.severity == Severity::Error);
+    }
     out
 }
 

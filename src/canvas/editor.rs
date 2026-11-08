@@ -1720,13 +1720,14 @@ mod error_tests {
         assert!(!marks[0].warn);
         assert_eq!(marks[0].message, "Table 'b' does not exist in Schema 'public'");
 
-        // strict-grammar recovery (comma index settings): soft-blue
+        // strict-grammar recovery (comma index settings): their
+        // validateNode class — a red mark, not soft-blue
         let app = App::with_source(
             "Table t {\n  id integer\n  indexes {\n    (id), unique\n  }\n}\n".into(),
         );
         let marks = error_marks(&app);
         assert_eq!(marks.len(), 1, "{marks:?}");
-        assert!(marks[0].warn);
+        assert!(!marks[0].warn);
     }
 
     #[test]
