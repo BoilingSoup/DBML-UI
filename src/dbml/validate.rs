@@ -16,6 +16,11 @@ pub enum Severity {
     /// Soft-blue squiggle — valid, but flagged (dbdiagram's warning/info
     /// class, their dark theme's `editorWarning.foreground` #64A0DC).
     Warning,
+    /// dbdiagram renders infos with the SAME soft-blue as warnings (their
+    /// theme sets `editorInfo.foreground` to the same `#64A0DC80`) — the
+    /// distinction is their diagnostics panel's, not a color one. Their
+    /// operator-consistency and records findings are all infos.
+    Info,
 }
 
 /// One quick fix: replace `span` in the source with `new_text`.
@@ -78,9 +83,12 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
     let mut tables: Vec<&str> = Vec::new();
     for t in &doc.tables {
         if tables.contains(&t.name.as_str()) {
+            // their dup marker anchors the END of the duplicate
+            // declaration (probe: a 2-line file flags row 2 — the offset
+            // past the closing brace)
             out.push(Diagnostic::plain(
-                t.name_span.start,
-                format!("Table '{}' already exists", t.name),
+                t.span.end,
+                format!("Table '{}' already exists in schema 'public'", t.name),
             ));
         }
         tables.push(t.name.as_str());
@@ -89,11 +97,25 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
     for e in &doc.enums {
         if enums.contains(&e.name.as_str()) {
             out.push(Diagnostic::plain(
-                e.name_span.start,
-                format!("Enum '{}' already exists", e.name),
+                e.span.end,
+                format!("Enum '{}' already exists in schema 'public'", e.name),
             ));
         }
         enums.push(e.name.as_str());
+    }
+    // their engine flags EVERY occurrence of a duplicated enum field
+    // (probe: both 'x' rows on `Enum e { x\n x }`)
+    for e in &doc.enums {
+        let mut seen: Vec<&str> = Vec::new();
+        for v in &e.values {
+            if seen.contains(&v.name.as_str()) {
+                out.push(Diagnostic::plain(
+                    v.name_span.start,
+                    format!("Duplicate enum field '{}'", v.name),
+                ));
+            }
+            seen.push(v.name.as_str());
+        }
     }
 
     // every ref endpoint must resolve to a real table and column (block
@@ -103,13 +125,23 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
         // the caller-provided position instead of offset 0
         let at = if ep.span.is_empty() { anchor } else { ep.span.start };
         match doc.tables.iter().find(|t| t.matches(&ep.table)) {
-            None => out.push(Diagnostic::plain(at, format!("Table '{}' does not exist", ep.table))),
+            None => out.push(Diagnostic::plain(
+                at,
+                format!(
+                    "Table '{}' does not exist in Schema 'public'",
+                    ep.table
+                ),
+            )),
             Some(t) => {
+                let schema = t.schema.as_deref().unwrap_or("public");
                 for col in &ep.columns {
                     if !t.columns.iter().any(|c| &c.name == col) {
                         out.push(Diagnostic::plain(
                             at,
-                            format!("Column '{}' does not exist in Table '{}'", col, ep.table),
+                            format!(
+                                "Column '{}' does not exist in Table '{}.{}'",
+                                col, schema, ep.table
+                            ),
                         ));
                     }
                 }
@@ -178,7 +210,7 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
                 out.push(Diagnostic {
                     offset: ix.span.start,
                     message: "An index field must be an identifier, a quoted identifier, a functional expression or a tuple of such".to_string(),
-                    severity: Severity::Warning,
+                    severity: Severity::Info,
                     category: Some("Index settings".to_string()),
                     explanation: vec![
                         format!("Settings belong inside the brackets: `({list}) [unique]`, not after a comma."),
@@ -224,7 +256,13 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
             return false;
         }
         if cols.len() == 1 {
-            return column_of(table, &cols[0]).is_some_and(|c| c.settings.unique || c.settings.pk);
+            // the column-setting fast path, then the index scan below —
+            // a pk declared as a single-column index satisfies uniqueness
+            // exactly like the composite form (their isColumnsUnique
+            // scans indexes for ALL cardinalities)
+            if column_of(table, &cols[0]).is_some_and(|c| c.settings.unique || c.settings.pk) {
+                return true;
+            }
         }
         // composite: a unique or pk index covering exactly these columns
         doc.tables
@@ -334,8 +372,12 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
                 (r_many, l_min_one, l_many)
             };
             // their y: the checked side is the many side, or a one-to-one
-            // with the FK on the left (the requirement on the left bound)
-            let applies = checked_many || (!other_many && !checked_from);
+            // with the FK on the left (the requirement on the left bound).
+            // a plain one-to-one (`-`, neither side many) checks BOTH
+            // sides — their op-dash run emits each side's uniqueness
+            // finding (probe: 4 diagnostics on a two-table `-` ref)
+            let is_one_to_one = !l_many && !r_many;
+            let applies = checked_many || is_one_to_one || (!other_many && !checked_from);
             if !applies || checked_cols.is_empty() || !all_exist {
                 continue;
             }
@@ -445,7 +487,7 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
                 out.push(Diagnostic {
                     offset: checked_anchor,
                         message: message.clone(),
-                        severity: Severity::Warning,
+                        severity: Severity::Info,
                         category: Some("Mismatched optional ref constraints".to_string()),
                         explanation: explanation.clone(),
                         quick_fixes: fixes.clone(),
@@ -456,7 +498,7 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
                         out.push(Diagnostic {
                             offset: col.name_span.start,
                             message: message.clone(),
-                            severity: Severity::Warning,
+                            severity: Severity::Info,
                             category: Some("Mismatched optional ref constraints".to_string()),
                             explanation: explanation.clone(),
                             quick_fixes: fixes.clone(),
@@ -498,7 +540,7 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
                 out.push(Diagnostic {
                     offset: checked_anchor,
                     message: message.clone(),
-                    severity: Severity::Warning,
+                    severity: Severity::Info,
                     category: Some("Mismatched optional ref constraints".to_string()),
                     explanation: explanation.clone(),
                     quick_fixes: fixes.clone(),
@@ -508,7 +550,7 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
                         out.push(Diagnostic {
                             offset: col.name_span.start,
                             message: message.clone(),
-                            severity: Severity::Warning,
+                            severity: Severity::Info,
                             category: Some("Mismatched optional ref constraints".to_string()),
                             explanation: explanation.clone(),
                             quick_fixes: fixes.clone(),
@@ -551,7 +593,7 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
                 out.push(Diagnostic {
                     offset: anchor,
                     message: message.clone(),
-                    severity: Severity::Warning,
+                    severity: Severity::Info,
                     category: Some("Mismatched optional ref constraints".to_string()),
                     explanation: explanation.clone(),
                     quick_fixes: fixes.clone(),
@@ -561,7 +603,7 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
                         out.push(Diagnostic {
                             offset: col.name_span.start,
                             message: message.clone(),
-                            severity: Severity::Warning,
+                            severity: Severity::Info,
                             category: Some("Mismatched optional ref constraints".to_string()),
                             explanation: explanation.clone(),
                             quick_fixes: fixes.clone(),
@@ -620,7 +662,7 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
                 out.push(Diagnostic {
                     offset: anchor,
                     message: message.clone(),
-                    severity: Severity::Warning,
+                    severity: Severity::Info,
                     category: Some("Mismatched optional ref constraints".to_string()),
                     explanation: explanation.clone(),
                     quick_fixes: fixes.clone(),
@@ -630,7 +672,7 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
                         out.push(Diagnostic {
                             offset: col.name_span.start,
                             message: message.clone(),
-                            severity: Severity::Warning,
+                            severity: Severity::Info,
                             category: Some("Mismatched optional ref constraints".to_string()),
                             explanation: explanation.clone(),
                             quick_fixes: fixes.clone(),
@@ -755,16 +797,53 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
         if let Some(fk_rec) = fk_rec {
             if !fk_rec.rows.is_empty() {
                 for (v, span) in &fk_vals {
-                    if v == "null" {
+                    // their null handling: an empty or literal-null cell on
+                    // a required FK column emits BOTH the NULL-not-allowed
+                    // note and the must-not-be-NULL violation (probe:
+                    // records-null-in-required)
+                    let is_null = v.is_empty() || v.eq_ignore_ascii_case("null");
+                    if is_null {
+                        let required = parent_vals.len() == 0
+                            || parent_vals.iter().any(|(pv, _)| pv.is_empty());
+                        let _ = required;
+                        let col_required = doc
+                            .tables
+                            .iter()
+                            .find(|t| t.matches(fk_tbl))
+                            .and_then(|t| t.columns.iter().find(|c| c.name == fk_col))
+                            .and_then(|c| c.settings.not_null)
+                            .unwrap_or(false);
+                        if col_required {
+                            out.push(Diagnostic {
+                                offset: span.start,
+                                message: format!(
+                                    "NULL not allowed for NOT NULL column `{fk_col}` without a default value or auto-increment"
+                                ),
+                                severity: Severity::Info,
+                                category: Some("Record constraint violations".to_string()),
+                                explanation: vec![],
+                                quick_fixes: vec![],
+                            });
+                        }
+                        out.push(Diagnostic {
+                            offset: span.start,
+                            message: format!(
+                                "FK violation: `{fk_tbl}.{fk_col}` = `{v}` must not be NULL"
+                            ),
+                            severity: Severity::Info,
+                            category: Some("Record constraint violations".to_string()),
+                            explanation: vec![],
+                            quick_fixes: vec![],
+                        });
                         continue;
                     }
                     if !parent_vals.iter().any(|(pv, _)| pv == v) {
                         out.push(Diagnostic {
                             offset: span.start,
                             message: format!(
-                                "FK violation: {fk_tbl}.{fk_col} = {v} does not exist in {parent_tbl}.{parent_col}"
+                                "FK violation: `{fk_tbl}.{fk_col}` = `{v}` does not exist in `{parent_tbl}.{parent_col}`"
                             ),
-                            severity: Severity::Warning,
+                            severity: Severity::Info,
                             category: Some("Record constraint violations".to_string()),
                             explanation: vec![],
                             quick_fixes: vec![],

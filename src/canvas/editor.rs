@@ -1013,7 +1013,11 @@ pub fn error_marks(app: &App) -> Vec<Mark> {
         push(e.offset, &e.message, false);
     }
     for d in &app.cur().diagnostics {
-        push(d.offset, &d.message, d.severity == dbml_ui::dbml::validate::Severity::Warning);
+        push(
+                        d.offset,
+                        &d.message,
+                        d.severity != dbml_ui::dbml::validate::Severity::Error,
+                    );
     }
     marks
 }

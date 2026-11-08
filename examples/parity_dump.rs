@@ -14,7 +14,7 @@ struct Diagnostic {
     r#type: &'static str,
     text: String,
     row: usize,
-    quick_fixes: Vec<QuickFix>,
+    quickFixes: Vec<QuickFix>,
 }
 
 #[derive(Serialize)]
@@ -39,19 +39,20 @@ fn dump_path(path: &str) -> Case {
             r#type: "error",
             text: e.message.clone(),
             row: row_of(&src, e.offset),
-            quick_fixes: Vec::new(),
+            quickFixes: Vec::new(),
         })
         .collect();
     for d in &ds {
         let ty = match d.severity {
             dbml_ui::dbml::validate::Severity::Error => "error",
             dbml_ui::dbml::validate::Severity::Warning => "warning",
+            dbml_ui::dbml::validate::Severity::Info => "info",
         };
         diagnostics.push(Diagnostic {
             r#type: ty,
             text: d.message.clone(),
             row: row_of(&src, d.offset),
-            quick_fixes: d
+            quickFixes: d
                 .quick_fixes
                 .iter()
                 .map(|q| QuickFix {

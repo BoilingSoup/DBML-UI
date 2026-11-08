@@ -1,7 +1,7 @@
 {
   "pinnedCommit": "6b0c25b5d87ef8f44236eeb1e9dc149848e1503e",
-  "pass": 8,
-  "fail": 61,
+  "pass": 9,
+  "fail": 60,
   "cases": [
     {
       "name": "clean-minimal",
@@ -13,7 +13,6 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] text: ours \"Enum 'e' already exists\" vs theirs \"Enum 'e' already exists in schema 'public'\"",
         "[0] row: ours 1 vs theirs 2"
       ]
     },
@@ -27,7 +26,6 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] text: ours \"Table 'a' already exists\" vs theirs \"Table 'a' already exists in schema 'public'\"",
         "[0] row: ours 1 vs theirs 2"
       ]
     },
@@ -36,7 +34,7 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 0 vs theirs 2"
+        "count: ours 1 vs theirs 2"
       ]
     },
     {
@@ -44,7 +42,6 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] text: ours \"Table 'e' does not exist\" vs theirs \"Table 'e' does not exist in Schema 'public'\"",
         "[0] row: ours 0 vs theirs 1"
       ]
     },
@@ -91,15 +88,9 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 3 vs theirs 4",
-        "[0] quickFixes: ours [] vs theirs [Change to <>::<>]",
-        "[1] type: ours warning vs theirs info",
         "[1] row: ours 4 vs theirs 5",
-        "[1] quickFixes: ours [] vs theirs [Change to <>::<>]",
-        "[2] type: ours warning vs theirs info",
-        "[2] row: ours 6 vs theirs 7",
-        "[2] quickFixes: ours [] vs theirs [Change to <>::<>]"
+        "[2] row: ours 6 vs theirs 7"
       ]
     },
     {
@@ -107,15 +98,9 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 3 vs theirs 4",
-        "[0] quickFixes: ours [] vs theirs [Change to <>::<>]",
-        "[1] type: ours warning vs theirs info",
         "[1] row: ours 4 vs theirs 5",
-        "[1] quickFixes: ours [] vs theirs [Change to <>::<>]",
-        "[2] type: ours warning vs theirs info",
-        "[2] row: ours 6 vs theirs 7",
-        "[2] quickFixes: ours [] vs theirs [Change to <>::<>]"
+        "[2] row: ours 6 vs theirs 7"
       ]
     },
     {
@@ -165,12 +150,8 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique:: [unique]]",
-        "[1] type: ours warning vs theirs info",
-        "[1] row: ours 1 vs theirs 2",
-        "[1] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique:: [unique]]"
+        "[1] row: ours 1 vs theirs 2"
       ]
     },
     {
@@ -178,12 +159,10 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique:: [unique]]",
-        "[1] type: ours warning vs theirs info",
+        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>::<>, Add unique:: [unique]]",
         "[1] row: ours 3 vs theirs 4",
-        "[1] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique:: [unique]]"
+        "[1] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>::<>, Add unique:: [unique]]"
       ]
     },
     {
@@ -191,14 +170,14 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 2 vs theirs 4",
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to >::>, Add unique::, unique]",
-        "[1] type: ours warning vs theirs info",
-        "[1] text: ours \"Column `parent.id` should be unique or primary key for operator `-`\" vs theirs \"Column `child.parent_id` should be unique or primary key for operator `-`\"",
-        "[1] row: ours 4 vs theirs 3",
-        "[1] quickFixes: ours [] vs theirs [Change to <::<, Add unique::, unique]"
+        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to >::>, Add unique::, unique]",
+        "[1] row: ours 2 vs theirs 3",
+        "[1] quickFixes: ours [Change to <>::<>, Add unique::, unique] vs theirs [Change to <::<, Add unique::, unique]",
+        "[2] row: ours 4 vs theirs 5",
+        "[2] quickFixes: ours [Change to <>::<>, Add unique::, unique] vs theirs [Change to <::<, Add unique::, unique]",
+        "[3] row: ours 4 vs theirs 5",
+        "[3] quickFixes: ours [Change to <>::<>] vs theirs [Change to >::>, Add unique::, unique]"
       ]
     },
     {
@@ -206,14 +185,18 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 2 vs theirs 4",
-        "[0] type: ours warning vs theirs info",
+        "count: ours 6 vs theirs 4",
+        "[0] text: ours \"Column `parent.id` is nullable but operator `-` requires it to be NOT NULL\" vs theirs \"Column `parent.id` should be unique or primary key for operator `-`\"",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to >::>, Add unique:: [unique]]",
-        "[1] type: ours warning vs theirs info",
+        "[0] quickFixes: ours [Change to -?::-?, Add not null:: [not null]] vs theirs [Change to >::>, Add unique:: [unique]]",
         "[1] text: ours \"Column `parent.id` should be unique or primary key for operator `-`\" vs theirs \"Column `child.parent_id` should be unique or primary key for operator `-`\"",
-        "[1] row: ours 4 vs theirs 3",
-        "[1] quickFixes: ours [] vs theirs [Change to <::<, Add unique::, unique]"
+        "[1] row: ours 0 vs theirs 3",
+        "[1] quickFixes: ours [Change to <>::<>] vs theirs [Change to <::<, Add unique::, unique]",
+        "[2] row: ours 2 vs theirs 5",
+        "[2] quickFixes: ours [Change to <>::<>, Add unique::, unique] vs theirs [Change to <::<, Add unique::, unique]",
+        "[3] text: ours \"Column `child.parent_id` should be unique or primary key for operator `-`\" vs theirs \"Column `parent.id` should be unique or primary key for operator `-`\"",
+        "[3] row: ours 4 vs theirs 5",
+        "[3] quickFixes: ours [Change to <>::<>, Add unique::, unique] vs theirs [Change to >::>, Add unique:: [unique]]"
       ]
     },
     {
@@ -221,21 +204,18 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 4 vs theirs 6",
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to >::>, Add unique::, unique]",
-        "[1] type: ours warning vs theirs info",
+        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to >::>, Add unique::, unique]",
         "[1] row: ours 2 vs theirs 3",
-        "[1] quickFixes: ours [] vs theirs [Change to ?-::?-, Add not null::]",
-        "[2] type: ours warning vs theirs info",
-        "[2] text: ours \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\" vs theirs \"Column `child.parent_id` should be unique or primary key for operator `-`\"",
-        "[2] row: ours 4 vs theirs 3",
-        "[2] quickFixes: ours [] vs theirs [Change to <::<, Add unique::, unique]",
-        "[3] type: ours warning vs theirs info",
-        "[3] text: ours \"Column `parent.id` should be unique or primary key for operator `-`\" vs theirs \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\"",
+        "[1] quickFixes: ours [Change to ?-::?-, Add not null::not null] vs theirs [Change to ?-::?-, Add not null::]",
+        "[2] row: ours 2 vs theirs 3",
+        "[2] quickFixes: ours [Change to <>::<>, Add unique::, unique] vs theirs [Change to <::<, Add unique::, unique]",
         "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [] vs theirs [Change to ?-::?-, Add not null::]"
+        "[3] quickFixes: ours [Change to ?-::?-, Add not null::not null] vs theirs [Change to ?-::?-, Add not null::]",
+        "[4] row: ours 4 vs theirs 5",
+        "[4] quickFixes: ours [Change to <>::<>, Add unique::, unique] vs theirs [Change to <::<, Add unique::, unique]",
+        "[5] row: ours 4 vs theirs 5",
+        "[5] quickFixes: ours [Change to <>::<>] vs theirs [Change to >::>, Add unique::, unique]"
       ]
     },
     {
@@ -243,21 +223,25 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 4 vs theirs 6",
-        "[0] type: ours warning vs theirs info",
+        "count: ours 8 vs theirs 6",
+        "[0] text: ours \"Column `parent.id` is nullable but operator `-` requires it to be NOT NULL\" vs theirs \"Column `parent.id` should be unique or primary key for operator `-`\"",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to >::>, Add unique:: [unique]]",
-        "[1] type: ours warning vs theirs info",
-        "[1] row: ours 2 vs theirs 3",
-        "[1] quickFixes: ours [] vs theirs [Change to ?-::?-, Add not null::]",
-        "[2] type: ours warning vs theirs info",
+        "[0] quickFixes: ours [Change to -?::-?, Add not null:: [not null]] vs theirs [Change to >::>, Add unique:: [unique]]",
+        "[1] text: ours \"Column `parent.id` should be unique or primary key for operator `-`\" vs theirs \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\"",
+        "[1] row: ours 0 vs theirs 3",
+        "[1] quickFixes: ours [Change to <>::<>] vs theirs [Change to ?-::?-, Add not null::]",
         "[2] text: ours \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\" vs theirs \"Column `child.parent_id` should be unique or primary key for operator `-`\"",
-        "[2] row: ours 4 vs theirs 3",
-        "[2] quickFixes: ours [] vs theirs [Change to <::<, Add unique::, unique]",
-        "[3] type: ours warning vs theirs info",
-        "[3] text: ours \"Column `parent.id` should be unique or primary key for operator `-`\" vs theirs \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\"",
-        "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [] vs theirs [Change to ?-::?-, Add not null::]"
+        "[2] row: ours 2 vs theirs 3",
+        "[2] quickFixes: ours [Change to ?-::?-, Add not null::not null] vs theirs [Change to <::<, Add unique::, unique]",
+        "[3] text: ours \"Column `child.parent_id` should be unique or primary key for operator `-`\" vs theirs \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\"",
+        "[3] row: ours 2 vs theirs 5",
+        "[3] quickFixes: ours [Change to <>::<>, Add unique::, unique] vs theirs [Change to ?-::?-, Add not null::]",
+        "[4] text: ours \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\" vs theirs \"Column `child.parent_id` should be unique or primary key for operator `-`\"",
+        "[4] row: ours 4 vs theirs 5",
+        "[4] quickFixes: ours [Change to ?-::?-, Add not null::not null] vs theirs [Change to <::<, Add unique::, unique]",
+        "[5] text: ours \"Column `child.parent_id` should be unique or primary key for operator `-`\" vs theirs \"Column `parent.id` should be unique or primary key for operator `-`\"",
+        "[5] row: ours 4 vs theirs 5",
+        "[5] quickFixes: ours [Change to <>::<>, Add unique::, unique] vs theirs [Change to >::>, Add unique:: [unique]]"
       ]
     },
     {
@@ -265,21 +249,16 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 4 vs theirs 6",
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to >::>, Add unique::, unique]",
-        "[1] type: ours warning vs theirs info",
+        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to >::>, Add unique::, unique]",
         "[1] row: ours 2 vs theirs 3",
-        "[1] quickFixes: ours [] vs theirs [Change to ?-::?-, Add not null:: [not null]]",
-        "[2] type: ours warning vs theirs info",
-        "[2] text: ours \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\" vs theirs \"Column `child.parent_id` should be unique or primary key for operator `-`\"",
-        "[2] row: ours 4 vs theirs 3",
-        "[2] quickFixes: ours [] vs theirs [Change to <::<, Add unique:: [unique]]",
-        "[3] type: ours warning vs theirs info",
-        "[3] text: ours \"Column `parent.id` should be unique or primary key for operator `-`\" vs theirs \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\"",
+        "[2] row: ours 2 vs theirs 3",
+        "[2] quickFixes: ours [Change to <>::<>, Add unique:: [unique]] vs theirs [Change to <::<, Add unique:: [unique]]",
         "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [] vs theirs [Change to ?-::?-, Add not null:: [not null]]"
+        "[4] row: ours 4 vs theirs 5",
+        "[4] quickFixes: ours [Change to <>::<>, Add unique:: [unique]] vs theirs [Change to <::<, Add unique:: [unique]]",
+        "[5] row: ours 4 vs theirs 5",
+        "[5] quickFixes: ours [Change to <>::<>] vs theirs [Change to >::>, Add unique::, unique]"
       ]
     },
     {
@@ -287,21 +266,25 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 4 vs theirs 6",
-        "[0] type: ours warning vs theirs info",
+        "count: ours 8 vs theirs 6",
+        "[0] text: ours \"Column `parent.id` is nullable but operator `-` requires it to be NOT NULL\" vs theirs \"Column `parent.id` should be unique or primary key for operator `-`\"",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to >::>, Add unique:: [unique]]",
-        "[1] type: ours warning vs theirs info",
-        "[1] row: ours 2 vs theirs 3",
-        "[1] quickFixes: ours [] vs theirs [Change to ?-::?-, Add not null:: [not null]]",
-        "[2] type: ours warning vs theirs info",
+        "[0] quickFixes: ours [Change to -?::-?, Add not null:: [not null]] vs theirs [Change to >::>, Add unique:: [unique]]",
+        "[1] text: ours \"Column `parent.id` should be unique or primary key for operator `-`\" vs theirs \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\"",
+        "[1] row: ours 0 vs theirs 3",
+        "[1] quickFixes: ours [Change to <>::<>] vs theirs [Change to ?-::?-, Add not null:: [not null]]",
         "[2] text: ours \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\" vs theirs \"Column `child.parent_id` should be unique or primary key for operator `-`\"",
-        "[2] row: ours 4 vs theirs 3",
-        "[2] quickFixes: ours [] vs theirs [Change to <::<, Add unique:: [unique]]",
-        "[3] type: ours warning vs theirs info",
-        "[3] text: ours \"Column `parent.id` should be unique or primary key for operator `-`\" vs theirs \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\"",
-        "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [] vs theirs [Change to ?-::?-, Add not null:: [not null]]"
+        "[2] row: ours 2 vs theirs 3",
+        "[2] quickFixes: ours [Change to ?-::?-, Add not null:: [not null]] vs theirs [Change to <::<, Add unique:: [unique]]",
+        "[3] text: ours \"Column `child.parent_id` should be unique or primary key for operator `-`\" vs theirs \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\"",
+        "[3] row: ours 2 vs theirs 5",
+        "[3] quickFixes: ours [Change to <>::<>, Add unique:: [unique]] vs theirs [Change to ?-::?-, Add not null:: [not null]]",
+        "[4] text: ours \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\" vs theirs \"Column `child.parent_id` should be unique or primary key for operator `-`\"",
+        "[4] row: ours 4 vs theirs 5",
+        "[4] quickFixes: ours [Change to ?-::?-, Add not null:: [not null]] vs theirs [Change to <::<, Add unique:: [unique]]",
+        "[5] text: ours \"Column `child.parent_id` should be unique or primary key for operator `-`\" vs theirs \"Column `parent.id` should be unique or primary key for operator `-`\"",
+        "[5] row: ours 4 vs theirs 5",
+        "[5] quickFixes: ours [Change to <>::<>, Add unique:: [unique]] vs theirs [Change to >::>, Add unique:: [unique]]"
       ]
     },
     {
@@ -309,12 +292,8 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 2 vs theirs 3",
-        "[0] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique::, unique]",
-        "[1] type: ours warning vs theirs info",
-        "[1] row: ours 4 vs theirs 5",
-        "[1] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique::, unique]"
+        "[1] row: ours 4 vs theirs 5"
       ]
     },
     {
@@ -322,18 +301,10 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to >?::>?, Add not null:: [not null]]",
-        "[1] type: ours warning vs theirs info",
         "[1] row: ours 2 vs theirs 3",
-        "[1] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique::, unique]",
-        "[2] type: ours warning vs theirs info",
         "[2] row: ours 4 vs theirs 5",
-        "[2] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique::, unique]",
-        "[3] type: ours warning vs theirs info",
-        "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [] vs theirs [Change to >?::>?, Add not null:: [not null]]"
+        "[3] row: ours 4 vs theirs 5"
       ]
     },
     {
@@ -341,12 +312,8 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 2 vs theirs 3",
-        "[0] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique::, unique]",
-        "[1] type: ours warning vs theirs info",
-        "[1] row: ours 4 vs theirs 5",
-        "[1] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique::, unique]"
+        "[1] row: ours 4 vs theirs 5"
       ]
     },
     {
@@ -354,18 +321,10 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to >?::>?, Add not null:: [not null]]",
-        "[1] type: ours warning vs theirs info",
         "[1] row: ours 2 vs theirs 3",
-        "[1] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique::, unique]",
-        "[2] type: ours warning vs theirs info",
         "[2] row: ours 4 vs theirs 5",
-        "[2] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique::, unique]",
-        "[3] type: ours warning vs theirs info",
-        "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [] vs theirs [Change to >?::>?, Add not null:: [not null]]"
+        "[3] row: ours 4 vs theirs 5"
       ]
     },
     {
@@ -373,12 +332,8 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 2 vs theirs 3",
-        "[0] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique:: [unique]]",
-        "[1] type: ours warning vs theirs info",
-        "[1] row: ours 4 vs theirs 5",
-        "[1] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique:: [unique]]"
+        "[1] row: ours 4 vs theirs 5"
       ]
     },
     {
@@ -386,18 +341,10 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to >?::>?, Add not null:: [not null]]",
-        "[1] type: ours warning vs theirs info",
         "[1] row: ours 2 vs theirs 3",
-        "[1] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique:: [unique]]",
-        "[2] type: ours warning vs theirs info",
         "[2] row: ours 4 vs theirs 5",
-        "[2] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique:: [unique]]",
-        "[3] type: ours warning vs theirs info",
-        "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [] vs theirs [Change to >?::>?, Add not null:: [not null]]"
+        "[3] row: ours 4 vs theirs 5"
       ]
     },
     {
@@ -405,18 +352,12 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to >::>, Make nullable::]",
-        "[1] type: ours warning vs theirs info",
+        "[0] quickFixes: ours [Change to >::>, Make nullable::null] vs theirs [Change to >::>, Make nullable::]",
         "[1] row: ours 2 vs theirs 3",
-        "[1] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique::, unique]",
-        "[2] type: ours warning vs theirs info",
         "[2] row: ours 4 vs theirs 5",
-        "[2] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique::, unique]",
-        "[3] type: ours warning vs theirs info",
         "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [] vs theirs [Change to >::>, Make nullable::]"
+        "[3] quickFixes: ours [Change to >::>, Make nullable::null] vs theirs [Change to >::>, Make nullable::]"
       ]
     },
     {
@@ -424,12 +365,8 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 2 vs theirs 3",
-        "[0] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique::, unique]",
-        "[1] type: ours warning vs theirs info",
-        "[1] row: ours 4 vs theirs 5",
-        "[1] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique::, unique]"
+        "[1] row: ours 4 vs theirs 5"
       ]
     },
     {
@@ -437,18 +374,12 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to >::>, Make nullable::]",
-        "[1] type: ours warning vs theirs info",
+        "[0] quickFixes: ours [Change to >::>, Make nullable::null] vs theirs [Change to >::>, Make nullable::]",
         "[1] row: ours 2 vs theirs 3",
-        "[1] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique::, unique]",
-        "[2] type: ours warning vs theirs info",
         "[2] row: ours 4 vs theirs 5",
-        "[2] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique::, unique]",
-        "[3] type: ours warning vs theirs info",
         "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [] vs theirs [Change to >::>, Make nullable::]"
+        "[3] quickFixes: ours [Change to >::>, Make nullable::null] vs theirs [Change to >::>, Make nullable::]"
       ]
     },
     {
@@ -456,12 +387,8 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 2 vs theirs 3",
-        "[0] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique::, unique]",
-        "[1] type: ours warning vs theirs info",
-        "[1] row: ours 4 vs theirs 5",
-        "[1] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique::, unique]"
+        "[1] row: ours 4 vs theirs 5"
       ]
     },
     {
@@ -469,18 +396,12 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to >::>, Make nullable::]",
-        "[1] type: ours warning vs theirs info",
+        "[0] quickFixes: ours [Change to >::>, Make nullable::null] vs theirs [Change to >::>, Make nullable::]",
         "[1] row: ours 2 vs theirs 3",
-        "[1] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique:: [unique]]",
-        "[2] type: ours warning vs theirs info",
         "[2] row: ours 4 vs theirs 5",
-        "[2] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique:: [unique]]",
-        "[3] type: ours warning vs theirs info",
         "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [] vs theirs [Change to >::>, Make nullable::]"
+        "[3] quickFixes: ours [Change to >::>, Make nullable::null] vs theirs [Change to >::>, Make nullable::]"
       ]
     },
     {
@@ -488,12 +409,8 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 2 vs theirs 3",
-        "[0] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique:: [unique]]",
-        "[1] type: ours warning vs theirs info",
-        "[1] row: ours 4 vs theirs 5",
-        "[1] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique:: [unique]]"
+        "[1] row: ours 4 vs theirs 5"
       ]
     },
     {
@@ -501,12 +418,10 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique::, unique]",
-        "[1] type: ours warning vs theirs info",
+        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>::<>, Add unique::, unique]",
         "[1] row: ours 4 vs theirs 5",
-        "[1] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique::, unique]"
+        "[1] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>::<>, Add unique::, unique]"
       ]
     },
     {
@@ -514,12 +429,10 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique:: [unique]]",
-        "[1] type: ours warning vs theirs info",
+        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>::<>, Add unique:: [unique]]",
         "[1] row: ours 4 vs theirs 5",
-        "[1] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique:: [unique]]"
+        "[1] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>::<>, Add unique:: [unique]]"
       ]
     },
     {
@@ -527,18 +440,14 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique::, unique]",
-        "[1] type: ours warning vs theirs info",
+        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>::<>, Add unique::, unique]",
         "[1] row: ours 2 vs theirs 3",
-        "[1] quickFixes: ours [] vs theirs [Change to ?<::?<, Add not null::]",
-        "[2] type: ours warning vs theirs info",
+        "[1] quickFixes: ours [Change to ?<::?<, Add not null::not null] vs theirs [Change to ?<::?<, Add not null::]",
         "[2] row: ours 4 vs theirs 5",
-        "[2] quickFixes: ours [] vs theirs [Change to ?<::?<, Add not null::]",
-        "[3] type: ours warning vs theirs info",
+        "[2] quickFixes: ours [Change to ?<::?<, Add not null::not null] vs theirs [Change to ?<::?<, Add not null::]",
         "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique::, unique]"
+        "[3] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>::<>, Add unique::, unique]"
       ]
     },
     {
@@ -546,18 +455,14 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique:: [unique]]",
-        "[1] type: ours warning vs theirs info",
+        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>::<>, Add unique:: [unique]]",
         "[1] row: ours 2 vs theirs 3",
-        "[1] quickFixes: ours [] vs theirs [Change to ?<::?<, Add not null::]",
-        "[2] type: ours warning vs theirs info",
+        "[1] quickFixes: ours [Change to ?<::?<, Add not null::not null] vs theirs [Change to ?<::?<, Add not null::]",
         "[2] row: ours 4 vs theirs 5",
-        "[2] quickFixes: ours [] vs theirs [Change to ?<::?<, Add not null::]",
-        "[3] type: ours warning vs theirs info",
+        "[2] quickFixes: ours [Change to ?<::?<, Add not null::not null] vs theirs [Change to ?<::?<, Add not null::]",
         "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique:: [unique]]"
+        "[3] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>::<>, Add unique:: [unique]]"
       ]
     },
     {
@@ -565,18 +470,12 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique::, unique]",
-        "[1] type: ours warning vs theirs info",
+        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>::<>, Add unique::, unique]",
         "[1] row: ours 2 vs theirs 3",
-        "[1] quickFixes: ours [] vs theirs [Change to ?<::?<, Add not null:: [not null]]",
-        "[2] type: ours warning vs theirs info",
         "[2] row: ours 4 vs theirs 5",
-        "[2] quickFixes: ours [] vs theirs [Change to ?<::?<, Add not null:: [not null]]",
-        "[3] type: ours warning vs theirs info",
         "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique::, unique]"
+        "[3] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>::<>, Add unique::, unique]"
       ]
     },
     {
@@ -584,18 +483,12 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique:: [unique]]",
-        "[1] type: ours warning vs theirs info",
+        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>::<>, Add unique:: [unique]]",
         "[1] row: ours 2 vs theirs 3",
-        "[1] quickFixes: ours [] vs theirs [Change to ?<::?<, Add not null:: [not null]]",
-        "[2] type: ours warning vs theirs info",
         "[2] row: ours 4 vs theirs 5",
-        "[2] quickFixes: ours [] vs theirs [Change to ?<::?<, Add not null:: [not null]]",
-        "[3] type: ours warning vs theirs info",
         "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique:: [unique]]"
+        "[3] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>::<>, Add unique:: [unique]]"
       ]
     },
     {
@@ -608,12 +501,8 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add not null:: [not null]]",
-        "[1] type: ours warning vs theirs info",
-        "[1] row: ours 4 vs theirs 5",
-        "[1] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add not null:: [not null]]"
+        "[1] row: ours 4 vs theirs 5"
       ]
     },
     {
@@ -621,12 +510,10 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 2 vs theirs 3",
-        "[0] quickFixes: ours [] vs theirs [Change to ?<>::?<>, Add not null::]",
-        "[1] type: ours warning vs theirs info",
+        "[0] quickFixes: ours [Change to ?<>::?<>, Add not null::not null] vs theirs [Change to ?<>::?<>, Add not null::]",
         "[1] row: ours 4 vs theirs 5",
-        "[1] quickFixes: ours [] vs theirs [Change to ?<>::?<>, Add not null::]"
+        "[1] quickFixes: ours [Change to ?<>::?<>, Add not null::not null] vs theirs [Change to ?<>::?<>, Add not null::]"
       ]
     },
     {
@@ -634,18 +521,12 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add not null:: [not null]]",
-        "[1] type: ours warning vs theirs info",
         "[1] row: ours 2 vs theirs 3",
-        "[1] quickFixes: ours [] vs theirs [Change to ?<>::?<>, Add not null::]",
-        "[2] type: ours warning vs theirs info",
+        "[1] quickFixes: ours [Change to ?<>::?<>, Add not null::not null] vs theirs [Change to ?<>::?<>, Add not null::]",
         "[2] row: ours 4 vs theirs 5",
-        "[2] quickFixes: ours [] vs theirs [Change to ?<>::?<>, Add not null::]",
-        "[3] type: ours warning vs theirs info",
-        "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add not null:: [not null]]"
+        "[2] quickFixes: ours [Change to ?<>::?<>, Add not null::not null] vs theirs [Change to ?<>::?<>, Add not null::]",
+        "[3] row: ours 4 vs theirs 5"
       ]
     },
     {
@@ -653,12 +534,8 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 2 vs theirs 3",
-        "[0] quickFixes: ours [] vs theirs [Change to ?<>::?<>, Add not null:: [not null]]",
-        "[1] type: ours warning vs theirs info",
-        "[1] row: ours 4 vs theirs 5",
-        "[1] quickFixes: ours [] vs theirs [Change to ?<>::?<>, Add not null:: [not null]]"
+        "[1] row: ours 4 vs theirs 5"
       ]
     },
     {
@@ -666,18 +543,10 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add not null:: [not null]]",
-        "[1] type: ours warning vs theirs info",
         "[1] row: ours 2 vs theirs 3",
-        "[1] quickFixes: ours [] vs theirs [Change to ?<>::?<>, Add not null:: [not null]]",
-        "[2] type: ours warning vs theirs info",
         "[2] row: ours 4 vs theirs 5",
-        "[2] quickFixes: ours [] vs theirs [Change to ?<>::?<>, Add not null:: [not null]]",
-        "[3] type: ours warning vs theirs info",
-        "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add not null:: [not null]]"
+        "[3] row: ours 4 vs theirs 5"
       ]
     },
     {
@@ -685,12 +554,10 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to <>::<>, Make nullable::]",
-        "[1] type: ours warning vs theirs info",
+        "[0] quickFixes: ours [Change to <>::<>, Make nullable::null] vs theirs [Change to <>::<>, Make nullable::]",
         "[1] row: ours 4 vs theirs 5",
-        "[1] quickFixes: ours [] vs theirs [Change to <>::<>, Make nullable::]"
+        "[1] quickFixes: ours [Change to <>::<>, Make nullable::null] vs theirs [Change to <>::<>, Make nullable::]"
       ]
     },
     {
@@ -703,18 +570,14 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to <>::<>, Make nullable::]",
-        "[1] type: ours warning vs theirs info",
+        "[0] quickFixes: ours [Change to <>::<>, Make nullable::null] vs theirs [Change to <>::<>, Make nullable::]",
         "[1] row: ours 2 vs theirs 3",
-        "[1] quickFixes: ours [] vs theirs [Change to ?<>?::?<>?, Add not null::]",
-        "[2] type: ours warning vs theirs info",
+        "[1] quickFixes: ours [Change to ?<>?::?<>?, Add not null::not null] vs theirs [Change to ?<>?::?<>?, Add not null::]",
         "[2] row: ours 4 vs theirs 5",
-        "[2] quickFixes: ours [] vs theirs [Change to ?<>?::?<>?, Add not null::]",
-        "[3] type: ours warning vs theirs info",
+        "[2] quickFixes: ours [Change to ?<>?::?<>?, Add not null::not null] vs theirs [Change to ?<>?::?<>?, Add not null::]",
         "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [] vs theirs [Change to <>::<>, Make nullable::]"
+        "[3] quickFixes: ours [Change to <>::<>, Make nullable::null] vs theirs [Change to <>::<>, Make nullable::]"
       ]
     },
     {
@@ -722,12 +585,10 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 2 vs theirs 3",
-        "[0] quickFixes: ours [] vs theirs [Change to ?<>?::?<>?, Add not null::]",
-        "[1] type: ours warning vs theirs info",
+        "[0] quickFixes: ours [Change to ?<>?::?<>?, Add not null::not null] vs theirs [Change to ?<>?::?<>?, Add not null::]",
         "[1] row: ours 4 vs theirs 5",
-        "[1] quickFixes: ours [] vs theirs [Change to ?<>?::?<>?, Add not null::]"
+        "[1] quickFixes: ours [Change to ?<>?::?<>?, Add not null::not null] vs theirs [Change to ?<>?::?<>?, Add not null::]"
       ]
     },
     {
@@ -735,18 +596,12 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to <>::<>, Make nullable::]",
-        "[1] type: ours warning vs theirs info",
+        "[0] quickFixes: ours [Change to <>::<>, Make nullable::null] vs theirs [Change to <>::<>, Make nullable::]",
         "[1] row: ours 2 vs theirs 3",
-        "[1] quickFixes: ours [] vs theirs [Change to ?<>?::?<>?, Add not null:: [not null]]",
-        "[2] type: ours warning vs theirs info",
         "[2] row: ours 4 vs theirs 5",
-        "[2] quickFixes: ours [] vs theirs [Change to ?<>?::?<>?, Add not null:: [not null]]",
-        "[3] type: ours warning vs theirs info",
         "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [] vs theirs [Change to <>::<>, Make nullable::]"
+        "[3] quickFixes: ours [Change to <>::<>, Make nullable::null] vs theirs [Change to <>::<>, Make nullable::]"
       ]
     },
     {
@@ -754,12 +609,8 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 2 vs theirs 3",
-        "[0] quickFixes: ours [] vs theirs [Change to ?<>?::?<>?, Add not null:: [not null]]",
-        "[1] type: ours warning vs theirs info",
-        "[1] row: ours 4 vs theirs 5",
-        "[1] quickFixes: ours [] vs theirs [Change to ?<>?::?<>?, Add not null:: [not null]]"
+        "[1] row: ours 4 vs theirs 5"
       ]
     },
     {
@@ -767,12 +618,10 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique::, unique]",
-        "[1] type: ours warning vs theirs info",
+        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>?::<>?, Add unique::, unique]",
         "[1] row: ours 4 vs theirs 5",
-        "[1] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique::, unique]"
+        "[1] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>?::<>?, Add unique::, unique]"
       ]
     },
     {
@@ -780,12 +629,10 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique:: [unique]]",
-        "[1] type: ours warning vs theirs info",
+        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>?::<>?, Add unique:: [unique]]",
         "[1] row: ours 4 vs theirs 5",
-        "[1] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique:: [unique]]"
+        "[1] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>?::<>?, Add unique:: [unique]]"
       ]
     },
     {
@@ -793,18 +640,14 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique::, unique]",
-        "[1] type: ours warning vs theirs info",
+        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>?::<>?, Add unique::, unique]",
         "[1] row: ours 2 vs theirs 3",
-        "[1] quickFixes: ours [] vs theirs [Change to ?<?::?<?, Add not null::]",
-        "[2] type: ours warning vs theirs info",
+        "[1] quickFixes: ours [Change to ?<?::?<?, Add not null::not null] vs theirs [Change to ?<?::?<?, Add not null::]",
         "[2] row: ours 4 vs theirs 5",
-        "[2] quickFixes: ours [] vs theirs [Change to ?<?::?<?, Add not null::]",
-        "[3] type: ours warning vs theirs info",
+        "[2] quickFixes: ours [Change to ?<?::?<?, Add not null::not null] vs theirs [Change to ?<?::?<?, Add not null::]",
         "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique::, unique]"
+        "[3] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>?::<>?, Add unique::, unique]"
       ]
     },
     {
@@ -812,18 +655,14 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique:: [unique]]",
-        "[1] type: ours warning vs theirs info",
+        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>?::<>?, Add unique:: [unique]]",
         "[1] row: ours 2 vs theirs 3",
-        "[1] quickFixes: ours [] vs theirs [Change to ?<?::?<?, Add not null::]",
-        "[2] type: ours warning vs theirs info",
+        "[1] quickFixes: ours [Change to ?<?::?<?, Add not null::not null] vs theirs [Change to ?<?::?<?, Add not null::]",
         "[2] row: ours 4 vs theirs 5",
-        "[2] quickFixes: ours [] vs theirs [Change to ?<?::?<?, Add not null::]",
-        "[3] type: ours warning vs theirs info",
+        "[2] quickFixes: ours [Change to ?<?::?<?, Add not null::not null] vs theirs [Change to ?<?::?<?, Add not null::]",
         "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique:: [unique]]"
+        "[3] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>?::<>?, Add unique:: [unique]]"
       ]
     },
     {
@@ -831,18 +670,12 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique::, unique]",
-        "[1] type: ours warning vs theirs info",
+        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>?::<>?, Add unique::, unique]",
         "[1] row: ours 2 vs theirs 3",
-        "[1] quickFixes: ours [] vs theirs [Change to ?<?::?<?, Add not null:: [not null]]",
-        "[2] type: ours warning vs theirs info",
         "[2] row: ours 4 vs theirs 5",
-        "[2] quickFixes: ours [] vs theirs [Change to ?<?::?<?, Add not null:: [not null]]",
-        "[3] type: ours warning vs theirs info",
         "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique::, unique]"
+        "[3] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>?::<>?, Add unique::, unique]"
       ]
     },
     {
@@ -850,18 +683,12 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique:: [unique]]",
-        "[1] type: ours warning vs theirs info",
+        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>?::<>?, Add unique:: [unique]]",
         "[1] row: ours 2 vs theirs 3",
-        "[1] quickFixes: ours [] vs theirs [Change to ?<?::?<?, Add not null:: [not null]]",
-        "[2] type: ours warning vs theirs info",
         "[2] row: ours 4 vs theirs 5",
-        "[2] quickFixes: ours [] vs theirs [Change to ?<?::?<?, Add not null:: [not null]]",
-        "[3] type: ours warning vs theirs info",
         "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique:: [unique]]"
+        "[3] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>?::<>?, Add unique:: [unique]]"
       ]
     },
     {
@@ -870,9 +697,7 @@
       "class": "semantic",
       "problems": [
         "count: ours 2 vs theirs 1",
-        "[0] type: ours warning vs theirs info",
-        "[0] row: ours 6 vs theirs 7",
-        "[0] quickFixes: ours [] vs theirs [Change to >?::>?, Add not null::, not null]"
+        "[0] row: ours 6 vs theirs 7"
       ]
     },
     {
@@ -881,12 +706,10 @@
       "class": "semantic",
       "problems": [
         "count: ours 3 vs theirs 2",
-        "[0] type: ours warning vs theirs info",
         "[0] row: ours 3 vs theirs 4",
-        "[0] quickFixes: ours [] vs theirs [Change to >?::>?, Add not null::, not null]",
-        "[1] type: ours warning vs theirs info",
         "[1] text: ours \"Column `posts.author_id` is nullable but operator `>` requires it to be NOT NULL\" vs theirs \"FK violation: `posts.author_id` = `42` does not exist in `users.id`\"",
-        "[1] row: ours 3 vs theirs 6"
+        "[1] row: ours 3 vs theirs 6",
+        "[1] quickFixes: ours [Change to >?::>?, Add not null::, not null] vs theirs []"
       ]
     },
     {
@@ -894,10 +717,9 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 1 vs theirs 2",
-        "[0] type: ours warning vs theirs info",
-        "[0] text: ours \"FK violation: posts.author_id =  does not exist in users.id\" vs theirs \"FK violation: `posts.author_id` = `null` must not be NULL\"",
-        "[0] row: ours 5 vs theirs 6"
+        "[0] text: ours \"FK violation: `posts.author_id` = `` must not be NULL\" vs theirs \"FK violation: `posts.author_id` = `null` must not be NULL\"",
+        "[0] row: ours 5 vs theirs 6",
+        "[1] row: ours 5 vs theirs 6"
       ]
     },
     {
@@ -905,7 +727,6 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] text: ours \"Column 'nope' does not exist in Table 'b'\" vs theirs \"Column 'nope' does not exist in Table 'public.b'\"",
         "[0] row: ours 2 vs theirs 3"
       ]
     },
@@ -914,9 +735,7 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] text: ours \"Column 'nope' does not exist in Table 'a'\" vs theirs \"Column 'nope' does not exist in Table 'public.a'\"",
         "[0] row: ours 2 vs theirs 3",
-        "[1] text: ours \"Column 'y' does not exist in Table 'b'\" vs theirs \"Column 'y' does not exist in Table 'public.b'\"",
         "[1] row: ours 2 vs theirs 3"
       ]
     },
@@ -925,17 +744,13 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[0] text: ours \"Table 'missing' does not exist\" vs theirs \"Table 'missing' does not exist in Schema 'public'\"",
         "[0] row: ours 1 vs theirs 2"
       ]
     },
     {
       "name": "reported-index-pk",
-      "status": "divergent",
-      "class": "semantic",
-      "problems": [
-        "count: ours 2 vs theirs 0"
-      ]
+      "status": "ok",
+      "count": 0
     }
   ]
 }

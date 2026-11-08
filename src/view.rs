@@ -3663,7 +3663,9 @@ fn diagnostics_overlay(app: &App) -> Element<'_, Message> {
                 let d = &entries[*i];
                 let dot = match d.severity {
                     Severity::Error => DIAG_RED_DOT,
-                    Severity::Warning => DIAG_BLUE_DOT,
+                    // dbdiagram's theme renders infos and warnings the
+                    // same soft blue (#64A0DC80) — the panel mirrors it
+                    Severity::Warning | Severity::Info => DIAG_BLUE_DOT,
                 };
                 let (line, col) = dbml_ui::dbml::parser::line_col_at(src, d.offset);
                 let expanded = app.diagnostics_expanded == Some(*i);
