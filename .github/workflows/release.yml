@@ -87,8 +87,17 @@ jobs:
           RUSTFLAGS: -L native=/usr/lib/x86_64-linux-gnu
         run: cargo zigbuild --release --target x86_64-unknown-linux-gnu.2.31
 
+      - name: Build release binary (Windows, static CRT)
+        if: matrix.bundle == 'windows'
+        env:
+          # the MSVC default links the DYNAMIC CRT (VCRUNTIME140.dll),
+          # which the exe does not ship — a clean machine can't run it.
+          # crt-static embeds the runtime: the portable-single-exe promise
+          RUSTFLAGS: -C target-feature=+crt-static
+        run: cargo build --release --target x86_64-pc-windows-msvc
+
       - name: Build release binary
-        if: matrix.bundle != 'linux'
+        if: matrix.bundle == 'macos'
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Bundle Linux (tar.gz + .deb)
