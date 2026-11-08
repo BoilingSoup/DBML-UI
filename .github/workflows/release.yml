@@ -371,7 +371,23 @@ jobs:
         with:
           merge-multiple: true
           path: dist
+      - name: Write the release notes
+        run: |
+          cat > release-notes.md <<NOTES
+          ## dbml-ui ${GITHUB_REF_NAME#v}
+
+          Edit DBML on the left, watch the ER diagram render live on the
+          right — vim-style editing, table groups, sticky notes, records
+          rows. Imports SQL dumps, exports SVG, PNG and SQL DDL.
+
+          ### Downloads
+          - **Linux** — tar.gz (portable), .deb, AppImage, .flatpak
+          - **Windows** — portable exe
+          - **macOS** — .app zip (Apple Silicon + Intel)
+
+          Full history: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commits/${GITHUB_REF_NAME}
+          NOTES
       - uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          body_path: release-notes.md
           files: dist/dbml-ui*
