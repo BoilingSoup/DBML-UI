@@ -40,6 +40,9 @@ pub struct Table {
     pub indexes: Vec<Index>,
     /// `Checks { ... }` block content, verbatim (their importer emits it).
     pub checks: Option<String>,
+    /// The block parsed into entries (their check interpretation: each
+    /// field is a backticked function expression with optional settings).
+    pub check_entries: Vec<TableCheck>,
     /// `records { ... }` sample rows (in-table or top-level, attached to
     /// the named table).
     pub records: Option<TableRecords>,
@@ -143,9 +146,20 @@ pub struct InlineRef {
     pub color: Option<String>,
 }
 
+/// One `Checks { }` entry: the backticked expression plus an optional
+/// `[name: '…']`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableCheck {
+    pub expression: String,
+    pub name: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Index {
     pub columns: Vec<String>,
+    /// Parallel to `columns`: true when the entry was a backticked
+    /// functional expression (their index-column `type: "expression"`).
+    pub expressions: Vec<bool>,
     pub unique: bool,
     pub pk: bool,
     pub name: Option<String>,

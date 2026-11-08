@@ -810,6 +810,63 @@ fn swallow_balanced_braces(input: &mut &str) {
     *input = "";
 }
 
+
+/// Their check-block grammar: each field is a backticked function
+/// expression, optionally followed by a settings list carrying `name`.
+/// A non-backticked field is their error.
+fn parse_check_entries(
+    raw: &str,
+    raw_base: usize,
+    errs: &mut Vec<ParseError>,
+) -> Vec<super::ast::TableCheck> {
+    let mut out = Vec::new();
+    let mut rest = raw;
+    loop {
+        let skipped = rest.len() - rest.trim_start().len();
+        rest = rest.trim_start();
+        if rest.is_empty() {
+            break;
+        }
+        let _ = skipped;
+        let entry_off = raw_base + (raw.len() - rest.len());
+        if let Some(exp) = rest.strip_prefix('`') {
+            let Some(close) = exp.find('`') else {
+                errs.push(err_at(entry_off, "unterminated check expression"));
+                break;
+            };
+            let expression = exp[..close].to_string();
+            rest = &exp[close + 1..];
+            let mut name = None;
+            let after = rest.trim_start();
+            if after.starts_with('[') {
+                let Some(close_b) = after.find(']') else {
+                    errs.push(err_at(entry_off, "unterminated check settings"));
+                    break;
+                };
+                let inner = &after[1..close_b];
+                for kv in inner.split(',') {
+                    let kv = kv.trim();
+                    if let Some((k, v)) = kv.split_once(':') {
+                        if k.trim().eq_ignore_ascii_case("name") {
+                            name = Some(v.trim().trim_matches('\'').to_string());
+                        }
+                    }
+                }
+                rest = &after[close_b + 1..];
+            }
+            out.push(super::ast::TableCheck { expression, name });
+        } else {
+            errs.push(err_at(entry_off, "A check field must be a function expression"));
+            // skip to the next backtick entry or the end
+            match rest.find('`') {
+                Some(k) => rest = &rest[k..],
+                None => break,
+            }
+        }
+    }
+    out
+}
+
 /// Index column: an identifier. Upstream importers emit unquoted
 /// multi-word names (`date of birth`), so consecutive bare words on the
 /// same line join into one name.
@@ -864,10 +921,13 @@ fn index_ident(input: &mut &str, base: usize) -> R<String> {
 fn index(input: &mut &str, base: usize) -> R<Index> {
     let start = offset(input, base);
     let mut columns = Vec::new();
+    let mut expressions = Vec::new();
     if eat(input, "(") {
         loop {
             ws(input);
+            let is_expr = input.starts_with('`');
             columns.push(index_ident(input, base)?);
+            expressions.push(is_expr);
             ws(input);
             if !eat(input, ",") {
                 break;
@@ -877,12 +937,15 @@ fn index(input: &mut &str, base: usize) -> R<Index> {
             return fail(offset(input, base), "expected ')' after index columns");
         }
     } else {
+        let is_expr = input.starts_with('`');
         columns.push(index_ident(input, base)?);
+        expressions.push(is_expr);
     }
     sp(input);
     let mut comma_form = false;
     let mut idx = Index {
         columns,
+        expressions,
         unique: false,
         pk: false,
         name: None,
@@ -1309,6 +1372,7 @@ fn table(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Table> 
         columns: Vec::new(),
         indexes: Vec::new(),
         checks: None,
+        check_entries: Vec::new(),
         records: None,
         custom: Vec::new(),
     };
@@ -1393,9 +1457,12 @@ fn table(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Table> 
                 }
             }
             let raw = input[..end].trim().to_string();
+            let raw_start = input[..end].len() - input[..end].trim_start().len();
+            let entries = parse_check_entries(&raw, base + raw_start, errs);
             *input = &input[end..];
             let _ = eat(input, "}");
             t.checks = Some(raw);
+            t.check_entries = entries;
             continue;
         }
         if peek_kw_then(input, "indexes", '{') {

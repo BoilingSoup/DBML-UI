@@ -64,6 +64,123 @@ impl Diagnostic {
     }
 }
 
+
+/// The four raw cardinality bounds (their core/types/relation.ts).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Card {
+    /// `1` — required one
+    One,
+    /// `0..1` — optional one
+    Maybe,
+    /// `*` — required many (their CARDINALITY_SOME)
+    Some,
+    /// `0..*` — optional many
+    Many,
+}
+
+impl Card {
+    pub fn min_one(self) -> bool {
+        matches!(self, Card::One | Card::Some)
+    }
+    pub fn max_many(self) -> bool {
+        matches!(self, Card::Some | Card::Many)
+    }
+    /// min -> 0: `1` -> `0..1`, `*` -> `0..*` (their makeCardinalityOptional)
+    pub fn make_optional(self) -> Self {
+        match self {
+            Card::One => Card::Maybe,
+            Card::Some => Card::Many,
+            o => o,
+        }
+    }
+    /// min -> 1: `0..1` -> `1`, `0..*` -> `*` (their makeCardinalityRequired)
+    pub fn make_required(self) -> Self {
+        match self {
+            Card::Maybe => Card::One,
+            Card::Many => Card::Some,
+            o => o,
+        }
+    }
+    /// max -> many: `1` -> `*`, `0..1` -> `0..*` (their makeCardinalityMany)
+    pub fn make_many(self) -> Self {
+        match self {
+            Card::One => Card::Some,
+            Card::Maybe => Card::Many,
+            o => o,
+        }
+    }
+}
+
+/// their RELATIONSHIP_OPS: written operator -> (left, right) raw bounds
+pub fn op_cards(op: &str) -> (Card, Card) {
+    match op {
+        "-" => (Card::One, Card::One),
+        "<>" => (Card::Some, Card::Some),
+        ">" => (Card::Some, Card::One),
+        "<" => (Card::One, Card::Some),
+        "-?" => (Card::One, Card::Maybe),
+        "?-" => (Card::Maybe, Card::One),
+        "?-?" => (Card::Maybe, Card::Maybe),
+        "?>" => (Card::Many, Card::One),
+        ">?" => (Card::Some, Card::Maybe),
+        "?>?" => (Card::Many, Card::Maybe),
+        "?<" => (Card::Maybe, Card::Some),
+        "<?" => (Card::One, Card::Many),
+        "?<?" => (Card::Maybe, Card::Many),
+        "?<>" => (Card::Many, Card::Some),
+        "<>?" => (Card::Some, Card::Many),
+        "?<>?" => (Card::Many, Card::Many),
+        _ => (Card::Some, Card::Some),
+    }
+}
+
+/// the inverse (their CARDINALITY_TO_OP / getRelationshipOp) — the 4x4
+/// pair space is exactly their 16-entry map, so no fallback exists
+pub fn card_to_op(l: Card, r: Card) -> &'static str {
+    match (l, r) {
+        (Card::One, Card::One) => "-",
+        (Card::Some, Card::Some) => "<>",
+        (Card::Some, Card::One) => ">",
+        (Card::One, Card::Some) => "<",
+        (Card::One, Card::Maybe) => "-?",
+        (Card::Maybe, Card::One) => "?-",
+        (Card::Maybe, Card::Maybe) => "?-?",
+        (Card::Many, Card::One) => "?>",
+        (Card::Some, Card::Maybe) => ">?",
+        (Card::Many, Card::Maybe) => "?>?",
+        (Card::Maybe, Card::Some) => "?<",
+        (Card::One, Card::Many) => "<?",
+        (Card::Maybe, Card::Many) => "?<?",
+        (Card::Many, Card::Some) => "?<>",
+        (Card::Some, Card::Many) => "<>?",
+        (Card::Many, Card::Many) => "?<>?",
+    }
+}
+
+/// the written operator for (cardinality, optional marks) — round-trips
+/// through op_cards
+pub fn written_op(card: Cardinality, left_opt: bool, right_opt: bool) -> &'static str {
+    use Cardinality::*;
+    match (card, left_opt, right_opt) {
+        (ManyToOne, true, true) => "?>?",
+        (ManyToOne, true, false) => "?>",
+        (ManyToOne, false, true) => ">?",
+        (ManyToOne, false, false) => ">",
+        (OneToMany, true, true) => "?<?",
+        (OneToMany, true, false) => "?<",
+        (OneToMany, false, true) => "<?",
+        (OneToMany, false, false) => "<",
+        (ManyToMany, true, true) => "?<>?",
+        (ManyToMany, true, false) => "?<>",
+        (ManyToMany, false, true) => "<>?",
+        (ManyToMany, false, false) => "<>",
+        (OneToOne, true, true) => "?-?",
+        (OneToOne, true, false) => "?-",
+        (OneToOne, false, true) => "-?",
+        (OneToOne, false, false) => "-",
+    }
+}
+
 /// Validate a parsed document: duplicate definition names, refs and
 /// TableGroup members pointing at tables or columns that do not exist,
 /// index columns missing from their table, the nullable-FK constraint
@@ -323,121 +440,6 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
     // anchors that coincide (an inline ref's host column IS its left
     // token, so the pair collapses to one entry — their pushDiag).
     //
-    // Cardinality algebra (their core/types/relation.ts): the 16 operator
-    // forms are pairs over four raw bounds, and a quick-fix target
-    // re-composes the transformed side with the untouched other side —
-    // which is how a written `<?` suggests `<>?` and a written `-`
-    // suggests `>` (left side relaxes) / `<` (right side relaxes).
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum Card {
-        /// `1` — required one
-        One,
-        /// `0..1` — optional one
-        Maybe,
-        /// `*` — required many (their CARDINALITY_SOME)
-        Some,
-        /// `0..*` — optional many
-        Many,
-    }
-    impl Card {
-        fn min_one(self) -> bool {
-            matches!(self, Card::One | Card::Some)
-        }
-        fn max_many(self) -> bool {
-            matches!(self, Card::Some | Card::Many)
-        }
-        /// min -> 0: `1` -> `0..1`, `*` -> `0..*` (their makeCardinalityOptional)
-        fn make_optional(self) -> Self {
-            match self {
-                Card::One => Card::Maybe,
-                Card::Some => Card::Many,
-                o => o,
-            }
-        }
-        /// min -> 1: `0..1` -> `1`, `0..*` -> `*` (their makeCardinalityRequired)
-        fn make_required(self) -> Self {
-            match self {
-                Card::Maybe => Card::One,
-                Card::Many => Card::Some,
-                o => o,
-            }
-        }
-        /// max -> many: `1` -> `*`, `0..1` -> `0..*` (their makeCardinalityMany)
-        fn make_many(self) -> Self {
-            match self {
-                Card::One => Card::Some,
-                Card::Maybe => Card::Many,
-                o => o,
-            }
-        }
-    }
-    // their RELATIONSHIP_OPS: written operator -> (left, right) raw bounds
-    let op_cards = |op: &str| -> (Card, Card) {
-        match op {
-            "-" => (Card::One, Card::One),
-            "<>" => (Card::Some, Card::Some),
-            ">" => (Card::Some, Card::One),
-            "<" => (Card::One, Card::Some),
-            "-?" => (Card::One, Card::Maybe),
-            "?-" => (Card::Maybe, Card::One),
-            "?-?" => (Card::Maybe, Card::Maybe),
-            "?>" => (Card::Many, Card::One),
-            ">?" => (Card::Some, Card::Maybe),
-            "?>?" => (Card::Many, Card::Maybe),
-            "?<" => (Card::Maybe, Card::Some),
-            "<?" => (Card::One, Card::Many),
-            "?<?" => (Card::Maybe, Card::Many),
-            "?<>" => (Card::Many, Card::Some),
-            "<>?" => (Card::Some, Card::Many),
-            "?<>?" => (Card::Many, Card::Many),
-            _ => (Card::Some, Card::Some),
-        }
-    };
-    // the inverse (their CARDINALITY_TO_OP / getRelationshipOp) — the 4x4
-    // pair space is exactly their 16-entry map, so no fallback exists
-    let card_to_op = |l: Card, r: Card| -> &'static str {
-        match (l, r) {
-            (Card::One, Card::One) => "-",
-            (Card::Some, Card::Some) => "<>",
-            (Card::Some, Card::One) => ">",
-            (Card::One, Card::Some) => "<",
-            (Card::One, Card::Maybe) => "-?",
-            (Card::Maybe, Card::One) => "?-",
-            (Card::Maybe, Card::Maybe) => "?-?",
-            (Card::Many, Card::One) => "?>",
-            (Card::Some, Card::Maybe) => ">?",
-            (Card::Many, Card::Maybe) => "?>?",
-            (Card::Maybe, Card::Some) => "?<",
-            (Card::One, Card::Many) => "<?",
-            (Card::Maybe, Card::Many) => "?<?",
-            (Card::Many, Card::Some) => "?<>",
-            (Card::Some, Card::Many) => "<>?",
-            (Card::Many, Card::Many) => "?<>?",
-        }
-    };
-    // the written operator for (cardinality, optional marks) — round-trips
-    // through op_cards
-    let op_str = |card: Cardinality, left_opt: bool, right_opt: bool| -> &'static str {
-        use super::ast::Cardinality::*;
-        match (card, left_opt, right_opt) {
-            (ManyToOne, true, true) => "?>?",
-            (ManyToOne, true, false) => "?>",
-            (ManyToOne, false, true) => ">?",
-            (ManyToOne, false, false) => ">",
-            (OneToMany, true, true) => "?<?",
-            (OneToMany, true, false) => "?<",
-            (OneToMany, false, true) => "<?",
-            (OneToMany, false, false) => "<",
-            (ManyToMany, true, true) => "?<>?",
-            (ManyToMany, true, false) => "?<>",
-            (ManyToMany, false, true) => "<>?",
-            (ManyToMany, false, false) => "<>",
-            (OneToOne, true, true) => "?-?",
-            (OneToOne, true, false) => "?-",
-            (OneToOne, false, true) => "-?",
-            (OneToOne, false, false) => "-",
-        }
-    };
     let column_of = |table: &str, col: &str| -> Option<&super::ast::Column> {
         doc.tables
             .iter()
@@ -889,7 +891,7 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
         }
     };
     for r in &doc.refs {
-        let op = op_str(r.card, r.left_optional, r.right_optional);
+        let op = written_op(r.card, r.left_optional, r.right_optional);
         let sides = RefSides {
             left: Side {
                 table: &r.from.table,
@@ -917,7 +919,7 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
             let Some(ir) = &c.settings.inline_ref else {
                 continue;
             };
-            let op = op_str(ir.card, ir.left_optional, ir.right_optional);
+            let op = written_op(ir.card, ir.left_optional, ir.right_optional);
             let sides = RefSides {
                 left: Side {
                     table: &t.name,

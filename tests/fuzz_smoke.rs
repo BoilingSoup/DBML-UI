@@ -89,13 +89,13 @@ fn gen_dbml(rng: &mut Rng) -> String {
     let mut out = String::new();
     let table_n = 1 + rng.below(3);
     let mut tables: Vec<String> = Vec::new();
-    for t in 0..table_n {
+    for _t in 0..table_n {
         let name = NAMES[rng.below(NAMES.len())].to_string();
         tables.push(name.clone());
         out.push_str(&format!("Table {name} {{\n"));
         let col_n = 1 + rng.below(4);
         let mut cols: Vec<String> = Vec::new();
-        for c in 0..col_n {
+        for _c in 0..col_n {
             let col = COLS[rng.below(COLS.len())].to_string();
             cols.push(col.clone());
             out.push_str(&format!("  {col} {} ", TYPES[rng.below(TYPES.len())]));
