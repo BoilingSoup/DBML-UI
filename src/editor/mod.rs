@@ -519,6 +519,44 @@ fn find_word_boundary(input: &str, from: usize, forward: bool) -> usize {
     /// first match at/after it per keystroke), Enter cycles forward, Esc
     /// closes: the match bands drop (:noh) while the pattern stays for
     /// `n`/`N`.
+    /// Insert one character into the find query at the caret (replacing
+    /// a live selection), then refresh the live search. The shared body
+    /// of the Char and Space arms — space arrives as a NAMED key
+    /// (KeyCode::Space), never Char(' ').
+    fn find_insert_char(&mut self, c: char) {
+        if let Some(f) = &mut self.find {
+            let len = f.input.chars().count();
+            let caret = f.caret.min(len);
+            let anchor = f.anchor.unwrap_or(caret).min(len);
+            let (s, e) = (caret.min(anchor), caret.max(anchor));
+            let start_b = f
+                .input
+                .char_indices()
+                .nth(s)
+                .map(|(i, _)| i)
+                .unwrap_or(f.input.len());
+            let end_b = f
+                .input
+                .char_indices()
+                .nth(e)
+                .map(|(i, _)| i)
+                .unwrap_or(f.input.len());
+            if e > s {
+                f.input.replace_range(start_b..end_b, "");
+            }
+            let at = f
+                .input
+                .char_indices()
+                .nth(s)
+                .map(|(i, _)| i)
+                .unwrap_or(f.input.len());
+            f.input.insert(at, c);
+            f.caret = s + 1;
+            f.anchor = None;
+        }
+        self.apply_find_query();
+    }
+
     pub fn handle_find_key(&mut self, key: KeyEvent) -> Action {
         let mods = key.modifiers;
         match key.code {
@@ -629,37 +667,17 @@ fn find_word_boundary(input: &str, from: usize, forward: bool) -> usize {
                     && !mods.contains(KeyModifiers::ALT) =>
             {
                 // typing replaces the selection or inserts at the caret
-                if let Some(f) = &mut self.find {
-                    let len = f.input.chars().count();
-                    let caret = f.caret.min(len);
-                    let anchor = f.anchor.unwrap_or(caret).min(len);
-                    let (s, e) = (caret.min(anchor), caret.max(anchor));
-                    let start_b = f
-                        .input
-                        .char_indices()
-                        .nth(s)
-                        .map(|(i, _)| i)
-                        .unwrap_or(f.input.len());
-                    let end_b = f
-                        .input
-                        .char_indices()
-                        .nth(e)
-                        .map(|(i, _)| i)
-                        .unwrap_or(f.input.len());
-                    if e > s {
-                        f.input.replace_range(start_b..end_b, "");
-                    }
-                    let at = f
-                        .input
-                        .char_indices()
-                        .nth(s)
-                        .map(|(i, _)| i)
-                        .unwrap_or(f.input.len());
-                    f.input.insert(at, c);
-                    f.caret = s + 1;
-                    f.anchor = None;
-                }
-                self.apply_find_query();
+                self.find_insert_char(c);
+                Action::None
+            }
+            // iced reports the spacebar as a NAMED key — it never arrives
+            // as Char(' '), so without this arm the query cannot contain
+            // spaces (the reported issue)
+            KeyCode::Space
+                if !mods.contains(KeyModifiers::CONTROL)
+                    && !mods.contains(KeyModifiers::ALT) =>
+            {
+                self.find_insert_char(' ');
                 Action::None
             }
             // ctrl/alt chords are the app's business (select-all,
@@ -793,8 +811,16 @@ fn find_word_boundary(input: &str, from: usize, forward: bool) -> usize {
         let Some(f) = self.find.as_ref() else { return };
         if f.input.is_empty() {
             self.buf.clear_search();
-        } else if self.buf.set_search_pattern(&f.input) {
-            self.buf.search_forward(true);
+        } else {
+            // the gui find is LITERAL: the query is escaped so regex
+            // metacharacters match themselves (`a.b` finds "a.b", not
+            // "axb") and a half-typed pattern (`foo(`) can never be an
+            // invalid regex — the stale-highlights bug dies with the
+            // escape. (vim's `/` prompt keeps raw regex, see
+            // apply_vim_search.)
+            if self.buf.set_search_pattern(&regex::escape(&f.input)) {
+                self.buf.search_forward(true);
+            }
         }
     }
 
@@ -834,7 +860,19 @@ fn find_word_boundary(input: &str, from: usize, forward: bool) -> usize {
                 self.apply_vim_search();
                 Action::None
             }
-            _ => Action::None,
+                        // iced reports the spacebar as a NAMED key — same gap as the
+            // gui find's field
+            KeyCode::Space
+                if !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                if let Some(q) = self.vim_search.as_mut() {
+                    q.push(' ');
+                }
+                self.apply_vim_search();
+                Action::None
+            }
+_ => Action::None,
         }
     }
 
@@ -5925,5 +5963,101 @@ mod paste_undo_tests {
         assert_eq!(e.buf.line_count(), 3, "pasted inline, splitting lines");
         keys(&mut e, &[('u')]);
         assert_eq!(e.buf.line_count(), 2, "one u undoes the whole put");
+    }
+}
+
+#[cfg(test)]
+mod find_field_tests {
+    use super::*;
+
+    fn editor(src: &str) -> Editor {
+        let mut e = Editor::new(src);
+        e.toggle_find();
+        e
+    }
+
+    fn key(e: &mut Editor, code: KeyCode) {
+        e.handle_find_key(KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    fn chars(e: &mut Editor, cs: &[char]) {
+        for c in cs {
+            key(e, KeyCode::Char(*c));
+        }
+    }
+
+    #[test]
+    fn space_types_into_the_find_query() {
+        let mut e = editor("foo bar baz\n");
+        chars(&mut e, &[('f'), ('o'), ('o')]);
+        key(&mut e, KeyCode::Space);
+        chars(&mut e, &[('b'), ('a'), ('r')]);
+        let f = e.find.as_ref().expect("find open");
+        assert_eq!(f.input, "foo bar", "the named-key space lands in the query");
+        assert_eq!(f.caret, 7);
+        // the live search applied: the escaped literal matches "foo bar"
+        assert_eq!(e.buf.search_match_spans(), vec![(0, 0, 7)]);
+    }
+
+    #[test]
+    fn space_replaces_a_live_selection() {
+        let mut e = editor("foo bar baz\n");
+        chars(&mut e, &[('a'), ('b')]);
+        // a live selection over the whole query (the anchor is the
+        // widget's shift business — the field's replace math is what
+        // this test pins)
+        if let Some(f) = &mut e.find {
+            f.anchor = Some(0);
+            f.caret = 2;
+        }
+        key(&mut e, KeyCode::Space);
+        let f = e.find.as_ref().expect("find open");
+        assert_eq!(f.input, " ", "the selection died, a space took its place");
+        assert_eq!(f.caret, 1);
+        // a bare space is a literal pattern: it matches the document's
+        // own spaces ("foo bar baz" has two)
+        assert_eq!(e.buf.search_match_spans(), vec![(0, 3, 4), (0, 7, 8)]);
+    }
+
+    #[test]
+    fn the_gui_find_is_literal_not_regex() {
+        // `a.b` matches the literal "a.b" only — not "axb"
+        let mut e = editor("axb\na.b\n");
+        chars(&mut e, &[('a'), ('.'), ('b')]);
+        assert_eq!(
+            e.buf.search_match_spans(),
+            vec![(1, 0, 3)],
+            "the dot matched itself, not any character"
+        );
+        // a half-typed regex can never be an invalid pattern: `foo(`
+        // matches "foo(" literally instead of leaving stale highlights
+        let mut e = editor("foo\nfoo(\n");
+        chars(&mut e, &[('f'), ('o'), ('o'), ('(')]);
+        assert_eq!(e.buf.search_match_spans(), vec![(1, 0, 4)]);
+    }
+
+    #[test]
+    fn empty_query_clears_the_search() {
+        let mut e = editor("foo bar\n");
+        chars(&mut e, &[('f'), ('o'), ('o')]);
+        assert!(!e.buf.search_match_spans().is_empty());
+        for _ in 0..3 {
+            key(&mut e, KeyCode::Backspace);
+        }
+        assert!(e.buf.search_match_spans().is_empty(), "empty query = no search");
+    }
+
+    #[test]
+    fn vim_search_prompt_takes_spaces_too() {
+        let mut e = Editor::new("a x y b\n");
+        e.vim_search = Some(String::new());
+        // the vim prompt's keys route through handle_vim_search_key
+        let vk = |e: &mut Editor, code: KeyCode| {
+            e.handle_vim_search_key(KeyEvent::new(code, KeyModifiers::NONE));
+        };
+        vk(&mut e, KeyCode::Char('x'));
+        vk(&mut e, KeyCode::Space);
+        vk(&mut e, KeyCode::Char('y'));
+        assert_eq!(e.vim_search.as_deref(), Some("x y"), "the named-key space lands in the pattern");
     }
 }
