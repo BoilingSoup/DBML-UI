@@ -1,6 +1,12 @@
 //! dbml-ui — desktop DBML diagram editor built on iced.
 
 #![forbid(unsafe_code)] // the whole editor is written in safe Rust
+// a GUI app, not a console one: Windows would otherwise open a terminal
+// alongside the window. Debug builds keep the console for stderr.
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
 mod app;
 #[cfg(all(unix, not(target_os = "macos")))]
 mod platform;
