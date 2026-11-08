@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["../upstream/dbml/packages/dbml-parse/src/*"]
+    },
+    "strict": false,
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "target": "es2022",
+    "skipLibCheck": true
+  }
+}

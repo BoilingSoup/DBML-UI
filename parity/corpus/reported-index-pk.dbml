@@ -1,0 +1,13 @@
+Table "test1" {
+  "id" INT [not null]
+
+  indexes {
+    ("id") [pk]
+  }
+}
+
+Table "test2" {
+  "id" INT [not null]
+}
+
+Ref: "test1"."id" < "test2"."id"
