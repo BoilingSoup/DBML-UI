@@ -20,7 +20,7 @@ pub struct ParseOutput {
 
 struct Fail {
     offset: usize,
-    message: &'static str,
+    message: String,
 }
 
 type R<T> = Result<T, Fail>;
@@ -32,10 +32,10 @@ fn offset(input: &str, base: usize) -> usize {
     input.as_ptr() as usize - base
 }
 
-fn fail<T>(o: usize, m: &'static str) -> R<T> {
+fn fail<T>(o: usize, m: impl Into<String>) -> R<T> {
     Err(Fail {
         offset: o,
-        message: m,
+        message: m.into(),
     })
 }
 
@@ -151,7 +151,7 @@ fn ident(input: &mut &str, base: usize) -> R<String> {
     if let Some(rest) = input.strip_prefix('"') {
         let end = rest.find('"').ok_or(Fail {
             offset: offset(input, base),
-            message: "unterminated quoted identifier",
+            message: "unterminated quoted identifier".to_string(),
         })?;
         let name = rest[..end].to_string();
         *input = &rest[end + 1..];
@@ -160,7 +160,7 @@ fn ident(input: &mut &str, base: usize) -> R<String> {
     if let Some(rest) = input.strip_prefix('`') {
         let end = rest.find('`').ok_or(Fail {
             offset: offset(input, base),
-            message: "unterminated backticked identifier",
+            message: "unterminated backticked identifier".to_string(),
         })?;
         let name = rest[..end].to_string();
         *input = &rest[end + 1..];
@@ -177,7 +177,61 @@ fn ident(input: &mut &str, base: usize) -> R<String> {
     Ok(name)
 }
 
-/// Single-quoted string with `''` escaping.
+// Their lexer's escapedString (core/lexer/lexer.ts): one backslash
+// escape, decoded inline — the string token carries the DECODED value.
+fn invalid_unicode_err(hex: &str) -> String {
+    format!("Invalid unicode escape sequence '\\u{hex}', only unicode escape sequences of the form '\\uHHHH' where H is a hexadecimal number are allowed")
+}
+
+fn escaped_string(input: &mut &str, base: usize) -> R<String> {
+    let mut chars = input.chars();
+    let Some(c) = chars.next() else {
+        return Ok("\\ ".to_string());
+    };
+    *input = &input[c.len_utf8()..];
+    Ok(match c {
+        '\r' => {
+            if input.starts_with('\n') {
+                *input = &input[1..];
+            }
+            String::new()
+        }
+        '\n' => String::new(),
+        't' => "\t".to_string(),
+        'n' => "\n".to_string(),
+        '\\' => "\\".to_string(),
+        'r' => "\r".to_string(),
+        '\'' => "'".to_string(),
+        '"' => "\"".to_string(),
+        '`' => "`".to_string(),
+        '0' => "\0".to_string(),
+        'b' => "\u{8}".to_string(),
+        'v' => "\u{b}".to_string(),
+        'f' => "\u{c}".to_string(),
+        ' ' => "\\ ".to_string(),
+        'u' => {
+            let mut hex = String::new();
+            for _ in 0..4 {
+                let Some(h) = input.chars().next() else {
+                    return fail(offset(input, base), &invalid_unicode_err(&hex));
+                };
+                if !h.is_ascii_hexdigit() {
+                    return fail(offset(input, base), &invalid_unicode_err(&hex));
+                }
+                hex.push(h);
+                *input = &input[h.len_utf8()..];
+            }
+            let cp = u32::from_str_radix(&hex, 16).unwrap_or(0xFFFD);
+            char::from_u32(cp).unwrap_or('\u{FFFD}').to_string()
+        }
+        other => other.to_string(),
+    })
+}
+
+/// Single-quoted string — their consumeUntil("'", raw: false): backslash
+/// escapes decode inline (so an escaped quote cannot end the string),
+/// there is no `''` doubling, and a newline or EOF inside is their parse
+/// error.
 fn sq_string(input: &mut &str, base: usize) -> R<String> {
     if !eat(input, "'") {
         return fail(offset(input, base), "expected 'string'");
@@ -185,11 +239,17 @@ fn sq_string(input: &mut &str, base: usize) -> R<String> {
     let mut out = String::new();
     loop {
         if input.is_empty() {
-            return fail(offset(input, base), "unterminated string");
+            return fail(offset(input, base), "EOF reached while parsing");
         }
-        if input.starts_with("''") {
-            out.push('\'');
-            *input = &input[2..];
+        if input.starts_with('\n') {
+            return fail(
+                offset(input, base),
+                "Invalid newline encountered while parsing",
+            );
+        }
+        if input.starts_with('\\') {
+            *input = &input[1..];
+            out.push_str(&escaped_string(input, base)?);
             continue;
         }
         if input.starts_with('\'') {
@@ -202,47 +262,55 @@ fn sq_string(input: &mut &str, base: usize) -> R<String> {
     }
 }
 
-/// Dedent a triple-quoted note body: strip one leading newline, a
-/// whitespace-only tail after the last line, and the common leading
-/// indent of the non-empty lines (dbdiagram's indented `'''` blocks read
-/// back as clean lines — the diagram and the GUI editor see the same
-/// text the author meant).
-fn dedent_note_body(raw: &str) -> String {
-    let t = raw.strip_prefix('\n').unwrap_or(raw);
-    // trim_end: the closing ''' line's indent + any empty trailing lines
-    // are structure, not content (a single strip_suffix left one behind)
-    let t = t.trim_end();
-    let min_indent = t
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(|l| l.len() - l.trim_start().len())
-        .min()
-        .unwrap_or(0);
-    let mut out = String::new();
-    for (i, l) in t.lines().enumerate() {
-        if i > 0 {
-            out.push('\n');
-        }
-        out.push_str(l.get(min_indent..).unwrap_or(l.trim_start()));
-    }
-    out
+/// Their normalizeNote (core/utils/interpret.ts): drop leading empty
+/// lines, then strip the smallest common indent of the non-empty lines —
+/// the trailing (empty-ish) line keeps its newline.
+fn normalize_note(content: &str) -> String {
+    let lines: Vec<&str> = content.split('\n').collect();
+    let start = lines
+        .iter()
+        .position(|l| !l.trim_start().is_empty())
+        .unwrap_or(lines.len());
+    let trimmed = &lines[start..];
+    let non_empty = trimmed.iter().filter(|l| !l.trim_start().is_empty());
+    let Some(min_indent) = non_empty.map(|l| l.len() - l.trim_start().len()).min() else {
+        return trimmed.join("\n");
+    };
+    trimmed
+        .iter()
+        .map(|l| l.get(min_indent..).unwrap_or(l.trim_start()))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
-/// Note value: `'''triple quoted'''` or a normal single-quoted string.
 fn note_value(input: &mut &str, base: usize) -> R<String> {
     if input.starts_with('"') {
         return ident(input, base);
     }
     if eat(input, "'''") {
-        let end = input.find("'''").ok_or(Fail {
-            offset: offset(input, base),
-            message: "unterminated triple-quoted note",
-        })?;
-        let v = dedent_note_body(&input[..end]);
-        *input = &input[end + 3..];
-        Ok(v)
+        // their consumeUntil("'''", allowNewline, raw: false): escapes
+        // decode inline and cannot end the string
+        let mut raw = String::new();
+        loop {
+            if input.is_empty() {
+                return fail(offset(input, base), "EOF reached while parsing");
+            }
+            if input.starts_with("'''") {
+                *input = &input[3..];
+                return Ok(normalize_note(&raw));
+            }
+            if input.starts_with('\\') {
+                *input = &input[1..];
+                raw.push_str(&escaped_string(input, base)?);
+                continue;
+            }
+            let c = input.chars().next().unwrap();
+            raw.push(c);
+            *input = &input[c.len_utf8()..];
+        }
     } else {
-        sq_string(input, base)
+        let v = sq_string(input, base)?;
+        Ok(normalize_note(&v))
     }
 }
 
@@ -258,7 +326,7 @@ fn type_str(input: &mut &str, base: usize) -> R<String> {
         if let Some(rest) = input.strip_prefix('"') {
             let end = rest.find('"').ok_or(Fail {
                 offset: offset(input, base),
-                message: "unterminated quoted type",
+                message: "unterminated quoted type".to_string(),
             })?;
             out.push('"');
             out.push_str(&rest[..end + 1]); // verbatim, both quotes
@@ -964,7 +1032,7 @@ fn record_value(input: &mut &str, base: usize) -> R<(RecordValue, Span)> {
             .find('`')
             .ok_or(Fail {
                 offset: offset(input, base),
-                message: "unterminated backtick expression",
+                message: "unterminated backtick expression".to_string(),
             })?
             + 1;
         let v = input[1..end].to_string();
@@ -1138,7 +1206,7 @@ fn records_block(
                 rec.value_spans.push(spans);
             }
             Err(e) => {
-                errs.push(err_at(e.offset, e.message));
+                errs.push(err_at(e.offset, &e.message));
                 let before = input.len();
                 skip_damaged_line(input);
                 if input.len() == before {
@@ -1202,7 +1270,7 @@ fn sticky_note(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<S
     let text = match note_value(input, base) {
         Ok(t) => t,
         Err(e) => {
-            errs.push(err_at(e.offset, e.message));
+            errs.push(err_at(e.offset, &e.message));
             skip_line(input);
             String::new()
         }
@@ -1284,7 +1352,7 @@ fn table(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Table> 
             match note_value(input, base) {
                 Ok(n) => t.note = Some(n),
                 Err(e) => {
-                    errs.push(err_at(e.offset, e.message));
+                    errs.push(err_at(e.offset, &e.message));
                     skip_line(input);
                 }
             }
@@ -1297,7 +1365,7 @@ fn table(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Table> 
             match records_block(input, base, errs) {
                 Ok((_, rec)) => t.records = Some(rec),
                 Err(e) => {
-                    errs.push(err_at(e.offset, e.message));
+                    errs.push(err_at(e.offset, &e.message));
                     // a bare `records` fails right at the table's closing
                     // brace — leave it for the block loop instead of
                     // swallowing the rest of the table
@@ -1346,7 +1414,7 @@ fn table(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Table> 
                 match index(input, base) {
                     Ok(ix) => t.indexes.push(ix),
                     Err(e) => {
-                        errs.push(err_at(e.offset, e.message));
+                        errs.push(err_at(e.offset, &e.message));
                         skip_line(input);
                     }
                 }
@@ -1356,7 +1424,7 @@ fn table(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Table> 
         match column(input, base, errs) {
             Ok(c) => t.columns.push(c),
             Err(e) => {
-                errs.push(err_at(e.offset, e.message));
+                errs.push(err_at(e.offset, &e.message));
                 skip_line(input);
             }
         }
@@ -1505,7 +1573,7 @@ fn enum_def(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Enum
                     let kvs = match settings_list(input, base) {
                         Ok(kvs) => kvs,
                         Err(err) => {
-                            errs.push(err_at(err.offset, err.message));
+                            errs.push(err_at(err.offset, &err.message));
                             skip_line(input);
                             e.values.push(EnumValue {
                                 name: vname,
@@ -1530,7 +1598,7 @@ fn enum_def(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Enum
                 });
             }
             Err(err) => {
-                errs.push(err_at(err.offset, err.message));
+                errs.push(err_at(err.offset, &err.message));
                 skip_line(input);
             }
         }
@@ -1593,7 +1661,7 @@ fn table_group(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<T
             match note_value(input, base) {
                 Ok(n) => g.note = Some(n),
                 Err(e) => {
-                    errs.push(err_at(e.offset, e.message));
+                    errs.push(err_at(e.offset, &e.message));
                     skip_line(input);
                 }
             }
@@ -1629,11 +1697,11 @@ fn table_group(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<T
                 // dbdiagram's phrasing for a member that is not a table
                 // reference (a comma, a setting, stray punctuation...)
                 let msg = if e.message.contains("identifier") {
-                    "A TableGroup field must be of the form <table> or <schema>.<table>"
+                    "A TableGroup field must be of the form <table> or <schema>.<table>".to_string()
                 } else {
                     e.message
                 };
-                errs.push(err_at(e.offset, msg));
+                errs.push(err_at(e.offset, &msg));
                 skip_line(input);
             }
         }
@@ -1671,7 +1739,7 @@ fn project(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Proje
         let key = match ident(input, base) {
             Ok(k) => k,
             Err(e) => {
-                errs.push(err_at(e.offset, e.message));
+                errs.push(err_at(e.offset, &e.message));
                 skip_line(input);
                 continue;
             }
@@ -1690,7 +1758,7 @@ fn project(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Proje
                 _ => {}
             },
             Err(e) => {
-                errs.push(err_at(e.offset, e.message));
+                errs.push(err_at(e.offset, &e.message));
                 skip_line(input);
             }
         }

@@ -21,27 +21,31 @@ pub fn format_source(src: &str) -> Option<String> {
     Some(render(&out.doc, &cm))
 }
 
-/// DBML note literal: plain single-quoted, or triple-quoted with
-/// backslash-escaped quotes when the note contains quotes (upstream
-/// exporter convention — db_dump golden). An already-escaped `\'` in the
-/// content stays as-is so formatting is idempotent.
 pub(crate) fn quote_note(n: &str) -> String {
-    if n.contains('\'') {
-        let mut esc = String::with_capacity(n.len() + 1);
-        let mut prev: Option<char> = None;
-        for c in n.chars() {
-            if c == '\'' && prev != Some('\\') {
-                esc.push('\\');
-            }
-            esc.push(c);
-            prev = Some(c);
+    // their escapeNote (dbml-core DbmlExporter): backslashes double
+    // first; a note with no newline/CR/quote stays single-quoted, anything
+    // else escapes quotes, folds CRLF to LF and wraps in triple quotes
+    let mut doubled = String::with_capacity(n.len() + 1);
+    for c in n.chars() {
+        if c == '\\' {
+            doubled.push_str("\\\\");
+        } else {
+            doubled.push(c);
         }
-        format!("'''{esc}'''")
-    } else {
-        format!("'{n}'")
     }
+    if !doubled.contains(['\n', '\r', '\'']) {
+        return format!("'{doubled}'");
+    }
+    let mut esc = String::with_capacity(doubled.len() + 1);
+    for c in doubled.chars() {
+        match c {
+            '\'' => esc.push_str("\\'"),
+            '\r' => {}
+            other => esc.push(other),
+        }
+    }
+    format!("'''{esc}'''")
 }
-
 // --- comment scanning ------------------------------------------------------
 
 /// Attachments for one construct (project / table / enum / group / ref),
@@ -798,7 +802,7 @@ fn card_str_full(c: Cardinality, left_opt: bool, right_opt: bool) -> String {
 fn record_value_src(v: &super::ast::RecordValue) -> String {
     match v {
         super::ast::RecordValue::Null => "null".to_string(),
-        super::ast::RecordValue::Text(s) => format!("'{}'", s.replace('\'', "''")),
+        super::ast::RecordValue::Text(s) => format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'")),
         super::ast::RecordValue::Number(n) => n.clone(),
         super::ast::RecordValue::Bool(b) => {
             if *b {
@@ -914,7 +918,8 @@ mod tests {
         assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
         assert_eq!(reparsed.doc.notes.len(), 1);
         assert_eq!(reparsed.doc.notes[0].name, "todo");
-        assert_eq!(reparsed.doc.notes[0].text, "one\ntwo");
+        // normalizeNote keeps the trailing (empty-ish) line — their shape
+        assert_eq!(reparsed.doc.notes[0].text, "one\ntwo\n");
     }
 
     #[test]
@@ -983,7 +988,7 @@ mod tests {
         assert!(out.contains("Note: '''\n  one\n  two\n  '''"), "{out}");
         // and it round-trips: the re-parse sees the same note
         let reparsed = crate::dbml::parser::parse(&out);
-        assert_eq!(reparsed.doc.table_groups[0].note.as_deref(), Some("one\ntwo"));
+        assert_eq!(reparsed.doc.table_groups[0].note.as_deref(), Some("one\ntwo\n"));
     }
 
     #[test]
@@ -1076,11 +1081,11 @@ mod tests {
 
     #[test]
     fn records_blocks_render_and_round_trip() {
-        let src = "Table t {\n  id integer [pk]\n  name varchar\n  records (id, name) {\n    1, 'Alice'\n    2, 'Bob''s'\n    3, null\n    4, `now()`\n  }\n}\n";
+        let src = "Table t {\n  id integer [pk]\n  name varchar\n  records (id, name) {\n    1, 'Alice'\n    2, 'Bob\\'s'\n    3, null\n    4, `now()`\n  }\n}\n";
         let f = format_source(src).expect("parses");
         assert!(f.contains("  records (id, name) {"), "{f}");
         assert!(f.contains("    1, 'Alice'\n"), "{f}");
-        assert!(f.contains("'Bob''s'"), "{f}");
+        assert!(f.contains("'Bob\\'s'"), "{f}");
         assert!(f.contains("3, null"), "{f}");
         assert!(f.contains("4, `now()`"), "{f}");
         let again = format_source(&f).expect("re-parse");
