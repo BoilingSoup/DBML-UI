@@ -1,0 +1,3 @@
+Table parent { id integer [unique] }
+Table child { parent_id integer [not null, ref: > parent.id]
+}

@@ -1,5 +1,5 @@
 Table parent { id integer 
 }
-Table child { parent_id integer  ref: > parent.id
+Table child { parent_id integer 
 }
 Ref: parent.id <? child.parent_id

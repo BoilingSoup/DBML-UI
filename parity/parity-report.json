@@ -1,7 +1,7 @@
 {
   "pinnedCommit": "6b0c25b5d87ef8f44236eeb1e9dc149848e1503e",
-  "pass": 2,
-  "fail": 67,
+  "pass": 8,
+  "fail": 61,
   "cases": [
     {
       "name": "clean-minimal",
@@ -67,48 +67,24 @@
       ]
     },
     {
-      "name": "key-col-pk-gt",
-      "status": "divergent",
-      "class": "their-parser-gap",
-      "problems": [
-        "count: ours 2 vs theirs 6",
-        "[0] text: ours \"expected identifier\" vs theirs \"Invalid column type\"",
-        "[1] text: ours \"expected column type\" vs theirs \"A column must have a type\"",
-        "[1] row: ours 3 vs theirs 4"
-      ]
+      "name": "key-col-pk-inline-gt",
+      "status": "ok",
+      "count": 0
     },
     {
       "name": "key-col-pk-lt",
-      "status": "divergent",
-      "class": "semantic",
-      "problems": [
-        "count: ours 3 vs theirs 1",
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` should be unique or primary key for operator `<`\" vs theirs \"Invalid column type\"",
-        "[0] row: ours 0 vs theirs 1"
-      ]
+      "status": "ok",
+      "count": 0
     },
     {
-      "name": "key-col-unique-gt",
-      "status": "divergent",
-      "class": "their-parser-gap",
-      "problems": [
-        "count: ours 2 vs theirs 6",
-        "[0] text: ours \"expected identifier\" vs theirs \"Invalid column type\"",
-        "[1] text: ours \"expected column type\" vs theirs \"A column must have a type\"",
-        "[1] row: ours 3 vs theirs 4"
-      ]
+      "name": "key-col-unique-inline-gt",
+      "status": "ok",
+      "count": 0
     },
     {
       "name": "key-col-unique-lt",
-      "status": "divergent",
-      "class": "semantic",
-      "problems": [
-        "count: ours 3 vs theirs 1",
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` should be unique or primary key for operator `<`\" vs theirs \"Invalid column type\"",
-        "[0] row: ours 0 vs theirs 1"
-      ]
+      "status": "ok",
+      "count": 0
     },
     {
       "name": "key-composite-missing",
@@ -143,13 +119,13 @@
       ]
     },
     {
-      "name": "key-idx-pk-gt",
+      "name": "key-idx-pk-inline-gt",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "count: ours 1 vs theirs 5",
-        "[0] text: ours \"expected column type\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 3 vs theirs 4"
+        "[0] text: ours \"expected identifier\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\"",
+        "[0] row: ours 0 vs theirs 1",
+        "[1] text: ours \"expected identifier\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\""
       ]
     },
     {
@@ -157,17 +133,20 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 2 vs theirs 0"
+        "count: ours 3 vs theirs 2",
+        "[0] text: ours \"expected identifier\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\"",
+        "[0] row: ours 0 vs theirs 1",
+        "[1] text: ours \"expected identifier\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\""
       ]
     },
     {
-      "name": "key-idx-unique-gt",
+      "name": "key-idx-unique-inline-gt",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "count: ours 1 vs theirs 5",
-        "[0] text: ours \"expected column type\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 3 vs theirs 4"
+        "[0] text: ours \"expected identifier\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\"",
+        "[0] row: ours 0 vs theirs 1",
+        "[1] text: ours \"expected identifier\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\""
       ]
     },
     {
@@ -175,17 +154,23 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 2 vs theirs 0"
+        "count: ours 3 vs theirs 2",
+        "[0] text: ours \"expected identifier\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\"",
+        "[0] row: ours 0 vs theirs 1",
+        "[1] text: ours \"expected identifier\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\""
       ]
     },
     {
-      "name": "key-none-gt",
+      "name": "key-none-inline-gt",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "count: ours 1 vs theirs 5",
-        "[0] text: ours \"expected column type\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 3 vs theirs 4"
+        "[0] type: ours warning vs theirs info",
+        "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique:: [unique]]",
+        "[1] type: ours warning vs theirs info",
+        "[1] row: ours 1 vs theirs 2",
+        "[1] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique:: [unique]]"
       ]
     },
     {
@@ -197,758 +182,686 @@
         "[0] row: ours 0 vs theirs 1",
         "[0] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique:: [unique]]",
         "[1] type: ours warning vs theirs info",
-        "[1] row: ours 5 vs theirs 6",
+        "[1] row: ours 3 vs theirs 4",
         "[1] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique:: [unique]]"
       ]
     },
     {
       "name": "op-dash-nn-nn",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "count: ours 3 vs theirs 5",
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` should be unique or primary key for operator `-`\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 0 vs theirs 3",
-        "[1] text: ours \"expected column type\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
-        "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `parent.id` should be unique or primary key for operator `-`\" vs theirs \"Invalid start of operand \":\"\"",
-        "[2] row: ours 4 vs theirs 3"
+        "count: ours 2 vs theirs 4",
+        "[0] type: ours warning vs theirs info",
+        "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [] vs theirs [Change to >::>, Add unique::, unique]",
+        "[1] type: ours warning vs theirs info",
+        "[1] text: ours \"Column `parent.id` should be unique or primary key for operator `-`\" vs theirs \"Column `child.parent_id` should be unique or primary key for operator `-`\"",
+        "[1] row: ours 4 vs theirs 3",
+        "[1] quickFixes: ours [] vs theirs [Change to <::<, Add unique::, unique]"
       ]
     },
     {
       "name": "op-dash-nn-unspec",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "count: ours 3 vs theirs 5",
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` should be unique or primary key for operator `-`\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 0 vs theirs 3",
-        "[1] text: ours \"expected column type\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
-        "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `parent.id` should be unique or primary key for operator `-`\" vs theirs \"Invalid start of operand \":\"\"",
-        "[2] row: ours 4 vs theirs 3"
+        "count: ours 2 vs theirs 4",
+        "[0] type: ours warning vs theirs info",
+        "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [] vs theirs [Change to >::>, Add unique:: [unique]]",
+        "[1] type: ours warning vs theirs info",
+        "[1] text: ours \"Column `parent.id` should be unique or primary key for operator `-`\" vs theirs \"Column `child.parent_id` should be unique or primary key for operator `-`\"",
+        "[1] row: ours 4 vs theirs 3",
+        "[1] quickFixes: ours [] vs theirs [Change to <::<, Add unique::, unique]"
       ]
     },
     {
       "name": "op-dash-null-nn",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` should be unique or primary key for operator `-`\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 0 vs theirs 3",
-        "[1] text: ours \"expected column type\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
+        "count: ours 4 vs theirs 6",
+        "[0] type: ours warning vs theirs info",
+        "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [] vs theirs [Change to >::>, Add unique::, unique]",
+        "[1] type: ours warning vs theirs info",
         "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\" vs theirs \"Invalid start of operand \":\"\"",
-        "[2] row: ours 2 vs theirs 3",
-        "[3] type: ours warning vs theirs error",
-        "[3] text: ours \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\"",
-        "[3] row: ours 4 vs theirs 3",
-        "[4] type: ours warning vs theirs error",
-        "[4] text: ours \"Column `parent.id` should be unique or primary key for operator `-`\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\"",
-        "[4] row: ours 4 vs theirs 3"
+        "[1] quickFixes: ours [] vs theirs [Change to ?-::?-, Add not null::]",
+        "[2] type: ours warning vs theirs info",
+        "[2] text: ours \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\" vs theirs \"Column `child.parent_id` should be unique or primary key for operator `-`\"",
+        "[2] row: ours 4 vs theirs 3",
+        "[2] quickFixes: ours [] vs theirs [Change to <::<, Add unique::, unique]",
+        "[3] type: ours warning vs theirs info",
+        "[3] text: ours \"Column `parent.id` should be unique or primary key for operator `-`\" vs theirs \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\"",
+        "[3] row: ours 4 vs theirs 5",
+        "[3] quickFixes: ours [] vs theirs [Change to ?-::?-, Add not null::]"
       ]
     },
     {
       "name": "op-dash-null-unspec",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` should be unique or primary key for operator `-`\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 0 vs theirs 3",
-        "[1] text: ours \"expected column type\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
+        "count: ours 4 vs theirs 6",
+        "[0] type: ours warning vs theirs info",
+        "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [] vs theirs [Change to >::>, Add unique:: [unique]]",
+        "[1] type: ours warning vs theirs info",
         "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\" vs theirs \"Invalid start of operand \":\"\"",
-        "[2] row: ours 2 vs theirs 3",
-        "[3] type: ours warning vs theirs error",
-        "[3] text: ours \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\"",
-        "[3] row: ours 4 vs theirs 3",
-        "[4] type: ours warning vs theirs error",
-        "[4] text: ours \"Column `parent.id` should be unique or primary key for operator `-`\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\"",
-        "[4] row: ours 4 vs theirs 3"
+        "[1] quickFixes: ours [] vs theirs [Change to ?-::?-, Add not null::]",
+        "[2] type: ours warning vs theirs info",
+        "[2] text: ours \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\" vs theirs \"Column `child.parent_id` should be unique or primary key for operator `-`\"",
+        "[2] row: ours 4 vs theirs 3",
+        "[2] quickFixes: ours [] vs theirs [Change to <::<, Add unique::, unique]",
+        "[3] type: ours warning vs theirs info",
+        "[3] text: ours \"Column `parent.id` should be unique or primary key for operator `-`\" vs theirs \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\"",
+        "[3] row: ours 4 vs theirs 5",
+        "[3] quickFixes: ours [] vs theirs [Change to ?-::?-, Add not null::]"
       ]
     },
     {
       "name": "op-dash-unspec-nn",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "count: ours 5 vs theirs 4",
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` should be unique or primary key for operator `-`\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 0 vs theirs 3",
-        "[1] text: ours \"expected identifier\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
+        "count: ours 4 vs theirs 6",
+        "[0] type: ours warning vs theirs info",
+        "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [] vs theirs [Change to >::>, Add unique::, unique]",
+        "[1] type: ours warning vs theirs info",
         "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\" vs theirs \"Inline column settings can only be `pk` or `unique`\"",
-        "[2] row: ours 2 vs theirs 3",
-        "[3] type: ours warning vs theirs error",
-        "[3] text: ours \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\" vs theirs \"Invalid start of operand \":\"\"",
-        "[3] row: ours 4 vs theirs 3"
+        "[1] quickFixes: ours [] vs theirs [Change to ?-::?-, Add not null:: [not null]]",
+        "[2] type: ours warning vs theirs info",
+        "[2] text: ours \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\" vs theirs \"Column `child.parent_id` should be unique or primary key for operator `-`\"",
+        "[2] row: ours 4 vs theirs 3",
+        "[2] quickFixes: ours [] vs theirs [Change to <::<, Add unique:: [unique]]",
+        "[3] type: ours warning vs theirs info",
+        "[3] text: ours \"Column `parent.id` should be unique or primary key for operator `-`\" vs theirs \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\"",
+        "[3] row: ours 4 vs theirs 5",
+        "[3] quickFixes: ours [] vs theirs [Change to ?-::?-, Add not null:: [not null]]"
       ]
     },
     {
       "name": "op-dash-unspec-unspec",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "count: ours 5 vs theirs 4",
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` should be unique or primary key for operator `-`\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 0 vs theirs 3",
-        "[1] text: ours \"expected identifier\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
+        "count: ours 4 vs theirs 6",
+        "[0] type: ours warning vs theirs info",
+        "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [] vs theirs [Change to >::>, Add unique:: [unique]]",
+        "[1] type: ours warning vs theirs info",
         "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\" vs theirs \"Inline column settings can only be `pk` or `unique`\"",
-        "[2] row: ours 2 vs theirs 3",
-        "[3] type: ours warning vs theirs error",
-        "[3] text: ours \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\" vs theirs \"Invalid start of operand \":\"\"",
-        "[3] row: ours 4 vs theirs 3"
+        "[1] quickFixes: ours [] vs theirs [Change to ?-::?-, Add not null:: [not null]]",
+        "[2] type: ours warning vs theirs info",
+        "[2] text: ours \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\" vs theirs \"Column `child.parent_id` should be unique or primary key for operator `-`\"",
+        "[2] row: ours 4 vs theirs 3",
+        "[2] quickFixes: ours [] vs theirs [Change to <::<, Add unique:: [unique]]",
+        "[3] type: ours warning vs theirs info",
+        "[3] text: ours \"Column `parent.id` should be unique or primary key for operator `-`\" vs theirs \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\"",
+        "[3] row: ours 4 vs theirs 5",
+        "[3] quickFixes: ours [] vs theirs [Change to ?-::?-, Add not null:: [not null]]"
       ]
     },
     {
       "name": "op-gt-nn-nn",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "count: ours 3 vs theirs 5",
-        "[0] text: ours \"expected column type\" vs theirs \"A column must have a type\"",
+        "[0] type: ours warning vs theirs info",
         "[0] row: ours 2 vs theirs 3",
-        "[1] type: ours warning vs theirs error",
-        "[1] text: ours \"Column `child.parent_id` should be unique or primary key for operator `>`\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
-        "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` should be unique or primary key for operator `>`\" vs theirs \"Invalid start of operand \":\"\"",
-        "[2] row: ours 4 vs theirs 3"
+        "[0] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique::, unique]",
+        "[1] type: ours warning vs theirs info",
+        "[1] row: ours 4 vs theirs 5",
+        "[1] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique::, unique]"
       ]
     },
     {
       "name": "op-gt-nn-unspec",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` is nullable but operator `>` requires it to be NOT NULL\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 0 vs theirs 3",
-        "[1] text: ours \"expected column type\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
+        "[0] type: ours warning vs theirs info",
+        "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [] vs theirs [Change to >?::>?, Add not null:: [not null]]",
+        "[1] type: ours warning vs theirs info",
         "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` should be unique or primary key for operator `>`\" vs theirs \"Invalid start of operand \":\"\"",
-        "[2] row: ours 2 vs theirs 3",
-        "[3] type: ours warning vs theirs error",
-        "[3] text: ours \"Column `child.parent_id` should be unique or primary key for operator `>`\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\"",
-        "[3] row: ours 4 vs theirs 3",
-        "[4] type: ours warning vs theirs error",
-        "[4] text: ours \"Column `parent.id` is nullable but operator `>` requires it to be NOT NULL\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\"",
-        "[4] row: ours 4 vs theirs 3"
+        "[1] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique::, unique]",
+        "[2] type: ours warning vs theirs info",
+        "[2] row: ours 4 vs theirs 5",
+        "[2] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique::, unique]",
+        "[3] type: ours warning vs theirs info",
+        "[3] row: ours 4 vs theirs 5",
+        "[3] quickFixes: ours [] vs theirs [Change to >?::>?, Add not null:: [not null]]"
       ]
     },
     {
       "name": "op-gt-null-nn",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "count: ours 3 vs theirs 5",
-        "[0] text: ours \"expected column type\" vs theirs \"A column must have a type\"",
+        "[0] type: ours warning vs theirs info",
         "[0] row: ours 2 vs theirs 3",
-        "[1] type: ours warning vs theirs error",
-        "[1] text: ours \"Column `child.parent_id` should be unique or primary key for operator `>`\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
-        "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` should be unique or primary key for operator `>`\" vs theirs \"Invalid start of operand \":\"\"",
-        "[2] row: ours 4 vs theirs 3"
+        "[0] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique::, unique]",
+        "[1] type: ours warning vs theirs info",
+        "[1] row: ours 4 vs theirs 5",
+        "[1] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique::, unique]"
       ]
     },
     {
       "name": "op-gt-null-unspec",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` is nullable but operator `>` requires it to be NOT NULL\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 0 vs theirs 3",
-        "[1] text: ours \"expected column type\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
+        "[0] type: ours warning vs theirs info",
+        "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [] vs theirs [Change to >?::>?, Add not null:: [not null]]",
+        "[1] type: ours warning vs theirs info",
         "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` should be unique or primary key for operator `>`\" vs theirs \"Invalid start of operand \":\"\"",
-        "[2] row: ours 2 vs theirs 3",
-        "[3] type: ours warning vs theirs error",
-        "[3] text: ours \"Column `child.parent_id` should be unique or primary key for operator `>`\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\"",
-        "[3] row: ours 4 vs theirs 3",
-        "[4] type: ours warning vs theirs error",
-        "[4] text: ours \"Column `parent.id` is nullable but operator `>` requires it to be NOT NULL\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\"",
-        "[4] row: ours 4 vs theirs 3"
+        "[1] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique::, unique]",
+        "[2] type: ours warning vs theirs info",
+        "[2] row: ours 4 vs theirs 5",
+        "[2] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique::, unique]",
+        "[3] type: ours warning vs theirs info",
+        "[3] row: ours 4 vs theirs 5",
+        "[3] quickFixes: ours [] vs theirs [Change to >?::>?, Add not null:: [not null]]"
       ]
     },
     {
       "name": "op-gt-unspec-nn",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "count: ours 3 vs theirs 4",
-        "[0] text: ours \"expected identifier\" vs theirs \"A column must have a type\"",
+        "[0] type: ours warning vs theirs info",
         "[0] row: ours 2 vs theirs 3",
-        "[1] type: ours warning vs theirs error",
-        "[1] text: ours \"Column `child.parent_id` should be unique or primary key for operator `>`\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
-        "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` should be unique or primary key for operator `>`\" vs theirs \"Inline column settings can only be `pk` or `unique`\"",
-        "[2] row: ours 4 vs theirs 3"
+        "[0] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique:: [unique]]",
+        "[1] type: ours warning vs theirs info",
+        "[1] row: ours 4 vs theirs 5",
+        "[1] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique:: [unique]]"
       ]
     },
     {
       "name": "op-gt-unspec-unspec",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "count: ours 5 vs theirs 4",
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` is nullable but operator `>` requires it to be NOT NULL\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 0 vs theirs 3",
-        "[1] text: ours \"expected identifier\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
+        "[0] type: ours warning vs theirs info",
+        "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [] vs theirs [Change to >?::>?, Add not null:: [not null]]",
+        "[1] type: ours warning vs theirs info",
         "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` should be unique or primary key for operator `>`\" vs theirs \"Inline column settings can only be `pk` or `unique`\"",
-        "[2] row: ours 2 vs theirs 3",
-        "[3] type: ours warning vs theirs error",
-        "[3] text: ours \"Column `child.parent_id` should be unique or primary key for operator `>`\" vs theirs \"Invalid start of operand \":\"\"",
-        "[3] row: ours 4 vs theirs 3"
+        "[1] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique:: [unique]]",
+        "[2] type: ours warning vs theirs info",
+        "[2] row: ours 4 vs theirs 5",
+        "[2] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique:: [unique]]",
+        "[3] type: ours warning vs theirs info",
+        "[3] row: ours 4 vs theirs 5",
+        "[3] quickFixes: ours [] vs theirs [Change to >?::>?, Add not null:: [not null]]"
       ]
     },
     {
       "name": "op-gtq-nn-nn",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` is NOT NULL but operator `>?` allows it to be optional\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 0 vs theirs 3",
-        "[1] text: ours \"expected column type\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
+        "[0] type: ours warning vs theirs info",
+        "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [] vs theirs [Change to >::>, Make nullable::]",
+        "[1] type: ours warning vs theirs info",
         "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` should be unique or primary key for operator `>?`\" vs theirs \"Invalid start of operand \":\"\"",
-        "[2] row: ours 2 vs theirs 3",
-        "[3] type: ours warning vs theirs error",
-        "[3] text: ours \"Column `child.parent_id` should be unique or primary key for operator `>?`\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\"",
-        "[3] row: ours 4 vs theirs 3",
-        "[4] type: ours warning vs theirs error",
-        "[4] text: ours \"Column `parent.id` is NOT NULL but operator `>?` allows it to be optional\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\"",
-        "[4] row: ours 4 vs theirs 3"
+        "[1] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique::, unique]",
+        "[2] type: ours warning vs theirs info",
+        "[2] row: ours 4 vs theirs 5",
+        "[2] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique::, unique]",
+        "[3] type: ours warning vs theirs info",
+        "[3] row: ours 4 vs theirs 5",
+        "[3] quickFixes: ours [] vs theirs [Change to >::>, Make nullable::]"
       ]
     },
     {
       "name": "op-gtq-nn-unspec",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "count: ours 3 vs theirs 5",
-        "[0] text: ours \"expected column type\" vs theirs \"A column must have a type\"",
+        "[0] type: ours warning vs theirs info",
         "[0] row: ours 2 vs theirs 3",
-        "[1] type: ours warning vs theirs error",
-        "[1] text: ours \"Column `child.parent_id` should be unique or primary key for operator `>?`\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
-        "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` should be unique or primary key for operator `>?`\" vs theirs \"Invalid start of operand \":\"\"",
-        "[2] row: ours 4 vs theirs 3"
+        "[0] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique::, unique]",
+        "[1] type: ours warning vs theirs info",
+        "[1] row: ours 4 vs theirs 5",
+        "[1] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique::, unique]"
       ]
     },
     {
       "name": "op-gtq-null-nn",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` is NOT NULL but operator `>?` allows it to be optional\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 0 vs theirs 3",
-        "[1] text: ours \"expected column type\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
+        "[0] type: ours warning vs theirs info",
+        "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [] vs theirs [Change to >::>, Make nullable::]",
+        "[1] type: ours warning vs theirs info",
         "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` should be unique or primary key for operator `>?`\" vs theirs \"Invalid start of operand \":\"\"",
-        "[2] row: ours 2 vs theirs 3",
-        "[3] type: ours warning vs theirs error",
-        "[3] text: ours \"Column `child.parent_id` should be unique or primary key for operator `>?`\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\"",
-        "[3] row: ours 4 vs theirs 3",
-        "[4] type: ours warning vs theirs error",
-        "[4] text: ours \"Column `parent.id` is NOT NULL but operator `>?` allows it to be optional\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\"",
-        "[4] row: ours 4 vs theirs 3"
+        "[1] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique::, unique]",
+        "[2] type: ours warning vs theirs info",
+        "[2] row: ours 4 vs theirs 5",
+        "[2] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique::, unique]",
+        "[3] type: ours warning vs theirs info",
+        "[3] row: ours 4 vs theirs 5",
+        "[3] quickFixes: ours [] vs theirs [Change to >::>, Make nullable::]"
       ]
     },
     {
       "name": "op-gtq-null-unspec",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "count: ours 3 vs theirs 5",
-        "[0] text: ours \"expected column type\" vs theirs \"A column must have a type\"",
+        "[0] type: ours warning vs theirs info",
         "[0] row: ours 2 vs theirs 3",
-        "[1] type: ours warning vs theirs error",
-        "[1] text: ours \"Column `child.parent_id` should be unique or primary key for operator `>?`\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
-        "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` should be unique or primary key for operator `>?`\" vs theirs \"Invalid start of operand \":\"\"",
-        "[2] row: ours 4 vs theirs 3"
+        "[0] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique::, unique]",
+        "[1] type: ours warning vs theirs info",
+        "[1] row: ours 4 vs theirs 5",
+        "[1] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique::, unique]"
       ]
     },
     {
       "name": "op-gtq-unspec-nn",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "count: ours 5 vs theirs 4",
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` is NOT NULL but operator `>?` allows it to be optional\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 0 vs theirs 3",
-        "[1] text: ours \"expected identifier\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
+        "[0] type: ours warning vs theirs info",
+        "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [] vs theirs [Change to >::>, Make nullable::]",
+        "[1] type: ours warning vs theirs info",
         "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` should be unique or primary key for operator `>?`\" vs theirs \"Inline column settings can only be `pk` or `unique`\"",
-        "[2] row: ours 2 vs theirs 3",
-        "[3] type: ours warning vs theirs error",
-        "[3] text: ours \"Column `child.parent_id` should be unique or primary key for operator `>?`\" vs theirs \"Invalid start of operand \":\"\"",
-        "[3] row: ours 4 vs theirs 3"
+        "[1] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique:: [unique]]",
+        "[2] type: ours warning vs theirs info",
+        "[2] row: ours 4 vs theirs 5",
+        "[2] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique:: [unique]]",
+        "[3] type: ours warning vs theirs info",
+        "[3] row: ours 4 vs theirs 5",
+        "[3] quickFixes: ours [] vs theirs [Change to >::>, Make nullable::]"
       ]
     },
     {
       "name": "op-gtq-unspec-unspec",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "count: ours 3 vs theirs 4",
-        "[0] text: ours \"expected identifier\" vs theirs \"A column must have a type\"",
+        "[0] type: ours warning vs theirs info",
         "[0] row: ours 2 vs theirs 3",
-        "[1] type: ours warning vs theirs error",
-        "[1] text: ours \"Column `child.parent_id` should be unique or primary key for operator `>?`\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
-        "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` should be unique or primary key for operator `>?`\" vs theirs \"Inline column settings can only be `pk` or `unique`\"",
-        "[2] row: ours 4 vs theirs 3"
+        "[0] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique:: [unique]]",
+        "[1] type: ours warning vs theirs info",
+        "[1] row: ours 4 vs theirs 5",
+        "[1] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique:: [unique]]"
       ]
     },
     {
       "name": "op-lt-nn-nn",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "count: ours 3 vs theirs 5",
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` should be unique or primary key for operator `<`\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 0 vs theirs 3",
-        "[1] text: ours \"expected column type\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
-        "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `parent.id` should be unique or primary key for operator `<`\" vs theirs \"Invalid start of operand \":\"\"",
-        "[2] row: ours 4 vs theirs 3"
+        "[0] type: ours warning vs theirs info",
+        "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique::, unique]",
+        "[1] type: ours warning vs theirs info",
+        "[1] row: ours 4 vs theirs 5",
+        "[1] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique::, unique]"
       ]
     },
     {
       "name": "op-lt-nn-unspec",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "count: ours 3 vs theirs 5",
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` should be unique or primary key for operator `<`\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 0 vs theirs 3",
-        "[1] text: ours \"expected column type\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
-        "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `parent.id` should be unique or primary key for operator `<`\" vs theirs \"Invalid start of operand \":\"\"",
-        "[2] row: ours 4 vs theirs 3"
+        "[0] type: ours warning vs theirs info",
+        "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique:: [unique]]",
+        "[1] type: ours warning vs theirs info",
+        "[1] row: ours 4 vs theirs 5",
+        "[1] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique:: [unique]]"
       ]
     },
     {
       "name": "op-lt-null-nn",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` should be unique or primary key for operator `<`\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 0 vs theirs 3",
-        "[1] text: ours \"expected column type\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
+        "[0] type: ours warning vs theirs info",
+        "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique::, unique]",
+        "[1] type: ours warning vs theirs info",
         "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` is nullable but operator `<` requires it to be NOT NULL\" vs theirs \"Invalid start of operand \":\"\"",
-        "[2] row: ours 2 vs theirs 3",
-        "[3] type: ours warning vs theirs error",
-        "[3] text: ours \"Column `child.parent_id` is nullable but operator `<` requires it to be NOT NULL\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\"",
-        "[3] row: ours 4 vs theirs 3",
-        "[4] type: ours warning vs theirs error",
-        "[4] text: ours \"Column `parent.id` should be unique or primary key for operator `<`\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\"",
-        "[4] row: ours 4 vs theirs 3"
+        "[1] quickFixes: ours [] vs theirs [Change to ?<::?<, Add not null::]",
+        "[2] type: ours warning vs theirs info",
+        "[2] row: ours 4 vs theirs 5",
+        "[2] quickFixes: ours [] vs theirs [Change to ?<::?<, Add not null::]",
+        "[3] type: ours warning vs theirs info",
+        "[3] row: ours 4 vs theirs 5",
+        "[3] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique::, unique]"
       ]
     },
     {
       "name": "op-lt-null-unspec",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` should be unique or primary key for operator `<`\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 0 vs theirs 3",
-        "[1] text: ours \"expected column type\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
+        "[0] type: ours warning vs theirs info",
+        "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique:: [unique]]",
+        "[1] type: ours warning vs theirs info",
         "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` is nullable but operator `<` requires it to be NOT NULL\" vs theirs \"Invalid start of operand \":\"\"",
-        "[2] row: ours 2 vs theirs 3",
-        "[3] type: ours warning vs theirs error",
-        "[3] text: ours \"Column `child.parent_id` is nullable but operator `<` requires it to be NOT NULL\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\"",
-        "[3] row: ours 4 vs theirs 3",
-        "[4] type: ours warning vs theirs error",
-        "[4] text: ours \"Column `parent.id` should be unique or primary key for operator `<`\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\"",
-        "[4] row: ours 4 vs theirs 3"
+        "[1] quickFixes: ours [] vs theirs [Change to ?<::?<, Add not null::]",
+        "[2] type: ours warning vs theirs info",
+        "[2] row: ours 4 vs theirs 5",
+        "[2] quickFixes: ours [] vs theirs [Change to ?<::?<, Add not null::]",
+        "[3] type: ours warning vs theirs info",
+        "[3] row: ours 4 vs theirs 5",
+        "[3] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique:: [unique]]"
       ]
     },
     {
       "name": "op-lt-unspec-nn",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "count: ours 5 vs theirs 4",
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` should be unique or primary key for operator `<`\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 0 vs theirs 3",
-        "[1] text: ours \"expected identifier\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
+        "[0] type: ours warning vs theirs info",
+        "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique::, unique]",
+        "[1] type: ours warning vs theirs info",
         "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` is nullable but operator `<` requires it to be NOT NULL\" vs theirs \"Inline column settings can only be `pk` or `unique`\"",
-        "[2] row: ours 2 vs theirs 3",
-        "[3] type: ours warning vs theirs error",
-        "[3] text: ours \"Column `child.parent_id` is nullable but operator `<` requires it to be NOT NULL\" vs theirs \"Invalid start of operand \":\"\"",
-        "[3] row: ours 4 vs theirs 3"
+        "[1] quickFixes: ours [] vs theirs [Change to ?<::?<, Add not null:: [not null]]",
+        "[2] type: ours warning vs theirs info",
+        "[2] row: ours 4 vs theirs 5",
+        "[2] quickFixes: ours [] vs theirs [Change to ?<::?<, Add not null:: [not null]]",
+        "[3] type: ours warning vs theirs info",
+        "[3] row: ours 4 vs theirs 5",
+        "[3] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique::, unique]"
       ]
     },
     {
       "name": "op-lt-unspec-unspec",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "count: ours 5 vs theirs 4",
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` should be unique or primary key for operator `<`\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 0 vs theirs 3",
-        "[1] text: ours \"expected identifier\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
+        "[0] type: ours warning vs theirs info",
+        "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique:: [unique]]",
+        "[1] type: ours warning vs theirs info",
         "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` is nullable but operator `<` requires it to be NOT NULL\" vs theirs \"Inline column settings can only be `pk` or `unique`\"",
-        "[2] row: ours 2 vs theirs 3",
-        "[3] type: ours warning vs theirs error",
-        "[3] text: ours \"Column `child.parent_id` is nullable but operator `<` requires it to be NOT NULL\" vs theirs \"Invalid start of operand \":\"\"",
-        "[3] row: ours 4 vs theirs 3"
+        "[1] quickFixes: ours [] vs theirs [Change to ?<::?<, Add not null:: [not null]]",
+        "[2] type: ours warning vs theirs info",
+        "[2] row: ours 4 vs theirs 5",
+        "[2] quickFixes: ours [] vs theirs [Change to ?<::?<, Add not null:: [not null]]",
+        "[3] type: ours warning vs theirs info",
+        "[3] row: ours 4 vs theirs 5",
+        "[3] quickFixes: ours [] vs theirs [Change to <>::<>, Add unique:: [unique]]"
       ]
     },
     {
       "name": "op-ltgt-nn-nn",
-      "status": "divergent",
-      "class": "their-parser-gap",
-      "problems": [
-        "count: ours 1 vs theirs 5",
-        "[0] text: ours \"expected column type\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 2 vs theirs 3"
-      ]
+      "status": "ok",
+      "count": 0
     },
     {
       "name": "op-ltgt-nn-unspec",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "count: ours 3 vs theirs 5",
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` is nullable but operator `<>` requires it to be NOT NULL\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 0 vs theirs 3",
-        "[1] text: ours \"expected column type\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
-        "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `parent.id` is nullable but operator `<>` requires it to be NOT NULL\" vs theirs \"Invalid start of operand \":\"\"",
-        "[2] row: ours 4 vs theirs 3"
+        "[0] type: ours warning vs theirs info",
+        "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add not null:: [not null]]",
+        "[1] type: ours warning vs theirs info",
+        "[1] row: ours 4 vs theirs 5",
+        "[1] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add not null:: [not null]]"
       ]
     },
     {
       "name": "op-ltgt-null-nn",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "count: ours 3 vs theirs 5",
-        "[0] text: ours \"expected column type\" vs theirs \"A column must have a type\"",
+        "[0] type: ours warning vs theirs info",
         "[0] row: ours 2 vs theirs 3",
-        "[1] type: ours warning vs theirs error",
-        "[1] text: ours \"Column `child.parent_id` is nullable but operator `<>` requires it to be NOT NULL\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
-        "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` is nullable but operator `<>` requires it to be NOT NULL\" vs theirs \"Invalid start of operand \":\"\"",
-        "[2] row: ours 4 vs theirs 3"
+        "[0] quickFixes: ours [] vs theirs [Change to ?<>::?<>, Add not null::]",
+        "[1] type: ours warning vs theirs info",
+        "[1] row: ours 4 vs theirs 5",
+        "[1] quickFixes: ours [] vs theirs [Change to ?<>::?<>, Add not null::]"
       ]
     },
     {
       "name": "op-ltgt-null-unspec",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` is nullable but operator `<>` requires it to be NOT NULL\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 0 vs theirs 3",
-        "[1] text: ours \"expected column type\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
+        "[0] type: ours warning vs theirs info",
+        "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add not null:: [not null]]",
+        "[1] type: ours warning vs theirs info",
         "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` is nullable but operator `<>` requires it to be NOT NULL\" vs theirs \"Invalid start of operand \":\"\"",
-        "[2] row: ours 2 vs theirs 3",
-        "[3] type: ours warning vs theirs error",
-        "[3] text: ours \"Column `child.parent_id` is nullable but operator `<>` requires it to be NOT NULL\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\"",
-        "[3] row: ours 4 vs theirs 3",
-        "[4] type: ours warning vs theirs error",
-        "[4] text: ours \"Column `parent.id` is nullable but operator `<>` requires it to be NOT NULL\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\"",
-        "[4] row: ours 4 vs theirs 3"
+        "[1] quickFixes: ours [] vs theirs [Change to ?<>::?<>, Add not null::]",
+        "[2] type: ours warning vs theirs info",
+        "[2] row: ours 4 vs theirs 5",
+        "[2] quickFixes: ours [] vs theirs [Change to ?<>::?<>, Add not null::]",
+        "[3] type: ours warning vs theirs info",
+        "[3] row: ours 4 vs theirs 5",
+        "[3] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add not null:: [not null]]"
       ]
     },
     {
       "name": "op-ltgt-unspec-nn",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "count: ours 3 vs theirs 4",
-        "[0] text: ours \"expected identifier\" vs theirs \"A column must have a type\"",
+        "[0] type: ours warning vs theirs info",
         "[0] row: ours 2 vs theirs 3",
-        "[1] type: ours warning vs theirs error",
-        "[1] text: ours \"Column `child.parent_id` is nullable but operator `<>` requires it to be NOT NULL\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
-        "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` is nullable but operator `<>` requires it to be NOT NULL\" vs theirs \"Inline column settings can only be `pk` or `unique`\"",
-        "[2] row: ours 4 vs theirs 3"
+        "[0] quickFixes: ours [] vs theirs [Change to ?<>::?<>, Add not null:: [not null]]",
+        "[1] type: ours warning vs theirs info",
+        "[1] row: ours 4 vs theirs 5",
+        "[1] quickFixes: ours [] vs theirs [Change to ?<>::?<>, Add not null:: [not null]]"
       ]
     },
     {
       "name": "op-ltgt-unspec-unspec",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "count: ours 5 vs theirs 4",
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` is nullable but operator `<>` requires it to be NOT NULL\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 0 vs theirs 3",
-        "[1] text: ours \"expected identifier\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
+        "[0] type: ours warning vs theirs info",
+        "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add not null:: [not null]]",
+        "[1] type: ours warning vs theirs info",
         "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` is nullable but operator `<>` requires it to be NOT NULL\" vs theirs \"Inline column settings can only be `pk` or `unique`\"",
-        "[2] row: ours 2 vs theirs 3",
-        "[3] type: ours warning vs theirs error",
-        "[3] text: ours \"Column `child.parent_id` is nullable but operator `<>` requires it to be NOT NULL\" vs theirs \"Invalid start of operand \":\"\"",
-        "[3] row: ours 4 vs theirs 3"
+        "[1] quickFixes: ours [] vs theirs [Change to ?<>::?<>, Add not null:: [not null]]",
+        "[2] type: ours warning vs theirs info",
+        "[2] row: ours 4 vs theirs 5",
+        "[2] quickFixes: ours [] vs theirs [Change to ?<>::?<>, Add not null:: [not null]]",
+        "[3] type: ours warning vs theirs info",
+        "[3] row: ours 4 vs theirs 5",
+        "[3] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add not null:: [not null]]"
       ]
     },
     {
       "name": "op-ltgtq-nn-nn",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "count: ours 3 vs theirs 5",
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` is NOT NULL but operator `<>?` allows it to be optional\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 0 vs theirs 3",
-        "[1] text: ours \"expected column type\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
-        "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `parent.id` is NOT NULL but operator `<>?` allows it to be optional\" vs theirs \"Invalid start of operand \":\"\"",
-        "[2] row: ours 4 vs theirs 3"
+        "[0] type: ours warning vs theirs info",
+        "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [] vs theirs [Change to <>::<>, Make nullable::]",
+        "[1] type: ours warning vs theirs info",
+        "[1] row: ours 4 vs theirs 5",
+        "[1] quickFixes: ours [] vs theirs [Change to <>::<>, Make nullable::]"
       ]
     },
     {
       "name": "op-ltgtq-nn-unspec",
-      "status": "divergent",
-      "class": "their-parser-gap",
-      "problems": [
-        "count: ours 1 vs theirs 5",
-        "[0] text: ours \"expected column type\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 2 vs theirs 3"
-      ]
+      "status": "ok",
+      "count": 0
     },
     {
       "name": "op-ltgtq-null-nn",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` is NOT NULL but operator `<>?` allows it to be optional\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 0 vs theirs 3",
-        "[1] text: ours \"expected column type\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
+        "[0] type: ours warning vs theirs info",
+        "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [] vs theirs [Change to <>::<>, Make nullable::]",
+        "[1] type: ours warning vs theirs info",
         "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` is nullable but operator `<>?` requires it to be NOT NULL\" vs theirs \"Invalid start of operand \":\"\"",
-        "[2] row: ours 2 vs theirs 3",
-        "[3] type: ours warning vs theirs error",
-        "[3] text: ours \"Column `child.parent_id` is nullable but operator `<>?` requires it to be NOT NULL\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\"",
-        "[3] row: ours 4 vs theirs 3",
-        "[4] type: ours warning vs theirs error",
-        "[4] text: ours \"Column `parent.id` is NOT NULL but operator `<>?` allows it to be optional\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\"",
-        "[4] row: ours 4 vs theirs 3"
+        "[1] quickFixes: ours [] vs theirs [Change to ?<>?::?<>?, Add not null::]",
+        "[2] type: ours warning vs theirs info",
+        "[2] row: ours 4 vs theirs 5",
+        "[2] quickFixes: ours [] vs theirs [Change to ?<>?::?<>?, Add not null::]",
+        "[3] type: ours warning vs theirs info",
+        "[3] row: ours 4 vs theirs 5",
+        "[3] quickFixes: ours [] vs theirs [Change to <>::<>, Make nullable::]"
       ]
     },
     {
       "name": "op-ltgtq-null-unspec",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "count: ours 3 vs theirs 5",
-        "[0] text: ours \"expected column type\" vs theirs \"A column must have a type\"",
+        "[0] type: ours warning vs theirs info",
         "[0] row: ours 2 vs theirs 3",
-        "[1] type: ours warning vs theirs error",
-        "[1] text: ours \"Column `child.parent_id` is nullable but operator `<>?` requires it to be NOT NULL\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
-        "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` is nullable but operator `<>?` requires it to be NOT NULL\" vs theirs \"Invalid start of operand \":\"\"",
-        "[2] row: ours 4 vs theirs 3"
+        "[0] quickFixes: ours [] vs theirs [Change to ?<>?::?<>?, Add not null::]",
+        "[1] type: ours warning vs theirs info",
+        "[1] row: ours 4 vs theirs 5",
+        "[1] quickFixes: ours [] vs theirs [Change to ?<>?::?<>?, Add not null::]"
       ]
     },
     {
       "name": "op-ltgtq-unspec-nn",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "count: ours 5 vs theirs 4",
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` is NOT NULL but operator `<>?` allows it to be optional\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 0 vs theirs 3",
-        "[1] text: ours \"expected identifier\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
+        "[0] type: ours warning vs theirs info",
+        "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [] vs theirs [Change to <>::<>, Make nullable::]",
+        "[1] type: ours warning vs theirs info",
         "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` is nullable but operator `<>?` requires it to be NOT NULL\" vs theirs \"Inline column settings can only be `pk` or `unique`\"",
-        "[2] row: ours 2 vs theirs 3",
-        "[3] type: ours warning vs theirs error",
-        "[3] text: ours \"Column `child.parent_id` is nullable but operator `<>?` requires it to be NOT NULL\" vs theirs \"Invalid start of operand \":\"\"",
-        "[3] row: ours 4 vs theirs 3"
+        "[1] quickFixes: ours [] vs theirs [Change to ?<>?::?<>?, Add not null:: [not null]]",
+        "[2] type: ours warning vs theirs info",
+        "[2] row: ours 4 vs theirs 5",
+        "[2] quickFixes: ours [] vs theirs [Change to ?<>?::?<>?, Add not null:: [not null]]",
+        "[3] type: ours warning vs theirs info",
+        "[3] row: ours 4 vs theirs 5",
+        "[3] quickFixes: ours [] vs theirs [Change to <>::<>, Make nullable::]"
       ]
     },
     {
       "name": "op-ltgtq-unspec-unspec",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "count: ours 3 vs theirs 4",
-        "[0] text: ours \"expected identifier\" vs theirs \"A column must have a type\"",
+        "[0] type: ours warning vs theirs info",
         "[0] row: ours 2 vs theirs 3",
-        "[1] type: ours warning vs theirs error",
-        "[1] text: ours \"Column `child.parent_id` is nullable but operator `<>?` requires it to be NOT NULL\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
-        "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` is nullable but operator `<>?` requires it to be NOT NULL\" vs theirs \"Inline column settings can only be `pk` or `unique`\"",
-        "[2] row: ours 4 vs theirs 3"
+        "[0] quickFixes: ours [] vs theirs [Change to ?<>?::?<>?, Add not null:: [not null]]",
+        "[1] type: ours warning vs theirs info",
+        "[1] row: ours 4 vs theirs 5",
+        "[1] quickFixes: ours [] vs theirs [Change to ?<>?::?<>?, Add not null:: [not null]]"
       ]
     },
     {
       "name": "op-ltq-nn-nn",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "count: ours 3 vs theirs 5",
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` should be unique or primary key for operator `<?`\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 0 vs theirs 3",
-        "[1] text: ours \"expected column type\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
-        "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `parent.id` should be unique or primary key for operator `<?`\" vs theirs \"Invalid start of operand \":\"\"",
-        "[2] row: ours 4 vs theirs 3"
+        "[0] type: ours warning vs theirs info",
+        "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique::, unique]",
+        "[1] type: ours warning vs theirs info",
+        "[1] row: ours 4 vs theirs 5",
+        "[1] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique::, unique]"
       ]
     },
     {
       "name": "op-ltq-nn-unspec",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "count: ours 3 vs theirs 5",
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` should be unique or primary key for operator `<?`\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 0 vs theirs 3",
-        "[1] text: ours \"expected column type\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
-        "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `parent.id` should be unique or primary key for operator `<?`\" vs theirs \"Invalid start of operand \":\"\"",
-        "[2] row: ours 4 vs theirs 3"
+        "[0] type: ours warning vs theirs info",
+        "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique:: [unique]]",
+        "[1] type: ours warning vs theirs info",
+        "[1] row: ours 4 vs theirs 5",
+        "[1] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique:: [unique]]"
       ]
     },
     {
       "name": "op-ltq-null-nn",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` should be unique or primary key for operator `<?`\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 0 vs theirs 3",
-        "[1] text: ours \"expected column type\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
+        "[0] type: ours warning vs theirs info",
+        "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique::, unique]",
+        "[1] type: ours warning vs theirs info",
         "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` is nullable but operator `<?` requires it to be NOT NULL\" vs theirs \"Invalid start of operand \":\"\"",
-        "[2] row: ours 2 vs theirs 3",
-        "[3] type: ours warning vs theirs error",
-        "[3] text: ours \"Column `child.parent_id` is nullable but operator `<?` requires it to be NOT NULL\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\"",
-        "[3] row: ours 4 vs theirs 3",
-        "[4] type: ours warning vs theirs error",
-        "[4] text: ours \"Column `parent.id` should be unique or primary key for operator `<?`\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\"",
-        "[4] row: ours 4 vs theirs 3"
+        "[1] quickFixes: ours [] vs theirs [Change to ?<?::?<?, Add not null::]",
+        "[2] type: ours warning vs theirs info",
+        "[2] row: ours 4 vs theirs 5",
+        "[2] quickFixes: ours [] vs theirs [Change to ?<?::?<?, Add not null::]",
+        "[3] type: ours warning vs theirs info",
+        "[3] row: ours 4 vs theirs 5",
+        "[3] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique::, unique]"
       ]
     },
     {
       "name": "op-ltq-null-unspec",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` should be unique or primary key for operator `<?`\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 0 vs theirs 3",
-        "[1] text: ours \"expected column type\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
+        "[0] type: ours warning vs theirs info",
+        "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique:: [unique]]",
+        "[1] type: ours warning vs theirs info",
         "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` is nullable but operator `<?` requires it to be NOT NULL\" vs theirs \"Invalid start of operand \":\"\"",
-        "[2] row: ours 2 vs theirs 3",
-        "[3] type: ours warning vs theirs error",
-        "[3] text: ours \"Column `child.parent_id` is nullable but operator `<?` requires it to be NOT NULL\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\"",
-        "[3] row: ours 4 vs theirs 3",
-        "[4] type: ours warning vs theirs error",
-        "[4] text: ours \"Column `parent.id` should be unique or primary key for operator `<?`\" vs theirs \"These fields must be some inline settings optionally ended with a setting list\"",
-        "[4] row: ours 4 vs theirs 3"
+        "[1] quickFixes: ours [] vs theirs [Change to ?<?::?<?, Add not null::]",
+        "[2] type: ours warning vs theirs info",
+        "[2] row: ours 4 vs theirs 5",
+        "[2] quickFixes: ours [] vs theirs [Change to ?<?::?<?, Add not null::]",
+        "[3] type: ours warning vs theirs info",
+        "[3] row: ours 4 vs theirs 5",
+        "[3] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique:: [unique]]"
       ]
     },
     {
       "name": "op-ltq-unspec-nn",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "count: ours 5 vs theirs 4",
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` should be unique or primary key for operator `<?`\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 0 vs theirs 3",
-        "[1] text: ours \"expected identifier\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
+        "[0] type: ours warning vs theirs info",
+        "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique::, unique]",
+        "[1] type: ours warning vs theirs info",
         "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` is nullable but operator `<?` requires it to be NOT NULL\" vs theirs \"Inline column settings can only be `pk` or `unique`\"",
-        "[2] row: ours 2 vs theirs 3",
-        "[3] type: ours warning vs theirs error",
-        "[3] text: ours \"Column `child.parent_id` is nullable but operator `<?` requires it to be NOT NULL\" vs theirs \"Invalid start of operand \":\"\"",
-        "[3] row: ours 4 vs theirs 3"
+        "[1] quickFixes: ours [] vs theirs [Change to ?<?::?<?, Add not null:: [not null]]",
+        "[2] type: ours warning vs theirs info",
+        "[2] row: ours 4 vs theirs 5",
+        "[2] quickFixes: ours [] vs theirs [Change to ?<?::?<?, Add not null:: [not null]]",
+        "[3] type: ours warning vs theirs info",
+        "[3] row: ours 4 vs theirs 5",
+        "[3] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique::, unique]"
       ]
     },
     {
       "name": "op-ltq-unspec-unspec",
       "status": "divergent",
-      "class": "their-parser-gap",
+      "class": "semantic",
       "problems": [
-        "count: ours 5 vs theirs 4",
-        "[0] type: ours warning vs theirs error",
-        "[0] text: ours \"Column `parent.id` should be unique or primary key for operator `<?`\" vs theirs \"A column must have a type\"",
-        "[0] row: ours 0 vs theirs 3",
-        "[1] text: ours \"expected identifier\" vs theirs \"A column name must be an identifier or a quoted identifier\"",
+        "[0] type: ours warning vs theirs info",
+        "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique:: [unique]]",
+        "[1] type: ours warning vs theirs info",
         "[1] row: ours 2 vs theirs 3",
-        "[2] type: ours warning vs theirs error",
-        "[2] text: ours \"Column `child.parent_id` is nullable but operator `<?` requires it to be NOT NULL\" vs theirs \"Inline column settings can only be `pk` or `unique`\"",
-        "[2] row: ours 2 vs theirs 3",
-        "[3] type: ours warning vs theirs error",
-        "[3] text: ours \"Column `child.parent_id` is nullable but operator `<?` requires it to be NOT NULL\" vs theirs \"Invalid start of operand \":\"\"",
-        "[3] row: ours 4 vs theirs 3"
+        "[1] quickFixes: ours [] vs theirs [Change to ?<?::?<?, Add not null:: [not null]]",
+        "[2] type: ours warning vs theirs info",
+        "[2] row: ours 4 vs theirs 5",
+        "[2] quickFixes: ours [] vs theirs [Change to ?<?::?<?, Add not null:: [not null]]",
+        "[3] type: ours warning vs theirs info",
+        "[3] row: ours 4 vs theirs 5",
+        "[3] quickFixes: ours [] vs theirs [Change to <>?::<>?, Add unique:: [unique]]"
       ]
     },
     {

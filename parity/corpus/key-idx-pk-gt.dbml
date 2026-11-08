@@ -1,5 +1,0 @@
-Table parent { id integer
-indexes { (id) [pk] }
-}
-Table child { parent_id integer [not null] ref: > parent.id
-}

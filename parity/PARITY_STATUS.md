@@ -39,6 +39,22 @@ Genuine divergences, each portable against their open source:
   at different constructs) — the spec compares rows; where their anchor
   row differs by convention, the port aligns ours to theirs.
 
+## Corpus correction (the 47 reclassified)
+
+The original corpus generated MALFORMED inline refs — bracketless
+`ref: > parent.id` floating after the settings brackets. Their compiler
+correctly rejected the malformed syntax; the "47 their-parser-gap"
+classification was my test bug, not theirs. The corrected corpus
+(bracketed `[not null, ref: > parent.id]`, single-line key tables)
+parses in BOTH engines: the parser-gap class is gone and the semantic
+comparison now covers 61 cases with real diagnostics from both sides.
+
+New finding from the corrected run: BOTH engines reject comma-separated
+TableGroup members (`TableGroup g { a, b }` — theirs: 1 error, ours: 2
+including an extra "unterminated table group"). Our parser's group loop
+misses comma consumption. Check their grammar tests for the expected
+member syntax before porting.
+
 ## Path to green
 
 1. Port the semantic divergences (the 20) — each: read their source

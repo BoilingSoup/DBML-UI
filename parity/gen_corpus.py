@@ -23,7 +23,7 @@ for op in OPS:
             add(
                 f"op-{op.replace('<', 'lt').replace('>', 'gt').replace('-', 'dash').replace('?', 'q')}-{fk_label}-{par_label}",
                 f"Table parent {{ id integer {par_attr}\n}}\n"
-                f"Table child {{ parent_id integer {fk_attr} ref: > parent.id\n}}\n"
+                f"Table child {{ parent_id integer {fk_attr}\n}}\n"
                 f"Ref: parent.id {op} child.parent_id\n",
             )
 
@@ -36,16 +36,20 @@ KEYS = {
     "idx-unique": "indexes { (id) [unique] }",
 }
 for key, body in KEYS.items():
+    # single-line parent: a split-line setting reads as a broken column
+    parent = f'Table parent {{ id integer {body} }}' if body else 'Table parent { id integer }'
     add(
         f"key-{key}-lt",
-        f'Table parent {{ id integer\n{body}\n}}\n'
+        f'{parent}\n'
         f'Table child {{ parent_id integer [not null]\n}}\n'
         f'Ref: parent.id < child.parent_id\n',
     )
+    # the inline form: the ref rides INSIDE the settings brackets
+    # (dbdiagram syntax: [not null, ref: > parent.id])
     add(
-        f"key-{key}-gt",
-        f'Table parent {{ id integer\n{body}\n}}\n'
-        f'Table child {{ parent_id integer [not null] ref: > parent.id\n}}\n',
+        f"key-{key}-inline-gt",
+        f'{parent}\n'
+        f'Table child {{ parent_id integer [not null, ref: > parent.id]\n}}\n',
     )
 
 # composite keys: satisfied vs missing
