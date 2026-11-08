@@ -31,9 +31,10 @@ struct Case {
     diagnostics: Vec<Diagnostic>,
 }
 
-/// The 0-based line of a byte offset in the source.
+/// The 1-based line of a byte offset in the source — their provider
+/// serves Monaco, whose rows are 1-based; the contract follows.
 fn row_of(src: &str, offset: usize) -> usize {
-    src[..offset.min(src.len())].bytes().filter(|&b| b == b'\n').count()
+    src[..offset.min(src.len())].bytes().filter(|&b| b == b'\n').count() + 1
 }
 
 /// The byte column within the line for a byte offset.
