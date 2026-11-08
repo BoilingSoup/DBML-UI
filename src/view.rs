@@ -2624,9 +2624,9 @@ fn editor_toolbar(app: &App) -> Element<'static, Message> {
                 ICON_EXPAND
             },
             if maximized {
-                "Restore editor"
+                "Restore editor (F1)"
             } else {
-                "Maximize editor"
+                "Maximize editor (F1)"
             },
             Message::ToggleEditorMaximize,
             true,
@@ -3257,9 +3257,9 @@ fn diagram_max_button(maximized: bool) -> Element<'static, Message> {
             .on_press(Message::ToggleDiagramMaximize),
     )
     .on_enter(Message::ToolbarTip(Some(if maximized {
-        "Restore diagram"
+        "Restore diagram (F2)"
     } else {
-        "Maximize diagram"
+        "Maximize diagram (F2)"
     })))
     .on_exit(Message::ToolbarTip(None))
     .into()
