@@ -1711,6 +1711,36 @@ fn ref_stmt(
     // relationship — their set is must-be-binary @ the field, the per-arg
     // errors, and the LEFT endpoint's column check; the ref does not bind
     // (probe: `Ref r0: t1.odd col < t1.x` yields exactly those three)
+    {
+        let mut probe = body_input;
+        let from_res = endpoint(&mut probe, base);
+        ws(&mut probe);
+        sp(&mut probe);
+        let mut middle_args = 0usize;
+        while probe.starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '"' || c == '`') {
+            let junk_start = offset(&mut probe, base);
+            if ident(&mut probe, base).is_err() {
+                break;
+            }
+            ref_binder_errors.push((
+                junk_start,
+                "A Ref field should only have a single binary relationship".to_string(),
+            ));
+            middle_args += 1;
+            sp(&mut probe);
+        }
+        if from_res.is_ok() && middle_args > 0 {
+            ref_binder_errors.push((
+                body_base,
+                "A Ref field must be a binary relationship".to_string(),
+            ));
+            if let Ok(from) = from_res {
+                broken_refs.push(from);
+            }
+            skip_line(input);
+            return Ok(None);
+        }
+    }
     let strict_from: R<super::ast::Endpoint> = (|| {
         let from = endpoint(&mut scratch, base)?;
         ws(&mut scratch);
@@ -1729,18 +1759,6 @@ fn ref_stmt(
             ));
             middle_args += 1;
             sp(&mut scratch);
-        }
-        if middle_args > 0 {
-            ref_binder_errors.push((
-                body_field_off,
-                "A Ref field must be a binary relationship".to_string(),
-            ));
-            broken_refs.push(from);
-            skip_line(input);
-            return Err(Fail {
-                offset: body_base,
-                message: "application-wrapped ref field".to_string(),
-            });
         }
         Ok(from)
     })();

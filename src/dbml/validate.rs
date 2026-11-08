@@ -310,12 +310,14 @@ pub fn validate_with_parse(doc: &Document, src: &str, parse_binder: &[(usize, St
             if let Some(ir) = &c.settings.inline_ref {
                 if ir.to.table.is_empty() {
                     // their bare-word endpoint = a column of the HOST table
+                    // (schema-qualified message, like every endpoint check)
                     if !t.columns.iter().any(|x| x.name == ir.to.columns[0]) {
+                        let schema = t.schema.as_deref().unwrap_or("public");
                         out.push(Diagnostic::plain(
                             ir.to.span.start,
                             format!(
-                                "Column '{}' does not exist in Table '{}'",
-                                ir.to.columns[0], t.name
+                                "Column '{}' does not exist in Table '{}.{}'",
+                                ir.to.columns[0], schema, t.name
                             ),
                         ));
                     }
