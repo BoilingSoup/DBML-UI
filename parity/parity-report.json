@@ -1,7 +1,7 @@
 {
   "pinnedCommit": "6b0c25b5d87ef8f44236eeb1e9dc149848e1503e",
-  "pass": 236,
-  "fail": 64,
+  "pass": 237,
+  "fail": 63,
   "cases": [
     {
       "name": "fuzz0000",
@@ -35,12 +35,8 @@
     },
     {
       "name": "fuzz0005",
-      "status": "divergent",
-      "class": "semantic",
-      "problems": [
-        "count: ours 6 vs theirs 7",
-        "[5] text: ours \"Table 'quoted' does not exist in Schema 'public'\" vs theirs \"A TableGroup field should only have a single Table name\""
-      ]
+      "status": "ok",
+      "count": 7
     },
     {
       "name": "fuzz0006",
@@ -1247,7 +1243,7 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 21 vs theirs 24",
+        "count: ours 22 vs theirs 24",
         "[5] text: ours \"Column 'odd' does not exist in Table 'a'\" vs theirs \"Duplicate column 'odd col'\"",
         "[5] row: ours 11 vs theirs 12",
         "[6] row: ours 12 vs theirs 14",
@@ -1261,7 +1257,7 @@
         "[14] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
         "[19] text: ours \"A TableGroup field should only have a single Table name\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
         "[19] row: ours 35 vs theirs 34",
-        "[20] text: ours \"Table 'quoted' does not exist in Schema 'public'\" vs theirs \"A TableGroup field should only have a single Table name\""
+        "[21] text: ours \"Table 'quoted' does not exist in Schema 'public'\" vs theirs \"A TableGroup field should only have a single Table name\""
       ]
     },
     {

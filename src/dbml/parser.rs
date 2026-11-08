@@ -2301,21 +2301,54 @@ fn table_group(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<T
                 // membership on `quoted` only)
                 sp(input);
                 if input.starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '"' || c == '`') {
-                    let arg_start = offset(input, base);
                     g.tables.push(sc.map_or(n.clone(), |s| format!("{s}.{n}")));
-                    // consume the argument list to the line end or `}`
-                    while !input.is_empty()
-                        && !input.starts_with('\n')
-                        && !input.starts_with('\r')
-                        && !input.starts_with('}')
-                    {
+                    // consume the argument list to the line end or `}`; the
+                    // single-name error fires per JUXTAPOSED word (a word
+                    // directly following another — probe: `quoted name,
+                    // quoted name, a` errs at both `name`s, not at the
+                    // comma-separated elements)
+                    // the callee's own word directly precedes the first
+                    // argument. BOUNDED: one iteration per source char —
+                    // structurally incapable of spinning.
+                    let mut after_word = true;
+                    let bound = input.len() + 2;
+                    for _ in 0..bound {
+                        if input.is_empty()
+                            || input.starts_with('\n')
+                            || input.starts_with('\r')
+                            || input.starts_with('}')
+                        {
+                            break;
+                        }
                         let c = input.chars().next().unwrap();
+                        if c.is_whitespace() {
+                            *input = &input[c.len_utf8()..];
+                            continue;
+                        }
+                        if c == ',' {
+                            after_word = false;
+                            *input = &input[c.len_utf8()..];
+                            continue;
+                        }
+                        if c.is_alphanumeric() || c == '_' || c == '"' || c == '`' {
+                            let word_start = offset(input, base);
+                            if after_word {
+                                errs.push(err_at(
+                                    word_start,
+                                    "A TableGroup field should only have a single Table name",
+                                ));
+                            }
+                            while input.starts_with(|c: char| {
+                                c.is_alphanumeric() || c == '_' || c == '"' || c == '`'
+                            }) {
+                                let ch = input.chars().next().unwrap();
+                                *input = &input[ch.len_utf8()..];
+                            }
+                            after_word = true;
+                            continue;
+                        }
                         *input = &input[c.len_utf8()..];
                     }
-                    errs.push(err_at(
-                        arg_start,
-                        "A TableGroup field should only have a single Table name",
-                    ));
                     if eat(input, "}") {
                         break;
                     }
