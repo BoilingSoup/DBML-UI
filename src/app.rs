@@ -738,15 +738,21 @@ impl Tab {
         }
         let has_errors = !out.errors.is_empty();
         self.parse_errors = out.errors;
-        // dbdiagram-style diagnostics: strict-grammar warnings plus the
-        // semantic pass (non-blocking — the doc still renders and formats).
-        // While ANY parse error stands the semantic pass is suppressed
-        // entirely — their pipeline surfaces only parse errors then
-        // (corpus-verified: no case mixes the two).
-        self.diagnostics = if has_errors {
-            Vec::new()
+        // dbdiagram-style diagnostics (their provider): parse + bind
+        // errors always surface; the interpret-class infos come from
+        // their interpretFile, which refuses while ANY error stands — so
+        // infos vanish but binder-class errors do not
+        use dbml::validate::Severity;
+        let all = dbml::validate::validate(&out.doc, src);
+        let bind_errors: Vec<_> = all
+            .iter()
+            .filter(|d| d.severity == Severity::Error)
+            .cloned()
+            .collect();
+        self.diagnostics = if has_errors || !bind_errors.is_empty() {
+            bind_errors
         } else {
-            dbml::validate::validate(&out.doc, src)
+            all
         };
     }
 

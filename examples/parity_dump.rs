@@ -54,12 +54,22 @@ fn line_col(src: &str, offset: usize) -> (usize, usize) {
 fn dump_path(path: &str) -> Case {
     let src = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
     let out = dbml_ui::dbml::parser::parse(&src);
-    // their pipeline surfaces ONLY parse errors while any stand — the
-    // semantic pass never joins them (corpus-verified across the suite)
-    let ds = if out.errors.is_empty() {
-        dbml_ui::dbml::validate::validate(&out.doc, &src)
+    // their pipeline (services/diagnostics/provider.ts): errors and
+    // warnings come from parse + bind and ALWAYS surface; the infos come
+    // from interpretFile, which refuses (null) while ANY error stands —
+    // so the interpret-class diagnostics (infos) vanish, the
+    // binder-class errors do not
+    let all = dbml_ui::dbml::validate::validate(&out.doc, &src);
+    use dbml_ui::dbml::validate::Severity;
+    let bind_errors: Vec<_> = all
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .cloned()
+        .collect();
+    let ds = if out.errors.is_empty() && bind_errors.is_empty() {
+        all
     } else {
-        Vec::new()
+        bind_errors
     };
     let mut diagnostics: Vec<Diagnostic> = out
         .errors
