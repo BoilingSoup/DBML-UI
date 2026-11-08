@@ -55,6 +55,8 @@ pub struct Table {
 /// columns, in definition order when the header list is omitted).
 #[derive(Debug, Clone)]
 pub struct TableRecords {
+    /// Whole `records … { … }` block.
+    pub span: Span,
     /// Header column list; empty for the implicit all-columns form (the
     /// model resolves it against the table).
     pub columns: Vec<String>,
@@ -180,6 +182,9 @@ pub struct Index {
     /// Parallel to `columns`: true when the entry was a backticked
     /// functional expression (their index-column `type: "expression"`).
     pub expressions: Vec<bool>,
+    /// Parallel to `columns`: each entry's source span (their index-column
+    /// tokens — quotes included).
+    pub column_spans: Vec<Span>,
     pub unique: bool,
     pub pk: bool,
     pub name: Option<String>,

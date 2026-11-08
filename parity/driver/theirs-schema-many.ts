@@ -10,13 +10,19 @@ import {
 
 const cases: { name: string; path: string }[] = JSON.parse(readFileSync(process.argv[2], 'utf8'));
 
-// drop token/filepath fields recursively — v1 is structure-only
+// v2: token positions join the contract as OFFSETS ONLY (their Position
+// is {offset, line, column} over UTF-16 — only the offset is
+// language-neutral). filepath drops; line/column drop with it.
 const strip = (v: any): any => {
   if (Array.isArray(v)) return v.map(strip);
   if (v && typeof v === 'object') {
     const out: any = {};
     for (const [k, val] of Object.entries(v)) {
-      if (k === 'token' || k === 'filepath') continue;
+      if (k === 'filepath') continue;
+      if (k === 'token' && val && typeof val === 'object' && 'start' in val) {
+        out[k] = { start: { offset: val.start.offset }, end: { offset: val.end.offset } };
+        continue;
+      }
       out[k] = strip(val);
     }
     return out;

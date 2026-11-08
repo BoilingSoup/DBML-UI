@@ -15,7 +15,7 @@ fn dump_path(path: &str) -> Value {
     let database = if blocked {
         Value::Null
     } else {
-        dbml_ui::dbml::schema_json::to_database_json(&out.doc)
+        dbml_ui::dbml::schema_json::to_database_json(&out.doc, &src)
     };
     serde_json::json!({
         "path": path,

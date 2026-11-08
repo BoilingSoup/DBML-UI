@@ -60,6 +60,30 @@ adjust step can no longer distinguish, so they always render as plain
 `<`. The fixture goldens carry upstream's verbatim marks (the old
 harness stripped them).
 
+## The schema gate (M-P) — live
+
+`node parity/run_schema.mjs` → **75 pass / 0 divergent** on the corpus,
+**148/150** on the fuzz corpus. The parser's OUTPUT is now gated: our
+Document renders as the normalized `Database` JSON their
+`interpretFile` produces (see `parity/PARITY_SCHEMA_SPEC.md`), and the
+runner deep-diffs with path-qualified reports. Ports: the type
+splitter, default/metadata value typing (their boolean-"null" quirk),
+the record value pipeline (`getRecordValueType` + the sqlTypes
+classifier union, the datetime format ladder), the 2+-col-pk merge
+into a synthetic composite pk index (flags reset, `{-1,-1}` sentinel
+token), inline refs stored as the reversed ref, and the empty-string-
+in-a-non-string-column null rule.
+
+Token positions joined the contract as OFFSETS ONLY (their Position is
+UTF-16-indexed; the offset is the language-neutral part) — table,
+column, index (columns included), ref endpoints (inline refs carry
+their attribute span; the host endpoint carries the column span),
+enum values, groups, sticky notes, records and record values.
+Known residual (fuzz-only): custom-metadata entries, enum-value notes
+and column checks carry their settings-entry tokens on their side —
+our occurrences track key offsets but not the full `key: value` span
+yet.
+
 ## Next: the schema gate (M-P)
 
 The parser's OUTPUT is not yet gated — only its errors and the

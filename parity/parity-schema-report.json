@@ -1,7 +1,7 @@
 {
   "pinnedCommit": "6b0c25b5d87ef8f44236eeb1e9dc149848e1503e",
-  "pass": 150,
-  "fail": 0,
+  "pass": 148,
+  "fail": 2,
   "cases": [
     {
       "name": "fuzz0000",
@@ -193,7 +193,10 @@
     },
     {
       "name": "fuzz0047",
-      "status": "ok"
+      "status": "divergent",
+      "problems": [
+        ".tables[0].fields[0].metadata.color.token: ours undefined vs theirs {\"end\":{\"offset\":34},\"start\":{\"offset\":20}}"
+      ]
     },
     {
       "name": "fuzz0048",
@@ -357,7 +360,12 @@
     },
     {
       "name": "fuzz0088",
-      "status": "ok"
+      "status": "divergent",
+      "problems": [
+        ".enums[0].values[1].note.token: ours undefined vs theirs {\"end\":{\"offset\":91},\"start\":{\"offset\":79}}",
+        ".enums[0].values[1].token.end.offset: ours 77 vs theirs 92",
+        ".tables[0].fields[0].checks[0].token: ours undefined vs theirs {\"end\":{\"offset\":42},\"start\":{\"offset\":28}}"
+      ]
     },
     {
       "name": "fuzz0089",

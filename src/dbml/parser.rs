@@ -984,6 +984,7 @@ fn index(input: &mut &str, base: usize) -> R<Index> {
     let start = offset(input, base);
     let mut columns = Vec::new();
     let mut expressions = Vec::new();
+    let mut column_spans = Vec::new();
     if eat(input, "(") {
         loop {
             ws(input);
@@ -991,7 +992,9 @@ fn index(input: &mut &str, base: usize) -> R<Index> {
                 break;
             }
             let is_expr = input.starts_with('`');
+            let col_start = offset(input, base);
             columns.push(index_ident(input, base)?);
+            column_spans.push(col_start..offset(input, base));
             expressions.push(is_expr);
             ws(input);
             if peek_is(input, ")") {
@@ -1008,7 +1011,9 @@ fn index(input: &mut &str, base: usize) -> R<Index> {
         }
     } else {
         let is_expr = input.starts_with('`');
+        let col_start = offset(input, base);
         columns.push(index_ident(input, base)?);
+        column_spans.push(col_start..offset(input, base));
         expressions.push(is_expr);
     }
     sp(input);
@@ -1016,6 +1021,7 @@ fn index(input: &mut &str, base: usize) -> R<Index> {
     let mut idx = Index {
         columns,
         expressions,
+        column_spans,
         unique: false,
         pk: false,
         name: None,
@@ -1265,6 +1271,7 @@ fn records_block(
     input: &mut &str,
     base: usize,
     errs: &mut Vec<ParseError>,
+    rec_start: usize,
 ) -> R<(Option<String>, TableRecords)> {
     sp(input);
     // The target binds on the SAME line only: a bare `records` mid-typing
@@ -1314,6 +1321,7 @@ fn records_block(
         return fail(offset(input, base), "expected '{' after records header");
     }
     let mut rec = TableRecords {
+        span: rec_start..0,
         columns,
         rows: Vec::new(),
         value_spans: Vec::new(),
@@ -1353,6 +1361,7 @@ fn records_block(
             }
         }
     }
+    rec.span = rec.span.start..offset(input, base);
     Ok((target, rec))
 }
 
@@ -1495,8 +1504,9 @@ fn table(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Table> 
         if peek_kw(input, "Records") {
             // records [target][(cols)] [example] { rows } — sample rows
             // shown in the record view
+            let rec_start = offset(input, base);
             let _ = eat(input, "Records");
-            match records_block(input, base, errs) {
+            match records_block(input, base, errs, rec_start) {
                 Ok((_, rec)) => t.records = Some(rec),
                 Err(e) => {
                     errs.push(err_at(e.offset, &e.message));
@@ -1941,7 +1951,8 @@ pub fn parse(src: &str) -> ParseOutput {
         if peek_kw(rest, "Records") {
             let mut attempt = rest;
             let _ = eat(&mut attempt, "Records");
-            match records_block(&mut attempt, base, &mut out.errors) {
+            let rec_start = offset(&mut attempt, base);
+            match records_block(&mut attempt, base, &mut out.errors, rec_start) {
                 Ok((target, rec)) => {
                     rest = attempt;
                     top_records.push((target, rec));

@@ -8,12 +8,25 @@ use serde_json::{json, Map, Value};
 
 use super::ast::{self, Document, RecordValue};
 
-pub fn to_database_json(doc: &Document) -> Value {
+
+/// their TokenPosition with offsets only: `{"start": {"offset": N}, "end": {"offset": M}}`
+fn token_json(span: std::ops::Range<usize>) -> Value {
+    json!({"start": {"offset": span.start}, "end": {"offset": span.end}})
+}
+
+/// The declaration content end: our spans can carry trailing same-line
+/// whitespace their tokens exclude.
+fn trimmed_end(src: &str, end: usize) -> usize {
+    src[..end.min(src.len())].trim_end().len()
+}
+
+pub fn to_database_json(doc: &Document, src: &str) -> Value {
     let mut db = Map::new();
+    db.insert("token".into(), token_json(0..src.len()));
     db.insert("schemas".into(), json!([]));
     db.insert(
         "tables".into(),
-        Value::Array(doc.tables.iter().map(table_json).collect()),
+        Value::Array(doc.tables.iter().map(|t| table_json(t, src)).collect()),
     );
     db.insert(
         "notes".into(),
@@ -21,7 +34,7 @@ pub fn to_database_json(doc: &Document) -> Value {
     );
     db.insert(
         "refs".into(),
-        Value::Array(refs_json(doc).into_iter().collect()),
+        Value::Array(refs_json(doc, src).into_iter().collect()),
     );
     db.insert("deps".into(), json!([]));
     db.insert(
@@ -51,7 +64,7 @@ pub fn to_database_json(doc: &Document) -> Value {
     let records: Vec<Value> = doc
         .tables
         .iter()
-        .filter_map(|t| t.records.as_ref().map(|r| record_json(t, r, doc)))
+        .filter_map(|t| t.records.as_ref().map(|r| record_json(t, r, doc, src)))
         .collect();
     db.insert("records".into(), json!(records));
     db.insert("diagramViews".into(), json!([]));
@@ -78,8 +91,9 @@ pub fn to_database_json(doc: &Document) -> Value {
     Value::Object(db)
 }
 
-fn table_json(t: &ast::Table) -> Value {
+fn table_json(t: &ast::Table, src: &str) -> Value {
     let mut m = Map::new();
+    m.insert("token".into(), token_json(t.span.start..trimmed_end(src, t.span.end)));
     m.insert("name".into(), json!(t.name));
     m.insert("schemaName".into(), json!(t.schema));
     m.insert("alias".into(), json!(t.alias));
@@ -91,7 +105,7 @@ fn table_json(t: &ast::Table) -> Value {
     let fields: Vec<Value> = t
         .columns
         .iter()
-        .map(|c| column_json(c, merged && c.settings.pk))
+        .map(|c| column_json(c, merged && c.settings.pk, src))
         .collect();
     m.insert("fields".into(), json!(fields));
     m.insert(
@@ -111,10 +125,23 @@ fn table_json(t: &ast::Table) -> Value {
         ),
     );
     m.insert("partials".into(), json!([]));
-    let mut indexes: Vec<Value> = t.indexes.iter().map(index_json).collect();
+    let mut indexes: Vec<Value> = t.indexes.iter().map(|ix| index_json(ix, src)).collect();
     if merged {
+        // their synthetic composite pk index: the token is their {-1,-1}
+        // sentinel (no real declaration) and the column entries carry the
+        // source columns' spans
         indexes.push(json!({
-            "columns": pk_cols.iter().map(|c| json!({"value": c.name, "type": "column"})).collect::<Vec<_>>(),
+            "token": {"start": {"offset": -1}, "end": {"offset": -1}},
+            "columns": pk_cols
+                .iter()
+                .map(|c| {
+                    json!({
+                        "token": token_json(c.span.clone()),
+                        "value": c.name,
+                        "type": "column",
+                    })
+                })
+                .collect::<Vec<_>>(),
             "pk": true,
         }));
     }
@@ -129,8 +156,9 @@ fn table_json(t: &ast::Table) -> Value {
     Value::Object(m)
 }
 
-fn column_json(c: &ast::Column, pk_reset: bool) -> Value {
+fn column_json(c: &ast::Column, pk_reset: bool, src: &str) -> Value {
     let mut m = Map::new();
+    m.insert("token".into(), token_json(c.span.start..trimmed_end(src, c.span.end)));
     m.insert("name".into(), json!(c.name));
     let (schema, type_name, args) = split_type(&c.ty);
     let mut ty = Map::new();
@@ -160,6 +188,7 @@ fn column_json(c: &ast::Column, pk_reset: bool) -> Value {
         .map(|ir| {
             let op = super::validate::written_op(ir.card, ir.left_optional, ir.right_optional);
             vec![json!({
+                "token": token_json(ir.attr_start..ir.to.span.end),
                 "schemaName": ir.to.schema,
                 "tableName": ir.to.table,
                 "fieldNames": ir.to.columns,
@@ -184,14 +213,17 @@ fn column_json(c: &ast::Column, pk_reset: bool) -> Value {
     Value::Object(m)
 }
 
-fn index_json(ix: &ast::Index) -> Value {
+fn index_json(ix: &ast::Index, src: &str) -> Value {
     let mut m = Map::new();
+    m.insert("token".into(), token_json(ix.span.start..trimmed_end(src, ix.span.end)));
     let columns: Vec<Value> = ix
         .columns
         .iter()
         .zip(ix.expressions.iter())
-        .map(|(c, is_expr)| {
+        .zip(ix.column_spans.iter())
+        .map(|((c, is_expr), span)| {
             json!({
+                "token": token_json(span.clone()),
                 "value": c,
                 "type": if *is_expr { "expression" } else { "column" },
             })
@@ -213,7 +245,7 @@ fn index_json(ix: &ast::Index) -> Value {
     Value::Object(m)
 }
 
-fn refs_json(doc: &Document) -> Vec<Value> {
+fn refs_json(doc: &Document, src: &str) -> Vec<Value> {
     let mut out = Vec::new();
     // standalone refs keep their written endpoint order
     for r in &doc.refs {
@@ -223,14 +255,15 @@ fn refs_json(doc: &Document) -> Vec<Value> {
             r.right_optional,
         ));
         let mut m = Map::new();
+        m.insert("token".into(), token_json(r.span.clone()));
         m.insert("name".into(), json!(r.name));
         m.insert("schemaName".into(), json!(r.from.schema.clone()));
         m.insert(
             "endpoints".into(),
             json!([
-                {"schemaName": r.from.schema, "tableName": r.from.table,
+                {"token": token_json(r.from.span.clone()), "schemaName": r.from.schema, "tableName": r.from.table,
                  "fieldNames": r.from.columns, "relation": card_str(l)},
-                {"schemaName": r.to.schema, "tableName": r.to.table,
+                {"token": token_json(r.to.span.clone()), "schemaName": r.to.schema, "tableName": r.to.table,
                  "fieldNames": r.to.columns, "relation": card_str(rt)},
             ]),
         );
@@ -260,11 +293,15 @@ fn refs_json(doc: &Document) -> Vec<Value> {
             ));
             let mut ir_m = Map::new();
             ir_m.insert(
+                "token".into(),
+                token_json(ir.attr_start..ir.to.span.end),
+            );
+            ir_m.insert(
                 "endpoints".into(),
                 json!([
-                    {"schemaName": ir.to.schema, "tableName": ir.to.table,
+                    {"token": token_json(ir.attr_start..ir.to.span.end), "schemaName": ir.to.schema, "tableName": ir.to.table,
                      "fieldNames": ir.to.columns, "relation": card_str(rt)},
-                    {"schemaName": t.schema, "tableName": t.name,
+                    {"token": token_json(c.span.start..trimmed_end(src, c.span.end)), "schemaName": t.schema, "tableName": t.name,
                      "fieldNames": [c.name], "relation": card_str(l)},
                 ]),
             );
@@ -280,6 +317,7 @@ fn enum_json(e: &ast::Enum) -> Value {
         .iter()
         .map(|v| {
             let mut m = Map::new();
+            m.insert("token".into(), token_json(v.name_span.clone()));
             m.insert("name".into(), json!(v.name));
             if let Some(n) = &v.note {
                 m.insert("note".into(), json!({"value": n}));
@@ -287,7 +325,12 @@ fn enum_json(e: &ast::Enum) -> Value {
             Value::Object(m)
         })
         .collect();
-    json!({"name": e.name, "schemaName": e.schema, "values": values})
+    let mut m = Map::new();
+    m.insert("token".into(), token_json(e.span.clone()));
+    m.insert("name".into(), json!(e.name));
+    m.insert("schemaName".into(), json!(e.schema));
+    m.insert("values".into(), json!(values));
+    Value::Object(m)
 }
 
 fn group_json(g: &ast::TableGroup) -> Value {
@@ -300,6 +343,7 @@ fn group_json(g: &ast::TableGroup) -> Value {
         })
         .collect();
     let mut m = Map::new();
+    m.insert("token".into(), token_json(g.span.clone()));
     m.insert("tables".into(), json!(tables));
     m.insert("name".into(), json!(g.name));
     m.insert("schemaName".into(), json!(Value::Null));
@@ -314,10 +358,10 @@ fn group_json(g: &ast::TableGroup) -> Value {
 }
 
 fn note_json(n: &ast::StickyNote) -> Value {
-    json!({"name": n.name, "content": n.text, "metadata": {}})
+    json!({"token": token_json(n.span.clone()), "name": n.name, "content": n.text, "metadata": {}})
 }
 
-fn record_json(t: &ast::Table, r: &ast::TableRecords, doc: &Document) -> Value {
+fn record_json(t: &ast::Table, r: &ast::TableRecords, doc: &Document, src: &str) -> Value {
     // resolve the header: explicit columns or the table's own order
     let columns: Vec<String> = if r.columns.is_empty() {
         doc.tables
@@ -342,20 +386,28 @@ fn record_json(t: &ast::Table, r: &ast::TableRecords, doc: &Document) -> Value {
     let values: Vec<Value> = r
         .rows
         .iter()
-        .map(|row| {
+        .zip(r.value_spans.iter())
+        .map(|(row, spans)| {
             Value::Array(
                 row.iter()
                     .enumerate()
                     .map(|(i, v)| {
                         let cname = columns.get(i).map(|s| s.as_str()).unwrap_or("");
                         let (ty, is_enum) = col_type(cname);
-                        record_value(v, &ty, is_enum)
+                        let mut val = record_value(v, &ty, is_enum);
+                        if let Some(sp) = spans.get(i) {
+                            if let serde_json::Value::Object(m) = &mut val {
+                                m.insert("token".into(), token_json(sp.clone()));
+                            }
+                        }
+                        val
                     })
                     .collect(),
             )
         })
         .collect();
     let mut m = Map::new();
+    m.insert("token".into(), token_json(r.span.start..trimmed_end(src, r.span.end)));
     m.insert("schemaName".into(), json!(t.schema));
     m.insert("tableName".into(), json!(t.name));
     m.insert("columns".into(), json!(columns));
