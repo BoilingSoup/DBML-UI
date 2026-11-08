@@ -590,8 +590,8 @@ enum SettingVal {
 
 /// `[key, key: value, ref: > t.c, ...]` — parsed generically; callers
 /// interpret the pairs.
-fn settings_list(input: &mut &str, base: usize) -> R<Vec<(String, Option<SettingVal>)>> {
-    settings_list_occs(input, base).map(|(kvs, _)| kvs)
+fn settings_list(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Vec<(String, Option<SettingVal>)>> {
+    settings_list_occs(input, base, errs).map(|(kvs, _)| kvs)
 }
 
 /// The settings list plus every key occurrence (their attribute nodes —
@@ -599,6 +599,7 @@ fn settings_list(input: &mut &str, base: usize) -> R<Vec<(String, Option<Setting
 fn settings_list_occs(
     input: &mut &str,
     base: usize,
+    errs: &mut Vec<ParseError>,
 ) -> R<(Vec<(String, Option<SettingVal>)>, Vec<super::ast::SettingOcc>)> {
     if !eat(input, "[") {
         return fail(offset(input, base), "expected '['");
@@ -643,7 +644,7 @@ fn settings_list_occs(
                 ws(input);
                 let mut color = None;
                 if peek_is(input, "[") {
-                    if let Ok(kvs) = settings_list(input, base) {
+                    if let Ok(kvs) = settings_list(input, base, errs) {
                         for (k, v) in kvs {
                             if let (Some(SettingVal::Str(sv)), "color") = (&v, k.as_str()) {
                                 color = Some(sv.clone());
@@ -741,7 +742,19 @@ fn settings_list_occs(
         if eat(input, "]") {
             return Ok((out, occs));
         }
-        return fail(offset(input, base), "Expect a comma ','");
+        // their recovery: the parse error is recorded and the list still
+        // yields what parsed (probe: `ref: -? orders.odd col` keeps the
+        // endpoint, and the binder flags the missing column)
+        errs.push(err_at(offset(input, base), "Expect a comma ','"));
+        // sync to the bracket's close, else the line end — exhausting the
+        // whole source here would swallow every later construct
+        let nl = input.find('\n');
+        match (input.find(']'), nl) {
+            (Some(k), _) => *input = &input[k + 1..],
+            (None, Some(nl)) => *input = &input[nl + 1..],
+            (None, None) => *input = &input[input.len()..],
+        }
+        return Ok((out, occs));
     }
 }
 
@@ -827,7 +840,7 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
     }
     let settings_bracket = if peek_is(input, "[") {
         let settings_start = offset(input, base);
-        let (kvs, occs) = settings_list_occs(input, base)?;
+        let (kvs, occs) = settings_list_occs(input, base, errs)?;
         // a SECOND bracket list on the same line is their fields error,
         // anchored at both lists (probe: `int [] [pk]` errs at `[` and `[`)
         sp(input);
@@ -873,7 +886,9 @@ fn swallow_balanced_braces(input: &mut &str) {
             _ => {}
         }
     }
-    *input = "";
+    // exhaust within the source: a foreign "" slice would break the
+    // pointer-difference offsets
+    *input = &input[input.len()..];
 }
 
 
@@ -984,7 +999,7 @@ fn index_ident(input: &mut &str, base: usize) -> R<String> {
     Ok(name)
 }
 
-fn index(input: &mut &str, base: usize) -> R<Index> {
+fn index(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Index> {
     let start = offset(input, base);
     let mut columns = Vec::new();
     let mut expressions = Vec::new();
@@ -1034,7 +1049,7 @@ fn index(input: &mut &str, base: usize) -> R<Index> {
         comma_form: false,
     };
     if peek_is(input, "[") {
-        let kvs = settings_list(input, base)?;
+        let kvs = settings_list(input, base, errs)?;
         for (key, val) in kvs {
             match val {
                 None => match key.as_str() {
@@ -1314,7 +1329,7 @@ fn records_block(
     }
     let mut example = false;
     if peek_is(input, "[") {
-        for (key, val) in settings_list(input, base)? {
+        for (key, val) in settings_list(input, base, errs)? {
             if key == "example" && val.is_none() {
                 example = true;
             }
@@ -1467,7 +1482,7 @@ fn table(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Table> 
         ws(input);
     }
     if peek_is(input, "[") {
-        let kvs = settings_list(input, base)?;
+        let kvs = settings_list(input, base, errs)?;
         for (key, val) in kvs {
             if let Some(SettingVal::Str(v)) = val {
                 match key.as_str() {
@@ -1563,7 +1578,7 @@ fn table(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Table> 
                 if eat(input, "}") {
                     break;
                 }
-                match index(input, base) {
+                match index(input, base, errs) {
                     Ok(ix) => t.indexes.push(ix),
                     Err(e) => {
                         errs.push(err_at(e.offset, &e.message));
@@ -1610,7 +1625,7 @@ fn ref_stmt(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Opti
         if !eat(input, "}") {
             return fail(offset(input, base), "expected '}' after ref body");
         }
-        let (on_delete, on_update, color) = ref_settings(input, base);
+        let (on_delete, on_update, color) = ref_settings(input, base, errs);
         return Ok(Some(Ref {
             name,
             span: start..offset(input, base),
@@ -1648,7 +1663,7 @@ fn ref_stmt(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Opti
     match strict {
         Ok((from, to, card, l_opt, r_opt, op_offset)) => {
             *input = scratch;
-            let (on_delete, on_update, color) = ref_settings(input, base);
+            let (on_delete, on_update, color) = ref_settings(input, base, errs);
             Ok(Some(Ref {
                 name,
                 span: start..offset(input, base),
@@ -1832,6 +1847,7 @@ fn ref_shape_errors(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) {
 fn ref_settings(
     input: &mut &str,
     base: usize,
+    errs: &mut Vec<ParseError>,
 ) -> (Option<String>, Option<String>, Option<String>) {
     let mut out = (None, None, None);
     // `ws` before the peek eats blank lines and comments too; when no
@@ -1846,7 +1862,7 @@ fn ref_settings(
         *input = before_ws;
         return out;
     }
-    if let Ok(kvs) = settings_list(input, base) {
+    if let Ok(kvs) = settings_list(input, base, errs) {
         for (k, v) in kvs {
             if let Some(SettingVal::Str(v)) = v {
                 match k.as_str() {
@@ -1898,7 +1914,7 @@ fn enum_def(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Enum
                 sp(input);
                 let mut note = None;
                 if peek_is(input, "[") {
-                    let kvs = match settings_list(input, base) {
+                    let kvs = match settings_list(input, base, errs) {
                         Ok(kvs) => kvs,
                         Err(err) => {
                             errs.push(err_at(err.offset, &err.message));
@@ -1948,7 +1964,7 @@ fn table_group(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<T
     let mut color = None;
     let mut custom: Vec<(String, String)> = Vec::new();
     if peek_is(input, "[") {
-        if let Ok(kvs) = settings_list(input, base) {
+        if let Ok(kvs) = settings_list(input, base, errs) {
             for (k, v) in kvs {
                 if let (Some(SettingVal::Str(sv)), "color") = (&v, k.as_str()) {
                     color = Some(sv.clone());

@@ -203,11 +203,10 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
     let mut tables: Vec<&str> = Vec::new();
     for t in &doc.tables {
         if tables.contains(&t.name.as_str()) {
-            // their dup marker anchors the END of the duplicate
-            // declaration (probe: a 2-line file flags row 2 — the offset
-            // past the closing brace)
+            // their dup marker anchors the duplicate declaration's NAME
+            // token (probe: three multi-line dups flag each later name)
             out.push(Diagnostic::plain(
-                t.span.end,
+                t.name_span.start,
                 format!("Table '{}' already exists in schema 'public'", t.name),
             ));
         }
@@ -283,11 +282,17 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
         }
     }
     for r in &doc.refs {
-        check_endpoint(doc, &r.from, r.span.start, &mut out);
-        check_endpoint(doc, &r.to, r.span.start, &mut out);
+        // their endpoint resolution checks the columns only when the two
+        // sides carry the same field count (probe: a.(id, nope) > b.x
+        // errs with Unequal fields alone)
+        let equal = r.from.columns.len() == r.to.columns.len();
+        if equal {
+            check_endpoint(doc, &r.from, r.span.start, &mut out);
+            check_endpoint(doc, &r.to, r.span.start, &mut out);
+        }
         // their isEqualTupleOperands: composite endpoints must carry the
         // same field count (probe: `a.(id, code) > b.x` errs at the field)
-        if r.from.columns.len() != r.to.columns.len() {
+        if !equal {
             out.push(Diagnostic::plain(
                 r.from.span.start,
                 "Unequal fields in ref endpoints".to_string(),
@@ -474,12 +479,15 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
     // bare-comma settings get dbdiagram's grammar warning + a rewrite fix
     for t in &doc.tables {
         for ix in &t.indexes {
-            for col in &ix.columns {
+            for (ci, col) in ix.columns.iter().enumerate() {
                 let plain = !col.contains(|c: char| !(c.is_alphanumeric() || c == '_'));
                 if plain && !t.columns.iter().any(|c| &c.name == col) {
+                    // their index-column check: the message differs from
+                    // the ref-endpoint one and anchors at the column
+                    let at = ix.column_spans.get(ci).map(|s| s.start).unwrap_or(ix.span.start);
                     out.push(Diagnostic::plain(
-                        ix.span.start,
-                        format!("Column '{}' does not exist in Table '{}'", col, t.name),
+                        at,
+                        format!("No column named '{}' inside Table '{}'", col, t.name),
                     ));
                 }
             }
@@ -1326,7 +1334,7 @@ mod tests {
             "{d:?}"
         );
         assert!(
-            d.contains(&"Column 'zzz' does not exist in Table 'c'".to_string()),
+            d.contains(&"No column named 'zzz' inside Table 'c'".to_string()),
             "{d:?}"
         );
         assert_eq!(d.len(), 2);
