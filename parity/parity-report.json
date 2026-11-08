@@ -1,7 +1,7 @@
 {
   "pinnedCommit": "6b0c25b5d87ef8f44236eeb1e9dc149848e1503e",
-  "pass": 230,
-  "fail": 70,
+  "pass": 236,
+  "fail": 64,
   "cases": [
     {
       "name": "fuzz0000",
@@ -15,11 +15,8 @@
     },
     {
       "name": "fuzz0002",
-      "status": "divergent",
-      "class": "semantic",
-      "problems": [
-        "[10] text: ours \"Table 'quoted' does not exist\" vs theirs \"Table 'quoted' does not exist in Schema 'public'\""
-      ]
+      "status": "ok",
+      "count": 11
     },
     {
       "name": "fuzz0003",
@@ -42,7 +39,7 @@
       "class": "semantic",
       "problems": [
         "count: ours 6 vs theirs 7",
-        "[5] text: ours \"Table 'quoted' does not exist\" vs theirs \"A TableGroup field should only have a single Table name\""
+        "[5] text: ours \"Table 'quoted' does not exist in Schema 'public'\" vs theirs \"A TableGroup field should only have a single Table name\""
       ]
     },
     {
@@ -182,11 +179,8 @@
     },
     {
       "name": "fuzz0031",
-      "status": "divergent",
-      "class": "semantic",
-      "problems": [
-        "[2] text: ours \"Table 'quoted' does not exist\" vs theirs \"Table 'quoted' does not exist in Schema 'public'\""
-      ]
+      "status": "ok",
+      "count": 3
     },
     {
       "name": "fuzz0032",
@@ -861,11 +855,8 @@
     },
     {
       "name": "fuzz0133",
-      "status": "divergent",
-      "class": "semantic",
-      "problems": [
-        "[3] text: ours \"Table 'quoted' does not exist\" vs theirs \"Table 'quoted' does not exist in Schema 'public'\""
-      ]
+      "status": "ok",
+      "count": 4
     },
     {
       "name": "fuzz0134",
@@ -935,7 +926,7 @@
         "[12] text: ours \"Unequal fields in ref endpoints\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
         "[13] text: ours \"A TableGroup field should only have a single Table name\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
         "[13] row: ours 13 vs theirs 8",
-        "[14] text: ours \"Table 'quoted' does not exist\" vs theirs \"Unequal fields in ref endpoints\"",
+        "[14] text: ours \"Table 'quoted' does not exist in Schema 'public'\" vs theirs \"Unequal fields in ref endpoints\"",
         "[14] row: ours 13 vs theirs 8"
       ]
     },
@@ -1109,7 +1100,7 @@
         "count: ours 9 vs theirs 10",
         "[7] text: ours \"A TableGroup field should only have a single Table name\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
         "[7] row: ours 26 vs theirs 24",
-        "[8] text: ours \"Table 'quoted' does not exist\" vs theirs \"A TableGroup field should only have a single Table name\""
+        "[8] text: ours \"Table 'quoted' does not exist in Schema 'public'\" vs theirs \"A TableGroup field should only have a single Table name\""
       ]
     },
     {
@@ -1134,19 +1125,13 @@
     },
     {
       "name": "fuzz0173",
-      "status": "divergent",
-      "class": "semantic",
-      "problems": [
-        "[7] text: ours \"Table 'quoted' does not exist\" vs theirs \"Table 'quoted' does not exist in Schema 'public'\""
-      ]
+      "status": "ok",
+      "count": 8
     },
     {
       "name": "fuzz0174",
-      "status": "divergent",
-      "class": "semantic",
-      "problems": [
-        "[9] text: ours \"Table 'quoted' does not exist\" vs theirs \"Table 'quoted' does not exist in Schema 'public'\""
-      ]
+      "status": "ok",
+      "count": 10
     },
     {
       "name": "fuzz0175",
@@ -1276,7 +1261,7 @@
         "[14] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
         "[19] text: ours \"A TableGroup field should only have a single Table name\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
         "[19] row: ours 35 vs theirs 34",
-        "[20] text: ours \"Table 'quoted' does not exist\" vs theirs \"A TableGroup field should only have a single Table name\""
+        "[20] text: ours \"Table 'quoted' does not exist in Schema 'public'\" vs theirs \"A TableGroup field should only have a single Table name\""
       ]
     },
     {
@@ -1399,11 +1384,8 @@
     },
     {
       "name": "fuzz0211",
-      "status": "divergent",
-      "class": "semantic",
-      "problems": [
-        "[14] text: ours \"Table 'quoted' does not exist\" vs theirs \"Table 'quoted' does not exist in Schema 'public'\""
-      ]
+      "status": "ok",
+      "count": 15
     },
     {
       "name": "fuzz0212",
@@ -1719,7 +1701,7 @@
       "class": "semantic",
       "problems": [
         "count: ours 4 vs theirs 5",
-        "[3] text: ours \"Table 'quoted' does not exist\" vs theirs \"Table 'name' does not exist in Schema 'public'\""
+        "[3] text: ours \"Table 'quoted' does not exist in Schema 'public'\" vs theirs \"Table 'name' does not exist in Schema 'public'\""
       ]
     },
     {

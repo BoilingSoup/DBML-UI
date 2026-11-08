@@ -535,7 +535,7 @@ pub fn validate_with_parse(
             }
             out.push(Diagnostic::plain(
                 g.span.start,
-                format!("Table '{}' does not exist", m),
+                format!("Table '{}' does not exist in Schema 'public'", m),
             ));
         }
     }
@@ -1420,7 +1420,7 @@ mod tests {
             "Table a { id integer }\nTableGroup g {\n  nope\n}\nTable c {\n  x integer\n  indexes {\n    (zzz) [unique]\n  }\n}\n",
         );
         assert!(
-            d.contains(&"Table 'nope' does not exist".to_string()),
+            d.contains(&"Table 'nope' does not exist in Schema 'public'".to_string()),
             "{d:?}"
         );
         assert!(
