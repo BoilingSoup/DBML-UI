@@ -1,7 +1,7 @@
 {
   "pinnedCommit": "6b0c25b5d87ef8f44236eeb1e9dc149848e1503e",
-  "pass": 195,
-  "fail": 105,
+  "pass": 199,
+  "fail": 101,
   "cases": [
     {
       "name": "fuzz0000",
@@ -18,15 +18,9 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 9 vs theirs 11",
-        "[5] text: ours \"Column 'code' does not exist in Table 'public.a'\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[5] row: ours 22 vs theirs 21",
-        "[6] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[6] row: ours 27 vs theirs 21",
-        "[7] text: ours \"Table 'name' does not exist\" vs theirs \"Column 'odd' does not exist in Table 'public.t1'\"",
-        "[7] row: ours 27 vs theirs 21",
-        "[8] text: ours \"Table 'quoted' does not exist\" vs theirs \"Column 'code' does not exist in Table 'public.a'\"",
-        "[8] row: ours 27 vs theirs 22"
+        "count: ours 12 vs theirs 11",
+        "[9] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"A TableGroup field should only have a single Table name\"",
+        "[10] text: ours \"Table 'name' does not exist\" vs theirs \"Table 'quoted' does not exist in Schema 'public'\""
       ]
     },
     {
@@ -67,7 +61,7 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 10 vs theirs 14",
+        "count: ours 11 vs theirs 14",
         "[1] text: ours \"expected ')' after records columns\" vs theirs \"Column 'odd' does not exist in Table 'ñT'\"",
         "[2] text: ours \"expected column type\" vs theirs \"Expect a comma ','\"",
         "[2] row: ours 13 vs theirs 12",
@@ -79,9 +73,7 @@
         "[5] row: ours 17 vs theirs 24",
         "[6] text: ours \"A Ref field must be a binary relationship\" vs theirs \"A Ref field should only have a single binary relationship\"",
         "[7] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
-        "[8] text: ours \"Unequal fields in ref endpoints\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
-        "[9] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"Unequal fields in ref endpoints\"",
-        "[9] row: ours 25 vs theirs 24"
+        "[8] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Table 'name' does not exist in Schema 'public'\""
       ]
     },
     {
@@ -163,7 +155,8 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 8 vs theirs 12"
+        "count: ours 11 vs theirs 12",
+        "[10] text: ours \"Column 'odd' does not exist in Table 'public.posts'\" vs theirs \"Column 'id' does not exist in Table 'public.B'\""
       ]
     },
     {
@@ -171,9 +164,10 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 6 vs theirs 10",
-        "[5] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[5] row: ours 27 vs theirs 25"
+        "count: ours 9 vs theirs 10",
+        "[7] text: ours \"Column 'odd' does not exist in Table 'public._x'\" vs theirs \"Column 'name' does not exist in Table 'public.a'\"",
+        "[8] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"Column 'odd' does not exist in Table 'public._x'\"",
+        "[8] row: ours 27 vs theirs 25"
       ]
     },
     {
@@ -234,7 +228,7 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 12 vs theirs 16",
+        "count: ours 15 vs theirs 16",
         "[1] text: ours \"Two endpoints are the same\" vs theirs \"Duplicate column 'name'\"",
         "[1] row: ours 2 vs theirs 3",
         "[2] text: ours \"Duplicate column 'name'\" vs theirs \"Table 'ñT' already exists in schema 'public'\"",
@@ -251,8 +245,9 @@
         "[9] text: ours \"No column named 'col' inside Table 'ñT'\" vs theirs \"No column named 'odd' inside Table 'ñT'\"",
         "[10] text: ours \"No column named 'odd' inside Table 'ñT'\" vs theirs \"A Ref field must be a binary relationship\"",
         "[10] row: ours 22 vs theirs 29",
-        "[11] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[11] row: ours 34 vs theirs 29"
+        "[11] text: ours \"A Ref field must be a binary relationship\" vs theirs \"A Ref field should only have a single binary relationship\"",
+        "[14] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"Column 'odd' does not exist in Table 'public.users'\"",
+        "[14] row: ours 34 vs theirs 29"
       ]
     },
     {
@@ -260,11 +255,10 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 6 vs theirs 10",
-        "[4] text: ours \"Column 'user_id' does not exist in Table 'public.B'\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[4] row: ours 25 vs theirs 24",
-        "[5] text: ours \"Column 'x' does not exist in Table 'public.B'\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[5] row: ours 25 vs theirs 24"
+        "count: ours 9 vs theirs 10",
+        "[7] text: ours \"Column 'user_id' does not exist in Table 'public.B'\" vs theirs \"Column 'x' does not exist in Table 'public.B'\"",
+        "[7] row: ours 25 vs theirs 24",
+        "[8] text: ours \"Column 'x' does not exist in Table 'public.B'\" vs theirs \"Column 'user_id' does not exist in Table 'public.B'\""
       ]
     },
     {
@@ -272,7 +266,7 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 0 vs theirs 4"
+        "count: ours 3 vs theirs 4"
       ]
     },
     {
@@ -330,13 +324,14 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 6 vs theirs 13",
-        "[2] text: ours \"Unequal fields in ref endpoints\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[3] text: ours \"A Ref field must be a binary relationship\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
-        "[3] row: ours 5 vs theirs 4",
-        "[4] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "count: ours 8 vs theirs 13",
+        "[3] text: ours \"Unequal fields in ref endpoints\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "[4] text: ours \"A Ref field must be a binary relationship\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
         "[4] row: ours 5 vs theirs 4",
-        "[5] row: ours 5 vs theirs 4"
+        "[5] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Unequal fields in ref endpoints\"",
+        "[5] row: ours 5 vs theirs 4",
+        "[6] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"A Ref field must be a binary relationship\"",
+        "[7] text: ours \"Unequal fields in ref endpoints\" vs theirs \"A Ref field should only have a single binary relationship\""
       ]
     },
     {
@@ -406,9 +401,10 @@
       "status": "divergent",
       "class": "their-parser-gap",
       "problems": [
-        "count: ours 3 vs theirs 7",
-        "[2] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[2] row: ours 20 vs theirs 15"
+        "count: ours 6 vs theirs 7",
+        "[4] text: ours \"Column 'odd' does not exist in Table 'public.posts'\" vs theirs \"Column 'id' does not exist in Table 'public.posts'\"",
+        "[5] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"Column 'odd' does not exist in Table 'public.posts'\"",
+        "[5] row: ours 20 vs theirs 15"
       ]
     },
     {
@@ -446,10 +442,15 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 8 vs theirs 16",
-        "[6] text: ours \"Unequal fields in ref endpoints\" vs theirs \"Table 'missing' does not exist in Schema 'public'\"",
-        "[7] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
-        "[7] row: ours 27 vs theirs 21"
+        "count: ours 12 vs theirs 16",
+        "[6] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Table 'missing' does not exist in Schema 'public'\"",
+        "[7] text: ours \"Unequal fields in ref endpoints\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "[8] text: ours \"A Ref field must be a binary relationship\" vs theirs \"Unequal fields in ref endpoints\"",
+        "[8] row: ours 22 vs theirs 21",
+        "[9] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"A Ref field must be a binary relationship\"",
+        "[10] text: ours \"Column 'odd' does not exist in Table 'public.a'\" vs theirs \"A Ref field should only have a single binary relationship\"",
+        "[11] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"Column 'odd' does not exist in Table 'public.a'\"",
+        "[11] row: ours 27 vs theirs 22"
       ]
     },
     {
@@ -477,14 +478,15 @@
       "status": "divergent",
       "class": "their-parser-gap",
       "problems": [
-        "count: ours 10 vs theirs 17",
-        "[6] text: ours \"Unequal fields in ref endpoints\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[7] text: ours \"A Ref field must be a binary relationship\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[7] row: ours 8 vs theirs 7",
-        "[8] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "count: ours 12 vs theirs 17",
+        "[7] text: ours \"Unequal fields in ref endpoints\" vs theirs \"A Ref field should only have a single binary relationship\"",
+        "[8] text: ours \"A Ref field must be a binary relationship\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
         "[8] row: ours 8 vs theirs 7",
-        "[9] text: ours \"Unequal fields in ref endpoints\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
-        "[9] row: ours 8 vs theirs 7"
+        "[9] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "[9] row: ours 8 vs theirs 7",
+        "[10] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Unequal fields in ref endpoints\"",
+        "[10] row: ours 8 vs theirs 7",
+        "[11] text: ours \"Unequal fields in ref endpoints\" vs theirs \"A Ref field must be a binary relationship\""
       ]
     },
     {
@@ -521,9 +523,10 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 10 vs theirs 14",
-        "[9] text: ours \"Column 'id' does not exist in Table 'public.posts'\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[9] row: ours 22 vs theirs 21"
+        "count: ours 13 vs theirs 14",
+        "[11] text: ours \"Column 'odd' does not exist in Table 'public.a'\" vs theirs \"Column 'code' does not exist in Table 'public.a'\"",
+        "[12] text: ours \"Column 'id' does not exist in Table 'public.posts'\" vs theirs \"Column 'odd' does not exist in Table 'public.a'\"",
+        "[12] row: ours 22 vs theirs 21"
       ]
     },
     {
@@ -536,13 +539,13 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 3 vs theirs 9",
-        "[0] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[0] row: ours 19 vs theirs 18",
-        "[1] text: ours \"Column 'id' does not exist in Table 'public.my_table'\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[1] row: ours 19 vs theirs 18",
+        "count: ours 6 vs theirs 9",
         "[2] text: ours \"Column 'odd' does not exist in Table 'public.my_table'\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[2] row: ours 19 vs theirs 18"
+        "[3] row: ours 19 vs theirs 18",
+        "[4] text: ours \"Column 'id' does not exist in Table 'public.my_table'\" vs theirs \"Column 'odd' does not exist in Table 'public.my_table'\"",
+        "[4] row: ours 19 vs theirs 18",
+        "[5] text: ours \"Column 'odd' does not exist in Table 'public.my_table'\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "[5] row: ours 19 vs theirs 18"
       ]
     },
     {
@@ -574,10 +577,8 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 12 vs theirs 14",
-        "[10] text: ours \"Unequal fields in ref endpoints\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
-        "[11] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"Unequal fields in ref endpoints\"",
-        "[11] row: ours 23 vs theirs 22"
+        "count: ours 13 vs theirs 14",
+        "[10] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Table 'name' does not exist in Schema 'public'\""
       ]
     },
     {
@@ -585,13 +586,13 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 8 vs theirs 13",
+        "count: ours 9 vs theirs 13",
         "[1] text: ours \"A Ref field must be a binary relationship\" vs theirs \"A Ref field should only have a single binary relationship\"",
         "[2] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Invalid column reference\"",
         "[3] text: ours \"Unequal fields in ref endpoints\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
-        "[6] text: ours \"Unequal fields in ref endpoints\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[7] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
-        "[7] row: ours 28 vs theirs 27"
+        "[7] text: ours \"Unequal fields in ref endpoints\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "[8] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "[8] row: ours 28 vs theirs 27"
       ]
     },
     {
@@ -634,7 +635,7 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 8 vs theirs 12",
+        "count: ours 11 vs theirs 12",
         "[1] text: ours \"Two endpoints are the same\" vs theirs \"Duplicate column 'code'\"",
         "[1] row: ours 2 vs theirs 4",
         "[2] text: ours \"Duplicate column 'code'\" vs theirs \"Table 'nope' does not exist in Schema 'public'\"",
@@ -643,10 +644,10 @@
         "[4] text: ours \"Expect a comma ','\" vs theirs \"Table 'nope' does not exist in Schema 'public'\"",
         "[5] text: ours \"Table 'nope' does not exist in Schema 'public'\" vs theirs \"A Ref field must be a binary relationship\"",
         "[5] row: ours 5 vs theirs 7",
-        "[6] text: ours \"Column 'id' does not exist in Table 'public.a'\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[6] row: ours 8 vs theirs 7",
-        "[7] text: ours \"Table 'missing' does not exist in Schema 'public'\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[7] row: ours 8 vs theirs 7"
+        "[6] text: ours \"A Ref field must be a binary relationship\" vs theirs \"A Ref field should only have a single binary relationship\"",
+        "[9] text: ours \"Column 'id' does not exist in Table 'public.a'\" vs theirs \"Table 'missing' does not exist in Schema 'public'\"",
+        "[9] row: ours 8 vs theirs 7",
+        "[10] text: ours \"Table 'missing' does not exist in Schema 'public'\" vs theirs \"Column 'id' does not exist in Table 'public.a'\""
       ]
     },
     {
@@ -735,12 +736,10 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 22 vs theirs 25",
-        "[18] text: ours \"Unequal fields in ref endpoints\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
-        "[19] text: ours \"A Ref field must be a binary relationship\" vs theirs \"Unequal fields in ref endpoints\"",
-        "[19] row: ours 33 vs theirs 32",
-        "[20] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[21] text: ours \"Unequal fields in ref endpoints\" vs theirs \"A Ref field should only have a single binary relationship\""
+        "count: ours 24 vs theirs 25",
+        "[18] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "[22] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Column 'x' does not exist in Table 'public.users'\"",
+        "[23] text: ours \"Unequal fields in ref endpoints\" vs theirs \"Table 'name' does not exist in Schema 'public'\""
       ]
     },
     {
@@ -748,7 +747,7 @@
       "status": "divergent",
       "class": "their-parser-gap",
       "problems": [
-        "count: ours 7 vs theirs 11"
+        "count: ours 10 vs theirs 11"
       ]
     },
     {
@@ -816,16 +815,17 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 13 vs theirs 22",
-        "[8] text: ours \"Unequal fields in ref endpoints\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[9] text: ours \"A Ref field must be a binary relationship\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[9] row: ours 12 vs theirs 11",
-        "[10] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "count: ours 15 vs theirs 22",
+        "[9] text: ours \"Unequal fields in ref endpoints\" vs theirs \"A Ref field should only have a single binary relationship\"",
+        "[10] text: ours \"A Ref field must be a binary relationship\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
         "[10] row: ours 12 vs theirs 11",
-        "[11] text: ours \"Unequal fields in ref endpoints\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "[11] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
         "[11] row: ours 12 vs theirs 11",
-        "[12] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"Unequal fields in ref endpoints\"",
-        "[12] row: ours 13 vs theirs 11"
+        "[12] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Unequal fields in ref endpoints\"",
+        "[12] row: ours 12 vs theirs 11",
+        "[13] text: ours \"Unequal fields in ref endpoints\" vs theirs \"A Ref field must be a binary relationship\"",
+        "[14] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"A Ref field should only have a single binary relationship\"",
+        "[14] row: ours 13 vs theirs 12"
       ]
     },
     {
@@ -853,7 +853,7 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 9 vs theirs 14",
+        "count: ours 15 vs theirs 14",
         "[2] text: ours \"Two endpoints are the same\" vs theirs \"Duplicate column 'x'\"",
         "[2] row: ours 2 vs theirs 3",
         "[3] row: ours 3 vs theirs 4",
@@ -865,7 +865,13 @@
         "[7] text: ours \"Duplicate column 'x'\" vs theirs \"A Ref field must be a binary relationship\"",
         "[7] row: ours 16 vs theirs 25",
         "[8] text: ours \"Duplicate column 'x'\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[8] row: ours 17 vs theirs 25"
+        "[8] row: ours 17 vs theirs 25",
+        "[9] text: ours \"A Ref field must be a binary relationship\" vs theirs \"Column 'code' does not exist in Table 'public._x'\"",
+        "[10] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Column 'odd' does not exist in Table 'public.a'\"",
+        "[11] text: ours \"Column 'odd' does not exist in Table 'public.a'\" vs theirs \"A Ref field must be a binary relationship\"",
+        "[11] row: ours 25 vs theirs 26",
+        "[12] text: ours \"A Ref field must be a binary relationship\" vs theirs \"A Ref field should only have a single binary relationship\"",
+        "[13] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Column 'odd' does not exist in Table 'public._x'\""
       ]
     },
     {
@@ -883,7 +889,8 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 4 vs theirs 8"
+        "count: ours 7 vs theirs 8",
+        "[6] text: ours \"Column 'odd' does not exist in Table 'public.posts'\" vs theirs \"Column 'id' does not exist in Table 'public.posts'\""
       ]
     },
     {
@@ -896,12 +903,12 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 9 vs theirs 12",
-        "[6] text: ours \"Unequal fields in ref endpoints\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[7] text: ours \"Column 'code' does not exist in Table 'public._x'\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
-        "[7] row: ours 25 vs theirs 24",
-        "[8] text: ours \"Column 'x' does not exist in Table 'public.users'\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
-        "[8] row: ours 25 vs theirs 24"
+        "count: ours 10 vs theirs 12",
+        "[7] text: ours \"Unequal fields in ref endpoints\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "[8] text: ours \"Column 'code' does not exist in Table 'public._x'\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "[8] row: ours 25 vs theirs 24",
+        "[9] text: ours \"Column 'x' does not exist in Table 'public.users'\" vs theirs \"Unequal fields in ref endpoints\"",
+        "[9] row: ours 25 vs theirs 24"
       ]
     },
     {
@@ -909,14 +916,15 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 10 vs theirs 18",
-        "[6] text: ours \"Unequal fields in ref endpoints\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[7] text: ours \"A Ref field must be a binary relationship\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[7] row: ours 6 vs theirs 5",
-        "[8] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "count: ours 12 vs theirs 18",
+        "[7] text: ours \"Unequal fields in ref endpoints\" vs theirs \"A Ref field should only have a single binary relationship\"",
+        "[8] text: ours \"A Ref field must be a binary relationship\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
         "[8] row: ours 6 vs theirs 5",
-        "[9] text: ours \"Unequal fields in ref endpoints\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
-        "[9] row: ours 6 vs theirs 5"
+        "[9] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "[9] row: ours 6 vs theirs 5",
+        "[10] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Unequal fields in ref endpoints\"",
+        "[10] row: ours 6 vs theirs 5",
+        "[11] text: ours \"Unequal fields in ref endpoints\" vs theirs \"A Ref field must be a binary relationship\""
       ]
     },
     {
@@ -937,7 +945,7 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 23 vs theirs 27",
+        "count: ours 26 vs theirs 27",
         "[5] text: ours \"Two endpoints are the same\" vs theirs \"'default' can only appear once\"",
         "[5] row: ours 8 vs theirs 9",
         "[7] text: ours \"'default' can only appear once\" vs theirs \"Expect a comma ','\"",
@@ -962,7 +970,8 @@
         "[21] text: ours \"Duplicate column 'user_id'\" vs theirs \"Column 'code' does not exist in Table 'public.ñT'\"",
         "[21] row: ours 23 vs theirs 30",
         "[22] text: ours \"Column 'code' does not exist in Table 'public.ñT'\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[22] row: ours 30 vs theirs 31"
+        "[22] row: ours 30 vs theirs 31",
+        "[23] text: ours \"A Ref field must be a binary relationship\" vs theirs \"A Ref field should only have a single binary relationship\""
       ]
     },
     {
@@ -975,7 +984,7 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 11 vs theirs 17",
+        "count: ours 14 vs theirs 17",
         "[4] text: ours \"Two endpoints are the same\" vs theirs \"Duplicate column 'id'\"",
         "[4] row: ours 11 vs theirs 12",
         "[5] text: ours \"Duplicate column 'id'\" vs theirs \"'not null' and 'null' can not be set at the same time\"",
@@ -983,7 +992,11 @@
         "[7] text: ours \"'not null' and 'null' can not be set at the same time\" vs theirs \"Duplicate column 'id'\"",
         "[8] text: ours \"Duplicate column 'id'\" vs theirs \"A Ref field should only have a single binary relationship\"",
         "[8] row: ours 13 vs theirs 19",
-        "[9] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Column 'code' does not exist in Table 'public.posts'\""
+        "[9] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Column 'code' does not exist in Table 'public.posts'\"",
+        "[11] text: ours \"A Ref field must be a binary relationship\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "[11] row: ours 20 vs theirs 19",
+        "[12] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"A Ref field must be a binary relationship\"",
+        "[13] text: ours \"Column 'odd' does not exist in Table 'public.posts'\" vs theirs \"A Ref field should only have a single binary relationship\""
       ]
     },
     {
@@ -991,7 +1004,8 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 8 vs theirs 13"
+        "count: ours 11 vs theirs 13",
+        "[10] text: ours \"Column 'odd' does not exist in Table 'public.t1'\" vs theirs \"A Ref field should only have a single binary relationship\""
       ]
     },
     {
@@ -999,7 +1013,8 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 0 vs theirs 5"
+        "count: ours 3 vs theirs 5",
+        "[2] text: ours \"Column 'odd' does not exist in Table 'public.orders'\" vs theirs \"A Ref field should only have a single binary relationship\""
       ]
     },
     {
@@ -1009,22 +1024,14 @@
     },
     {
       "name": "fuzz0128",
-      "status": "divergent",
-      "class": "semantic",
-      "problems": [
-        "count: ours 4 vs theirs 7",
-        "[2] text: ours \"Column 'x' does not exist in Table 'public.my_table'\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[2] row: ours 22 vs theirs 21",
-        "[3] text: ours \"Table 'missing' does not exist in Schema 'public'\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[3] row: ours 22 vs theirs 21"
-      ]
+      "status": "ok",
+      "count": 7
     },
     {
       "name": "fuzz0129",
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 17 vs theirs 18",
         "[1] text: ours \"Two endpoints are the same\" vs theirs \"Duplicate column 'name'\"",
         "[1] row: ours 2 vs theirs 3",
         "[2] text: ours \"Duplicate column 'name'\" vs theirs \"Table 'nope' does not exist in Schema 'public'\"",
@@ -1048,7 +1055,7 @@
         "[13] row: ours 25 vs theirs 32",
         "[14] text: ours \"A Ref field must be a binary relationship\" vs theirs \"A Ref field should only have a single binary relationship\"",
         "[15] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Column 'user_id' does not exist in Table 'public.users'\"",
-        "[16] text: ours \"Unequal fields in ref endpoints\" vs theirs \"Table 'name' does not exist in Schema 'public'\""
+        "[16] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Table 'name' does not exist in Schema 'public'\""
       ]
     },
     {
@@ -1118,11 +1125,12 @@
       "status": "divergent",
       "class": "their-parser-gap",
       "problems": [
-        "count: ours 13 vs theirs 17",
-        "[11] text: ours \"Column 'x' does not exist in Table 'public.users'\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[11] row: ours 34 vs theirs 33",
-        "[12] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[12] row: ours 35 vs theirs 33"
+        "count: ours 16 vs theirs 17",
+        "[13] text: ours \"Column 'odd' does not exist in Table 'public.a'\" vs theirs \"Column 'name' does not exist in Table 'public._x'\"",
+        "[14] text: ours \"Column 'x' does not exist in Table 'public.users'\" vs theirs \"Column 'odd' does not exist in Table 'public.a'\"",
+        "[14] row: ours 34 vs theirs 33",
+        "[15] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"Column 'x' does not exist in Table 'public.users'\"",
+        "[15] row: ours 35 vs theirs 34"
       ]
     },
     {
@@ -1130,9 +1138,10 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 6 vs theirs 10",
-        "[5] text: ours \"Column 'x' does not exist in Table 'public.B'\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[5] row: ours 14 vs theirs 13"
+        "count: ours 9 vs theirs 10",
+        "[7] text: ours \"Column 'odd' does not exist in Table 'public.B'\" vs theirs \"Column 'code' does not exist in Table 'public.orders'\"",
+        "[8] text: ours \"Column 'x' does not exist in Table 'public.B'\" vs theirs \"Column 'odd' does not exist in Table 'public.B'\"",
+        "[8] row: ours 14 vs theirs 13"
       ]
     },
     {
@@ -1150,17 +1159,18 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 11 vs theirs 18",
-        "[5] text: ours \"Unequal fields in ref endpoints\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[6] text: ours \"A Ref field must be a binary relationship\" vs theirs \"Table 'missing' does not exist in Schema 'public'\"",
-        "[6] row: ours 8 vs theirs 7",
-        "[7] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "count: ours 13 vs theirs 18",
+        "[6] text: ours \"Unequal fields in ref endpoints\" vs theirs \"Table 'missing' does not exist in Schema 'public'\"",
+        "[7] text: ours \"A Ref field must be a binary relationship\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
         "[7] row: ours 8 vs theirs 7",
+        "[8] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Unequal fields in ref endpoints\"",
         "[8] row: ours 8 vs theirs 7",
-        "[9] text: ours \"Table 'name' does not exist\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[9] row: ours 13 vs theirs 8",
-        "[10] text: ours \"Table 'quoted' does not exist\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[10] row: ours 13 vs theirs 8"
+        "[9] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"A Ref field must be a binary relationship\"",
+        "[10] text: ours \"Unequal fields in ref endpoints\" vs theirs \"A Ref field should only have a single binary relationship\"",
+        "[11] text: ours \"Table 'name' does not exist\" vs theirs \"A Ref field should only have a single binary relationship\"",
+        "[11] row: ours 13 vs theirs 8",
+        "[12] text: ours \"Table 'quoted' does not exist\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "[12] row: ours 13 vs theirs 8"
       ]
     },
     {
@@ -1176,12 +1186,14 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 4 vs theirs 6",
+        "count: ours 7 vs theirs 6",
         "[1] text: ours \"Two endpoints are the same\" vs theirs \"Duplicate column 'x'\"",
         "[1] row: ours 2 vs theirs 3",
         "[2] text: ours \"Duplicate column 'x'\" vs theirs \"Two endpoints are the same\"",
         "[3] text: ours \"Two endpoints are the same\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[3] row: ours 3 vs theirs 6"
+        "[3] row: ours 3 vs theirs 6",
+        "[4] text: ours \"A Ref field must be a binary relationship\" vs theirs \"A Ref field should only have a single binary relationship\"",
+        "[5] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Column 'odd' does not exist in Table 'public.users'\""
       ]
     },
     {
@@ -1189,7 +1201,7 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 12 vs theirs 13",
+        "count: ours 15 vs theirs 13",
         "[6] text: ours \"expected ')' after records columns\" vs theirs \"Column 'odd' does not exist in Table 'users'\"",
         "[7] text: ours \"expected column type\" vs theirs \"Expect a comma ','\"",
         "[7] row: ours 6 vs theirs 5",
@@ -1200,7 +1212,8 @@
         "[10] text: ours \"expected Project, Table, Ref, Enum, Note, or TableGroup\" vs theirs \"A Ref field should only have a single binary relationship\"",
         "[10] row: ours 10 vs theirs 17",
         "[11] text: ours \"Table 'nope' does not exist in Schema 'public'\" vs theirs \"Column 'odd' does not exist in Table 'public.a'\"",
-        "[11] row: ours 12 vs theirs 17"
+        "[11] row: ours 12 vs theirs 17",
+        "[12] text: ours \"A Ref field must be a binary relationship\" vs theirs \"Table 'missing' does not exist in Schema 'public'\""
       ]
     },
     {
@@ -1229,8 +1242,8 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 13 vs theirs 16",
-        "[12] text: ours \"Unequal fields in ref endpoints\" vs theirs \"A Ref field should only have a single binary relationship\""
+        "count: ours 14 vs theirs 16",
+        "[13] text: ours \"Unequal fields in ref endpoints\" vs theirs \"Table 'name' does not exist in Schema 'public'\""
       ]
     },
     {
@@ -1248,7 +1261,7 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 1 vs theirs 5"
+        "count: ours 4 vs theirs 5"
       ]
     },
     {
@@ -1266,9 +1279,10 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 5 vs theirs 9",
-        "[4] text: ours \"Column 'code' does not exist in Table 'public._x'\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[4] row: ours 13 vs theirs 12"
+        "count: ours 8 vs theirs 9",
+        "[6] text: ours \"Column 'odd' does not exist in Table 'public._x'\" vs theirs \"Column 'code' does not exist in Table 'public._x'\"",
+        "[7] text: ours \"Column 'code' does not exist in Table 'public._x'\" vs theirs \"Column 'odd' does not exist in Table 'public._x'\"",
+        "[7] row: ours 13 vs theirs 12"
       ]
     },
     {
@@ -1338,7 +1352,7 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 8 vs theirs 12"
+        "count: ours 11 vs theirs 12"
       ]
     },
     {
@@ -1346,13 +1360,14 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 5 vs theirs 10",
-        "[2] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[2] row: ours 26 vs theirs 24",
-        "[3] text: ours \"Table 'name' does not exist\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[3] row: ours 26 vs theirs 24",
-        "[4] text: ours \"Table 'quoted' does not exist\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[4] row: ours 26 vs theirs 24"
+        "count: ours 8 vs theirs 10",
+        "[4] text: ours \"Column 'odd' does not exist in Table 'public.posts'\" vs theirs \"A Ref field should only have a single binary relationship\"",
+        "[5] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"A Ref field should only have a single binary relationship\"",
+        "[5] row: ours 26 vs theirs 24",
+        "[6] text: ours \"Table 'name' does not exist\" vs theirs \"Column 'odd' does not exist in Table 'public.posts'\"",
+        "[6] row: ours 26 vs theirs 24",
+        "[7] text: ours \"Table 'quoted' does not exist\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "[7] row: ours 26 vs theirs 24"
       ]
     },
     {
@@ -1360,7 +1375,8 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 2 vs theirs 6"
+        "count: ours 5 vs theirs 6",
+        "[4] text: ours \"Column 'odd' does not exist in Table 'public.posts'\" vs theirs \"Column 'name' does not exist in Table 'public.posts'\""
       ]
     },
     {
@@ -1393,13 +1409,10 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 7 vs theirs 10",
-        "[4] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[4] row: ours 15 vs theirs 14",
-        "[5] text: ours \"Table 'name' does not exist\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[5] row: ours 15 vs theirs 14",
-        "[6] text: ours \"Table 'quoted' does not exist\" vs theirs \"Column 'odd' does not exist in Table 'public.orders'\"",
-        "[6] row: ours 15 vs theirs 14"
+        "[7] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"Table 'missing' does not exist in Schema 'public'\"",
+        "[7] row: ours 15 vs theirs 14",
+        "[8] text: ours \"Table 'name' does not exist\" vs theirs \"A TableGroup field should only have a single Table name\"",
+        "[9] text: ours \"Table 'quoted' does not exist\" vs theirs \"Table 'quoted' does not exist in Schema 'public'\""
       ]
     },
     {
@@ -1422,9 +1435,8 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 3 vs theirs 7",
-        "[2] text: ours \"Table 'missing' does not exist in Schema 'public'\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[2] row: ours 7 vs theirs 6"
+        "count: ours 6 vs theirs 7",
+        "[5] row: ours 7 vs theirs 6"
       ]
     },
     {
@@ -1432,13 +1444,12 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 9 vs theirs 13",
-        "[6] text: ours \"Column 'user_id' does not exist in Table 'public.orders'\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[6] row: ours 20 vs theirs 19",
-        "[7] text: ours \"Table 'missing' does not exist in Schema 'public'\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[7] row: ours 20 vs theirs 19",
-        "[8] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"Column 'odd' does not exist in Table 'public.orders'\"",
-        "[8] row: ours 21 vs theirs 19"
+        "count: ours 12 vs theirs 13",
+        "[9] text: ours \"Column 'user_id' does not exist in Table 'public.orders'\" vs theirs \"Table 'missing' does not exist in Schema 'public'\"",
+        "[9] row: ours 20 vs theirs 19",
+        "[10] text: ours \"Table 'missing' does not exist in Schema 'public'\" vs theirs \"Column 'user_id' does not exist in Table 'public.orders'\"",
+        "[11] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"Table 'missing' does not exist in Schema 'public'\"",
+        "[11] row: ours 21 vs theirs 20"
       ]
     },
     {
@@ -1466,7 +1477,7 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 11 vs theirs 17",
+        "count: ours 15 vs theirs 17",
         "[5] text: ours \"Two endpoints are the same\" vs theirs \"Duplicate column 'user_id'\"",
         "[5] row: ours 12 vs theirs 13",
         "[6] text: ours \"Duplicate column 'user_id'\" vs theirs \"Table 'nope' does not exist in Schema 'public'\"",
@@ -1475,7 +1486,8 @@
         "[7] row: ours 19 vs theirs 23",
         "[8] text: ours \"A Ref field must be a binary relationship\" vs theirs \"A Ref field should only have a single binary relationship\"",
         "[9] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Column 'name' does not exist in Table 'public.a'\"",
-        "[10] text: ours \"Unequal fields in ref endpoints\" vs theirs \"Table 'name' does not exist in Schema 'public'\""
+        "[10] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "[14] text: ours \"Column 'odd' does not exist in Table 'public.a'\" vs theirs \"A Ref field should only have a single binary relationship\""
       ]
     },
     {
@@ -1498,7 +1510,7 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 10 vs theirs 14",
+        "count: ours 13 vs theirs 14",
         "[4] text: ours \"expected ')' after records columns\" vs theirs \"Column 'odd' does not exist in Table 'posts'\"",
         "[5] text: ours \"expected column type\" vs theirs \"Expect a comma ','\"",
         "[5] row: ours 25 vs theirs 24",
@@ -1507,8 +1519,9 @@
         "[7] row: ours 29 vs theirs 31",
         "[8] text: ours \"Duplicate column 'code'\" vs theirs \"A Ref field must be a binary relationship\"",
         "[8] row: ours 31 vs theirs 43",
-        "[9] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[9] row: ours 44 vs theirs 43"
+        "[9] text: ours \"A Ref field must be a binary relationship\" vs theirs \"A Ref field should only have a single binary relationship\"",
+        "[12] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"Table 'missing' does not exist in Schema 'public'\"",
+        "[12] row: ours 44 vs theirs 43"
       ]
     },
     {
@@ -1516,8 +1529,8 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 8 vs theirs 12",
-        "[7] text: ours \"Unequal fields in ref endpoints\" vs theirs \"A Ref field should only have a single binary relationship\""
+        "count: ours 9 vs theirs 12",
+        "[8] text: ours \"Unequal fields in ref endpoints\" vs theirs \"A Ref field should only have a single binary relationship\""
       ]
     },
     {
@@ -1540,7 +1553,7 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 20 vs theirs 24",
+        "count: ours 23 vs theirs 24",
         "[9] text: ours \"expected ')' after records columns\" vs theirs \"Column 'odd' does not exist in Table 'a'\"",
         "[10] text: ours \"expected column type\" vs theirs \"Expect a comma ','\"",
         "[10] row: ours 20 vs theirs 19",
@@ -1555,12 +1568,12 @@
         "[15] row: ours 33 vs theirs 34",
         "[16] text: ours \"Unequal fields in ref endpoints\" vs theirs \"A Ref field should only have a single binary relationship\"",
         "[16] row: ours 33 vs theirs 34",
-        "[17] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[17] row: ours 35 vs theirs 34",
-        "[18] text: ours \"Table 'name' does not exist\" vs theirs \"Column 'odd' does not exist in Table 'public.a'\"",
-        "[18] row: ours 35 vs theirs 34",
-        "[19] text: ours \"Table 'quoted' does not exist\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
-        "[19] row: ours 35 vs theirs 34"
+        "[17] text: ours \"A Ref field must be a binary relationship\" vs theirs \"A Ref field should only have a single binary relationship\"",
+        "[18] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Column 'odd' does not exist in Table 'public.a'\"",
+        "[19] text: ours \"Column 'odd' does not exist in Table 'public.a'\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "[20] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"A TableGroup field should only have a single Table name\"",
+        "[21] text: ours \"Table 'name' does not exist\" vs theirs \"A TableGroup field should only have a single Table name\"",
+        "[22] text: ours \"Table 'quoted' does not exist\" vs theirs \"Table 'name' does not exist in Schema 'public'\""
       ]
     },
     {
@@ -1568,7 +1581,7 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 11 vs theirs 15",
+        "count: ours 14 vs theirs 15",
         "[5] text: ours \"expected ')' after records columns\" vs theirs \"Column 'odd' does not exist in Table 'my_table'\"",
         "[6] text: ours \"expected column type\" vs theirs \"Expect a comma ','\"",
         "[6] row: ours 8 vs theirs 7",
@@ -1578,7 +1591,8 @@
         "[8] row: ours 18 vs theirs 23",
         "[9] text: ours \"No column named 'col' inside Table 'B'\" vs theirs \"No column named 'odd' inside Table 'B'\"",
         "[10] text: ours \"No column named 'odd' inside Table 'B'\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[10] row: ours 23 vs theirs 26"
+        "[10] row: ours 23 vs theirs 26",
+        "[11] text: ours \"A Ref field must be a binary relationship\" vs theirs \"A Ref field should only have a single binary relationship\""
       ]
     },
     {
@@ -1591,7 +1605,8 @@
       "status": "divergent",
       "class": "their-parser-gap",
       "problems": [
-        "count: ours 10 vs theirs 15"
+        "count: ours 13 vs theirs 15",
+        "[12] text: ours \"Column 'odd' does not exist in Table 'public.ñT'\" vs theirs \"A Ref field should only have a single binary relationship\""
       ]
     },
     {
@@ -1659,7 +1674,7 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 7 vs theirs 11"
+        "count: ours 10 vs theirs 11"
       ]
     },
     {
@@ -1723,7 +1738,6 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 14 vs theirs 17",
         "[4] text: ours \"expected ')' after records columns\" vs theirs \"Column 'odd' does not exist in Table 'my_table'\"",
         "[5] text: ours \"expected column type\" vs theirs \"Expect a comma ','\"",
         "[5] row: ours 20 vs theirs 19",
@@ -1739,8 +1753,9 @@
         "[11] text: ours \"Duplicate column 'odd col'\" vs theirs \"Expect a comma ','\"",
         "[12] text: ours \"Expect a comma ','\" vs theirs \"A Ref field must be a binary relationship\"",
         "[12] row: ours 26 vs theirs 29",
-        "[13] text: ours \"Column 'x' does not exist in Table 'public.my_table'\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[13] row: ours 30 vs theirs 29"
+        "[13] text: ours \"A Ref field must be a binary relationship\" vs theirs \"A Ref field should only have a single binary relationship\"",
+        "[14] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Column 'odd' does not exist in Table 'public._x'\"",
+        "[15] text: ours \"Column 'odd' does not exist in Table 'public._x'\" vs theirs \"Table 'missing' does not exist in Schema 'public'\""
       ]
     },
     {
@@ -1783,9 +1798,9 @@
       "status": "divergent",
       "class": "their-parser-gap",
       "problems": [
-        "count: ours 13 vs theirs 17",
-        "[12] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[12] row: ours 42 vs theirs 41"
+        "count: ours 16 vs theirs 17",
+        "[15] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"Table 'missing' does not exist in Schema 'public'\"",
+        "[15] row: ours 42 vs theirs 41"
       ]
     },
     {
@@ -1830,6 +1845,7 @@
       "status": "divergent",
       "class": "their-parser-gap",
       "problems": [
+        "count: ours 14 vs theirs 13",
         "[3] text: ours \"expected ')' after records columns\" vs theirs \"Column 'odd' does not exist in Table 'quoted name'\"",
         "[4] text: ours \"expected identifier\" vs theirs \"Expect a comma ','\"",
         "[4] row: ours 13 vs theirs 12",
@@ -1842,7 +1858,10 @@
         "[8] text: ours \"Table 'my_table' already exists in schema 'public'\" vs theirs \"A Ref field should only have a single binary relationship\"",
         "[8] row: ours 22 vs theirs 29",
         "[9] text: ours \"A Ref field must be a binary relationship\" vs theirs \"Column 'code' does not exist in Table 'public.my_table'\"",
-        "[10] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Table 'name' does not exist in Schema 'public'\""
+        "[10] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "[11] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Unequal fields in ref endpoints\"",
+        "[12] text: ours \"Unequal fields in ref endpoints\" vs theirs \"Column 'user_id' does not exist in Table 'public.my_table'\"",
+        "[12] row: ours 29 vs theirs 30"
       ]
     },
     {
@@ -1855,10 +1874,10 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 18 vs theirs 22",
-        "[16] text: ours \"Unequal fields in ref endpoints\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[17] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"Column 'odd' does not exist in Table 'public.a'\"",
-        "[17] row: ours 29 vs theirs 28"
+        "count: ours 19 vs theirs 22",
+        "[17] text: ours \"Unequal fields in ref endpoints\" vs theirs \"Column 'odd' does not exist in Table 'public.a'\"",
+        "[18] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "[18] row: ours 29 vs theirs 28"
       ]
     },
     {
@@ -2031,8 +2050,9 @@
       "status": "divergent",
       "class": "their-parser-gap",
       "problems": [
-        "count: ours 8 vs theirs 10",
-        "[7] text: ours \"Unequal fields in ref endpoints\" vs theirs \"Table 'missing' does not exist in Schema 'public'\""
+        "count: ours 9 vs theirs 10",
+        "[7] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Table 'missing' does not exist in Schema 'public'\"",
+        "[8] text: ours \"Unequal fields in ref endpoints\" vs theirs \"Table 'name' does not exist in Schema 'public'\""
       ]
     },
     {
@@ -2110,9 +2130,10 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 7 vs theirs 11",
-        "[6] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[6] row: ours 11 vs theirs 10"
+        "count: ours 10 vs theirs 11",
+        "[8] text: ours \"Column 'odd' does not exist in Table 'public.t1'\" vs theirs \"Column 'code' does not exist in Table 'public.t1'\"",
+        "[9] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"Column 'odd' does not exist in Table 'public.t1'\"",
+        "[9] row: ours 11 vs theirs 10"
       ]
     },
     {
@@ -2151,14 +2172,15 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 9 vs theirs 15",
+        "count: ours 10 vs theirs 15",
         "[5] text: ours \"Invalid column reference\" vs theirs \"A Ref field should only have a single binary relationship\"",
         "[6] text: ours \"A Ref field must be a binary relationship\" vs theirs \"Column 'x' does not exist in Table 'public.B'\"",
         "[6] row: ours 15 vs theirs 14",
         "[7] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Invalid column reference\"",
         "[7] row: ours 15 vs theirs 14",
-        "[8] text: ours \"Unequal fields in ref endpoints\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
-        "[8] row: ours 15 vs theirs 14"
+        "[8] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "[8] row: ours 15 vs theirs 14",
+        "[9] text: ours \"Unequal fields in ref endpoints\" vs theirs \"A Ref field must be a binary relationship\""
       ]
     },
     {
@@ -2179,7 +2201,7 @@
       "status": "divergent",
       "class": "their-parser-gap",
       "problems": [
-        "count: ours 18 vs theirs 19",
+        "count: ours 21 vs theirs 19",
         "[5] text: ours \"expected ')' after records columns\" vs theirs \"Column 'odd' does not exist in Table 'a'\"",
         "[6] text: ours \"expected identifier\" vs theirs \"Expect a comma ','\"",
         "[6] row: ours 14 vs theirs 13",
@@ -2203,44 +2225,20 @@
         "[15] row: ours 31 vs theirs 37",
         "[16] text: ours \"Duplicate column 'code'\" vs theirs \"Column 'odd' does not exist in Table 'public._x'\"",
         "[16] row: ours 32 vs theirs 37",
-        "[17] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"Table 'missing' does not exist in Schema 'public'\"",
-        "[17] row: ours 42 vs theirs 37"
+        "[17] text: ours \"A Ref field must be a binary relationship\" vs theirs \"Table 'missing' does not exist in Schema 'public'\"",
+        "[18] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"A TableGroup field must be of the form <table> or <schema>.<table>\"",
+        "[18] row: ours 37 vs theirs 42"
       ]
     },
     {
       "name": "fuzz0274",
-      "status": "divergent",
-      "class": "semantic",
-      "problems": [
-        "count: ours 9 vs theirs 12",
-        "[8] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[8] row: ours 22 vs theirs 21"
-      ]
+      "status": "ok",
+      "count": 12
     },
     {
       "name": "fuzz0275",
-      "status": "divergent",
-      "class": "semantic",
-      "problems": [
-        "[0] type: ours info vs theirs error",
-        "[0] text: ours \"Column `ñT.name` should be unique or primary key for operator `?-`\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[0] row: ours 10 vs theirs 17",
-        "[0] category: ours \"Mismatched optional ref constraints\" vs theirs \"null\"",
-        "[0] explanation: ours \"In ref definition `ref: ?- ñT.name`, the operator `?-` implies `ñT.name` has at most one row.\n`ñT.name` has no unique or primary key constraint.\" vs theirs \"\"",
-        "[0] quickFixes: ours [Change to ?<::?<::Make 'ñT.name' many in the ref (change operator to '?<')::true, Add unique::, unique::Mark 'ñT.name' as UNIQUE::] vs theirs []",
-        "[1] type: ours info vs theirs error",
-        "[1] text: ours \"Column `ñT.id` should be unique or primary key for operator `?-`\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[1] row: ours 11 vs theirs 17",
-        "[1] category: ours \"Mismatched optional ref constraints\" vs theirs \"null\"",
-        "[1] explanation: ours \"In ref definition `ref: ?- ñT.name`, the operator `?-` implies `ñT.id` has at most one row.\n`ñT.id` has no unique or primary key constraint.\" vs theirs \"\"",
-        "[1] quickFixes: ours [Change to ?>::?>::Make 'ñT.id' many in the ref (change operator to '?>')::true, Add unique::, unique::Mark 'ñT.id' as UNIQUE::] vs theirs []",
-        "[2] type: ours info vs theirs error",
-        "[2] text: ours \"Column `ñT.name` should be unique or primary key for operator `?-`\" vs theirs \"Column 'odd' does not exist in Table 'public.ñT'\"",
-        "[2] row: ours 11 vs theirs 17",
-        "[2] category: ours \"Mismatched optional ref constraints\" vs theirs \"null\"",
-        "[2] explanation: ours \"In ref definition `ref: ?- ñT.name`, the operator `?-` implies `ñT.name` has at most one row.\n`ñT.name` has no unique or primary key constraint.\" vs theirs \"\"",
-        "[2] quickFixes: ours [Change to ?<::?<::Make 'ñT.name' many in the ref (change operator to '?<')::true, Add unique::, unique::Mark 'ñT.name' as UNIQUE::] vs theirs []"
-      ]
+      "status": "ok",
+      "count": 3
     },
     {
       "name": "fuzz0276",
@@ -2269,13 +2267,12 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 4 vs theirs 8",
-        "[1] text: ours \"Column 'name' does not exist in Table 'public.B'\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[1] row: ours 19 vs theirs 18",
-        "[2] text: ours \"Column 'x' does not exist in Table 'public.users'\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[2] row: ours 19 vs theirs 18",
-        "[3] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"Column 'odd' does not exist in Table 'public.my_table'\"",
-        "[3] row: ours 20 vs theirs 18"
+        "count: ours 7 vs theirs 8",
+        "[4] text: ours \"Column 'name' does not exist in Table 'public.B'\" vs theirs \"Table 'missing' does not exist in Schema 'public'\"",
+        "[4] row: ours 19 vs theirs 18",
+        "[5] text: ours \"Column 'x' does not exist in Table 'public.users'\" vs theirs \"Column 'name' does not exist in Table 'public.B'\"",
+        "[6] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"Column 'x' does not exist in Table 'public.users'\"",
+        "[6] row: ours 20 vs theirs 19"
       ]
     },
     {
@@ -2345,13 +2342,8 @@
     },
     {
       "name": "fuzz0291",
-      "status": "divergent",
-      "class": "semantic",
-      "problems": [
-        "count: ours 10 vs theirs 13",
-        "[9] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[9] row: ours 23 vs theirs 22"
-      ]
+      "status": "ok",
+      "count": 13
     },
     {
       "name": "fuzz0292",
@@ -2363,13 +2355,12 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 11 vs theirs 15",
-        "[8] text: ours \"Column 'id' does not exist in Table 'public.orders'\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[8] row: ours 20 vs theirs 19",
-        "[9] text: ours \"Column 'user_id' does not exist in Table 'public.my_table'\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[9] row: ours 20 vs theirs 19",
-        "[10] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"Column 'odd' does not exist in Table 'public.orders'\"",
-        "[10] row: ours 21 vs theirs 19"
+        "count: ours 14 vs theirs 15",
+        "[11] text: ours \"Column 'id' does not exist in Table 'public.orders'\" vs theirs \"Column 'x' does not exist in Table 'public.my_table'\"",
+        "[11] row: ours 20 vs theirs 19",
+        "[12] text: ours \"Column 'user_id' does not exist in Table 'public.my_table'\" vs theirs \"Column 'id' does not exist in Table 'public.orders'\"",
+        "[13] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"Column 'user_id' does not exist in Table 'public.my_table'\"",
+        "[13] row: ours 21 vs theirs 20"
       ]
     },
     {

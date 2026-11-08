@@ -1735,7 +1735,8 @@ fn ref_stmt(
             if ident(&mut probe, base).is_err() {
                 break;
             }
-            ref_binder_errors.push((
+            // the ref never binds — the doc channel is the only survivor
+            doc_binder_errors.push((
                 junk_start,
                 "A Ref field should only have a single binary relationship".to_string(),
             ));
@@ -1743,7 +1744,7 @@ fn ref_stmt(
             sp(&mut probe);
         }
         if from_res.is_ok() && middle_args > 0 {
-            ref_binder_errors.push((
+            doc_binder_errors.push((
                 body_base,
                 "A Ref field must be a binary relationship".to_string(),
             ));

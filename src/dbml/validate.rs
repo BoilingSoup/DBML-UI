@@ -188,12 +188,17 @@ pub fn written_op(card: Cardinality, left_opt: bool, right_opt: bool) -> &'stati
 /// bullets their raw source-line quotes (the ref statement and the column
 /// definition, verbatim).
 pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
-    validate_with_parse(doc, src, &[])
+    validate_with_parse(doc, src, &[], &[])
 }
 
 /// The parse-level binder findings join the same gate (their errors()
 /// chains parse + binder reports).
-pub fn validate_with_parse(doc: &Document, src: &str, parse_binder: &[(usize, String)]) -> Vec<Diagnostic> {
+pub fn validate_with_parse(
+    doc: &Document,
+    src: &str,
+    parse_binder: &[(usize, String)],
+    broken_refs: &[super::ast::Endpoint],
+) -> Vec<Diagnostic> {
     // the trimmed source line containing `offset` — their explanation
     // quotes the ref statement and the column definition as written
     let line_text = |offset: usize| -> String {
@@ -1246,6 +1251,15 @@ pub fn validate_with_parse(doc: &Document, src: &str, parse_binder: &[(usize, St
     // the parse-side binder findings (broken-ref shape sets)
     for (offset, msg) in parse_binder {
         out.push(Diagnostic::plain(*offset, msg.clone()));
+    }
+    // their binder still resolves the LEFT endpoint of an
+    // application-wrapped ref and flags its columns (probe: t1.odd col <
+    // t1.x flags 'odd' against public.t1)
+    for ep in broken_refs {
+        if ep.table.is_empty() {
+            continue;
+        }
+        check_endpoint(doc, ep, ep.span.start, &mut out);
     }
     // the column-parse binder findings (their validateNode class)
     for t in &doc.tables {
