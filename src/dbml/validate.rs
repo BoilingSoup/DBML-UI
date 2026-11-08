@@ -310,6 +310,23 @@ pub fn validate_with_parse(
             ));
         }
     }
+    // records headers: every named column must exist (probe:
+    // records (nope) errs with the endpoint phrasing)
+    for t in &doc.tables {
+        if let Some(r) = &t.records {
+            for cname in &r.columns {
+                if !t.columns.iter().any(|x| x.name == *cname) {
+                    // their records check does NOT schema-qualify (probe:
+                    // records (nope) errs against Table 'T')
+                    out.push(Diagnostic::plain(
+                        t.name_span.start,
+                        format!("Column '{}' does not exist in Table '{}'", cname, t.name),
+                    ));
+                }
+            }
+        }
+    }
+
     for t in &doc.tables {
         for c in &t.columns {
             if let Some(ir) = &c.settings.inline_ref {

@@ -1369,13 +1369,23 @@ fn records_block(
             sp(input);
             if !eat(input, ",") {
                 sp(input);
-                if !eat(input, ")") {
-                    return fail(
-                        offset(input, base),
-                        "expected ')' after records columns",
-                    );
+                if eat(input, ")") {
+                    break;
                 }
-                break;
+                // their tuple recovery: the error is recorded, the
+                // offending token skipped, the tuple continues (probe:
+                // `(odd col)` flags odd and errs at col)
+                errs.push(err_at(offset(input, base), "Expect a comma ','"));
+                if ident(input, base).is_err() {
+                    return fail(offset(input, base), "expected ')' after records columns");
+                }
+                sp(input);
+                if eat(input, ")") {
+                    break;
+                }
+                if !eat(input, ",") {
+                    return fail(offset(input, base), "expected ')' after records columns");
+                }
             }
         }
         sp(input);

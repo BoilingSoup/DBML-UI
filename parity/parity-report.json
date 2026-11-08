@@ -61,19 +61,11 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 11 vs theirs 14",
-        "[1] text: ours \"expected ')' after records columns\" vs theirs \"Column 'odd' does not exist in Table 'ñT'\"",
-        "[2] text: ours \"expected column type\" vs theirs \"Expect a comma ','\"",
-        "[2] row: ours 13 vs theirs 12",
-        "[3] text: ours \"expected column type\" vs theirs \"Table 'quoted name' already exists in schema 'public'\"",
-        "[3] row: ours 14 vs theirs 17",
-        "[4] text: ours \"expected Project, Table, Ref, Enum, Note, or TableGroup\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[4] row: ours 16 vs theirs 24",
-        "[5] text: ours \"Table 'quoted name' already exists in schema 'public'\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[5] row: ours 17 vs theirs 24",
-        "[6] text: ours \"A Ref field must be a binary relationship\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[7] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
-        "[8] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Table 'name' does not exist in Schema 'public'\""
+        "count: ours 9 vs theirs 14",
+        "[1] row: ours 9 vs theirs 12",
+        "[7] text: ours \"Unequal fields in ref endpoints\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "[8] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "[8] row: ours 25 vs theirs 24"
       ]
     },
     {
@@ -382,18 +374,11 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 12 vs theirs 11",
-        "[4] text: ours \"expected ')' after records columns\" vs theirs \"Column 'odd' does not exist in Table 'orders'\"",
-        "[5] text: ours \"expected column type\" vs theirs \"Expect a comma ','\"",
-        "[5] row: ours 20 vs theirs 19",
-        "[6] text: ours \"expected Project, Table, Ref, Enum, Note, or TableGroup\" vs theirs \"Two endpoints are the same\"",
-        "[6] row: ours 22 vs theirs 25",
-        "[7] row: ours 25 vs theirs 27",
-        "[8] text: ours \"Two endpoints are the same\" vs theirs \"Expect a comma ','\"",
-        "[8] row: ours 27 vs theirs 29",
-        "[9] text: ours \"Expect a comma ','\" vs theirs \"No column named 'odd' inside Table 't1'\"",
-        "[10] text: ours \"No column named 'odd' inside Table 't1'\" vs theirs \"A TableGroup field must be of the form <table> or <schema>.<table>\"",
-        "[10] row: ours 29 vs theirs 37"
+        "[2] text: ours \"Column 'odd' does not exist in Table 'orders'\" vs theirs \"Expect a comma ','\"",
+        "[2] row: ours 13 vs theirs 15",
+        "[3] text: ours \"Expect a comma ','\" vs theirs \"Table 'nope' does not exist in Schema 'public'\"",
+        "[4] text: ours \"Table 'nope' does not exist in Schema 'public'\" vs theirs \"Column 'odd' does not exist in Table 'orders'\"",
+        "[4] row: ours 15 vs theirs 19"
       ]
     },
     {
@@ -685,12 +670,11 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 6 vs theirs 5",
-        "[2] text: ours \"expected ')' after records columns\" vs theirs \"Column 'odd' does not exist in Table 't1'\"",
-        "[3] text: ours \"expected column type\" vs theirs \"Expect a comma ','\"",
-        "[3] row: ours 9 vs theirs 8",
-        "[4] text: ours \"expected Project, Table, Ref, Enum, Note, or TableGroup\" vs theirs \"Table 't1' already exists in schema 'public'\"",
-        "[4] row: ours 11 vs theirs 12"
+        "[0] text: ours \"Column 'odd' does not exist in Table 't1'\" vs theirs \"Duplicate column 'odd col'\"",
+        "[0] row: ours 4 vs theirs 5",
+        "[1] row: ours 5 vs theirs 6",
+        "[2] text: ours \"Duplicate column 'odd col'\" vs theirs \"Column 'odd' does not exist in Table 't1'\"",
+        "[2] row: ours 6 vs theirs 8"
       ]
     },
     {
@@ -833,19 +817,11 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 12 vs theirs 11",
-        "[2] text: ours \"expected ')' after records columns\" vs theirs \"Column 'odd' does not exist in Table 'B'\"",
-        "[3] text: ours \"expected column type\" vs theirs \"Expect a comma ','\"",
-        "[3] row: ours 4 vs theirs 3",
-        "[4] text: ours \"expected Project, Table, Ref, Enum, Note, or TableGroup\" vs theirs \"Table 'nope' does not exist in Schema 'public'\"",
-        "[4] row: ours 6 vs theirs 8",
-        "[5] row: ours 8 vs theirs 9",
-        "[6] row: ours 9 vs theirs 18",
-        "[7] text: ours \"Table 'nope' does not exist in Schema 'public'\" vs theirs \"Column 'user_id' does not exist in Table 'public.B'\"",
-        "[7] row: ours 18 vs theirs 25",
-        "[8] text: ours \"Column 'user_id' does not exist in Table 'public.B'\" vs theirs \"Column 'user_id' does not exist in Table 'public.my_table'\"",
-        "[9] row: ours 25 vs theirs 26",
-        "[10] text: ours \"Column 'user_id' does not exist in Table 'public.my_table'\" vs theirs \"Table 'missing' does not exist in Schema 'public'\""
+        "[0] text: ours \"Column 'odd' does not exist in Table 'B'\" vs theirs \"Column 'odd' does not exist in Table 'public.B'\"",
+        "[0] row: ours 1 vs theirs 2",
+        "[1] text: ours \"Column 'odd' does not exist in Table 'public.B'\" vs theirs \"Expect a comma ','\"",
+        "[2] text: ours \"Expect a comma ','\" vs theirs \"Column 'odd' does not exist in Table 'B'\"",
+        "[2] row: ours 2 vs theirs 3"
       ]
     },
     {
@@ -1201,19 +1177,16 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 15 vs theirs 13",
-        "[6] text: ours \"expected ')' after records columns\" vs theirs \"Column 'odd' does not exist in Table 'users'\"",
-        "[7] text: ours \"expected column type\" vs theirs \"Expect a comma ','\"",
-        "[7] row: ours 6 vs theirs 5",
-        "[8] text: ours \"expected column type\" vs theirs \"Table 'nope' does not exist in Schema 'public'\"",
-        "[8] row: ours 7 vs theirs 12",
-        "[9] text: ours \"expected identifier\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[9] row: ours 8 vs theirs 17",
-        "[10] text: ours \"expected Project, Table, Ref, Enum, Note, or TableGroup\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[10] row: ours 10 vs theirs 17",
-        "[11] text: ours \"Table 'nope' does not exist in Schema 'public'\" vs theirs \"Column 'odd' does not exist in Table 'public.a'\"",
-        "[11] row: ours 12 vs theirs 17",
-        "[12] text: ours \"A Ref field must be a binary relationship\" vs theirs \"Table 'missing' does not exist in Schema 'public'\""
+        "count: ours 12 vs theirs 13",
+        "[0] text: ours \"Column 'odd' does not exist in Table 'users'\" vs theirs \"Duplicate column 'odd col'\"",
+        "[0] row: ours 1 vs theirs 2",
+        "[1] text: ours \"Duplicate column 'odd col'\" vs theirs \"Expect a comma ','\"",
+        "[2] text: ours \"Expect a comma ','\" vs theirs \"Table 'nope' does not exist in Schema 'public'\"",
+        "[3] text: ours \"Table 'nope' does not exist in Schema 'public'\" vs theirs \"'default' can only appear once\"",
+        "[3] row: ours 2 vs theirs 3",
+        "[5] text: ours \"'default' can only appear once\" vs theirs \"Duplicate column 'odd col'\"",
+        "[6] text: ours \"Duplicate column 'odd col'\" vs theirs \"Column 'odd' does not exist in Table 'users'\"",
+        "[6] row: ours 3 vs theirs 5"
       ]
     },
     {
@@ -1295,16 +1268,15 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 12 vs theirs 9",
-        "[4] text: ours \"expected ')' after records columns\" vs theirs \"Column 'odd' does not exist in Table 'ñT'\"",
-        "[5] text: ours \"expected identifier\" vs theirs \"Expect a comma ','\"",
-        "[5] row: ours 8 vs theirs 7",
-        "[6] text: ours \"expected identifier\" vs theirs \"Table 'ñT' already exists in schema 'public'\"",
-        "[6] row: ours 9 vs theirs 21",
-        "[7] text: ours \"expected Project, Table, Ref, Enum, Note, or TableGroup\" vs theirs \"Column 'code' does not exist in Table 'public.ñT'\"",
-        "[7] row: ours 11 vs theirs 35",
-        "[8] text: ours \"Table 'ñT' already exists in schema 'public'\" vs theirs \"Column 'code' does not exist in Table 'public.ñT'\"",
-        "[8] row: ours 21 vs theirs 35"
+        "count: ours 10 vs theirs 9",
+        "[0] text: ours \"Column 'odd' does not exist in Table 'ñT'\" vs theirs \"No column named 'col' inside Table 'ñT'\"",
+        "[0] row: ours 1 vs theirs 4",
+        "[1] text: ours \"No column named 'col' inside Table 'ñT'\" vs theirs \"No column named 'odd' inside Table 'ñT'\"",
+        "[2] text: ours \"No column named 'odd' inside Table 'ñT'\" vs theirs \"Expect a comma ','\"",
+        "[2] row: ours 4 vs theirs 5",
+        "[3] text: ours \"Expect a comma ','\" vs theirs \"No column named 'odd' inside Table 'ñT'\"",
+        "[4] text: ours \"No column named 'odd' inside Table 'ñT'\" vs theirs \"Column 'odd' does not exist in Table 'ñT'\"",
+        "[4] row: ours 5 vs theirs 7"
       ]
     },
     {
@@ -1510,18 +1482,13 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 13 vs theirs 14",
-        "[4] text: ours \"expected ')' after records columns\" vs theirs \"Column 'odd' does not exist in Table 'posts'\"",
-        "[5] text: ours \"expected column type\" vs theirs \"Expect a comma ','\"",
-        "[5] row: ours 25 vs theirs 24",
-        "[6] text: ours \"expected Project, Table, Ref, Enum, Note, or TableGroup\" vs theirs \"Duplicate column 'code'\"",
-        "[6] row: ours 27 vs theirs 29",
-        "[7] row: ours 29 vs theirs 31",
-        "[8] text: ours \"Duplicate column 'code'\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[8] row: ours 31 vs theirs 43",
-        "[9] text: ours \"A Ref field must be a binary relationship\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[12] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"Table 'missing' does not exist in Schema 'public'\"",
-        "[12] row: ours 44 vs theirs 43"
+        "count: ours 12 vs theirs 14",
+        "[3] text: ours \"Column 'odd' does not exist in Table 'posts'\" vs theirs \"Table 'posts' already exists in schema 'public'\"",
+        "[4] text: ours \"Table 'posts' already exists in schema 'public'\" vs theirs \"Column 'odd' does not exist in Table 'posts'\"",
+        "[4] row: ours 17 vs theirs 24",
+        "[10] text: ours \"Column 'odd' does not exist in Table 'public.posts'\" vs theirs \"A Ref field should only have a single binary relationship\"",
+        "[11] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"Column 'odd' does not exist in Table 'public.posts'\"",
+        "[11] row: ours 44 vs theirs 43"
       ]
     },
     {
@@ -1553,27 +1520,24 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 23 vs theirs 24",
-        "[9] text: ours \"expected ')' after records columns\" vs theirs \"Column 'odd' does not exist in Table 'a'\"",
-        "[10] text: ours \"expected column type\" vs theirs \"Expect a comma ','\"",
-        "[10] row: ours 20 vs theirs 19",
-        "[11] text: ours \"expected column type\" vs theirs \"Table 'quoted name' already exists in schema 'public'\"",
-        "[11] row: ours 21 vs theirs 24",
-        "[12] text: ours \"expected Project, Table, Ref, Enum, Note, or TableGroup\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[12] row: ours 23 vs theirs 33",
-        "[13] text: ours \"Table 'quoted name' already exists in schema 'public'\" vs theirs \"Invalid column reference\"",
-        "[13] row: ours 24 vs theirs 33",
-        "[14] text: ours \"A Ref field must be a binary relationship\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
-        "[15] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[15] row: ours 33 vs theirs 34",
-        "[16] text: ours \"Unequal fields in ref endpoints\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[16] row: ours 33 vs theirs 34",
-        "[17] text: ours \"A Ref field must be a binary relationship\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[18] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Column 'odd' does not exist in Table 'public.a'\"",
-        "[19] text: ours \"Column 'odd' does not exist in Table 'public.a'\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
-        "[20] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"A TableGroup field should only have a single Table name\"",
-        "[21] text: ours \"Table 'name' does not exist\" vs theirs \"A TableGroup field should only have a single Table name\"",
-        "[22] text: ours \"Table 'quoted' does not exist\" vs theirs \"Table 'name' does not exist in Schema 'public'\""
+        "count: ours 21 vs theirs 24",
+        "[5] text: ours \"Column 'odd' does not exist in Table 'a'\" vs theirs \"Duplicate column 'odd col'\"",
+        "[5] row: ours 11 vs theirs 12",
+        "[6] row: ours 12 vs theirs 14",
+        "[7] text: ours \"Duplicate column 'odd col'\" vs theirs \"Expect a comma ','\"",
+        "[7] row: ours 14 vs theirs 17",
+        "[8] text: ours \"Expect a comma ','\" vs theirs \"No column named 'odd' inside Table 'a'\"",
+        "[9] text: ours \"No column named 'odd' inside Table 'a'\" vs theirs \"Column 'odd' does not exist in Table 'a'\"",
+        "[9] row: ours 17 vs theirs 19",
+        "[12] text: ours \"A Ref field must be a binary relationship\" vs theirs \"A Ref field should only have a single binary relationship\"",
+        "[13] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Invalid column reference\"",
+        "[14] text: ours \"Unequal fields in ref endpoints\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "[17] text: ours \"Column 'odd' does not exist in Table 'public.a'\" vs theirs \"A Ref field should only have a single binary relationship\"",
+        "[18] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"Column 'odd' does not exist in Table 'public.a'\"",
+        "[18] row: ours 35 vs theirs 34",
+        "[19] text: ours \"Table 'name' does not exist\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "[19] row: ours 35 vs theirs 34",
+        "[20] text: ours \"Table 'quoted' does not exist\" vs theirs \"A TableGroup field should only have a single Table name\""
       ]
     },
     {
@@ -1581,18 +1545,16 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 14 vs theirs 15",
-        "[5] text: ours \"expected ')' after records columns\" vs theirs \"Column 'odd' does not exist in Table 'my_table'\"",
-        "[6] text: ours \"expected column type\" vs theirs \"Expect a comma ','\"",
-        "[6] row: ours 8 vs theirs 7",
-        "[7] text: ours \"expected Project, Table, Ref, Enum, Note, or TableGroup\" vs theirs \"Table 'B' already exists in schema 'public'\"",
-        "[7] row: ours 10 vs theirs 18",
-        "[8] text: ours \"Table 'B' already exists in schema 'public'\" vs theirs \"No column named 'col' inside Table 'B'\"",
-        "[8] row: ours 18 vs theirs 23",
-        "[9] text: ours \"No column named 'col' inside Table 'B'\" vs theirs \"No column named 'odd' inside Table 'B'\"",
-        "[10] text: ours \"No column named 'odd' inside Table 'B'\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[10] row: ours 23 vs theirs 26",
-        "[11] text: ours \"A Ref field must be a binary relationship\" vs theirs \"A Ref field should only have a single binary relationship\""
+        "count: ours 13 vs theirs 15",
+        "[0] text: ours \"Column 'odd' does not exist in Table 'my_table'\" vs theirs \"'default' can only appear once\"",
+        "[0] row: ours 1 vs theirs 2",
+        "[2] text: ours \"'default' can only appear once\" vs theirs \"Duplicate column 'id'\"",
+        "[2] row: ours 2 vs theirs 3",
+        "[3] row: ours 3 vs theirs 4",
+        "[4] text: ours \"Duplicate column 'id'\" vs theirs \"Two endpoints are the same\"",
+        "[5] text: ours \"Two endpoints are the same\" vs theirs \"Column 'odd' does not exist in Table 'my_table'\"",
+        "[5] row: ours 4 vs theirs 7",
+        "[12] text: ours \"Column 'odd' does not exist in Table 'public.B'\" vs theirs \"A Ref field should only have a single binary relationship\""
       ]
     },
     {
@@ -1692,20 +1654,11 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 11 vs theirs 9",
-        "[2] text: ours \"expected ')' after records columns\" vs theirs \"Column 'odd' does not exist in Table '_x'\"",
-        "[3] text: ours \"expected column type\" vs theirs \"Expect a comma ','\"",
-        "[3] row: ours 10 vs theirs 9",
-        "[4] text: ours \"expected column type\" vs theirs \"Duplicate column 'id'\"",
-        "[4] row: ours 11 vs theirs 20",
-        "[5] text: ours \"expected Project, Table, Ref, Enum, Note, or TableGroup\" vs theirs \"Duplicate column 'id'\"",
-        "[5] row: ours 13 vs theirs 21",
-        "[6] text: ours \"Duplicate column 'id'\" vs theirs \"Table 'nope' does not exist in Schema 'public'\"",
-        "[6] row: ours 20 vs theirs 21",
-        "[7] text: ours \"Duplicate column 'id'\" vs theirs \"Column 'code' does not exist in Table 'public.t1'\"",
-        "[7] row: ours 21 vs theirs 27",
-        "[8] text: ours \"Table 'nope' does not exist in Schema 'public'\" vs theirs \"Column 'x' does not exist in Table 'public.my_table'\"",
-        "[8] row: ours 21 vs theirs 27"
+        "[0] text: ours \"Column 'odd' does not exist in Table '_x'\" vs theirs \"Expect a comma ','\"",
+        "[0] row: ours 7 vs theirs 8",
+        "[1] text: ours \"Expect a comma ','\" vs theirs \"Table 'nope' does not exist in Schema 'public'\"",
+        "[2] text: ours \"Table 'nope' does not exist in Schema 'public'\" vs theirs \"Column 'odd' does not exist in Table '_x'\"",
+        "[2] row: ours 8 vs theirs 9"
       ]
     },
     {
@@ -1738,24 +1691,17 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "[4] text: ours \"expected ')' after records columns\" vs theirs \"Column 'odd' does not exist in Table 'my_table'\"",
-        "[5] text: ours \"expected column type\" vs theirs \"Expect a comma ','\"",
-        "[5] row: ours 20 vs theirs 19",
-        "[6] text: ours \"expected Project, Table, Ref, Enum, Note, or TableGroup\" vs theirs \"Table 't1' already exists in schema 'public'\"",
-        "[6] row: ours 22 vs theirs 23",
-        "[7] text: ours \"Table 't1' already exists in schema 'public'\" vs theirs \"Column 'code' does not exist in Table 'public.t1'\"",
-        "[7] row: ours 23 vs theirs 24",
-        "[8] text: ours \"Column 'code' does not exist in Table 'public.t1'\" vs theirs \"Duplicate column 'odd col'\"",
-        "[8] row: ours 24 vs theirs 25",
-        "[9] text: ours \"Duplicate column 'odd col'\" vs theirs \"Column 'odd' does not exist in Table 'public._x'\"",
-        "[9] row: ours 25 vs theirs 26",
-        "[10] text: ours \"Column 'odd' does not exist in Table 'public._x'\" vs theirs \"Duplicate column 'odd col'\"",
-        "[11] text: ours \"Duplicate column 'odd col'\" vs theirs \"Expect a comma ','\"",
-        "[12] text: ours \"Expect a comma ','\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[12] row: ours 26 vs theirs 29",
-        "[13] text: ours \"A Ref field must be a binary relationship\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[14] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Column 'odd' does not exist in Table 'public._x'\"",
-        "[15] text: ours \"Column 'odd' does not exist in Table 'public._x'\" vs theirs \"Table 'missing' does not exist in Schema 'public'\""
+        "count: ours 16 vs theirs 17",
+        "[0] text: ours \"Column 'odd' does not exist in Table 'my_table'\" vs theirs \"Expect a comma ','\"",
+        "[0] row: ours 12 vs theirs 15",
+        "[1] text: ours \"Expect a comma ','\" vs theirs \"No column named 'odd' inside Table 'my_table'\"",
+        "[2] text: ours \"No column named 'odd' inside Table 'my_table'\" vs theirs \"No column named 'col' inside Table 'my_table'\"",
+        "[2] row: ours 15 vs theirs 16",
+        "[3] text: ours \"No column named 'col' inside Table 'my_table'\" vs theirs \"No column named 'odd' inside Table 'my_table'\"",
+        "[4] text: ours \"No column named 'odd' inside Table 'my_table'\" vs theirs \"Column 'odd' does not exist in Table 'my_table'\"",
+        "[4] row: ours 16 vs theirs 19",
+        "[15] text: ours \"Column 'x' does not exist in Table 'public.my_table'\" vs theirs \"Table 'missing' does not exist in Schema 'public'\"",
+        "[15] row: ours 30 vs theirs 29"
       ]
     },
     {
@@ -1845,23 +1791,16 @@
       "status": "divergent",
       "class": "their-parser-gap",
       "problems": [
-        "count: ours 14 vs theirs 13",
-        "[3] text: ours \"expected ')' after records columns\" vs theirs \"Column 'odd' does not exist in Table 'quoted name'\"",
-        "[4] text: ours \"expected identifier\" vs theirs \"Expect a comma ','\"",
-        "[4] row: ours 13 vs theirs 12",
-        "[5] text: ours \"expected column type\" vs theirs \"Two endpoints are the same\"",
-        "[5] row: ours 14 vs theirs 20",
-        "[6] text: ours \"expected Project, Table, Ref, Enum, Note, or TableGroup\" vs theirs \"Table 'my_table' already exists in schema 'public'\"",
-        "[6] row: ours 16 vs theirs 22",
-        "[7] text: ours \"Two endpoints are the same\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[7] row: ours 20 vs theirs 29",
-        "[8] text: ours \"Table 'my_table' already exists in schema 'public'\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[8] row: ours 22 vs theirs 29",
-        "[9] text: ours \"A Ref field must be a binary relationship\" vs theirs \"Column 'code' does not exist in Table 'public.my_table'\"",
-        "[10] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
-        "[11] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Unequal fields in ref endpoints\"",
-        "[12] text: ours \"Unequal fields in ref endpoints\" vs theirs \"Column 'user_id' does not exist in Table 'public.my_table'\"",
-        "[12] row: ours 29 vs theirs 30"
+        "count: ours 12 vs theirs 13",
+        "[1] text: ours \"Column 'odd' does not exist in Table 'quoted name'\" vs theirs \"Expect a comma ','\"",
+        "[1] row: ours 8 vs theirs 9",
+        "[2] text: ours \"Expect a comma ','\" vs theirs \"Table 'nope' does not exist in Schema 'public'\"",
+        "[3] text: ours \"Table 'nope' does not exist in Schema 'public'\" vs theirs \"Column 'odd' does not exist in Table 'quoted name'\"",
+        "[3] row: ours 9 vs theirs 12",
+        "[9] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Column 'code' does not exist in Table 'public.my_table'\"",
+        "[10] text: ours \"Unequal fields in ref endpoints\" vs theirs \"Table 'name' does not exist in Schema 'public'\"",
+        "[11] text: ours \"Column 'user_id' does not exist in Table 'public.my_table'\" vs theirs \"Unequal fields in ref endpoints\"",
+        "[11] row: ours 30 vs theirs 29"
       ]
     },
     {
@@ -1923,10 +1862,15 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 10 vs theirs 7",
-        "[5] text: ours \"expected ')' after records columns\" vs theirs \"Column 'odd' does not exist in Table 't1'\"",
-        "[6] text: ours \"expected identifier\" vs theirs \"Expect a comma ','\"",
-        "[6] row: ours 7 vs theirs 6"
+        "[0] text: ours \"Column 'odd' does not exist in Table 't1'\" vs theirs \"Duplicate column 'x'\"",
+        "[0] row: ours 1 vs theirs 4",
+        "[1] text: ours \"Duplicate column 'x'\" vs theirs \"Expect a comma ','\"",
+        "[2] text: ours \"Expect a comma ','\" vs theirs \"Table 'nope' does not exist in Schema 'public'\"",
+        "[3] text: ours \"Table 'nope' does not exist in Schema 'public'\" vs theirs \"Duplicate column 'x'\"",
+        "[3] row: ours 4 vs theirs 5",
+        "[4] text: ours \"Duplicate column 'x'\" vs theirs \"Two endpoints are the same\"",
+        "[5] text: ours \"Two endpoints are the same\" vs theirs \"Column 'odd' does not exist in Table 't1'\"",
+        "[5] row: ours 5 vs theirs 6"
       ]
     },
     {
@@ -1974,16 +1918,13 @@
       "status": "divergent",
       "class": "their-parser-gap",
       "problems": [
-        "count: ours 10 vs theirs 8",
-        "[3] text: ours \"expected ')' after records columns\" vs theirs \"Column 'odd' does not exist in Table 'orders'\"",
-        "[4] text: ours \"expected column type\" vs theirs \"Expect a comma ','\"",
-        "[4] row: ours 6 vs theirs 5",
-        "[5] text: ours \"expected identifier\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[5] row: ours 7 vs theirs 35",
-        "[6] text: ours \"expected Project, Table, Ref, Enum, Note, or TableGroup\" vs theirs \"Table 'missing' does not exist in Schema 'public'\"",
-        "[6] row: ours 9 vs theirs 35",
-        "[7] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"A TableGroup field must be of the form <table> or <schema>.<table>\"",
-        "[7] row: ours 35 vs theirs 36"
+        "[0] text: ours \"Column 'odd' does not exist in Table 'orders'\" vs theirs \"Duplicate column 'odd col'\"",
+        "[0] row: ours 1 vs theirs 2",
+        "[1] text: ours \"Duplicate column 'odd col'\" vs theirs \"Inline column settings can only be `pk` or `unique`\"",
+        "[2] text: ours \"Inline column settings can only be `pk` or `unique`\" vs theirs \"Duplicate column 'odd col'\"",
+        "[2] row: ours 2 vs theirs 4",
+        "[3] text: ours \"Duplicate column 'odd col'\" vs theirs \"Column 'odd' does not exist in Table 'orders'\"",
+        "[3] row: ours 4 vs theirs 5"
       ]
     },
     {
@@ -2014,16 +1955,7 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 7 vs theirs 6",
-        "[0] text: ours \"expected ')' after records columns\" vs theirs \"Column 'odd' does not exist in Table 'users'\"",
-        "[1] text: ours \"expected identifier\" vs theirs \"Expect a comma ','\"",
-        "[1] row: ours 16 vs theirs 15",
-        "[2] text: ours \"expected Project, Table, Ref, Enum, Note, or TableGroup\" vs theirs \"Column 'code' does not exist in Table 'public.orders'\"",
-        "[2] row: ours 18 vs theirs 26",
-        "[3] text: ours \"Column 'code' does not exist in Table 'public.orders'\" vs theirs \"Column 'user_id' does not exist in Table 'public.posts'\"",
-        "[4] text: ours \"Column 'user_id' does not exist in Table 'public.posts'\" vs theirs \"Column 'code' does not exist in Table 'public.orders'\"",
-        "[4] row: ours 26 vs theirs 27",
-        "[5] text: ours \"Column 'code' does not exist in Table 'public.orders'\" vs theirs \"Column 'code' does not exist in Table 'public.users'\""
+        "[0] row: ours 12 vs theirs 15"
       ]
     },
     {
@@ -2031,10 +1963,10 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 6 vs theirs 3",
-        "[1] text: ours \"expected ')' after records columns\" vs theirs \"Column 'odd' does not exist in Table 'posts'\"",
-        "[2] text: ours \"expected column type\" vs theirs \"Expect a comma ','\"",
-        "[2] row: ours 6 vs theirs 5"
+        "[0] text: ours \"Column 'odd' does not exist in Table 'posts'\" vs theirs \"Two endpoints are the same\"",
+        "[0] row: ours 1 vs theirs 3",
+        "[1] text: ours \"Two endpoints are the same\" vs theirs \"Column 'odd' does not exist in Table 'posts'\"",
+        "[1] row: ours 3 vs theirs 5"
       ]
     },
     {
@@ -2100,19 +2032,15 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 14 vs theirs 11",
-        "[4] text: ours \"expected ')' after records columns\" vs theirs \"Column 'odd' does not exist in Table 'posts'\"",
-        "[5] text: ours \"expected identifier\" vs theirs \"Expect a comma ','\"",
-        "[5] row: ours 5 vs theirs 4",
-        "[6] text: ours \"expected column type\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[6] row: ours 6 vs theirs 16",
-        "[7] text: ours \"expected Project, Table, Ref, Enum, Note, or TableGroup\" vs theirs \"Column 'code' does not exist in Table 'public.users'\"",
-        "[7] row: ours 8 vs theirs 16",
-        "[8] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"Column 'odd' does not exist in Table 'public.posts'\"",
-        "[9] text: ours \"Column 'code' does not exist in Table 'public.users'\" vs theirs \"Column 'name' does not exist in Table 'public.users'\"",
-        "[9] row: ours 16 vs theirs 17",
-        "[10] text: ours \"Column 'odd' does not exist in Table 'public.posts'\" vs theirs \"Column 'name' does not exist in Table 'public.users'\"",
-        "[10] row: ours 16 vs theirs 17"
+        "count: ours 12 vs theirs 11",
+        "[0] text: ours \"Column 'odd' does not exist in Table 'posts'\" vs theirs \"Duplicate column 'odd col'\"",
+        "[0] row: ours 1 vs theirs 2",
+        "[1] text: ours \"Duplicate column 'odd col'\" vs theirs \"Expect a comma ','\"",
+        "[2] text: ours \"Expect a comma ','\" vs theirs \"Table 'nope' does not exist in Schema 'public'\"",
+        "[3] text: ours \"Table 'nope' does not exist in Schema 'public'\" vs theirs \"Duplicate column 'odd col'\"",
+        "[3] row: ours 2 vs theirs 3",
+        "[4] text: ours \"Duplicate column 'odd col'\" vs theirs \"Column 'odd' does not exist in Table 'posts'\"",
+        "[4] row: ours 3 vs theirs 4"
       ]
     },
     {
@@ -2201,33 +2129,14 @@
       "status": "divergent",
       "class": "their-parser-gap",
       "problems": [
-        "count: ours 21 vs theirs 19",
-        "[5] text: ours \"expected ')' after records columns\" vs theirs \"Column 'odd' does not exist in Table 'a'\"",
-        "[6] text: ours \"expected identifier\" vs theirs \"Expect a comma ','\"",
-        "[6] row: ours 14 vs theirs 13",
-        "[7] text: ours \"expected identifier\" vs theirs \"Inline column settings can only be `pk` or `unique`\"",
-        "[7] row: ours 15 vs theirs 20",
-        "[8] text: ours \"expected column type\" vs theirs \"Duplicate column 'name'\"",
-        "[8] row: ours 16 vs theirs 22",
-        "[9] text: ours \"expected Project, Table, Ref, Enum, Note, or TableGroup\" vs theirs \"Duplicate column 'name'\"",
-        "[9] row: ours 18 vs theirs 23",
-        "[10] text: ours \"Inline column settings can only be `pk` or `unique`\" vs theirs \"Column 'user_id' does not exist in Table 'public.a'\"",
-        "[10] row: ours 20 vs theirs 30",
-        "[11] text: ours \"Duplicate column 'name'\" vs theirs \"Duplicate column 'code'\"",
-        "[11] row: ours 22 vs theirs 31",
-        "[12] text: ours \"Duplicate column 'name'\" vs theirs \"Table 'nope' does not exist in Schema 'public'\"",
-        "[12] row: ours 23 vs theirs 31",
-        "[13] text: ours \"Column 'user_id' does not exist in Table 'public.a'\" vs theirs \"Duplicate column 'code'\"",
-        "[13] row: ours 30 vs theirs 32",
-        "[14] text: ours \"Duplicate column 'code'\" vs theirs \"A Ref field must be a binary relationship\"",
-        "[14] row: ours 31 vs theirs 37",
-        "[15] text: ours \"Table 'nope' does not exist in Schema 'public'\" vs theirs \"A Ref field should only have a single binary relationship\"",
-        "[15] row: ours 31 vs theirs 37",
-        "[16] text: ours \"Duplicate column 'code'\" vs theirs \"Column 'odd' does not exist in Table 'public._x'\"",
-        "[16] row: ours 32 vs theirs 37",
-        "[17] text: ours \"A Ref field must be a binary relationship\" vs theirs \"Table 'missing' does not exist in Schema 'public'\"",
-        "[18] text: ours \"A Ref field should only have a single binary relationship\" vs theirs \"A TableGroup field must be of the form <table> or <schema>.<table>\"",
-        "[18] row: ours 37 vs theirs 42"
+        "count: ours 18 vs theirs 19",
+        "[3] text: ours \"Column 'odd' does not exist in Table 'a'\" vs theirs \"Column 'odd' does not exist in Table 'public.a'\"",
+        "[3] row: ours 10 vs theirs 12",
+        "[4] text: ours \"Column 'odd' does not exist in Table 'public.a'\" vs theirs \"Expect a comma ','\"",
+        "[5] text: ours \"Expect a comma ','\" vs theirs \"Column 'odd' does not exist in Table 'a'\"",
+        "[5] row: ours 12 vs theirs 13",
+        "[17] text: ours \"A TableGroup field must be of the form <table> or <schema>.<table>\" vs theirs \"Table 'missing' does not exist in Schema 'public'\"",
+        "[17] row: ours 42 vs theirs 37"
       ]
     },
     {
@@ -2245,21 +2154,17 @@
       "status": "divergent",
       "class": "semantic",
       "problems": [
-        "count: ours 16 vs theirs 15",
-        "[6] text: ours \"expected ')' after records columns\" vs theirs \"Column 'odd' does not exist in Table 'users'\"",
-        "[7] text: ours \"expected identifier\" vs theirs \"Expect a comma ','\"",
-        "[7] row: ours 9 vs theirs 8",
-        "[8] text: ours \"expected Project, Table, Ref, Enum, Note, or TableGroup\" vs theirs \"Table 'users' already exists in schema 'public'\"",
-        "[8] row: ours 11 vs theirs 12",
-        "[9] text: ours \"Table 'users' already exists in schema 'public'\" vs theirs \"Duplicate column 'odd col'\"",
-        "[9] row: ours 12 vs theirs 20",
-        "[10] text: ours \"Duplicate column 'odd col'\" vs theirs \"Column 'odd' does not exist in Table 'public.users'\"",
-        "[10] row: ours 20 vs theirs 22",
-        "[11] text: ours \"Column 'odd' does not exist in Table 'public.users'\" vs theirs \"Duplicate column 'odd col'\"",
-        "[12] text: ours \"Duplicate column 'odd col'\" vs theirs \"Expect a comma ','\"",
-        "[13] text: ours \"Expect a comma ','\" vs theirs \"Column 'name' does not exist in Table 'public.users'\"",
-        "[13] row: ours 22 vs theirs 29",
-        "[14] text: ours \"Column 'name' does not exist in Table 'public.users'\" vs theirs \"Column 'user_id' does not exist in Table 'public.t1'\""
+        "[0] text: ours \"Column 'odd' does not exist in Table 'users'\" vs theirs \"Column 'odd' does not exist in Table 'public.users'\"",
+        "[0] row: ours 1 vs theirs 2",
+        "[1] text: ours \"Column 'odd' does not exist in Table 'public.users'\" vs theirs \"Expect a comma ','\"",
+        "[2] text: ours \"Expect a comma ','\" vs theirs \"No column named 'col' inside Table 'users'\"",
+        "[2] row: ours 2 vs theirs 5",
+        "[3] text: ours \"No column named 'col' inside Table 'users'\" vs theirs \"No column named 'odd' inside Table 'users'\"",
+        "[4] text: ours \"No column named 'odd' inside Table 'users'\" vs theirs \"Expect a comma ','\"",
+        "[4] row: ours 5 vs theirs 6",
+        "[5] text: ours \"Expect a comma ','\" vs theirs \"No column named 'odd' inside Table 'users'\"",
+        "[6] text: ours \"No column named 'odd' inside Table 'users'\" vs theirs \"Column 'odd' does not exist in Table 'users'\"",
+        "[6] row: ours 6 vs theirs 8"
       ]
     },
     {
