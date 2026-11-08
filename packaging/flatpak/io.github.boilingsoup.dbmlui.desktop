@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=dbml-ui
+Name=DBML-UI
 Comment=DBML diagram editor
 Exec=dbml-ui
 Icon=io.github.boilingsoup.dbmlui

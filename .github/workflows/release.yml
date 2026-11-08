@@ -117,7 +117,7 @@ jobs:
           cat > "dist/$OUT/dbml-ui.desktop" <<DESKTOP
           [Desktop Entry]
           Type=Application
-          Name=dbml-ui
+          Name=DBML-UI
           Comment=DBML diagram editor
           Exec=dbml-ui
           Icon=dbml-ui
@@ -338,8 +338,8 @@ jobs:
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
-            <key>CFBundleName</key><string>dbml-ui</string>
-            <key>CFBundleDisplayName</key><string>dbml-ui</string>
+            <key>CFBundleName</key><string>DBML-UI</string>
+            <key>CFBundleDisplayName</key><string>DBML-UI</string>
             <key>CFBundleIdentifier</key><string>io.github.dbml-ui</string>
             <key>CFBundleVersion</key><string>$VERSION</string>
             <key>CFBundleShortVersionString</key><string>$VERSION</string>

@@ -7,5 +7,8 @@ fn main() {
     }
     let mut res = winresource::WindowsResource::new();
     res.set_icon("icons/app-icon.ico");
+    // the launcher-facing name: the exe stays lowercase
+    res.set("FileDescription", "DBML-UI");
+    res.set("ProductName", "DBML-UI");
     res.compile().expect("embed app-icon.ico into the exe");
 }

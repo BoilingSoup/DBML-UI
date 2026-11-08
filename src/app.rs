@@ -1345,9 +1345,10 @@ impl App {
 
     /// Window title: the active tab's file when one is open.
     pub fn window_title(&self) -> String {
+        // the launcher-facing name is DBML-UI; the binary stays lowercase
         match self.file() {
-            Some(f) => format!("dbml-ui — {}", f.display()),
-            None => "dbml-ui".to_string(),
+            Some(f) => format!("DBML-UI — {}", f.display()),
+            None => "DBML-UI".to_string(),
         }
     }
 
