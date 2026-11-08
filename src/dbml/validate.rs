@@ -188,6 +188,12 @@ pub fn written_op(card: Cardinality, left_opt: bool, right_opt: bool) -> &'stati
 /// bullets their raw source-line quotes (the ref statement and the column
 /// definition, verbatim).
 pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
+    validate_with_parse(doc, src, &[])
+}
+
+/// The parse-level binder findings join the same gate (their errors()
+/// chains parse + binder reports).
+pub fn validate_with_parse(doc: &Document, src: &str, parse_binder: &[(usize, String)]) -> Vec<Diagnostic> {
     // the trimmed source line containing `offset` — their explanation
     // quotes the ref statement and the column definition as written
     let line_text = |offset: usize| -> String {
@@ -1235,12 +1241,22 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
         }
     }
 
+    // the parse-side binder findings (broken-ref shape sets)
+    for (offset, msg) in parse_binder {
+        out.push(Diagnostic::plain(*offset, msg.clone()));
+    }
     // the column-parse binder findings (their validateNode class)
     for t in &doc.tables {
         for c in &t.columns {
             for (offset, msg) in &c.binder_errors {
                 out.push(Diagnostic::plain(*offset, msg.clone()));
             }
+        }
+    }
+    // bound refs' application-arg findings (their INVALID_REF_FIELD)
+    for r in &doc.refs {
+        for (offset, msg) in &r.binder_errors {
+            out.push(Diagnostic::plain(*offset, msg.clone()));
         }
     }
 

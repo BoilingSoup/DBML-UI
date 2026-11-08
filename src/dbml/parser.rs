@@ -16,6 +16,9 @@ pub struct ParseError {
 pub struct ParseOutput {
     pub doc: Document,
     pub errors: Vec<ParseError>,
+    /// Their validateNode-class findings raised while parsing (broken-ref
+    /// shape sets) — binder-class, gate the interpretation layer.
+    pub binder_errors: Vec<(usize, String)>,
 }
 
 struct Fail {
@@ -1412,7 +1415,12 @@ enum Item {
     Note(StickyNote),
 }
 
-fn top_item(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Item> {
+fn top_item(
+    input: &mut &str,
+    base: usize,
+    errs: &mut Vec<ParseError>,
+    doc_binder_errors: &mut Vec<(usize, String)>,
+) -> R<Item> {
     if peek_kw(input, "TableGroup") {
         table_group(input, base, errs).map(Item::Grp)
     } else if peek_kw(input, "Table") {
@@ -1420,7 +1428,7 @@ fn top_item(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Item
     } else if peek_kw(input, "Project") {
         project(input, base, errs).map(Item::Prj)
     } else if peek_kw(input, "Ref") {
-        ref_stmt(input, base, errs).map(|r| r.map_or(Item::Skip, Item::Ref))
+        ref_stmt(input, base, errs, doc_binder_errors).map(|r| r.map_or(Item::Skip, Item::Ref))
     } else if peek_kw(input, "Enum") {
         enum_def(input, base, errs).map(Item::Enm)
     } else if peek_kw(input, "Note") {
@@ -1616,7 +1624,12 @@ fn table(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Table> 
     Ok(t)
 }
 
-fn ref_stmt(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Option<Ref>> {
+fn ref_stmt(
+    input: &mut &str,
+    base: usize,
+    errs: &mut Vec<ParseError>,
+    doc_binder_errors: &mut Vec<(usize, String)>,
+) -> R<Option<Ref>> {
     let start = offset(input, base);
     if !eat(input, "Ref") {
         return fail(offset(input, base), "expected 'Ref'");
@@ -1644,6 +1657,7 @@ fn ref_stmt(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Opti
         let (on_delete, on_update, color) = ref_settings(input, base, errs);
         return Ok(Some(Ref {
             name,
+            binder_errors: Vec::new(),
             span: start..offset(input, base),
             from,
             to,
@@ -1667,9 +1681,24 @@ fn ref_stmt(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Opti
     let mut scratch = body_input;
     // the scratch shares the source pointer, so sub-parsers keep taking
     // the source `base` — their offsets are pointer differences
+    let mut ref_binder_errors: Vec<(usize, String)> = Vec::new();
     let strict: R<(super::ast::Endpoint, super::ast::Endpoint, Cardinality, bool, bool, usize)> = (|| {
         let from = endpoint(&mut scratch, base)?;
         ws(&mut scratch);
+        // their application args between the endpoints: the ref binds
+        // from/op/to and each arg errs once (binder class)
+        sp(&mut scratch);
+        while scratch.starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '"' || c == '`') {
+            let junk_start = offset(&mut scratch, base);
+            let _ = ident(&mut scratch, base);
+            ref_binder_errors.push((
+                junk_start,
+                "A Ref field should only have a single binary relationship".to_string(),
+            ));
+            sp(&mut scratch);
+        }
+        // the op binds to the next expression immediately (their Pratt
+        // grammar) — no args can sit between the op and the right endpoint
         let op_offset = offset(&mut scratch, base);
         let (card, l_opt, r_opt) = cardinality_full(&mut scratch, base)?;
         ws(&mut scratch);
@@ -1680,8 +1709,22 @@ fn ref_stmt(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Opti
         Ok((from, to, card, l_opt, r_opt, op_offset)) => {
             *input = scratch;
             let (on_delete, on_update, color) = ref_settings(input, base, errs);
+            // trailing args after the last endpoint (probe: `Ref: a.id >
+            // b.odd col` errs once at each arg) — consume them so the
+            // top-level loop continues
+            sp(input);
+            while input.starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '"' || c == '`') {
+                let junk_start = offset(input, base);
+                let _ = ident(input, base);
+                ref_binder_errors.push((
+                    junk_start,
+                    "A Ref field should only have a single binary relationship".to_string(),
+                ));
+                sp(input);
+            }
             Ok(Some(Ref {
                 name,
+                binder_errors: ref_binder_errors,
                 span: start..offset(input, base),
                 from,
                 to,
@@ -1697,8 +1740,11 @@ fn ref_stmt(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Opti
         Err(_) => {
             // their ref-field shape rules (ref/validate.ts validateFields
             // + the field-args walk): classify the broken body, emit
-            // their error set, recover at the line end
-            ref_shape_errors(&mut body_input.clone(), body_base, errs);
+            // their error set, recover at the line end — binder-class
+            // errors, routed to the parse output's binder channel
+            let mut shape = Vec::new();
+            ref_shape_errors(&mut body_input.clone(), body_base, &mut shape);
+            doc_binder_errors.extend(shape);
             skip_line(input);
             Ok(None)
         }
@@ -1719,7 +1765,7 @@ enum RefChunkKind {
     Other,
 }
 
-fn ref_shape_errors(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) {
+fn ref_shape_errors(input: &mut &str, base: usize, out: &mut Vec<(usize, String)>) {
     // tokenize the body line into chunks
     let mut chunks: Vec<RefChunk> = Vec::new();
     let line_end = input.find('\n').unwrap_or(input.len());
@@ -1791,26 +1837,26 @@ fn ref_shape_errors(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) {
         // empty body: their EOF pair + the shape pair (probe: `Ref:` + EOF)
         (None, _) => {
             for _ in 0..2 {
-                errs.push(err_at(base, "Unexpected EOF"));
+                out.push((base, "Unexpected EOF".to_string()));
             }
-            errs.push(err_at(base, "A Ref field must be a binary relationship"));
-            errs.push(err_at(base, "Unequal fields in ref endpoints"));
+            out.push((base, "A Ref field must be a binary relationship".to_string()));
+            out.push((base, "Unequal fields in ref endpoints".to_string()));
         }
         // a lone operand (`Ref: a.b`): not a binary relationship
         (Some((_, fstart, _)), None) if chunks.len() == 1 => {
-            errs.push(err_at(fstart, "A Ref field must be a binary relationship"));
-            errs.push(err_at(fstart, "Unequal fields in ref endpoints"));
+            out.push((fstart, "A Ref field must be a binary relationship".to_string()));
+            out.push((fstart, "Unequal fields in ref endpoints".to_string()));
         }
         // an application wrapper: operand followed by non-operator content
         (Some((_, fstart, _)), _) if rel_pos != Some(1) && chunks.len() > 1 => {
-            errs.push(err_at(fstart, "A Ref field must be a binary relationship"));
-            errs.push(err_at(fstart, "Unequal fields in ref endpoints"));
+            out.push((fstart, "A Ref field must be a binary relationship".to_string()));
+            out.push((fstart, "Unequal fields in ref endpoints".to_string()));
             // the application's first argument anchors the single-field
             // error (probe: `b x > a.id` errs at `x`)
             let arg = chunks.get(1).map(|c| c.start).unwrap_or(fstart);
-            errs.push(err_at(
+            out.push((
                 arg,
-                "A Ref field should only have a single binary relationship",
+                "A Ref field should only have a single binary relationship".to_string(),
             ));
         }
         // a binary infix: side validity + tuple equality
@@ -1824,18 +1870,18 @@ fn ref_shape_errors(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) {
             };
             if !side_ok(left) {
                 let at = left.first().map(|c| c.start).unwrap_or(base);
-                errs.push(err_at(at, "Invalid column reference"));
+                out.push((at, "Invalid column reference".to_string()));
             }
             if !side_ok(right) {
                 let at = right.first().map(|c| c.start).unwrap_or(base);
-                errs.push(err_at(at, "Invalid column reference"));
+                out.push((at, "Invalid column reference".to_string()));
             }
             // junk after the right operand = application args
             if right.len() > 1 {
                 let at = right[1].start;
-                errs.push(err_at(
+                out.push((
                     at,
-                    "A Ref field should only have a single binary relationship",
+                    "A Ref field should only have a single binary relationship".to_string(),
                 ));
             }
             // tuple/chain length mismatch (their isEqualTupleOperands)
@@ -1849,7 +1895,7 @@ fn ref_shape_errors(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) {
             if let (Some(l), Some(r)) = (tuple_len(left), tuple_len(right)) {
                 if l != r && l.max(r) > 1 {
                     let at = chunks[0].start;
-                    errs.push(err_at(at, "Unequal fields in ref endpoints"));
+                    out.push((at, "Unequal fields in ref endpoints".to_string()));
                 }
             }
             let _ = empty_or_one;
@@ -2181,7 +2227,7 @@ pub fn parse(src: &str) -> ParseOutput {
             continue;
         }
         let mut attempt = rest;
-        match top_item(&mut attempt, base, &mut out.errors) {
+        match top_item(&mut attempt, base, &mut out.errors, &mut out.binder_errors) {
             Ok(item) => {
                 rest = attempt;
                 match item {

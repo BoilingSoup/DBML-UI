@@ -226,6 +226,9 @@ impl Cardinality {
 #[derive(Debug, Clone)]
 pub struct Ref {
     pub name: Option<String>,
+    /// Their INVALID_REF_FIELD findings on a bound ref (application args
+    /// between the endpoints) — binder-class, gate the infos.
+    pub binder_errors: Vec<(usize, String)>,
     pub span: Span,
     pub from: Endpoint,
     pub to: Endpoint,
