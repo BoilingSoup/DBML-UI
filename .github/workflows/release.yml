@@ -368,6 +368,41 @@ jobs:
   # (manifest in packaging/flatpak/). The runtime's GNOME stack provides
   # every library the binary links; the manifest's finish-args cover the
   # sandbox settings (GPU, sockets, the FileChooser portal).
+  conformance:
+    # The parity gates: our engine vs holistics/dbml at the pinned
+    # commit — diagnostics, the parsed schema (with token offsets), the
+    # differentially-fuzzed corpus, and the Rust suites (robustness
+    # fuzzing, formatter model preservation, the sqlite3 oracle).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install sqlite3 (the oracle)
+        run: sudo apt-get update && sudo apt-get install -y sqlite3
+      - name: Pin and prepare the upstream compiler
+        run: sh parity/setup.sh
+      - name: Install the driver's node deps
+        run: npm ci --prefix parity/driver
+      - name: Build the harnesses
+        run: |
+          cargo build --release --example parity_dump
+          cargo build --release --example parity_schema
+      - name: Gate — diagnostics
+        run: node parity/run.mjs
+      - name: Gate — schema output
+        run: node parity/run_schema.mjs
+      - name: Gate — differential fuzz (grammar-shaped corpus)
+        run: |
+          python3 parity/fuzz.py 300
+          CORPUS_DIR="$PWD/parity/fuzz" node parity/run.mjs
+          CORPUS_DIR="$PWD/parity/fuzz" node parity/run_schema.mjs
+      - name: Rust suites (incl. robustness fuzz + formatter property + sqlite oracle)
+        run: cargo test --release
+
   flatpak:
     needs: build
     runs-on: ubuntu-latest
@@ -412,7 +447,7 @@ jobs:
           path: dist/dbml-ui*
 
   release:
-    needs: [build, flatpak]
+    needs: [build, flatpak, conformance]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
