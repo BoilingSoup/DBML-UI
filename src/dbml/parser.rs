@@ -1060,9 +1060,22 @@ fn index(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Index> 
                 break;
             }
             // their tuple grammar requires the separator (parser.ts
-            // "Expect a comma ','")
+            // "Expect a comma ','") — but the recovery keeps what parsed:
+            // the error is recorded, the offending token skipped, and the
+            // tuple continues (probe: `(odd col)` flags odd AND errs at
+            // col, keeping the index)
             if !eat(input, ",") {
-                return fail(offset(input, base), "Expect a comma ','");
+                errs.push(err_at(offset(input, base), "Expect a comma ','"));
+                if ident(input, base).is_err() {
+                    return fail(offset(input, base), "Expect a comma ','");
+                }
+                ws(input);
+                if peek_is(input, ")") {
+                    break;
+                }
+                if !eat(input, ",") {
+                    return fail(offset(input, base), "Expect a comma ','");
+                }
             }
         }
         if !eat(input, ")") {
