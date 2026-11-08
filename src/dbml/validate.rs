@@ -302,6 +302,19 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
     for t in &doc.tables {
         for c in &t.columns {
             if let Some(ir) = &c.settings.inline_ref {
+                if ir.to.table.is_empty() {
+                    // their bare-word endpoint = a column of the HOST table
+                    if !t.columns.iter().any(|x| x.name == ir.to.columns[0]) {
+                        out.push(Diagnostic::plain(
+                            ir.to.span.start,
+                            format!(
+                                "Column '{}' does not exist in Table '{}'",
+                                ir.to.columns[0], t.name
+                            ),
+                        ));
+                    }
+                    continue;
+                }
                 check_endpoint(doc, &ir.to, c.name_span.start, &mut out);
             }
         }
@@ -1022,6 +1035,7 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
                 continue;
             };
             let op = written_op(ir.card, ir.left_optional, ir.right_optional);
+            let host_of_bare = ir.to.table.is_empty();
             let sides = RefSides {
                 left: Side {
                     table: &t.name,
@@ -1029,7 +1043,7 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
                     token: c.name_span.start,
                 },
                 right: Side {
-                    table: &ir.to.table,
+                    table: if host_of_bare { &t.name } else { &ir.to.table },
                     cols: &ir.to.columns,
                     token: ir.attr_start,
                 },

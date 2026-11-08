@@ -637,11 +637,39 @@ fn settings_list_occs(
                 let op_offset = offset(input, base);
                 let (card, l_opt, r_opt) = cardinality_full(input, base)?;
                 ws(input);
-                let to = endpoint(input, base)?;
+                // their endpoint grammar: a bare word is a column of the
+                // HOST table, and words after a parsed endpoint are
+                // application args — each arg errs once (their
+                // INVALID_REF_FIELD, a binder-class error)
+                let to = match endpoint(input, base) {
+                    Ok(to) => to,
+                    Err(_) => {
+                        // a bare word = the host table's column
+                        let save = *input;
+                        let w_start = offset(input, base);
+                        match ident(input, base) {
+                            Ok(w) => {
+                                super::ast::Endpoint {
+                                    table: String::new(),
+                                    schema: None,
+                                    columns: vec![w],
+                                    span: w_start..offset(input, base),
+                                }
+                            }
+                            Err(_) => {
+                                *input = save;
+                                return fail(offset(input, base), "expected a reference endpoint");
+                            }
+                        }
+                    }
+                };
+                // junk words after the endpoint are the settings tail's
+                // "Expect a comma ','" (their settings consume) — the
+                // endpoint still binds; the single-binary error belongs to
+                // STANDALONE ref lines only (probe mw1 vs mw2)
                 // endpoint settings bracket: `ref: > t.c [color: …]` —
                 // the relationship's color lives there (only `color` is
                 // interpreted; other keys ride along unused)
-                ws(input);
                 let mut color = None;
                 if peek_is(input, "[") {
                     if let Ok(kvs) = settings_list(input, base, errs) {
