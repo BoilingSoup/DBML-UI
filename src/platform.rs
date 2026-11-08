@@ -240,6 +240,27 @@ fn ewmh_activate(
     let _ = conn.flush();
 }
 
+/// Every toplevel the WM would manage, frames included: under a
+/// reparenting WM (mutter) root's children are FRAMES and the real
+/// client windows — the ones carrying _NET_WM_PID / WM_NAME — are their
+/// children. Any window search must walk both levels (a root-only scan
+/// works only under a WM-less X server, where nothing reparents).
+fn wm_toplevels<C: x11rb::connection::Connection>(conn: &C, root: u32) -> Vec<u32> {
+    use x11rb::protocol::xproto::ConnectionExt as _;
+    let mut out = Vec::new();
+    let Ok(cookie) = conn.query_tree(root) else { return out };
+    let Ok(frames) = cookie.reply() else { return out };
+    for w in frames.children {
+        out.push(w);
+        if let Ok(cookie) = conn.query_tree(w) {
+            if let Ok(children) = cookie.reply() {
+                out.extend(children.children.iter().copied());
+            }
+        }
+    }
+    out
+}
+
 fn own_window_xid(
     conn: &x11rb::rust_connection::RustConnection,
     root: u32,
@@ -250,7 +271,7 @@ fn own_window_xid(
     pid: u32,
 ) -> Option<u32> {
     use x11rb::protocol::xproto::ConnectionExt as _;
-    let tree = conn.query_tree(root).ok()?.reply().ok()?;
+    let tree = wm_toplevels(conn, root);
     let name_of = |w: u32| -> Option<String> {
         for prop in [net_wm_name_w, wm_name_w] {
             if let Ok(r) = conn.get_property(false, w, prop, 0u32, 0u32, 1024u32) {
@@ -265,7 +286,7 @@ fn own_window_xid(
         None
     };
     let mut best: Option<(u64, u32)> = None; // (area, xid)
-    for &w in &tree.children {
+    for &w in &tree {
         let Ok(attr) = conn.get_window_attributes(w).ok()?.reply() else {
             continue;
         };
@@ -391,12 +412,12 @@ pub fn raise_dialog(title: &str) {
         }
         for _ in 0..40 {
             std::thread::sleep(std::time::Duration::from_millis(150));
-            let Some(tree) = conn.query_tree(root).ok().and_then(|c| c.reply().ok())
-            else {
+            let toplevels = wm_toplevels(&conn, root);
+            if toplevels.is_empty() {
                 return;
-            };
+            }
             let mut found = None;
-            for &w in &tree.children {
+            for &w in &toplevels {
                 if name_of(w).is_some_and(|n| n.contains(&needle)) {
                     found = Some(w);
                     break;

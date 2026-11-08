@@ -16,8 +16,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
         // scan mode: list every toplevel with title/pid/geometry
-        let tree = conn.query_tree(root)?.reply()?;
-        for w in tree.children {
+        // walk TWO levels: under a reparenting WM (mutter), root's
+        // children are FRAMES — the real client windows (carrying
+        // pid/title) are their children
+        let mut all: Vec<u32> = Vec::new();
+        for w in conn.query_tree(root)?.reply()?.children {
+            all.push(w);
+            if let Ok(t) = conn.query_tree(w).map(|c| c.reply()) {
+                if let Ok(t) = t {
+                    all.extend(t.children.iter().copied());
+                }
+            }
+        }
+        for w in all {
             let mut title = None;
             for prop in [net_name, wm_name] {
                 if let Ok(r) = conn.get_property(false, w, prop, 0u32, 0u32, 1024u32) {
@@ -44,7 +55,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     for arg in args {
-        let w: u32 = u32::from_str_radix(arg.trim_start_matches("0x"), 16)?;
+        let mut w: u32 = u32::from_str_radix(arg.trim_start_matches("0x"), 16)?;
+        // a frame id resolves to its client child (properties live there)
+        if let Ok(t) = conn.query_tree(w).map(|c| c.reply()) {
+            if let Ok(t) = t {
+                if let Some(&c) = t.children.first() {
+                    w = c;
+                }
+            }
+        }
         let mut title = None;
         for prop in [net_name, wm_name] {
             if let Ok(r) = conn.get_property(false, w, prop, 0u32, 0u32, 1024u32) {
