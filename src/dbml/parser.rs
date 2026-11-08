@@ -1333,6 +1333,33 @@ fn skip_damaged_line(input: &mut &str) {
     skip_line(input);
 }
 
+/// Consume one lexer-shaped token (their `synchronize*` advances one
+/// token at a time): a quoted string/ident, a word/number, or one
+/// punctuation/operator char. Returns the consumed length.
+fn consume_one_token(input: &mut &str) -> Option<usize> {
+    let b = input.as_bytes();
+    if b.is_empty() {
+        return None;
+    }
+    let n = match b[0] {
+        b'"' | b'\'' | b'`' => {
+            let q = b[0];
+            let mut i = 1;
+            while i < b.len() && b[i] != q {
+                i += 1;
+            }
+            (i + 1).min(b.len())
+        }
+        c if c.is_ascii_alphanumeric() || c == b'_' || c >= 0x80 => b
+            .iter()
+            .take_while(|&&x| x.is_ascii_alphanumeric() || x == b'_' || x >= 0x80)
+            .count(),
+        _ => 1,
+    };
+    *input = &input[n..];
+    Some(n)
+}
+
 /// `records [target][.schema][(col, ...)] [example] { rows }` — sample
 /// rows for a table. The caller has consumed the `records` keyword.
 /// Returns the optional target table name (top-level form; the last path
@@ -1359,32 +1386,40 @@ fn records_block(
     }
     sp(input);
     let mut columns = Vec::new();
+    let mut column_spans = Vec::new();
     if eat(input, "(") {
+        // their tupleExpression: one element, then a comma-terminated
+        // loop; a missing comma errs once at the offending token and
+        // synchronizeTuple skips silently to the next `,`/`)` — the
+        // skipped tokens never become elements (probe: `(odd col)`
+        // flags odd, errs at col; `(a b c)` errs at b only, tuple [a])
         loop {
             sp(input);
-            if eat(input, ")") {
+            if input.is_empty() || eat(input, ")") {
                 break;
             }
-            columns.push(ident(input, base)?);
+            let start = offset(input, base);
+            let name = ident(input, base)?;
+            column_spans.push(start..offset(input, base));
+            columns.push(name);
             sp(input);
-            if !eat(input, ",") {
+            if eat(input, ",") {
+                continue;
+            }
+            if input.is_empty() || eat(input, ")") {
+                break;
+            }
+            errs.push(err_at(offset(input, base), "Expect a comma ','"));
+            // synchronize: skip until a `,`/`)` WITHOUT consuming — the
+            // next iteration's comma consume takes the `,`, the outer
+            // loop's closing check takes the `)`
+            loop {
                 sp(input);
-                if eat(input, ")") {
+                if input.is_empty() || input.starts_with(')') || input.starts_with(',') {
                     break;
                 }
-                // their tuple recovery: the error is recorded, the
-                // offending token skipped, the tuple continues (probe:
-                // `(odd col)` flags odd and errs at col)
-                errs.push(err_at(offset(input, base), "Expect a comma ','"));
-                if ident(input, base).is_err() {
-                    return fail(offset(input, base), "expected ')' after records columns");
-                }
-                sp(input);
-                if eat(input, ")") {
+                if consume_one_token(input).is_none() {
                     break;
-                }
-                if !eat(input, ",") {
-                    return fail(offset(input, base), "expected ')' after records columns");
                 }
             }
         }
@@ -1405,6 +1440,7 @@ fn records_block(
     let mut rec = TableRecords {
         span: rec_start..0,
         columns,
+        column_spans,
         rows: Vec::new(),
         value_spans: Vec::new(),
         example,

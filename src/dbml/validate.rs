@@ -309,15 +309,22 @@ pub fn validate_with_parse(
         }
     }
     // records headers: every named column must exist (probe:
-    // records (nope) errs with the endpoint phrasing)
+    // records (nope) errs with the endpoint phrasing); the anchor is
+    // the header column itself — their binder errs at the
+    // `columnBindee` (records/bind.ts), not the table declaration
     for t in &doc.tables {
         if let Some(r) = &t.records {
-            for cname in &r.columns {
+            for (i, cname) in r.columns.iter().enumerate() {
                 if !t.columns.iter().any(|x| x.name == *cname) {
                     // their records check does NOT schema-qualify (probe:
                     // records (nope) errs against Table 'T')
+                    let at = r
+                        .column_spans
+                        .get(i)
+                        .map(|s| s.start)
+                        .unwrap_or(t.name_span.start);
                     out.push(Diagnostic::plain(
-                        t.name_span.start,
+                        at,
                         format!("Column '{}' does not exist in Table '{}'", cname, t.name),
                     ));
                 }

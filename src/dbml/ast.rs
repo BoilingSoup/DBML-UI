@@ -60,6 +60,10 @@ pub struct TableRecords {
     /// Header column list; empty for the implicit all-columns form (the
     /// model resolves it against the table).
     pub columns: Vec<String>,
+    /// Each header column's source span, parallel to `columns` (the
+    /// missing-column anchors — their binder errs at the `columnBindee`,
+    /// the primary expression in the records header).
+    pub column_spans: Vec<Span>,
     /// One entry per row, each parallel to `columns` as written.
     pub rows: Vec<Vec<RecordValue>>,
     /// Each value's source span, parallel to `rows` (the diagnostics'
