@@ -128,6 +128,26 @@ pub struct ColumnSettings {
     /// (`[masking: "partial"]`): any unrecognized key with a value, shown
     /// on the diagram hover cards.
     pub custom: Vec<(String, String)>,
+    /// Every key occurrence — feeds their duplicate/conflict settings
+    /// rules.
+    pub occurrences: Vec<SettingOcc>,
+}
+
+/// One settings-list key occurrence with its token — the duplicate /
+/// conflict rules flag each occurrence individually (their attribute
+/// nodes).
+#[derive(Debug, Clone)]
+pub struct SettingOcc {
+    /// Lowercased key as written (`pk`, `not null`, …).
+    pub key: String,
+    /// Byte offset of the key token.
+    pub offset: usize,
+    pub has_value: bool,
+    /// The verbatim value text (quotes kept) when the value parsed as a
+    /// plain string.
+    pub value: Option<String>,
+    /// The value was a quoted string (their isExpressionAQuotedString).
+    pub quoted: bool,
 }
 
 #[derive(Debug, Clone)]

@@ -294,6 +294,92 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
         }
     }
 
+    // their column-settings rules (tablePartial/validate.ts): once-only
+    // names, the pk/primary-key and not-null/null conflicts (each error
+    // anchored at EVERY offending occurrence), and the flag/value rules
+    for t in &doc.tables {
+        for c in &t.columns {
+            let occs = &c.settings.occurrences;
+            if occs.is_empty() {
+                continue;
+            }
+            let attrs_of = |name: &str| -> Vec<&super::ast::SettingOcc> {
+                occs.iter()
+                    .filter(|o| {
+                        o.key == name
+                            || (name == "primary key" && o.key == "primary_key")
+                    })
+                    .collect()
+            };
+            for name in [
+                "note",
+                "primary key",
+                "pk",
+                "not null",
+                "null",
+                "unique",
+                "increment",
+                "default",
+            ] {
+                let attrs = attrs_of(name);
+                if attrs.len() > 1 {
+                    for a in attrs {
+                        out.push(Diagnostic::plain(
+                            a.offset,
+                            format!("'{name}' can only appear once"),
+                        ));
+                    }
+                }
+            }
+            let pk = attrs_of("pk");
+            let pkey = attrs_of("primary key");
+            if !pk.is_empty() && !pkey.is_empty() {
+                for a in pk.iter().chain(pkey.iter()) {
+                    out.push(Diagnostic::plain(
+                        a.offset,
+                        "Either one of 'primary key' and 'pk' can appear".to_string(),
+                    ));
+                }
+            }
+            let nn = attrs_of("not null");
+            let nu = attrs_of("null");
+            if !nn.is_empty() && !nu.is_empty() {
+                for a in nn.iter().chain(nu.iter()) {
+                    out.push(Diagnostic::plain(
+                        a.offset,
+                        "'not null' and 'null' can not be set at the same time".to_string(),
+                    ));
+                }
+            }
+            for a in occs {
+                let name = if a.key == "primary_key" {
+                    "primary key"
+                } else {
+                    a.key.as_str()
+                };
+                match name {
+                    "pk" | "primary key" | "not null" | "null" | "unique" | "increment" => {
+                        if a.has_value {
+                            out.push(Diagnostic::plain(
+                                a.offset,
+                                format!("'{name}' must not have a value"),
+                            ));
+                        }
+                    }
+                    "note" => {
+                        if a.has_value && !a.quoted {
+                            out.push(Diagnostic::plain(
+                                a.offset,
+                                "'note' must be a quoted string".to_string(),
+                            ));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
     // their checkRefEndpoints (program/bind.ts): a ref whose two sides
     // cover the SAME column set errs once ('Two endpoints are the same')
     // and drops out of the pair map; the same unordered PAIR across refs

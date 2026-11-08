@@ -372,6 +372,20 @@ fn type_str(input: &mut &str, base: usize) -> R<String> {
     } else {
         *input = save;
     }
+    // array suffixes bind to the type with NO space (`int[]`, `int[3]`,
+    // multi-dimensional `int[2][3]`) — a spaced `int []` is a settings
+    // list instead (probe-verified on their engine)
+    while input.starts_with('[') {
+        let after = &input[1..];
+        let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let close = 1 + digits.len();
+        if after[digits.len()..].starts_with(']') {
+            out.push_str(&input[..close + 1]);
+            *input = &input[close + 1..];
+        } else {
+            break;
+        }
+    }
     Ok(out)
 }
 
@@ -501,8 +515,11 @@ fn endpoint(input: &mut &str, base: usize) -> R<Endpoint> {
             }
             columns.push(c);
             ws(input);
-            if !eat(input, ",") {
+            if peek_is(input, ")") {
                 break;
+            }
+            if !eat(input, ",") {
+                return fail(offset(input, base), "Expect a comma ','");
             }
         }
         if !eat(input, ")") {
@@ -574,14 +591,24 @@ enum SettingVal {
 /// `[key, key: value, ref: > t.c, ...]` — parsed generically; callers
 /// interpret the pairs.
 fn settings_list(input: &mut &str, base: usize) -> R<Vec<(String, Option<SettingVal>)>> {
+    settings_list_occs(input, base).map(|(kvs, _)| kvs)
+}
+
+/// The settings list plus every key occurrence (their attribute nodes —
+/// the duplicate/conflict rules anchor each one).
+fn settings_list_occs(
+    input: &mut &str,
+    base: usize,
+) -> R<(Vec<(String, Option<SettingVal>)>, Vec<super::ast::SettingOcc>)> {
     if !eat(input, "[") {
         return fail(offset(input, base), "expected '['");
     }
+    let mut occs: Vec<super::ast::SettingOcc> = Vec::new();
     let mut out = Vec::new();
     loop {
         sp(input);
         if eat(input, "]") {
-            return Ok(out);
+            return Ok((out, occs));
         }
         if input.is_empty() {
             return fail(offset(input, base), "unterminated settings");
@@ -594,10 +621,17 @@ fn settings_list(input: &mut &str, base: usize) -> R<Vec<(String, Option<Setting
         if key.is_empty() {
             return fail(offset(input, base), "expected setting key");
         }
+        let occ_key = key.clone();
         *input = &input[end..];
         sp(input);
+        let occ_before_value = input.len();
+        let mut val_quoted = false;
         if eat(input, ":") {
             sp(input);
+            // quotedness must be read BEFORE the value parses — the
+            // parsed value arrives unquoted (their
+            // isExpressionAQuotedString)
+            val_quoted = input.starts_with('\'') || input.starts_with('"');
             if key == "ref" {
                 let op_offset = offset(input, base);
                 let (card, l_opt, r_opt) = cardinality_full(input, base)?;
@@ -686,14 +720,28 @@ fn settings_list(input: &mut &str, base: usize) -> R<Vec<(String, Option<Setting
         } else {
             out.push((key, None));
         }
+        // the key's occurrence: the value text when it parsed as a plain
+        // string (verbatim, quotes kept), plus whether the value was a
+        // quoted string literal
+        let last_val = match out.last() {
+            Some((_, Some(SettingVal::Str(v)))) => Some(v.clone()),
+            _ => None,
+        };
+        occs.push(super::ast::SettingOcc {
+            key: occ_key,
+            offset: key_start,
+            has_value: occ_before_value != input.len(),
+            quoted: val_quoted,
+            value: last_val,
+        });
         if eat(input, ",") {
             continue;
         }
         sp(input);
         if eat(input, "]") {
-            return Ok(out);
+            return Ok((out, occs));
         }
-        return fail(offset(input, base), "expected ',' or ']' in settings");
+        return fail(offset(input, base), "Expect a comma ','");
     }
 }
 
@@ -774,11 +822,25 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
             )),
         }
     }
-    let mut settings = if peek_is(input, "[") {
-        column_settings_from(settings_list(input, base)?)
+    let settings_bracket = if peek_is(input, "[") {
+        let settings_start = offset(input, base);
+        let (kvs, occs) = settings_list_occs(input, base)?;
+        // a SECOND bracket list on the same line is their fields error,
+        // anchored at both lists (probe: `int [] [pk]` errs at `[` and `[`)
+        sp(input);
+        if peek_is(input, "[") {
+            let msg = "These fields must be some inline settings optionally ended with a setting list";
+            errs.push(err_at(settings_start, msg));
+            errs.push(err_at(offset(input, base), msg));
+            swallow_balanced_braces(input);
+        }
+        let mut s = column_settings_from(kvs);
+        s.occurrences = occs;
+        Some(s)
     } else {
-        ColumnSettings::default()
+        None
     };
+    let mut settings = settings_bracket.unwrap_or_default();
     settings.pk |= inline_pk;
     settings.unique |= inline_unique;
     Ok(Column {
@@ -925,12 +987,20 @@ fn index(input: &mut &str, base: usize) -> R<Index> {
     if eat(input, "(") {
         loop {
             ws(input);
+            if peek_is(input, ")") {
+                break;
+            }
             let is_expr = input.starts_with('`');
             columns.push(index_ident(input, base)?);
             expressions.push(is_expr);
             ws(input);
-            if !eat(input, ",") {
+            if peek_is(input, ")") {
                 break;
+            }
+            // their tuple grammar requires the separator (parser.ts
+            // "Expect a comma ','")
+            if !eat(input, ",") {
+                return fail(offset(input, base), "Expect a comma ','");
             }
         }
         if !eat(input, ")") {
