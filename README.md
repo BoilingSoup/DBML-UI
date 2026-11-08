@@ -26,7 +26,7 @@ the ER diagram render live on the right. Native desktop app
 |---|---|---|
 | Linux (x86_64) | tar.gz, .deb, AppImage or .flatpak | glibc 2.29+ (AppImage/Flatpak: 2.31+) — Debian 11+, Ubuntu 20.04+, RHEL 9+, Fedora, Mint 20+, Arch · GTK3 (bundled in the AppImage) · Wayland and X11 |
 | Windows 10 / 11 (x86_64) | exe | portable single exe, no installer |
-| macOS 10.13+ (Apple Silicon & Intel) | .app.zip | ad-hoc signed: right-click → Open on first launch |
+| macOS 11+ (Apple Silicon & Intel) | .app.zip | ad-hoc signed — first launch: right-click → Open, or System Settings → Privacy & Security → Open Anyway (macOS 15+ gatekeeper) |
 
 ## Installation
 

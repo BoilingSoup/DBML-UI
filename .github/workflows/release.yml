@@ -272,6 +272,42 @@ jobs:
 
       # the .icns: macOS's own iconutil over an iconset directory — no
       # third-party package, and proper retina variants from the PNG set
+      # the macOS equivalent of the VCRUNTIME failure: a third-party
+      # dylib the target machine doesn't have. Everything linked must be
+      # OS-provided — the audit is a hard gate on both darwin jobs.
+      - name: Audit macOS dynamic dependencies
+        if: matrix.bundle == 'macos'
+        run: |
+          BIN="target/${{ matrix.target }}/release/$BIN_NAME"
+          otool -L "$BIN" | awk 'NR>1 { print $1 }' | sort -u | while read -r lib; do
+            case "$lib" in
+              /System/Library/*|/usr/lib/*) ;;
+              @rpath/*) echo "FAIL: @rpath dependency $lib (the target machine may not resolve it)"; exit 1 ;;
+              *) echo "FAIL: non-system dependency $lib"; exit 1 ;;
+            esac
+          done
+          echo "all dependencies are OS-provided"
+      # dyld failures exit instantly; a healthy app is still alive when
+      # the timeout fires. Diagnostics only: a runner oddity must not
+      # block the release.
+      - name: Smoke-launch the macOS binary
+        if: matrix.bundle == 'macos'
+        continue-on-error: true
+        run: |
+          BIN="target/${{ matrix.target }}/release/$BIN_NAME"
+          "$BIN" > /tmp/smoke.log 2>&1 &
+          APP=$!
+          sleep 5
+          if kill -0 $APP 2>/dev/null; then
+            echo "launch smoke: alive after 5s — no dyld/loader failure"
+            kill $APP
+          else
+            wait $APP || true
+            echo "launch smoke: process exited early — check /tmp/smoke.log"
+            cat /tmp/smoke.log
+            exit 1
+          fi
+
       - name: Build the .icns (macOS)
         if: matrix.bundle == 'macos'
         run: |
@@ -317,6 +353,9 @@ jobs:
           # ad-hoc sign: unsigned binaries are killed by Gatekeeper's
           # taskgated even for local runs on arm64
           codesign --force --deep -s - "$APP" || true
+          # the signature must be structurally valid — a broken seal is
+          # the "damaged and can't be opened" error on user machines
+          codesign --verify --deep --strict "$APP"
           ditto -c -k "$APP" "dist/$OUT.app.zip"
 
       - name: Upload bundle
