@@ -641,25 +641,27 @@ fn settings_list_occs(
                 // HOST table, and words after a parsed endpoint are
                 // application args — each arg errs once (their
                 // INVALID_REF_FIELD, a binder-class error)
+                let ep_start = *input;
+                let ep_start_off = offset(input, base);
                 let to = match endpoint(input, base) {
                     Ok(to) => to,
                     Err(_) => {
-                        // a bare word = the host table's column
-                        let save = *input;
-                        let w_start = offset(input, base);
-                        match ident(input, base) {
-                            Ok(w) => {
-                                super::ast::Endpoint {
-                                    table: String::new(),
-                                    schema: None,
-                                    columns: vec![w],
-                                    span: w_start..offset(input, base),
-                                }
-                            }
+                        // a bare word = the host table's column — read from
+                        // BEFORE the failed attempt (endpoint consumes its
+                        // first ident before failing on the missing dot)
+                        *input = ep_start;
+                        let w = match ident(input, base) {
+                            Ok(w) => w,
                             Err(_) => {
-                                *input = save;
-                                return fail(offset(input, base), "expected a reference endpoint");
+                                *input = ep_start;
+                                return fail(ep_start_off, "expected a reference endpoint");
                             }
+                        };
+                        super::ast::Endpoint {
+                            table: String::new(),
+                            schema: None,
+                            columns: vec![w],
+                            span: ep_start_off..offset(input, base),
                         }
                     }
                 };
@@ -1008,24 +1010,9 @@ fn index_ident(input: &mut &str, base: usize) -> R<String> {
         *input = &input[end + 1..];
         return Ok(name);
     }
-    let mut name = ident(input, base)?;
-    loop {
-        let save = *input;
-        let b = input.as_bytes();
-        let mut k = 0;
-        while k < b.len() && b[k].is_ascii_whitespace() && b[k] != b'\n' && b[k] != b'\r' {
-            k += 1;
-        }
-        if k < b.len() && is_bare_ident(b[k] as char) {
-            *input = &input[k..];
-            name.push(' ');
-            name.push_str(&ident(input, base)?);
-        } else {
-            *input = save;
-            break;
-        }
-    }
-    Ok(name)
+    // their grammar never joins bare words here: `odd col` reads as two
+    // columns, each flagged separately (probe-verified)
+    ident(input, base)
 }
 
 fn index(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Index> {

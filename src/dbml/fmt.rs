@@ -619,10 +619,24 @@ fn render(doc: &Document, cm: &CommentMap) -> String {
                         if let Some(t) = &ix.index_type {
                             st.push(format!("type: {t}"));
                         }
+                        // multi-word columns must be quoted — their tuple
+                        // grammar requires commas between bare names
+                        let cols = ix
+                            .columns
+                            .iter()
+                            .map(|c| {
+                                if c.contains(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_')) {
+                                    format!("\"{c}\"")
+                                } else {
+                                    c.clone()
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", ");
                         let line = if st.is_empty() {
-                            format!("({})", ix.columns.join(", "))
+                            format!("({cols})")
                         } else {
-                            format!("({}) [{}]", ix.columns.join(", "), st.join(", "))
+                            format!("({cols}) [{}]", st.join(", "))
                         };
                         e.out.push_str(&format!("    {line}\n"));
                     }
