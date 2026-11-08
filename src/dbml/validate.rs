@@ -486,6 +486,27 @@ pub fn validate_with_parse(
             for c in &t.columns {
                 let Some(ir) = &c.settings.inline_ref else { continue };
                 let ti = doc.tables.iter().position(|x| std::ptr::eq(x, t));
+                // their endpoint binding is AMBIGUOUS when the target
+                // column name is duplicated in the table — the binding
+                // fails silently and the same-endpoint check never runs
+                // (probe: the self-ref on the first of three duplicate x
+                // columns produces NO same-endpoint finding, while the
+                // self-ref on a unique column does)
+                let target_self_and_duplicated = ti.is_some_and(|ti| {
+                    ir.to.columns.len() == 1
+                        && t.matches(&ir.to.table)
+                        && ir.to.columns[0] == c.name
+                        && doc.tables.get(ti).is_some_and(|t| {
+                            t.columns
+                                .iter()
+                                .filter(|x| x.name == ir.to.columns[0])
+                                .count()
+                                > 1
+                        })
+                });
+                if target_self_and_duplicated {
+                    continue;
+                }
                 let host_key = ti.map(|ti| {
                     let mut cols = vec![c.name.clone()];
                     cols.sort();
@@ -586,10 +607,14 @@ pub fn validate_with_parse(
     // token, so the pair collapses to one entry — their pushDiag).
     //
     let column_of = |table: &str, col: &str| -> Option<&super::ast::Column> {
+        // their symbol table: later declarations overwrite earlier ones —
+        // a duplicate name resolves to the LAST declaration (probe: the
+        // self-inline ref on the first of three duplicate x columns binds
+        // to two different symbols, so no same-endpoint finding)
         doc.tables
             .iter()
             .find(|t| t.matches(table))
-            .and_then(|t| t.columns.iter().find(|c| c.name == col))
+            .and_then(|t| t.columns.iter().rev().find(|c| c.name == col))
     };
     let is_nullable = |table: &str, col: &str| -> bool {
         // their ColumnSymbol.nullable: pk flag, auto-increment, membership
