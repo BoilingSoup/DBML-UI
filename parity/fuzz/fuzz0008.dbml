@@ -1,0 +1,30 @@
+Table posts {
+  x decimal(10, 2) unique
+  user_id decimal(10, 2) [default: 1, ref: ?- posts.user_id]
+  Note: 'table note'
+}
+Table "quoted name" {
+  id text [default: 'x', not null]
+}
+Table ñT {
+  "odd col" int[] [default: 'x']
+  Note: 'table note'
+  records (odd col) {
+    null
+    2.5
+  }
+}
+Table "quoted name" {
+  name timestamp [default: 1, not null]
+  Note: 'table note'
+  records (name) {
+    1
+  }
+}
+Ref: quoted name.code -? quoted name.id
+TableGroup g { posts, quoted name, ñT, quoted name }
+Note sticky {
+  '''
+  text
+  '''
+}

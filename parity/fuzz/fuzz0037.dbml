@@ -1,0 +1,10 @@
+Table my_table {
+  name integer
+  x bool [pk]
+  indexes {
+    name [unique]
+  }
+}
+Ref: my_table.id >? missing.id
+Ref: my_table.x <> my_table.code
+TableGroup g { my_table }

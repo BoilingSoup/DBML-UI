@@ -1,0 +1,12 @@
+Table B {
+  "odd col" text [check: `x > 0`]
+}
+Table "quoted name" {
+  code e_status [increment, default: `now()`]
+}
+Table posts {
+  name bool [default: 1, increment, ref: ?- nope.name]
+  user_id integer [increment]
+  "odd col" e_status [check: `x > 0`, default: 1, ref: <? nope.name]
+  x decimal(10, 2) [check: `x > 0`, default: `now()`]
+}

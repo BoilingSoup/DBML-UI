@@ -1,0 +1,4 @@
+Table B {
+  name e_status [increment]
+  id bool [default: 'x', unique]
+}

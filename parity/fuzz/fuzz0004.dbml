@@ -1,0 +1,18 @@
+Table ñT {
+  "odd col" timestamp [default: 1, default: 'x', ref: -? nope.odd col]
+}
+Table _x {
+  name timestamp
+  x bool [unique]
+  id decimal(10, 2) [null, default: `now()`]
+}
+Table "quoted name" {
+  name int[]
+  id decimal(10, 2) [color: #1E69FD, pk, ref: ?> quoted name.name]
+}
+Ref: _x.name > quoted name.name
+Note sticky {
+  '''
+  text
+  '''
+}

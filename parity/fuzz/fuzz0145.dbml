@@ -1,0 +1,6 @@
+Table users {
+  x e_status [unique, pk, ref: <> users.x]
+  x bool [not null, unique, ref: -? users.x]
+  id text
+}
+Ref: users.odd col ?<> users.id

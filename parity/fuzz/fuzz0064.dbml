@@ -1,0 +1,8 @@
+Table my_table {
+  "odd col" varchar(255) [check: `x > 0`, ref: < nope.odd col]
+  indexes {
+    odd col
+    odd col [unique, name: 'ix']
+  }
+}
+TableGroup g { my_table }

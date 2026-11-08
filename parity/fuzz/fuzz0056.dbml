@@ -1,0 +1,12 @@
+Table a {
+  "odd col" varchar(255)
+  id bool [pk, check: `x > 0`]
+  "odd col" bool [unique]
+  "odd col" bool [default: 1]
+  indexes {
+    odd col
+    odd col [pk]
+  }
+}
+Ref r0: a.id ?< missing.name
+Ref: a.id <>? a.id

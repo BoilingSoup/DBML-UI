@@ -1,0 +1,14 @@
+Table B {
+  code e_status [default: 1, null]
+  id varchar(255)
+  records (code) {
+    'a'
+  }
+}
+Table orders {
+  name timestamp [unique]
+  indexes {
+    (name)
+    (name) [pk]
+  }
+}

@@ -1,0 +1,13 @@
+Table "quoted name" {
+  user_id e_status foo
+  user_id text [null, ref: ?<> nope.user_id]
+  name e_status [pk]
+  x int[] [not null, increment]
+}
+Ref r0: quoted name.odd col < quoted name.code
+Ref: quoted name.name ?<> quoted name.code
+Note sticky {
+  '''
+  text
+  '''
+}

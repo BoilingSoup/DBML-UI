@@ -1,0 +1,4 @@
+Table my_table {
+  "odd col" bool [note: 'n', ref: < nope.odd col]
+  code e_status
+}

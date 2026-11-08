@@ -1,0 +1,10 @@
+Table posts {
+  id "character varying" [null, ref: < nope.id]
+  id text [default: `now()`, ref: < nope.id]
+  "odd col" text
+  name int[] [color: #1E69FD, null, ref: ?< posts.name]
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}

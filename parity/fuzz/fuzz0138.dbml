@@ -1,0 +1,16 @@
+Table users {
+  x text
+  records (x) {
+    2.5
+    `x`
+    ''
+  }
+}
+Table "quoted name" {
+  id text
+  id decimal(10, 2) [check: `x > 0`]
+  code e_status [not null, increment, ref: ?> users.code]
+  name timestamp
+  Note: 'table note'
+}
+TableGroup g { users, quoted name }

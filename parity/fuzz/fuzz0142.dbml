@@ -1,0 +1,28 @@
+Table orders {
+  id bool [check: `x > 0`, ref: ?- nope.id]
+  user_id timestamp [default: `now()`]
+  code varchar(255) [unique]
+  indexes {
+    code [unique]
+  }
+}
+Table B {
+  name "character varying"
+  x decimal(10, 2) [increment]
+  name varchar(255) foo
+  indexes {
+    (name) [unique]
+  }
+  Note: 'table note'
+}
+Table users {
+  id int[] [default: 'x']
+  id int[] [check: `x > 0`]
+  x timestamp
+  user_id bool [default: 1]
+}
+Ref r0: orders.code <> orders.user_id
+Enum e_status {
+  open
+  closed [note: 'done']
+}

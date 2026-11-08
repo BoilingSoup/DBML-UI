@@ -1,0 +1,10 @@
+Table users {
+  user_id int[] [unique, ref: -? users.user_id]
+  name int[] [note: 'n', default: 1, ref: - nope.name]
+  x decimal(10, 2)
+  "odd col" text [default: 1, default: 'x']
+  indexes {
+    odd col [pk]
+    odd col [pk]
+  }
+}

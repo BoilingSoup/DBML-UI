@@ -1,0 +1,12 @@
+Table t1 {
+  name bool [pk]
+  indexes {
+    (name) [unique, name: 'ix']
+    name [pk]
+  }
+}
+Ref: t1.code -? t1.user_id
+Enum e_status {
+  open
+  closed [note: 'done']
+}

@@ -1,0 +1,7 @@
+Table a {
+  "odd col" bool [check: `x > 0`]
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}

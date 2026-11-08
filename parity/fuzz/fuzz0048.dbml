@@ -1,0 +1,21 @@
+Table "quoted name" {
+  id "character varying" pk
+  name "character varying" [null, check: `x > 0`]
+  id timestamp [null, ref: <>? quoted name.id]
+}
+Table my_table {
+  "odd col" timestamp [unique, check: `x > 0`]
+  "odd col" e_status
+  x varchar(255)
+}
+Table orders {
+  name int[]
+  user_id decimal(10, 2) [pk, color: #1E69FD]
+}
+Ref: my_table.user_id -? orders.id
+Ref r1: orders.user_id <? my_table.user_id
+Note sticky {
+  '''
+  text
+  '''
+}

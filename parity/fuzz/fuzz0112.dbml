@@ -1,0 +1,13 @@
+Table _x {
+  name e_status [default: 'x', ref: ?< nope.name]
+  "odd col" varchar(255) [pk, ref: > _x.name]
+  name varchar(255) [pk, null]
+  "odd col" timestamp
+}
+Table "quoted name" {
+  x bool [check: `x > 0`, ref: - nope.x]
+  user_id e_status [increment, default: `now()`]
+}
+Ref: quoted name.x <> quoted name.odd col
+Ref: quoted name.user_id ?<> quoted name.x
+TableGroup g { _x, quoted name }

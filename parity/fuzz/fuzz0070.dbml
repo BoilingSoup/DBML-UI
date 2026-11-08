@@ -1,0 +1,22 @@
+Table orders {
+  "odd col" varchar(255) [unique]
+  id e_status [not null, note: 'n', ref: ?> nope.odd col]
+  code timestamp pk
+  name timestamp
+}
+Table a {
+  x decimal(10, 2) [increment, note: 'n']
+  id int[] [note: 'n', default: `now()`]
+  id text [null, default: `now()`, ref: <>? orders.x]
+  "odd col" varchar(255) [null]
+}
+Table posts {
+  "odd col" decimal(10, 2)
+  indexes {
+    (odd col) [unique]
+    odd col [unique]
+  }
+  Note: 'table note'
+}
+Ref r0: a.odd col <? a.code
+Ref: posts.id ?< a.x

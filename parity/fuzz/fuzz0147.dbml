@@ -1,0 +1,30 @@
+Table posts {
+  x decimal(10, 2) [color: #1E69FD, default: 1]
+  name varchar(255) foo
+}
+Table my_table {
+  "odd col" text [check: `x > 0`]
+}
+Table t1 {
+  x text [color: #1E69FD, default: 1, ref: <> my_table.x]
+  name "character varying"
+  name int[] [not null, null]
+  x "character varying" [null]
+  Note: 'table note'
+}
+Table a {
+  "odd col" "character varying" foo
+  user_id decimal(10, 2) [unique, check: `x > 0`]
+  "odd col" varchar(255) [color: #1E69FD]
+  user_id integer [default: 'x', ref: - nope.user_id]
+  indexes {
+    (odd col) [unique, name: 'ix']
+  }
+}
+Ref: posts.user_id ?<> t1.code
+Ref r1: my_table.name >? t1.odd col
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { posts, my_table, t1, a }

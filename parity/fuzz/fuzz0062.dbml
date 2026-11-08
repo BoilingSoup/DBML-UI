@@ -1,0 +1,29 @@
+Table B {
+  user_id integer [not null, ref: - nope.user_id]
+  user_id int[]
+  indexes {
+    user_id [unique]
+  }
+}
+Table B {
+  x bool [pk]
+  id decimal(10, 2) [pk, default: 1, ref: < B.x]
+  name timestamp [color: #1E69FD]
+  indexes {
+    (name) [unique, name: 'ix']
+    name [unique]
+  }
+  records (x) {
+    null
+    ''
+  }
+}
+Table my_table {
+  code timestamp
+  name text
+}
+Table ñT {
+  "odd col" varchar(255) [note: 'n', pk]
+}
+Ref r0: B.id -? missing.user_id
+Ref r1: B.x -? B.name

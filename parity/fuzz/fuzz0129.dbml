@@ -1,0 +1,32 @@
+Table users {
+  name integer [default: 'x', pk, ref: ?< users.name]
+  name int[] [default: 1, ref: < nope.name]
+  records (name) {
+    1
+    2.5
+  }
+}
+Table "quoted name" {
+  name e_status
+  user_id timestamp [null]
+  records (name) {
+    `x`
+  }
+}
+Table users {
+  x varchar(255) [null, ref: ?<> users.x]
+  user_id varchar(255) pk
+  "odd col" decimal(10, 2) [note: 'n']
+  "odd col" decimal(10, 2) [check: `x > 0`, default: 'x', ref: ?<> users.x]
+}
+Table users {
+  name integer [null]
+  name timestamp [increment]
+  id timestamp [null, not null]
+  code int[] [increment]
+  indexes {
+    code [unique]
+  }
+  Note: 'table note'
+}
+Ref: quoted name.name ?- users.user_id

@@ -1,0 +1,23 @@
+Table posts {
+  id timestamp
+}
+Table t1 {
+  "odd col" int[] [default: 'x', pk]
+  "odd col" "character varying" [default: 1]
+  code varchar(255) [increment, default: 'x']
+  records (odd col) {
+    true
+  }
+}
+Table t1 {
+  "odd col" text [not null, note: 'n']
+  x decimal(10, 2) [unique]
+  indexes {
+    (x)
+    x [unique]
+  }
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}

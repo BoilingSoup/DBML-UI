@@ -1,0 +1,21 @@
+Table B {
+  code e_status [default: 1, ref: ?> B.code]
+  x decimal(10, 2) [increment]
+  Note: 'table note'
+}
+Table "quoted name" {
+  id e_status pk
+  code decimal(10, 2) unique
+  "odd col" e_status [color: #1E69FD]
+  Note: 'table note'
+}
+Table B {
+  name timestamp [default: 'x', increment]
+  x varchar(255)
+}
+Ref: B.name > missing.x
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { B, quoted name, B }

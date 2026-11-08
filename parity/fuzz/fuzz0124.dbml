@@ -1,0 +1,20 @@
+Table "quoted name" {
+  user_id varchar(255) [not null, default: `now()`]
+  user_id timestamp [increment, note: 'n']
+  "odd col" varchar(255)
+  indexes {
+    (user_id) [pk]
+    user_id [pk]
+  }
+}
+Table posts {
+  id bool [default: `now()`, ref: ?<> posts.id]
+  id "character varying"
+  id e_status [null, not null]
+  name text [default: 'x', color: #1E69FD]
+  indexes {
+    id [pk]
+  }
+}
+Ref: posts.code - quoted name.code
+Ref: posts.odd col ?< quoted name.x

@@ -1,0 +1,16 @@
+Table ñT {
+  "odd col" bool [color: #1E69FD, unique]
+  user_id integer [not null, ref: ?> nope.odd col]
+  id text
+  name "character varying" [increment]
+  indexes {
+    (odd col) [pk]
+  }
+  Note: 'table note'
+}
+Ref r0: ñT.user_id < ñT.id
+Ref: ñT.user_id ?< missing.name
+Enum e_status {
+  open
+  closed [note: 'done']
+}

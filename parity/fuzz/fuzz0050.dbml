@@ -1,0 +1,19 @@
+Table t1 {
+  user_id text [default: 1]
+  id varchar(255) [increment, pk]
+  user_id e_status [check: `x > 0`]
+  user_id timestamp [unique, default: `now()`, ref: -? nope.user_id]
+  indexes {
+    (user_id) [unique]
+    id [unique]
+  }
+  records (user_id) {
+    `x`
+  }
+}
+Table users {
+  name e_status [check: `x > 0`, default: 1, ref: <> t1.name]
+  records (name) {
+    true
+  }
+}

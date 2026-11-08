@@ -1,0 +1,32 @@
+Table t1 {
+  name integer [note: 'n', not null, ref: > t1.name]
+  x bool
+  x int[] unique
+  user_id timestamp foo
+  indexes {
+    (x)
+  }
+}
+Table t1 {
+  id e_status [default: 1, ref: - nope.id]
+  Note: 'table note'
+}
+Table _x {
+  x text [check: `x > 0`, default: 'x']
+  name e_status [color: #1E69FD, note: 'n', ref: >? t1.name]
+  indexes {
+    x [unique]
+  }
+}
+Table _x {
+  user_id decimal(10, 2)
+  indexes {
+    user_id [unique, name: 'ix']
+    user_id
+  }
+  records (user_id) {
+    ''
+    1
+  }
+}
+Ref: t1.odd col ?<> _x.user_id

@@ -17,6 +17,7 @@ Table users as U [note: 'Registered accounts', headercolor: #3498DB] {
 
 Table posts [headercolor: #2ECC71] {
   id integer [pk]
+  parent_id integer [not null]
   user_id integer [not null, ref: > U.id]
   status post_status [not null, default: 'draft']
   title varchar(200) [not null]
@@ -43,4 +44,4 @@ TableGroup content {
 }
 
 Ref: comments.author_id > users.id
-Ref post_post: posts.id - posts.id
+Ref post_post: posts.parent_id > posts.id

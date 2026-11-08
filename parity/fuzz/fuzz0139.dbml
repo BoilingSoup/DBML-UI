@@ -1,0 +1,35 @@
+Table _x {
+  x timestamp [default: `now()`, note: 'n']
+  indexes {
+    (x) [unique, name: 'ix']
+  }
+}
+Table a {
+  id decimal(10, 2) [increment, null]
+  id varchar(255)
+  id e_status [default: `now()`, note: 'n']
+  user_id decimal(10, 2) foo
+  Note: 'table note'
+}
+Table a {
+  code "character varying" [default: `now()`, default: 'x']
+  id e_status
+  user_id timestamp [default: 'x']
+  indexes {
+    (code) [unique, name: 'ix']
+    code [unique]
+  }
+  records (code) {
+    2.5
+  }
+}
+Table users {
+  id "character varying" [note: 'n', default: 1]
+  name text
+  code varchar(255) [color: #1E69FD, note: 'n']
+  id decimal(10, 2) [not null, ref: > a.name]
+  Note: 'table note'
+}
+Ref r0: a.odd col ?<> _x.name
+Ref r1: a.id ?< users.x
+TableGroup g { _x, a, a, users }

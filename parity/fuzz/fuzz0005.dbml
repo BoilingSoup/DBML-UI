@@ -1,0 +1,21 @@
+Table "quoted name" {
+  user_id text
+  indexes {
+    user_id
+  }
+}
+Table "quoted name" {
+  name bool
+  user_id bool [pk, default: 'x', ref: - nope.user_id]
+  indexes {
+    (user_id) [unique, name: 'ix']
+  }
+  records (name) {
+    'a'
+    true
+  }
+}
+Table a {
+  x "character varying" [default: `now()`, default: 'x']
+}
+TableGroup g { quoted name, quoted name, a }

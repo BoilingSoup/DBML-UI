@@ -1,0 +1,11 @@
+Table B {
+  user_id text unique
+  "odd col" text [default: `now()`]
+  "odd col" text [default: 'x']
+}
+Table a {
+  "odd col" integer [default: `now()`]
+  name varchar(255)
+}
+Ref r0: a.code ?<> a.code
+Ref: B.x ?- missing.name

@@ -1,0 +1,10 @@
+Table t1 {
+  id "character varying" [note: 'n']
+  name varchar(255) [default: 'x', note: 'n']
+}
+Ref: t1.id > t1.x
+Ref r1: t1.name <> t1.name
+Enum e_status {
+  open
+  closed [note: 'done']
+}

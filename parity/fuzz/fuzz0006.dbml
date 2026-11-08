@@ -1,0 +1,23 @@
+Table ñT {
+  user_id "character varying" [check: `x > 0`]
+  "odd col" varchar(255)
+}
+Table orders {
+  id "character varying" [note: 'n', pk]
+  Note: 'table note'
+}
+Table posts {
+  name bool [default: 1]
+  indexes {
+    name [unique, name: 'ix']
+  }
+}
+Table posts {
+  "odd col" bool
+  indexes {
+    odd col [unique]
+    odd col [unique, name: 'ix']
+  }
+  Note: 'table note'
+}
+Ref: ñT.user_id - posts.x

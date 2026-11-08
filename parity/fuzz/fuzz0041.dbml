@@ -1,0 +1,30 @@
+Table orders {
+  x decimal(10, 2) [note: 'n']
+  name text [check: `x > 0`]
+  indexes {
+    name [unique]
+  }
+  records (x) {
+    ''
+    2.5
+  }
+}
+Table users {
+  x text [default: 'x']
+  indexes {
+    x [unique]
+    (x)
+  }
+  records (x) {
+    1
+  }
+}
+Table orders {
+  user_id timestamp [color: #1E69FD, default: `now()`]
+  x varchar(255) [unique, check: `x > 0`, ref: <? nope.x]
+  id timestamp
+  indexes {
+    id
+  }
+  Note: 'table note'
+}

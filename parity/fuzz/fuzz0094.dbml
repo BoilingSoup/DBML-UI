@@ -1,0 +1,18 @@
+Table _x {
+  x timestamp [not null, unique]
+  x varchar(255) [note: 'n']
+  user_id text
+  records (x) {
+    1
+  }
+}
+Table orders {
+  x e_status [null]
+  x e_status [check: `x > 0`, pk, ref: >? _x.x]
+  code varchar(255) [pk, ref: ?> _x.code]
+  indexes {
+    (code)
+    code [pk]
+  }
+}
+Ref r0: _x.x ?< _x.user_id

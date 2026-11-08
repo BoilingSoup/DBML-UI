@@ -1,0 +1,7 @@
+Table a {
+  x bool [color: #1E69FD]
+  indexes {
+    x
+    (x) [unique]
+  }
+}

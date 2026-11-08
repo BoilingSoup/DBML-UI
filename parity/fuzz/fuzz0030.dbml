@@ -1,0 +1,25 @@
+Table a {
+  "odd col" decimal(10, 2) [color: #1E69FD, default: `now()`]
+  code "character varying"
+  indexes {
+    (code) [unique]
+    (code) [unique, name: 'ix']
+  }
+}
+Table ñT {
+  x varchar(255) [color: #1E69FD]
+  x integer [increment, null]
+  id varchar(255) [default: 'x']
+  code "character varying"
+  indexes {
+    (x) [unique, name: 'ix']
+  }
+}
+Table my_table {
+  code e_status unique
+  id e_status
+  "odd col" int[] [default: 'x', default: `now()`, ref: ?- my_table.id]
+  name "character varying" [default: 1]
+}
+Ref: a.x ?> ñT.odd col
+Ref: a.code <? a.x

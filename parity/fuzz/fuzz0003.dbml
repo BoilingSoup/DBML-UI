@@ -1,0 +1,36 @@
+Table _x {
+  "odd col" "character varying"
+  id text [not null]
+  id varchar(255)
+}
+Table t1 {
+  name "character varying" [increment, note: 'n', ref: <? _x.name]
+  "odd col" bool [unique, increment, ref: ?- _x.name]
+  user_id e_status [increment, ref: < nope.name]
+  indexes {
+    user_id [pk]
+    user_id [pk]
+  }
+  records (name) {
+    ''
+  }
+}
+Table orders {
+  "odd col" timestamp [color: #1E69FD]
+  code varchar(255)
+  "odd col" varchar(255) [color: #1E69FD, check: `x > 0`]
+  Note: 'table note'
+}
+Table ñT {
+  user_id "character varying" [note: 'n']
+  name decimal(10, 2) [pk]
+  id e_status [check: `x > 0`, null]
+  id int[] [color: #1E69FD, default: 'x', ref: -? t1.id]
+}
+Ref: t1.user_id -? orders.user_id
+Ref r1: ñT.id ?- _x.user_id
+Note sticky {
+  '''
+  text
+  '''
+}

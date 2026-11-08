@@ -1,0 +1,10 @@
+Table orders {
+  name timestamp [null, check: `x > 0`, ref: -? nope.name]
+  user_id e_status [note: 'n', default: `now()`]
+}
+Table t1 {
+  id int[] [default: 1]
+  "odd col" timestamp [null]
+  "odd col" bool [default: `now()`, color: #1E69FD]
+  Note: 'table note'
+}

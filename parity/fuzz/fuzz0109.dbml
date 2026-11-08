@@ -1,0 +1,9 @@
+Table my_table {
+  "odd col" integer [default: `now()`]
+  "odd col" bool [default: 'x', note: 'n']
+  x decimal(10, 2) [pk, not null, ref: ?<> my_table.odd col]
+  indexes {
+    (x)
+  }
+}
+Ref: my_table.code ?- my_table.odd col

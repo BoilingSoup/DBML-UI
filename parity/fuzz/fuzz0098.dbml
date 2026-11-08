@@ -1,0 +1,33 @@
+Table users {
+  name timestamp [unique]
+  id timestamp [null, not null, ref: ?<> nope.id]
+  code varchar(255) [note: 'n']
+  "odd col" "character varying" [check: `x > 0`, not null, ref: <? users.odd col]
+  indexes {
+    (id) [pk]
+    (code) [unique, name: 'ix']
+  }
+}
+Table t1 {
+  user_id integer
+  id "character varying" unique
+  name "character varying" [null, ref: ?< nope.id]
+  x e_status [increment, note: 'n']
+}
+Table "quoted name" {
+  x decimal(10, 2) [default: 1, increment]
+  "odd col" varchar(255) [default: 1, check: `x > 0`, ref: ?> t1.odd col]
+  indexes {
+    odd col [unique]
+    (odd col) [pk]
+  }
+}
+Table t1 {
+  user_id e_status [color: #1E69FD, pk, ref: > nope.user_id]
+  x text
+  id timestamp [default: `now()`]
+  user_id text [default: 1, color: #1E69FD]
+  Note: 'table note'
+}
+Ref: quoted name.code >? t1.id
+Ref: quoted name.name < users.x

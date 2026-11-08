@@ -1,0 +1,27 @@
+Table a {
+  user_id decimal(10, 2) [unique]
+  user_id integer [increment, ref: <> nope.user_id]
+  x timestamp [default: 'x', increment]
+  code varchar(255) [null, increment]
+  indexes {
+    user_id [unique, name: 'ix']
+  }
+}
+Table _x {
+  x int[] [increment, default: `now()`]
+  id text
+  name "character varying" [increment, default: 1]
+  user_id bool [increment, default: `now()`, ref: ?- _x.user_id]
+  Note: 'table note'
+  records (x) {
+    ''
+    `x`
+    ''
+  }
+}
+Table _x {
+  user_id integer [default: `now()`, pk]
+}
+Ref: _x.odd col > a.name
+Ref: _x.x <? _x.id
+TableGroup g { a, _x, _x }

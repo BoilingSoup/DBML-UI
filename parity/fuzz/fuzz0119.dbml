@@ -1,0 +1,29 @@
+Table _x {
+  name integer [null, check: `x > 0`, ref: ?<> _x.name]
+  Note: 'table note'
+  records (name) {
+    true
+    2.5
+  }
+}
+Table "quoted name" {
+  name integer
+  "odd col" e_status [default: 1, not null]
+  "odd col" bool [check: `x > 0`]
+  indexes {
+    name [unique]
+  }
+}
+Table users {
+  id text [not null, ref: > _x.id]
+  indexes {
+    (id)
+  }
+  Note: 'table note'
+}
+Ref: quoted name.x -? quoted name.id
+Ref: users.x <? _x.code
+Enum e_status {
+  open
+  closed [note: 'done']
+}

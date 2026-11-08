@@ -1,0 +1,13 @@
+Table t1 {
+  x bool [note: 'n']
+  user_id varchar(255) [check: `x > 0`]
+  indexes {
+    (user_id) [unique, name: 'ix']
+  }
+}
+Ref: t1.odd col <? missing.code
+Note sticky {
+  '''
+  text
+  '''
+}

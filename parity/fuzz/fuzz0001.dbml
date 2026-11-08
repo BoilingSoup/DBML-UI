@@ -1,0 +1,15 @@
+Table a {
+  code timestamp [null, default: `now()`]
+}
+Table orders {
+  id timestamp [default: `now()`, pk, ref: ?- nope.id]
+  id integer
+  name varchar(255)
+}
+Table t1 {
+  code "character varying" unique
+  name bool [default: `now()`, ref: <>? t1.code]
+  "odd col" decimal(10, 2) [unique, ref: -? orders.odd col]
+  code "character varying" [default: 1]
+}
+TableGroup g { a, orders, t1 }

@@ -106,6 +106,22 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
         }
         enums.push(e.name.as_str());
     }
+    // duplicate column names (their table binder, table/index.ts: the
+    // seen-map flags EVERY repeat and re-flags the first sighting — 3
+    // twins yield 4 errors; anchors are the column name nodes)
+    for t in &doc.tables {
+        let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for (i, c) in t.columns.iter().enumerate() {
+            if let Some(&first) = seen.get(c.name.as_str()) {
+                let msg = format!("Duplicate column '{}'", c.name);
+                out.push(Diagnostic::plain(t.columns[first].name_span.start, msg.clone()));
+                out.push(Diagnostic::plain(c.name_span.start, msg));
+            } else {
+                seen.insert(c.name.as_str(), i);
+            }
+        }
+    }
+
     // their engine flags EVERY occurrence of a duplicated enum field —
     // the first twin included (probe: both 'x' rows on `Enum e { x\n x }`)
     for e in &doc.enums {
@@ -159,6 +175,74 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
                 check_endpoint(doc, &ir.to, c.name_span.start, &mut out);
             }
         }
+    }
+
+    // their checkRefEndpoints (program/bind.ts): a ref whose two sides
+    // cover the SAME column set errs once ('Two endpoints are the same')
+    // and drops out of the pair map; the same unordered PAIR across refs
+    // flags both declarations ('References with same endpoints exist').
+    // Side identity = resolved table + its sorted column names; inline
+    // refs join the same map, anchored at their `ref:` attribute.
+    let side_key = |ep: &super::ast::Endpoint| -> Option<String> {
+        let ti = doc.tables.iter().position(|t| t.matches(&ep.table))?;
+        let mut cols = ep.columns.clone();
+        cols.sort();
+        Some(format!("{ti}:{}", cols.join(",")))
+    };
+    let mut pair_first: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new(); // pair key -> first sighting's anchor
+    let mut endpoint_errors: Vec<(usize, String)> = Vec::new();
+    {
+        let mut run = |host_key: Option<String>,
+                        other_key: Option<String>,
+                        anchor: usize,
+                        emissions: &mut Vec<(usize, String)>| {
+            let (Some(l), Some(rt)) = (host_key, other_key) else {
+                return;
+            };
+            if l == rt {
+                emissions.push((anchor, "Two endpoints are the same".to_string()));
+                return;
+            }
+            let key = if l < rt { format!("{l}-{rt}") } else { format!("{rt}-{l}") };
+            if let Some(&first_anchor) = pair_first.get(&key) {
+                emissions.push((
+                    first_anchor,
+                    "References with same endpoints exist".to_string(),
+                ));
+                emissions.push((anchor, "References with same endpoints exist".to_string()));
+            } else {
+                pair_first.insert(key, anchor);
+            }
+        };
+        for r in &doc.refs {
+            run(
+                side_key(&r.from),
+                side_key(&r.to),
+                r.span.start,
+                &mut endpoint_errors,
+            );
+        }
+        for t in &doc.tables {
+            for c in &t.columns {
+                let Some(ir) = &c.settings.inline_ref else { continue };
+                let ti = doc.tables.iter().position(|x| std::ptr::eq(x, t));
+                let host_key = ti.map(|ti| {
+                    let mut cols = vec![c.name.clone()];
+                    cols.sort();
+                    format!("{ti}:{}", cols.join(","))
+                });
+                run(
+                    host_key,
+                    side_key(&ir.to),
+                    ir.attr_start,
+                    &mut endpoint_errors,
+                );
+            }
+        }
+    }
+    for (anchor, msg) in endpoint_errors {
+        out.push(Diagnostic::plain(anchor, msg));
     }
 
     // TableGroup members must name a table (or its alias)

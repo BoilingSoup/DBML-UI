@@ -1,0 +1,32 @@
+Table _x {
+  id int[] [unique, not null, ref: >? nope.id]
+  id "character varying" [pk, not null]
+  indexes {
+    id [unique, name: 'ix']
+  }
+}
+Table ñT {
+  name int[] [note: 'n']
+}
+Table posts {
+  "odd col" bool [color: #1E69FD, ref: ?> posts.odd col]
+  x text [unique, null]
+  name timestamp [default: `now()`]
+  id decimal(10, 2)
+  Note: 'table note'
+}
+Table _x {
+  x integer [check: `x > 0`]
+  name decimal(10, 2) [not null]
+  user_id decimal(10, 2) [null, pk]
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { _x, ñT, posts, _x }
+Note sticky {
+  '''
+  text
+  '''
+}

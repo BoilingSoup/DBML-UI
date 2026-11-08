@@ -1,0 +1,9 @@
+Table posts {
+  "odd col" int[] [note: 'n', check: `x > 0`, ref: < posts.odd col]
+  name text [not null]
+  indexes {
+    (odd col) [pk]
+  }
+  Note: 'table note'
+}
+Ref: posts.odd col ?- posts.id

@@ -1,0 +1,8 @@
+Table a {
+  code decimal(10, 2) [color: #1E69FD, not null, ref: <>? a.code]
+  user_id timestamp [null, pk]
+  code integer [default: 1, ref: ?> nope.code]
+  "odd col" text [increment, unique, ref: ?- nope.odd col]
+}
+Ref: a.odd col >? missing.odd col
+Ref: a.id <>? missing.id

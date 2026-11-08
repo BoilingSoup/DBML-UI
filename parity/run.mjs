@@ -13,7 +13,7 @@ import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const CORPUS = join(ROOT, 'parity', 'corpus');
+const CORPUS = process.env.CORPUS_DIR ?? join(ROOT, 'parity', 'corpus');
 const OURS_BIN = join(ROOT, 'target', 'release', 'examples', 'parity_dump');
 const FILTER = process.argv[2] ?? '';
 

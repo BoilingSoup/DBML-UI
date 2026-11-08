@@ -1,0 +1,16 @@
+Table B {
+  id decimal(10, 2) [unique]
+  user_id varchar(255) [pk]
+  code int[]
+}
+Table orders {
+  code e_status
+  id e_status [not null, default: `now()`]
+}
+Ref: orders.user_id > missing.odd col
+Ref r1: orders.user_id > B.id
+Note sticky {
+  '''
+  text
+  '''
+}

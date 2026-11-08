@@ -1,0 +1,15 @@
+Table my_table {
+  x text pk
+  name text [color: #1E69FD, default: 1]
+  code e_status [pk, default: 1, ref: <>? my_table.x]
+  indexes {
+    (x) [unique]
+    (x) [unique, name: 'ix']
+  }
+}
+Table _x {
+  x varchar(255) [default: 1]
+  Note: 'table note'
+}
+Ref r0: _x.x > _x.id
+Ref: my_table.code <>? missing.user_id

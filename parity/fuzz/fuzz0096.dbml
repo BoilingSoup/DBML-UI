@@ -1,0 +1,29 @@
+Table my_table {
+  x e_status [increment]
+  indexes {
+    (x) [unique]
+  }
+}
+Table my_table {
+  id int[] [note: 'n']
+  "odd col" varchar(255) [default: 'x', pk]
+  "odd col" decimal(10, 2) [default: 1, color: #1E69FD]
+  id text [null]
+  indexes {
+    id [pk]
+  }
+  records (id) {
+    true
+    ''
+    1
+  }
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+Note sticky {
+  '''
+  text
+  '''
+}

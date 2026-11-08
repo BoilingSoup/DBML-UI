@@ -1,0 +1,11 @@
+Table ñT {
+  x text
+  code text [pk]
+}
+Table ñT {
+  user_id decimal(10, 2) [check: `x > 0`, note: 'n', ref: ?> nope.user_id]
+  "odd col" "character varying" [default: 1]
+  code decimal(10, 2) [not null]
+  name integer
+}
+Ref r0: ñT.x ?> ñT.code

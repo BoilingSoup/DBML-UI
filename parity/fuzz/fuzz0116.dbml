@@ -1,0 +1,10 @@
+Table t1 {
+  user_id integer [default: `now()`]
+  indexes {
+    user_id [unique]
+  }
+}
+Table my_table {
+  x e_status [null, not null, ref: <>? t1.x]
+}
+Ref r0: t1.name ?<> my_table.id

@@ -1,0 +1,22 @@
+Table "quoted name" {
+  x timestamp [unique, default: `now()`]
+}
+Table my_table {
+  name e_status [note: 'n']
+  x "character varying"
+  x text [not null]
+  indexes {
+    (name)
+    name
+  }
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { quoted name, my_table }
+Note sticky {
+  '''
+  text
+  '''
+}

@@ -1,0 +1,26 @@
+Table my_table {
+  "odd col" bool [default: 1]
+  Note: 'table note'
+}
+Table users {
+  x decimal(10, 2) [default: 1]
+  id "character varying" [color: #1E69FD, null, ref: <> my_table.x]
+  records (x) {
+    1
+    `x`
+    null
+  }
+}
+Table orders {
+  x "character varying" [check: `x > 0`, ref: ?> nope.x]
+  indexes {
+    (x) [unique]
+    x [unique]
+  }
+}
+Ref: orders.odd col ?- users.x
+Ref: my_table.x ?< missing.user_id
+Enum e_status {
+  open
+  closed [note: 'done']
+}

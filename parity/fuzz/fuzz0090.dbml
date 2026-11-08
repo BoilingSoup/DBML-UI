@@ -1,0 +1,26 @@
+Table orders {
+  code e_status [color: #1E69FD, not null]
+  user_id varchar(255) [color: #1E69FD, default: 1, ref: ?<> orders.code]
+  user_id "character varying" [default: `now()`]
+  records (code) {
+    ''
+    true
+  }
+}
+Table ñT {
+  id "character varying"
+  code "character varying"
+}
+Table B {
+  code int[]
+  id integer [note: 'n', ref: >? ñT.code]
+  code int[] [check: `x > 0`]
+  indexes {
+    code [unique, name: 'ix']
+  }
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { orders, ñT, B }

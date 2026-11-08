@@ -1,0 +1,35 @@
+Table t1 {
+  name "character varying" [not null]
+  indexes {
+    (name) [pk]
+    name [unique]
+  }
+  Note: 'table note'
+}
+Table B {
+  "odd col" bool [note: 'n', ref: <> nope.odd col]
+  user_id int[] [default: 'x']
+  code integer [not null]
+  id "character varying" [note: 'n']
+}
+Table orders {
+  user_id timestamp unique
+  name bool [default: 'x', pk, ref: ?- nope.name]
+  "odd col" int[] [default: 1, unique]
+  id varchar(255) [default: 1, null]
+  indexes {
+    name
+  }
+  Note: 'table note'
+}
+Table a {
+  code "character varying" [not null]
+  "odd col" integer [default: `now()`]
+  user_id e_status [note: 'n']
+  Note: 'table note'
+}
+Note sticky {
+  '''
+  text
+  '''
+}

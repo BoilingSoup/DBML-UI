@@ -1,0 +1,6 @@
+Table users {
+  id text [default: 'x']
+  name timestamp
+  user_id text
+  name "character varying" [not null, default: `now()`]
+}

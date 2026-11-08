@@ -1,0 +1,14 @@
+Table a {
+  user_id "character varying" [not null, note: 'n']
+  id integer
+}
+Table a {
+  user_id int[] [increment, not null, ref: <? a.user_id]
+  "odd col" timestamp [not null]
+  indexes {
+    (user_id) [unique, name: 'ix']
+  }
+  Note: 'table note'
+}
+Ref: a.user_id ?- missing.x
+Ref: a.x <>? a.odd col

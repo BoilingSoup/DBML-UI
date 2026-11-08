@@ -1,0 +1,27 @@
+Table t1 {
+  x e_status [default: 'x', unique]
+  "odd col" varchar(255) [unique]
+  x e_status [default: 'x']
+  Note: 'table note'
+  records (x) {
+    1
+    `x`
+  }
+}
+Table ñT {
+  "odd col" text [note: 'n']
+}
+Table posts {
+  x bool [check: `x > 0`, not null]
+  "odd col" bool
+  id varchar(255) [check: `x > 0`, color: #1E69FD, ref: ?- ñT.odd col]
+  name decimal(10, 2)
+}
+Table users {
+  name integer [null, default: 'x', ref: ?< t1.name]
+  x bool [default: `now()`, null]
+  records (name) {
+    true
+  }
+}
+Ref: users.name ?> t1.id

@@ -1,0 +1,17 @@
+Table users {
+  "odd col" text [color: #1E69FD, check: `x > 0`, ref: -? nope.odd col]
+  "odd col" timestamp [default: `now()`, default: 'x']
+  id "character varying"
+  records (odd col) {
+    1
+    `x`
+    ''
+  }
+}
+Table a {
+  x bool [default: 1, ref: ?- nope.x]
+  indexes {
+    x
+  }
+}
+Ref r0: a.odd col ?> missing.id

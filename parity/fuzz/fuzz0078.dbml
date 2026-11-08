@@ -1,0 +1,20 @@
+Table _x {
+  code varchar(255) [unique, note: 'n']
+  x int[] [null, color: #1E69FD]
+  x text [increment, check: `x > 0`]
+  code int[] [default: 'x']
+  indexes {
+    (code) [unique]
+  }
+}
+Table t1 {
+  user_id decimal(10, 2)
+  "odd col" bool [pk, note: 'n']
+  Note: 'table note'
+}
+Table ñT {
+  user_id e_status
+  name timestamp
+  code varchar(255) [null]
+  name int[]
+}

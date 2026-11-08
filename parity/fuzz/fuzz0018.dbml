@@ -1,0 +1,16 @@
+Table orders {
+  "odd col" integer [default: `now()`, unique, ref: < orders.odd col]
+  "odd col" integer [unique, increment]
+  indexes {
+    odd col
+    (odd col) [pk]
+  }
+}
+Ref: orders.name < orders.odd col
+Ref: orders.x -? orders.code
+TableGroup g { orders }
+Note sticky {
+  '''
+  text
+  '''
+}

@@ -1,0 +1,26 @@
+Table "quoted name" {
+  x bool [not null, unique, ref: <? quoted name.x]
+}
+Table my_table {
+  name e_status [null, ref: ?< quoted name.name]
+  user_id integer [default: `now()`, note: 'n']
+  code bool
+  "odd col" int[] [check: `x > 0`, default: 'x']
+  indexes {
+    (code) [unique, name: 'ix']
+    name [unique, name: 'ix']
+  }
+}
+Table users {
+  name varchar(255) [check: `x > 0`, note: 'n', ref: <? my_table.name]
+  id integer [null]
+}
+Table B {
+  code e_status [pk, check: `x > 0`]
+  name varchar(255)
+  "odd col" timestamp [increment, ref: -? quoted name.code]
+  indexes {
+    code
+  }
+}
+Ref: B.code < B.user_id

@@ -1,0 +1,36 @@
+Table orders {
+  user_id e_status [pk]
+  code bool [check: `x > 0`, default: `now()`]
+  records (user_id) {
+    null
+    'a'
+    null
+  }
+}
+Table "quoted name" {
+  name timestamp [pk, check: `x > 0`]
+  x varchar(255) [pk]
+  indexes {
+    (x) [pk]
+  }
+}
+Table a {
+  code text [default: 'x', ref: <> orders.code]
+  code int[] [color: #1E69FD, ref: <? orders.code]
+  id int[] [pk, ref: <>? a.code]
+  "odd col" "character varying" [null, ref: < a.code]
+  indexes {
+    (code)
+  }
+}
+Table orders {
+  x e_status [check: `x > 0`, unique]
+  x decimal(10, 2) [default: 1, default: `now()`]
+  id text
+  user_id decimal(10, 2) [default: 'x']
+  records (x) {
+    true
+    true
+  }
+}
+Ref r0: orders.id <? orders.x

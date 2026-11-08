@@ -1,0 +1,9 @@
+Table "quoted name" {
+  name "character varying" [default: `now()`]
+}
+Ref: quoted name.user_id <? quoted name.code
+Ref: quoted name.odd col ?> quoted name.user_id
+Enum e_status {
+  open
+  closed [note: 'done']
+}

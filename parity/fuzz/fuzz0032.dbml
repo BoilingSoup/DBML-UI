@@ -1,0 +1,9 @@
+Table my_table {
+  id integer [unique, color: #1E69FD]
+  code e_status [pk]
+}
+Ref r0: my_table.x ?- my_table.odd col
+Enum e_status {
+  open
+  closed [note: 'done']
+}

@@ -1,0 +1,11 @@
+Table _x {
+  id text [pk, ref: ?<> nope.id]
+  id decimal(10, 2)
+  Note: 'table note'
+}
+Ref: _x.name <> _x.id
+Ref: _x.x ?> _x.x
+Enum e_status {
+  open
+  closed [note: 'done']
+}

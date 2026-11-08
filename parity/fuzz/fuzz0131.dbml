@@ -1,0 +1,19 @@
+Table orders {
+  x timestamp foo
+  user_id int[] [pk]
+  name int[] [null, increment, ref: -? orders.name]
+  Note: 'table note'
+}
+Table t1 {
+  x e_status [default: 'x', increment, ref: <>? nope.x]
+  indexes {
+    x
+    (x) [unique]
+  }
+}
+Table posts {
+  id int[] [unique]
+  x e_status [default: 'x', unique, ref: <>? posts.x]
+}
+Ref: orders.x -? missing.odd col
+TableGroup g { orders, t1, posts }

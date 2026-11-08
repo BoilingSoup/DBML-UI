@@ -1,0 +1,10 @@
+Table B {
+  name integer [default: 1, default: `now()`, ref: ?< B.name]
+  x e_status [increment, check: `x > 0`]
+}
+Ref: B.id ?<> B.odd col
+Note sticky {
+  '''
+  text
+  '''
+}

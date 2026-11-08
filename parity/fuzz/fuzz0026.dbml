@@ -1,0 +1,21 @@
+Table t1 {
+  code bool [not null]
+  name int[] [default: 1]
+  "odd col" bool [default: `now()`, default: 'x']
+}
+Table t1 {
+  user_id int[] [pk, unique]
+}
+Table B {
+  id "character varying" [default: 1]
+  "odd col" integer
+  name decimal(10, 2)
+  indexes {
+    (name) [pk]
+  }
+}
+Ref: B.name <? t1.user_id
+Enum e_status {
+  open
+  closed [note: 'done']
+}

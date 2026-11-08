@@ -1,0 +1,11 @@
+Table _x {
+  "odd col" text [not null]
+}
+Ref: _x.name - missing.odd col
+Ref r1: _x.code ?> missing.name
+TableGroup g { _x }
+Note sticky {
+  '''
+  text
+  '''
+}

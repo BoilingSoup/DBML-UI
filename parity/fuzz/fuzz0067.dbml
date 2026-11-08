@@ -1,0 +1,19 @@
+Table a {
+  x bool
+  code varchar(255) [color: #1E69FD]
+  x bool
+  user_id timestamp
+  indexes {
+    user_id [pk]
+    user_id [unique]
+  }
+  records (x) {
+    2.5
+    null
+    2.5
+  }
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}

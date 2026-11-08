@@ -64,5 +64,5 @@ Enum post_status {
   archived
 }
 
-Ref: comments.author_id > users.id
+Ref fk_post_comment: posts.id - comments.id
 "#;

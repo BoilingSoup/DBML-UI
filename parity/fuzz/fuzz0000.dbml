@@ -1,0 +1,21 @@
+Table ñT {
+  id bool [default: 1, not null]
+  code integer [note: 'n']
+  code bool [default: 'x']
+  indexes {
+    code [unique, name: 'ix']
+    id [pk]
+  }
+}
+Table _x {
+  user_id int[] [null, note: 'n', ref: ?- ñT.user_id]
+  id varchar(255)
+}
+Table posts {
+  code text [default: `now()`, default: 1]
+  "odd col" varchar(255) [null]
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}

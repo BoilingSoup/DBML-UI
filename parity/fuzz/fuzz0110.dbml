@@ -1,0 +1,15 @@
+Table B {
+  "odd col" decimal(10, 2) [default: 'x']
+  indexes {
+    (odd col) [unique, name: 'ix']
+  }
+}
+Table users {
+  name decimal(10, 2)
+  user_id timestamp [note: 'n', increment, ref: - users.user_id]
+  indexes {
+    (user_id)
+    (user_id) [unique, name: 'ix']
+  }
+  Note: 'table note'
+}

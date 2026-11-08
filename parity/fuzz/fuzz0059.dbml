@@ -1,0 +1,16 @@
+Table a {
+  x "character varying"
+  indexes {
+    (x) [unique, name: 'ix']
+  }
+  records (x) {
+    ''
+    `x`
+    ''
+  }
+}
+Ref r0: a.name < missing.user_id
+Enum e_status {
+  open
+  closed [note: 'done']
+}

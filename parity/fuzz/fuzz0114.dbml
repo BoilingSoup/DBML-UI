@@ -1,0 +1,26 @@
+Table _x {
+  x "character varying" [note: 'n', ref: ?<> _x.x]
+  x varchar(255) [increment, check: `x > 0`, ref: <>? _x.x]
+  x "character varying" [pk, ref: <> nope.x]
+  name integer [check: `x > 0`, color: #1E69FD]
+  Note: 'table note'
+}
+Table a {
+  x text [default: 'x']
+  name int[]
+  "odd col" "character varying"
+  code e_status unique
+}
+Table users {
+  code "character varying" [color: #1E69FD, check: `x > 0`]
+  x decimal(10, 2) [check: `x > 0`]
+  x timestamp
+  user_id varchar(255) [not null, default: `now()`]
+  indexes {
+    x [unique]
+    (x) [unique]
+  }
+  Note: 'table note'
+}
+Ref: a.odd col ?- _x.code
+Ref: _x.odd col > users.user_id

@@ -1,0 +1,23 @@
+Table orders {
+  name int[] [note: 'n', default: 'x', ref: ?< orders.name]
+  user_id bool [default: 1, note: 'n']
+  Note: 'table note'
+}
+Table users {
+  name "character varying" [default: `now()`]
+  indexes {
+    name
+    name [unique]
+  }
+}
+Table users {
+  code varchar(255) [default: 1, pk, ref: <> orders.code]
+  name "character varying" [pk]
+}
+Table ñT {
+  "odd col" text [increment, check: `x > 0`]
+  x e_status pk
+  x decimal(10, 2) [pk, default: 'x']
+  code e_status [check: `x > 0`]
+  Note: 'table note'
+}

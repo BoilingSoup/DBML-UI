@@ -1,0 +1,14 @@
+Table a {
+  "odd col" "character varying" [pk]
+  name e_status [check: `x > 0`, increment]
+  Note: 'table note'
+}
+Table t1 {
+  user_id text [default: 1, not null]
+  x e_status [pk]
+  id text [note: 'n', ref: <> t1.user_id]
+  user_id text
+  Note: 'table note'
+}
+Ref: a.name >? t1.name
+Ref: t1.id >? a.odd col

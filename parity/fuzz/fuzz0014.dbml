@@ -1,0 +1,19 @@
+Table t1 {
+  "odd col" int[] [default: 'x']
+  name varchar(255)
+  Note: 'table note'
+}
+Table a {
+  "odd col" int[]
+}
+Ref r0: a.user_id >? missing.x
+Ref: a.id > t1.x
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+Note sticky {
+  '''
+  text
+  '''
+}

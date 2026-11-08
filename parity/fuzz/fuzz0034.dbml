@@ -1,0 +1,29 @@
+Table B {
+  "odd col" integer
+  "odd col" integer [color: #1E69FD]
+}
+Table B {
+  code varchar(255) [color: #1E69FD]
+  id text [color: #1E69FD, ref: - nope.id]
+}
+Table t1 {
+  x "character varying" [color: #1E69FD, note: 'n']
+  user_id int[] [default: 'x', increment]
+  records (x) {
+    null
+  }
+}
+Table _x {
+  "odd col" e_status [unique, check: `x > 0`]
+  code int[] [not null]
+  indexes {
+    (code) [pk]
+  }
+  Note: 'table note'
+}
+Ref: B.odd col < B.x
+Ref: B.user_id <> B.x
+Enum e_status {
+  open
+  closed [note: 'done']
+}

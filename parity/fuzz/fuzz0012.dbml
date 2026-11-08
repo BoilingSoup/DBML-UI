@@ -1,0 +1,19 @@
+Table t1 {
+  user_id integer [check: `x > 0`, note: 'n']
+}
+Table users {
+  code timestamp [note: 'n', unique, ref: - t1.code]
+  indexes {
+    (code)
+    code
+  }
+  records (code) {
+    true
+  }
+}
+Ref: t1.name - missing.x
+Ref: t1.code -? t1.id
+Enum e_status {
+  open
+  closed [note: 'done']
+}

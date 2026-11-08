@@ -1,0 +1,16 @@
+Table a {
+  code timestamp [not null]
+  indexes {
+    code [unique, name: 'ix']
+  }
+}
+Table orders {
+  code e_status [default: `now()`]
+  id timestamp [pk, ref: ?< a.code]
+  "odd col" timestamp [check: `x > 0`, default: 'x', ref: -? a.code]
+  name integer [not null, ref: > a.odd col]
+  indexes {
+    (odd col) [unique, name: 'ix']
+  }
+  Note: 'table note'
+}

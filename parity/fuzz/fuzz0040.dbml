@@ -1,0 +1,32 @@
+Table _x {
+  id bool [default: 'x']
+  id e_status
+  user_id decimal(10, 2) [default: `now()`, unique, ref: <? _x.id]
+  Note: 'table note'
+  records (id) {
+    2.5
+  }
+}
+Table my_table {
+  x decimal(10, 2) [default: 1, note: 'n']
+  user_id varchar(255) [pk, note: 'n']
+  "odd col" timestamp [not null, default: `now()`]
+  user_id varchar(255) [null, check: `x > 0`]
+  indexes {
+    user_id
+  }
+  Note: 'table note'
+}
+Table a {
+  x bool [pk]
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { _x, my_table, a }
+Note sticky {
+  '''
+  text
+  '''
+}

@@ -1,0 +1,28 @@
+Table B {
+  x "character varying" [note: 'n', default: 1]
+  Note: 'table note'
+}
+Table posts {
+  user_id timestamp [default: 1, increment, ref: >? posts.user_id]
+}
+Table ñT {
+  user_id int[] pk
+  user_id integer [pk, note: 'n']
+  indexes {
+    (user_id)
+  }
+}
+Table t1 {
+  user_id bool [unique, ref: >? ñT.user_id]
+  code int[] [color: #1E69FD, default: `now()`]
+  "odd col" decimal(10, 2) [pk]
+  user_id varchar(255) [default: `now()`, increment]
+  Note: 'table note'
+}
+Ref: ñT.name < B.code
+Ref r1: posts.name ?> B.x
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { B, posts, ñT, t1 }

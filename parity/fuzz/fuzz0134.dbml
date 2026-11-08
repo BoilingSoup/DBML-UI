@@ -1,0 +1,11 @@
+Table t1 {
+  name timestamp [note: 'n', check: `x > 0`, ref: ?<> t1.name]
+  user_id timestamp [unique]
+  user_id e_status
+  "odd col" e_status [increment, check: `x > 0`, ref: < nope.name]
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { t1 }

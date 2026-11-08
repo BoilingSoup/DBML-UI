@@ -1,0 +1,14 @@
+Table orders {
+  x decimal(10, 2) [increment, ref: ?< orders.x]
+}
+Table B {
+  id "character varying" [null]
+  "odd col" "character varying"
+  "odd col" "character varying" [note: 'n', default: `now()`, ref: -? nope.odd col]
+}
+Table _x {
+  user_id integer [pk, check: `x > 0`]
+  x decimal(10, 2) [default: `now()`]
+}
+Ref: B.odd col - orders.code
+Ref: _x.x <? B.x

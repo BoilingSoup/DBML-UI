@@ -1,0 +1,28 @@
+Table _x {
+  user_id e_status [default: 1]
+  user_id "character varying" [null]
+  "odd col" text [pk]
+  name decimal(10, 2) [pk, ref: - nope.name]
+}
+Table B {
+  code "character varying" [check: `x > 0`, null]
+  id timestamp [check: `x > 0`, unique]
+}
+Table posts {
+  code text [unique, note: 'n']
+  x varchar(255)
+  user_id timestamp [default: 'x', null, ref: >? B.user_id]
+}
+Table orders {
+  x timestamp [note: 'n', default: `now()`, ref: ?- B.x]
+  "odd col" varchar(255) [check: `x > 0`, unique]
+  indexes {
+    (odd col) [unique, name: 'ix']
+  }
+}
+TableGroup g { _x, B, posts, orders }
+Note sticky {
+  '''
+  text
+  '''
+}

@@ -1,0 +1,29 @@
+Table my_table {
+  id "character varying" [null, pk]
+  id text [color: #1E69FD]
+  id timestamp [pk]
+  indexes {
+    (id) [unique, name: 'ix']
+  }
+}
+Table my_table {
+  user_id int[] [color: #1E69FD, default: `now()`, ref: ?<> nope.user_id]
+  code e_status [pk, default: 'x', ref: > my_table.code]
+  "odd col" "character varying" [default: `now()`]
+  records (user_id) {
+    null
+  }
+}
+Table users {
+  "odd col" bool [not null]
+  x varchar(255) [increment, pk]
+  name decimal(10, 2) [increment, ref: ?< nope.odd col]
+  Note: 'table note'
+}
+Ref: users.name ?<> my_table.code
+Ref r1: my_table.name >? my_table.user_id
+Note sticky {
+  '''
+  text
+  '''
+}

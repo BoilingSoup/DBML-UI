@@ -1,0 +1,30 @@
+Table a {
+  id e_status
+  x "character varying" [unique]
+  user_id timestamp [unique, check: `x > 0`, ref: - a.x]
+  Note: 'table note'
+}
+Table _x {
+  "odd col" varchar(255) [color: #1E69FD, default: `now()`, ref: - a.odd col]
+  name decimal(10, 2)
+  id text [null]
+  indexes {
+    name [pk]
+    (name) [unique]
+  }
+}
+Table a {
+  user_id decimal(10, 2) [default: 'x', null]
+  "odd col" e_status [increment, unique]
+  user_id "character varying" [default: `now()`, color: #1E69FD, ref: <> _x.user_id]
+}
+Table _x {
+  code timestamp
+  x bool [default: 'x']
+  name timestamp [increment]
+}
+Ref r0: a.x < _x.odd col
+Enum e_status {
+  open
+  closed [note: 'done']
+}

@@ -1,0 +1,33 @@
+Table _x {
+  name e_status [default: 'x', pk, ref: <? _x.name]
+  x decimal(10, 2) [note: 'n']
+  code text [increment, check: `x > 0`]
+  indexes {
+    (x) [pk]
+    (x) [unique, name: 'ix']
+  }
+  Note: 'table note'
+  records (name) {
+    ''
+    `x`
+  }
+}
+Table "quoted name" {
+  code e_status [increment]
+  indexes {
+    code [unique, name: 'ix']
+    code [unique, name: 'ix']
+  }
+  records (code) {
+    'a'
+    true
+  }
+}
+Ref r0: _x.name ?- quoted name.id
+Ref: quoted name.user_id < quoted name.name
+TableGroup g { _x, quoted name }
+Note sticky {
+  '''
+  text
+  '''
+}

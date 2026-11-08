@@ -1,0 +1,14 @@
+Table B {
+  "odd col" decimal(10, 2)
+  x "character varying" [check: `x > 0`]
+  id bool [unique, ref: <? B.id]
+  indexes {
+    (id) [pk]
+  }
+}
+Ref: B.user_id <> B.id
+Ref: B.code >? B.code
+Enum e_status {
+  open
+  closed [note: 'done']
+}

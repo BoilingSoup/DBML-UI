@@ -1,0 +1,19 @@
+Table ñT {
+  x int[]
+  code "character varying" [check: `x > 0`]
+  x "character varying" [null, note: 'n']
+  x timestamp [increment, pk]
+}
+Table posts {
+  x text
+  Note: 'table note'
+}
+Table ñT {
+  "odd col" varchar(255) unique
+}
+Ref r0: ñT.x ?<> posts.user_id
+Ref r1: posts.code ?- ñT.name
+Enum e_status {
+  open
+  closed [note: 'done']
+}

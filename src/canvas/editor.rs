@@ -1495,18 +1495,19 @@ mod doc_tests {
     #[test]
     fn hovering_a_table_name_shows_its_columns() {
         let app = app();
-        // last line: "Ref: comments.author_id > users.id" — hover "users"
+        // last line: "Ref fk_post_comment: posts.id - comments.id" —
+        // hover "posts"
         let row = app.editor().buf.line_count() - 1;
         let line = app.editor().buf.line(row);
-        let col = line.find("users").unwrap();
+        let col = line.find("posts").unwrap();
         let p = pos_to_px(
             crate::editor::buffer::Pos { row, col },
             app.cur().editor_scroll,
             app.cur().editor_hscroll,
         );
         let doc = doc_hover_at(&app, p + Vector::new(3.0, 10.0)).expect("doc");
-        assert_eq!(doc.title, "Table users");
-        assert!(doc.rows.iter().any(|r| r.text.contains("username")));
+        assert_eq!(doc.title, "Table posts");
+        assert!(doc.rows.iter().any(|r| r.text.contains("user_id")));
         assert!(
             doc.rows.iter().any(|r| r.pk && r.has_icon()),
             "pk marker"

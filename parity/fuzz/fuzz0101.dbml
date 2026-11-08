@@ -1,0 +1,21 @@
+Table posts {
+  name decimal(10, 2) [check: `x > 0`, unique]
+  records (name) {
+    1
+  }
+}
+Table B {
+  name int[] [increment, default: `now()`]
+  code int[] [not null]
+  indexes {
+    code
+    (name) [unique, name: 'ix']
+  }
+}
+Table posts {
+  name e_status [default: 'x', ref: >? posts.name]
+  user_id varchar(255) [default: 1]
+}
+Ref: B.id ?> posts.code
+Ref: posts.code - posts.odd col
+TableGroup g { posts, B, posts }

@@ -1,0 +1,41 @@
+Table ñT {
+  id int[] [default: 'x', ref: <> nope.id]
+  "odd col" varchar(255) [null, note: 'n', ref: <> ñT.id]
+  "odd col" e_status unique
+  id varchar(255)
+  records (id) {
+    2.5
+    'a'
+    'a'
+  }
+}
+Table my_table {
+  name e_status [default: 'x', color: #1E69FD]
+  indexes {
+    name [unique, name: 'ix']
+    name [unique, name: 'ix']
+  }
+  records (name) {
+    `x`
+  }
+}
+Table _x {
+  user_id "character varying" [unique, pk, ref: <? ñT.user_id]
+  "odd col" timestamp [default: `now()`, check: `x > 0`, ref: ?<> _x.user_id]
+  name text [increment, default: 'x']
+  id bool [color: #1E69FD]
+  Note: 'table note'
+  records (user_id) {
+    `x`
+  }
+}
+Ref r0: ñT.name <>? ñT.id
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+Note sticky {
+  '''
+  text
+  '''
+}

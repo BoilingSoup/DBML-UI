@@ -1,0 +1,24 @@
+Table posts {
+  x int[] [null, not null]
+  user_id e_status [default: 1, ref: <> posts.user_id]
+}
+Table B {
+  user_id "character varying" [note: 'n', color: #1E69FD]
+  code decimal(10, 2) [not null]
+  indexes {
+    (user_id) [pk]
+    (user_id) [pk]
+  }
+  Note: 'table note'
+}
+Table B {
+  name decimal(10, 2) [note: 'n']
+  "odd col" e_status [default: 1, ref: <>? posts.odd col]
+  id bool [default: 1, not null]
+  records (name) {
+    2.5
+    true
+  }
+}
+Ref: posts.code ?< missing.name
+Ref: posts.odd col > B.id

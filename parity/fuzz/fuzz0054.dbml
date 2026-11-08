@@ -1,0 +1,24 @@
+Table B {
+  "odd col" integer [null]
+  Note: 'table note'
+}
+Table B {
+  code int[] [note: 'n', ref: ?< B.code]
+  Note: 'table note'
+}
+Table a {
+  id timestamp [color: #1E69FD]
+  user_id varchar(255) [color: #1E69FD]
+  code e_status [check: `x > 0`, note: 'n']
+}
+Table my_table {
+  "odd col" e_status [not null]
+  user_id "character varying" foo
+}
+Ref: B.user_id > a.code
+Ref r1: B.x ?- my_table.code
+Note sticky {
+  '''
+  text
+  '''
+}

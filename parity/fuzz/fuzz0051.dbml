@@ -1,0 +1,11 @@
+Table my_table {
+  x "character varying" [default: 'x', increment, ref: -? my_table.x]
+  code integer [color: #1E69FD, ref: < nope.x]
+  Note: 'table note'
+}
+Table B {
+  user_id e_status [not null]
+  "odd col" text [default: 'x', unique]
+}
+Ref: B.name ?< B.odd col
+TableGroup g { my_table, B }

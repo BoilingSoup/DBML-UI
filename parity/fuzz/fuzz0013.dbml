@@ -1,0 +1,25 @@
+Table ñT {
+  id int[]
+  "odd col" timestamp [unique]
+  name e_status [not null]
+  id "character varying" foo
+}
+Table "quoted name" {
+  "odd col" integer [unique, color: #1E69FD, ref: ?<> ñT.odd col]
+  id varchar(255)
+  id varchar(255) [increment, ref: <>? quoted name.id]
+}
+Table orders {
+  x decimal(10, 2) [default: 1]
+  x int[] [increment, color: #1E69FD, ref: ?<> orders.x]
+}
+Table a {
+  "odd col" integer [default: `now()`]
+  Note: 'table note'
+}
+Ref: orders.id ?- a.user_id
+Ref: orders.id <> a.name
+Enum e_status {
+  open
+  closed [note: 'done']
+}

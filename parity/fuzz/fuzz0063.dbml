@@ -1,0 +1,36 @@
+Table _x {
+  name int[]
+  indexes {
+    (name)
+    name [unique]
+  }
+  records (name) {
+    2.5
+    null
+  }
+}
+Table orders {
+  user_id varchar(255) [default: 'x', increment, ref: ?> _x.user_id]
+  user_id "character varying" [unique, ref: <? orders.user_id]
+  code decimal(10, 2) [check: `x > 0`]
+  "odd col" integer
+  indexes {
+    odd col [pk]
+  }
+  Note: 'table note'
+  records (user_id) {
+    'a'
+    ''
+  }
+}
+Table orders {
+  id int[] [pk]
+  name integer [not null, check: `x > 0`]
+  id bool [null, increment, ref: <? nope.id]
+  name bool [check: `x > 0`, unique]
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { _x, orders, orders }

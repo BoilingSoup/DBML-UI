@@ -1,0 +1,7 @@
+Table a {
+  x bool [default: 1, ref: -? a.x]
+  id bool [default: `now()`, null]
+  x varchar(255) [pk, unique]
+  x integer [unique]
+  Note: 'table note'
+}

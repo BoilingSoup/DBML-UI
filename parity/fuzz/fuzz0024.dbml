@@ -1,0 +1,24 @@
+Table ñT {
+  "odd col" text [default: 'x', ref: -? ñT.odd col]
+  user_id text [null]
+  x integer [pk, not null, ref: ?- nope.user_id]
+  "odd col" bool [increment]
+}
+Table posts {
+  name timestamp [unique, increment]
+  name text [note: 'n', default: `now()`]
+  "odd col" timestamp [note: 'n']
+  x int[] [increment, default: `now()`, ref: > nope.name]
+  Note: 'table note'
+  records (name) {
+    2.5
+  }
+}
+Ref: posts.x -? missing.name
+Ref: posts.name ?<> missing.user_id
+TableGroup g { ñT, posts }
+Note sticky {
+  '''
+  text
+  '''
+}

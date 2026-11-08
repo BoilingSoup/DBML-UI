@@ -1,0 +1,19 @@
+Table my_table {
+  id text [check: `x > 0`, default: 1]
+  user_id "character varying" [null, default: `now()`, ref: > nope.user_id]
+  x text
+  id text [default: 'x']
+  Note: 'table note'
+}
+Table my_table {
+  name int[] [check: `x > 0`, ref: <>? my_table.name]
+  "odd col" decimal(10, 2) [default: 1]
+}
+Table orders {
+  "odd col" varchar(255) [not null, unique]
+  code decimal(10, 2) [note: 'n', unique]
+  code "character varying"
+  user_id int[] [default: 'x']
+  Note: 'table note'
+}
+TableGroup g { my_table, my_table, orders }

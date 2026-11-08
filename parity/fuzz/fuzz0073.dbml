@@ -1,0 +1,29 @@
+Table B {
+  x bool [not null]
+  user_id text pk
+}
+Table my_table {
+  user_id timestamp [default: `now()`, default: 'x', ref: ?< my_table.user_id]
+  name integer
+  user_id integer [check: `x > 0`]
+  indexes {
+    (user_id)
+  }
+  Note: 'table note'
+}
+Table a {
+  "odd col" varchar(255) [default: 1, ref: ?> nope.odd col]
+  id text [color: #1E69FD, check: `x > 0`, ref: ?<> my_table.odd col]
+  x varchar(255) [color: #1E69FD]
+  Note: 'table note'
+}
+Table posts {
+  name bool [default: `now()`]
+  name e_status [pk, color: #1E69FD]
+  Note: 'table note'
+}
+Note sticky {
+  '''
+  text
+  '''
+}

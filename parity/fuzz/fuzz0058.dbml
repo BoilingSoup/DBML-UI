@@ -1,0 +1,6 @@
+Table "quoted name" {
+  user_id timestamp foo
+  name decimal(10, 2) [increment]
+  name integer [null, increment]
+  x "character varying" foo
+}

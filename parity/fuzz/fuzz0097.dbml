@@ -1,0 +1,7 @@
+Table users {
+  name varchar(255) [pk]
+  x decimal(10, 2) [null, color: #1E69FD, ref: <? nope.name]
+  x timestamp
+  code varchar(255) [not null, default: `now()`]
+}
+Ref: users.x >? users.user_id

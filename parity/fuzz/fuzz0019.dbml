@@ -1,0 +1,19 @@
+Table a {
+  code decimal(10, 2) [increment, pk]
+  x text [check: `x > 0`, not null, ref: ?<> nope.x]
+  indexes {
+    (code) [unique]
+  }
+}
+Table _x {
+  id int[] [color: #1E69FD, default: `now()`]
+  indexes {
+    id
+    (id) [unique]
+  }
+}
+Table _x {
+  x e_status [default: 1, null, ref: ?> nope.x]
+  user_id "character varying" [not null, ref: ?- _x.x]
+  user_id "character varying" [default: 'x', note: 'n']
+}

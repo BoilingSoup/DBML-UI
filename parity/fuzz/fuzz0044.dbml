@@ -1,0 +1,18 @@
+Table t1 {
+  user_id decimal(10, 2)
+  code decimal(10, 2)
+  id bool [increment]
+  id varchar(255) [unique, increment]
+  indexes {
+    (id) [pk]
+    (user_id)
+  }
+  records (user_id) {
+    ''
+  }
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { t1 }

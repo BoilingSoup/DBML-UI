@@ -1,0 +1,14 @@
+Table "quoted name" {
+  id "character varying" [default: `now()`, not null]
+  code timestamp [unique, check: `x > 0`]
+  name integer [default: 1]
+  name int[] [note: 'n', ref: > nope.code]
+  indexes {
+    name [unique, name: 'ix']
+    name [unique, name: 'ix']
+  }
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}

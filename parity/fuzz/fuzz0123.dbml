@@ -1,0 +1,26 @@
+Table ñT {
+  x int[]
+  id bool [default: `now()`]
+}
+Table posts {
+  user_id int[] [pk, default: `now()`, ref: ?<> nope.user_id]
+}
+Table a {
+  x int[] [default: 'x']
+  indexes {
+    (x) [unique, name: 'ix']
+  }
+}
+Table orders {
+  name text [check: `x > 0`, unique]
+  name decimal(10, 2) [increment, default: `now()`]
+  id timestamp [not null, default: `now()`]
+  records (name) {
+    `x`
+  }
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { ñT, posts, a, orders }

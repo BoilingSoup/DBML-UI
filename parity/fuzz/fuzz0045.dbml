@@ -1,0 +1,22 @@
+Table posts {
+  code bool [default: 1, note: 'n', ref: <> nope.code]
+  indexes {
+    (code) [unique]
+  }
+}
+Table users {
+  id varchar(255) [default: 'x', check: `x > 0`]
+  Note: 'table note'
+  records (id) {
+    `x`
+  }
+}
+Table _x {
+  "odd col" text [increment]
+  code decimal(10, 2) [default: 1]
+  x decimal(10, 2) [default: 'x', default: `now()`, ref: - posts.odd col]
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}

@@ -1,0 +1,33 @@
+Table posts {
+  name decimal(10, 2)
+  x int[]
+  user_id e_status [null, note: 'n']
+  user_id bool [null]
+  indexes {
+    (user_id) [pk]
+    (name) [pk]
+  }
+}
+Table B {
+  id timestamp [not null, ref: ?<> nope.id]
+  user_id text
+  Note: 'table note'
+  records (id) {
+    null
+    `x`
+    null
+  }
+}
+Table my_table {
+  code integer [unique, default: `now()`]
+  user_id text [note: 'n', increment, ref: ?- my_table.code]
+  id integer [unique]
+}
+Table my_table {
+  x text
+  id int[] [default: 'x']
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}

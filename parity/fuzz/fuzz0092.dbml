@@ -1,0 +1,21 @@
+Table posts {
+  x decimal(10, 2) [default: 1]
+  "odd col" text [color: #1E69FD]
+  "odd col" "character varying" [default: 1, not null]
+  Note: 'table note'
+}
+Table a {
+  user_id timestamp [not null]
+  code int[] [null, increment]
+}
+Table ñT {
+  user_id int[] [unique, increment, ref: <> nope.user_id]
+  name timestamp
+  code text [not null, color: #1E69FD]
+  "odd col" decimal(10, 2) [default: 'x', unique]
+  indexes {
+    (code) [unique, name: 'ix']
+    (name)
+  }
+}
+Ref: posts.name <? a.id

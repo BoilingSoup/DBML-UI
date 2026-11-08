@@ -1,0 +1,30 @@
+Table B {
+  "odd col" "character varying" [pk, ref: >? B.odd col]
+  records (odd col) {
+    2.5
+  }
+}
+Table a {
+  name integer [increment, null, ref: ?<> nope.name]
+  id text [note: 'n', ref: < nope.id]
+  Note: 'table note'
+  records (name) {
+    true
+    `x`
+    'a'
+  }
+}
+Table my_table {
+  x decimal(10, 2) [pk, ref: - nope.x]
+  code text [null, unique]
+  indexes {
+    (x) [pk]
+  }
+  Note: 'table note'
+}
+Ref: B.user_id <>? my_table.user_id
+Ref: my_table.user_id <> missing.id
+Enum e_status {
+  open
+  closed [note: 'done']
+}

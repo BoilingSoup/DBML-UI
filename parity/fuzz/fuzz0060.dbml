@@ -1,0 +1,27 @@
+Table posts {
+  x text [null, unique]
+  name int[] [check: `x > 0`, unique]
+  records (x) {
+    1
+    `x`
+    ''
+  }
+}
+Table a {
+  user_id int[]
+  indexes {
+    (user_id)
+  }
+}
+Table "quoted name" {
+  "odd col" varchar(255) [increment, ref: ?< posts.odd col]
+  code bool [color: #1E69FD, default: `now()`]
+  code varchar(255) [default: 'x', note: 'n']
+}
+Ref: quoted name.id > missing.code
+Ref: a.odd col > missing.name
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { posts, a, quoted name }

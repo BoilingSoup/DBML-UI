@@ -1,0 +1,28 @@
+Table posts {
+  code timestamp
+  code timestamp [default: `now()`, note: 'n', ref: ?< posts.code]
+  id int[] [unique, check: `x > 0`, ref: - nope.id]
+  indexes {
+    id
+    id [unique, name: 'ix']
+  }
+}
+Table "quoted name" {
+  "odd col" int[] [default: 'x', default: `now()`, ref: ?- quoted name.odd col]
+  x decimal(10, 2) [unique, color: #1E69FD]
+  Note: 'table note'
+}
+Table _x {
+  user_id "character varying" [default: `now()`]
+  records (user_id) {
+    true
+    'a'
+  }
+}
+Ref: quoted name.name <> posts.id
+TableGroup g { posts, quoted name, _x }
+Note sticky {
+  '''
+  text
+  '''
+}

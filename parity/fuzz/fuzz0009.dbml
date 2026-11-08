@@ -1,0 +1,4 @@
+Table B {
+  user_id varchar(255)
+  name varchar(255) [null]
+}

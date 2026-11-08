@@ -1,0 +1,35 @@
+Table _x {
+  id "character varying" [unique, color: #1E69FD]
+}
+Table B {
+  code decimal(10, 2) [not null, ref: ?<> nope.code]
+  code text [default: `now()`, ref: <> B.code]
+  indexes {
+    (code) [pk]
+  }
+  records (code) {
+    true
+    'a'
+    ''
+  }
+}
+Table orders {
+  "odd col" e_status [default: 1]
+  id bool [default: 'x', pk]
+  user_id varchar(255) [increment, unique]
+  name decimal(10, 2)
+  indexes {
+    (odd col) [unique, name: 'ix']
+  }
+}
+Table _x {
+  name timestamp
+  id decimal(10, 2)
+  "odd col" timestamp [note: 'n', default: `now()`, ref: - B.name]
+  indexes {
+    (name)
+    (odd col) [unique, name: 'ix']
+  }
+}
+Ref: _x.id <> _x.x
+TableGroup g { _x, B, orders, _x }

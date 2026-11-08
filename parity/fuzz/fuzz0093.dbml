@@ -1,0 +1,13 @@
+Table _x {
+  user_id e_status [not null, ref: -? _x.user_id]
+  user_id "character varying" [null, ref: - _x.user_id]
+  code bool
+}
+Table t1 {
+  name "character varying" [color: #1E69FD, null]
+  id varchar(255)
+  user_id varchar(255) [default: 'x', default: 1]
+  indexes {
+    (user_id)
+  }
+}

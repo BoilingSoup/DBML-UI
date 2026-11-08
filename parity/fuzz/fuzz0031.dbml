@@ -1,0 +1,26 @@
+Table "quoted name" {
+  id "character varying" [unique]
+  x "character varying" [unique, default: 1]
+  indexes {
+    id [unique, name: 'ix']
+    (x) [unique]
+  }
+}
+Table posts {
+  code "character varying" [null, check: `x > 0`]
+}
+Table ñT {
+  code int[] [null]
+  Note: 'table note'
+}
+Ref r0: ñT.user_id ?- posts.code
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { quoted name, posts, ñT }
+Note sticky {
+  '''
+  text
+  '''
+}

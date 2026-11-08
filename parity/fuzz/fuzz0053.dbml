@@ -1,0 +1,20 @@
+Table posts {
+  name integer
+  x "character varying" foo
+  "odd col" e_status [not null]
+  Note: 'table note'
+}
+Table a {
+  code int[] [pk, check: `x > 0`, ref: <>? nope.code]
+  name timestamp [not null]
+  records (code) {
+    1
+    null
+  }
+}
+Ref r0: posts.odd col ?- posts.id
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { posts, a }

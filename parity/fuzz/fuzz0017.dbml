@@ -1,0 +1,24 @@
+Table users {
+  name integer unique
+  "odd col" bool [default: 'x', color: #1E69FD]
+  "odd col" timestamp
+  Note: 'table note'
+}
+Table orders {
+  "odd col" timestamp [increment]
+  "odd col" varchar(255) [increment, pk, ref: ?<> users.odd col]
+  user_id e_status unique
+  user_id text [default: 'x', not null]
+}
+Ref r0: users.x - missing.code
+Ref r1: users.id < orders.user_id
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { users, orders }
+Note sticky {
+  '''
+  text
+  '''
+}

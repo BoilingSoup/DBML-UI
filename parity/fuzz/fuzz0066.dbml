@@ -1,0 +1,50 @@
+Table orders {
+  user_id int[] [default: 1, color: #1E69FD]
+  indexes {
+    (user_id)
+    user_id [unique, name: 'ix']
+  }
+}
+Table ñT {
+  code timestamp [default: 'x', pk]
+  code decimal(10, 2) [not null, default: `now()`]
+  user_id text [pk, ref: > ñT.code]
+  user_id bool [default: `now()`, increment, ref: >? ñT.user_id]
+  indexes {
+    (code) [pk]
+    code [pk]
+  }
+  records (code) {
+    true
+    `x`
+  }
+}
+Table t1 {
+  code e_status
+  x int[] [check: `x > 0`]
+  name timestamp [unique]
+  indexes {
+    x [pk]
+    (code) [unique]
+  }
+  records (code) {
+    1
+    `x`
+    `x`
+  }
+}
+Table users {
+  id integer [null]
+}
+Ref: orders.name ?> orders.user_id
+Ref: ñT.x ?- users.id
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { orders, ñT, t1, users }
+Note sticky {
+  '''
+  text
+  '''
+}

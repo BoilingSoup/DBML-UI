@@ -1,0 +1,11 @@
+Table B {
+  user_id timestamp [check: `x > 0`, ref: <> nope.user_id]
+  user_id "character varying" [null]
+  x "character varying" pk
+}
+Table orders {
+  x int[] [pk]
+  id "character varying"
+  name decimal(10, 2) [note: 'n', ref: <>? B.name]
+  Note: 'table note'
+}

@@ -1,0 +1,32 @@
+Table t1 {
+  code text
+  code varchar(255) [increment]
+  user_id int[] [check: `x > 0`]
+  user_id bool [default: `now()`, unique, ref: <>? nope.code]
+}
+Table "quoted name" {
+  name int[] [not null, default: 1]
+  name decimal(10, 2) [default: `now()`, null]
+  x int[]
+}
+Table orders {
+  id integer
+  name decimal(10, 2) [not null]
+  "odd col" e_status [pk, null, ref: ?- nope.name]
+  Note: 'table note'
+  records (id) {
+    'a'
+  }
+}
+Table a {
+  x varchar(255) [increment]
+  indexes {
+    (x) [unique]
+  }
+}
+Ref: orders.name - orders.id
+Ref: t1.odd col <? quoted name.user_id
+Enum e_status {
+  open
+  closed [note: 'done']
+}

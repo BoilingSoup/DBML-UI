@@ -1,0 +1,15 @@
+Table _x {
+  id bool
+  "odd col" integer
+  indexes {
+    (id)
+    (id) [unique]
+  }
+}
+Ref r0: _x.code ?< _x.id
+Ref: _x.user_id < missing.x
+Note sticky {
+  '''
+  text
+  '''
+}

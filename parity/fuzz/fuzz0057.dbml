@@ -1,0 +1,10 @@
+Table _x {
+  x varchar(255) [not null, default: 'x']
+  id text [default: 'x', ref: -? nope.x]
+  user_id e_status
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { _x }

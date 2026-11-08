@@ -1,0 +1,10 @@
+Table orders {
+  code timestamp
+  user_id integer [not null]
+  x varchar(255) [default: 'x', null]
+  indexes {
+    (user_id) [pk]
+    x [unique, name: 'ix']
+  }
+}
+Ref: orders.code >? missing.user_id

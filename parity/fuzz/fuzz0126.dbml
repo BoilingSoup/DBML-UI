@@ -1,0 +1,14 @@
+Table t1 {
+  name text [pk, color: #1E69FD]
+}
+Table orders {
+  x int[] [default: 'x']
+  id e_status
+  Note: 'table note'
+  records (x) {
+    null
+    ''
+    null
+  }
+}
+Ref r0: orders.odd col >? t1.odd col

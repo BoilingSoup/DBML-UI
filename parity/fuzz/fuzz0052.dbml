@@ -1,0 +1,37 @@
+Table my_table {
+  code bool [default: 1, ref: <> nope.code]
+  user_id bool
+  indexes {
+    code
+  }
+  Note: 'table note'
+}
+Table posts {
+  x "character varying" [color: #1E69FD, default: `now()`]
+  code int[] [unique, increment, ref: < nope.x]
+}
+Table orders {
+  "odd col" varchar(255)
+  name integer [pk, default: `now()`, ref: ?> nope.odd col]
+  indexes {
+    name [unique, name: 'ix']
+  }
+  records (odd col) {
+    null
+  }
+}
+Table t1 {
+  "odd col" varchar(255) [increment]
+  x integer [color: #1E69FD, ref: < t1.x]
+  id e_status [check: `x > 0`, increment]
+  user_id e_status [default: `now()`, unique, ref: ?> t1.user_id]
+  indexes {
+    (odd col) [unique]
+    user_id
+  }
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { my_table, posts, orders, t1 }

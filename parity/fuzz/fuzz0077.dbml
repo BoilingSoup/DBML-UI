@@ -1,0 +1,4 @@
+Table my_table {
+  code e_status [default: `now()`, default: 'x', ref: -? my_table.code]
+}
+TableGroup g { my_table }

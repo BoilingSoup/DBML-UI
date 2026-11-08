@@ -1,0 +1,40 @@
+Table "quoted name" {
+  id varchar(255) [default: 'x', ref: - nope.id]
+  code bool
+  name e_status [note: 'n']
+  code e_status [increment, ref: >? nope.name]
+}
+Table a {
+  name varchar(255) [pk, increment, ref: > a.name]
+  "odd col" varchar(255) [default: 'x', default: 1, ref: -? nope.odd col]
+  x int[] [default: 'x', default: `now()`, ref: <> nope.odd col]
+  name "character varying"
+  Note: 'table note'
+}
+Table B {
+  x e_status
+  id varchar(255) [default: `now()`, check: `x > 0`, ref: <> nope.id]
+  code int[] [not null]
+}
+Table ñT {
+  name integer unique
+  user_id integer [not null, default: 1, ref: <> quoted name.name]
+  x int[] [null, unique, ref: <>? quoted name.x]
+  user_id varchar(255)
+  records (name) {
+    1
+    null
+    true
+  }
+}
+Ref r0: ñT.user_id > ñT.code
+Ref: ñT.odd col ?> quoted name.x
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+Note sticky {
+  '''
+  text
+  '''
+}

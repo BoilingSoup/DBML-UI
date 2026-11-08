@@ -1,0 +1,19 @@
+Table a {
+  user_id bool [default: 1, increment]
+  code varchar(255) [default: 1, ref: > a.code]
+  "odd col" e_status [not null, unique]
+  code bool [null]
+}
+Table posts {
+  user_id bool [increment, color: #1E69FD]
+  indexes {
+    (user_id) [unique]
+    (user_id) [pk]
+  }
+}
+Table B {
+  name varchar(255) [unique]
+  id text
+  Note: 'table note'
+}
+Ref: a.id <>? posts.odd col

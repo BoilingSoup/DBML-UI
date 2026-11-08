@@ -1,0 +1,35 @@
+Table t1 {
+  x "character varying"
+}
+Table my_table {
+  code decimal(10, 2) [increment, ref: ?- t1.code]
+  code int[] [default: `now()`]
+  records (code) {
+    'a'
+    ''
+  }
+}
+Table my_table {
+  id integer
+  id bool [not null, default: `now()`, ref: -? t1.id]
+  user_id "character varying" [not null, unique]
+  name text [default: 'x', check: `x > 0`]
+  indexes {
+    id
+    (id) [unique, name: 'ix']
+  }
+  records (id) {
+    2.5
+    'a'
+  }
+}
+Ref: my_table.code <> my_table.user_id
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+Note sticky {
+  '''
+  text
+  '''
+}

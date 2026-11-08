@@ -1,0 +1,28 @@
+Table ñT {
+  x integer unique
+  indexes {
+    x [unique]
+  }
+}
+Table _x {
+  x int[] [default: 'x', ref: ?<> _x.x]
+  x varchar(255)
+  name e_status
+  indexes {
+    (name) [unique]
+  }
+}
+Table my_table {
+  name integer [increment]
+  name "character varying" [null, default: 'x']
+  x bool [not null]
+  indexes {
+    name [pk]
+    (x)
+  }
+  records (name) {
+    'a'
+    2.5
+    `x`
+  }
+}

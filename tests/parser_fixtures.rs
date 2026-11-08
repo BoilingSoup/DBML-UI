@@ -31,7 +31,7 @@ fn basic_fixture_parses_cleanly() {
     assert!(users.matches("U"));
 
     let posts = doc.tables.iter().find(|t| t.name == "posts").unwrap();
-    assert_eq!(posts.columns.len(), 6);
+    assert_eq!(posts.columns.len(), 7);
     assert_eq!(posts.header_color.as_deref(), Some("#2ECC71"));
     let status = posts.columns.iter().find(|c| c.name == "status").unwrap();
     assert_eq!(status.ty, "post_status");

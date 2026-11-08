@@ -1,0 +1,39 @@
+Table ñT {
+  name integer [check: `x > 0`, ref: ?> ñT.name]
+  name timestamp [unique]
+}
+Table users {
+  code bool
+}
+Table ñT {
+  name varchar(255)
+  user_id "character varying" [default: 'x']
+  indexes {
+    (name) [unique]
+    (name) [unique]
+  }
+}
+Table ñT {
+  code timestamp
+  "odd col" decimal(10, 2) [unique, pk]
+  "odd col" varchar(255) [pk]
+  indexes {
+    (odd col)
+    odd col
+  }
+  Note: 'table note'
+  records (code) {
+    null
+  }
+}
+Ref: ñT.odd col <>? users.odd col
+Enum e_status {
+  open
+  closed [note: 'done']
+}
+TableGroup g { ñT, users, ñT, ñT }
+Note sticky {
+  '''
+  text
+  '''
+}
