@@ -5,7 +5,9 @@ use serde::Serialize;
 
 #[derive(Serialize)]
 struct QuickFix {
+    title: String,
     shortTitle: String,
+    isPreferred: Option<bool>,
     newText: String,
 }
 
@@ -14,6 +16,12 @@ struct Diagnostic {
     r#type: &'static str,
     text: String,
     row: usize,
+    column: usize,
+    endRow: usize,
+    endColumn: usize,
+    category: Option<String>,
+    explanation: String,
+    code: Option<String>,
     quickFixes: Vec<QuickFix>,
 }
 
@@ -28,6 +36,20 @@ fn row_of(src: &str, offset: usize) -> usize {
     src[..offset.min(src.len())].bytes().filter(|&b| b == b'\n').count()
 }
 
+/// The byte column within the line for a byte offset.
+fn col_of(src: &str, offset: usize) -> usize {
+    let off = offset.min(src.len());
+    match src[..off].rfind('\n') {
+        Some(nl) => off - nl - 1,
+        None => off,
+    }
+}
+
+/// (row, column) for a byte offset.
+fn line_col(src: &str, offset: usize) -> (usize, usize) {
+    (row_of(src, offset), col_of(src, offset))
+}
+
 fn dump_path(path: &str) -> Case {
     let src = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
     let out = dbml_ui::dbml::parser::parse(&src);
@@ -39,6 +61,12 @@ fn dump_path(path: &str) -> Case {
             r#type: "error",
             text: e.message.clone(),
             row: row_of(&src, e.offset),
+            column: col_of(&src, e.offset),
+            endRow: row_of(&src, e.offset),
+            endColumn: col_of(&src, e.offset),
+            category: None,
+            explanation: String::new(),
+            code: None,
             quickFixes: Vec::new(),
         })
         .collect();
@@ -48,15 +76,24 @@ fn dump_path(path: &str) -> Case {
             dbml_ui::dbml::validate::Severity::Warning => "warning",
             dbml_ui::dbml::validate::Severity::Info => "info",
         };
+        let (r, c) = line_col(&src, d.offset);
         diagnostics.push(Diagnostic {
             r#type: ty,
             text: d.message.clone(),
-            row: row_of(&src, d.offset),
+            row: r,
+            column: c,
+            endRow: r,
+            endColumn: c,
+            category: d.category.clone(),
+            explanation: d.explanation.join("\n"),
+            code: None,
             quickFixes: d
                 .quick_fixes
                 .iter()
                 .map(|q| QuickFix {
+                    title: q.title.clone(),
                     shortTitle: q.short_title.clone(),
+                    isPreferred: Some(q.is_preferred),
                     newText: q.new_text.clone(),
                 })
                 .collect(),

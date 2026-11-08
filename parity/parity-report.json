@@ -151,7 +151,11 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 0 vs theirs 1",
-        "[1] row: ours 1 vs theirs 2"
+        "[0] explanation: ours \"In ref definition `Table child { parent_id integer [not null, ref: > parent.id]`, the operator `>` implies `parent.id` has at most one row.\n`parent.id` has no unique or primary key constraint.\" vs theirs \"In ref definition `ref: > parent.id`, the operator `>` implies `parent.id` has at most one row.\n`parent.id` has no unique or primary key constraint.\"",
+        "[0] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true, Add unique:: [unique]::Mark 'parent.id' as UNIQUE::false] vs theirs [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true, Add unique:: [unique]::Mark 'parent.id' as UNIQUE::]",
+        "[1] row: ours 1 vs theirs 2",
+        "[1] explanation: ours \"In ref definition `Table child { parent_id integer [not null, ref: > parent.id]`, the operator `>` implies `parent.id` has at most one row.\n`parent.id` has no unique or primary key constraint.\" vs theirs \"In ref definition `ref: > parent.id`, the operator `>` implies `parent.id` has at most one row.\n`parent.id` has no unique or primary key constraint.\"",
+        "[1] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true, Add unique:: [unique]::Mark 'parent.id' as UNIQUE::false] vs theirs [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true, Add unique:: [unique]::Mark 'parent.id' as UNIQUE::]"
       ]
     },
     {
@@ -160,9 +164,9 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>::<>, Add unique:: [unique]]",
+        "[0] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true, Add unique:: [unique]::Mark 'parent.id' as UNIQUE::]",
         "[1] row: ours 3 vs theirs 4",
-        "[1] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>::<>, Add unique:: [unique]]"
+        "[1] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true, Add unique:: [unique]::Mark 'parent.id' as UNIQUE::]"
       ]
     },
     {
@@ -171,13 +175,13 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to >::>, Add unique::, unique]",
+        "[0] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to >::>::Make 'parent.id' many in the ref (change operator to '>')::true, Add unique::, unique::Mark 'parent.id' as UNIQUE::]",
         "[1] row: ours 2 vs theirs 3",
-        "[1] quickFixes: ours [Change to <>::<>, Add unique::, unique] vs theirs [Change to <::<, Add unique::, unique]",
+        "[1] quickFixes: ours [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to <::<::Make 'child.parent_id' many in the ref (change operator to '<')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::]",
         "[2] row: ours 4 vs theirs 5",
-        "[2] quickFixes: ours [Change to <>::<>, Add unique::, unique] vs theirs [Change to <::<, Add unique::, unique]",
+        "[2] quickFixes: ours [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to <::<::Make 'child.parent_id' many in the ref (change operator to '<')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::]",
         "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [Change to <>::<>] vs theirs [Change to >::>, Add unique::, unique]"
+        "[3] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to >::>::Make 'parent.id' many in the ref (change operator to '>')::true, Add unique::, unique::Mark 'parent.id' as UNIQUE::]"
       ]
     },
     {
@@ -188,15 +192,18 @@
         "count: ours 6 vs theirs 4",
         "[0] text: ours \"Column `parent.id` is nullable but operator `-` requires it to be NOT NULL\" vs theirs \"Column `parent.id` should be unique or primary key for operator `-`\"",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [Change to -?::-?, Add not null:: [not null]] vs theirs [Change to >::>, Add unique:: [unique]]",
+        "[0] explanation: ours \"In ref definition `Ref: parent.id - child.parent_id`, the operator `-` requires `parent.id` to reference an existing row.\nIn column definition `id integer`, the column is nullable, which allows rows with no parent.\" vs theirs \"In ref definition `Ref: parent.id - child.parent_id`, the operator `-` implies `parent.id` has at most one row.\n`parent.id` has no unique or primary key constraint.\"",
+        "[0] quickFixes: ours [Change to -?::-?::Make 'parent.id' optional in the ref (change operator to '-?')::true, Add not null:: [not null]::Mark 'parent.id' as NOT NULL::false] vs theirs [Change to >::>::Make 'parent.id' many in the ref (change operator to '>')::true, Add unique:: [unique]::Mark 'parent.id' as UNIQUE::]",
         "[1] text: ours \"Column `parent.id` should be unique or primary key for operator `-`\" vs theirs \"Column `child.parent_id` should be unique or primary key for operator `-`\"",
         "[1] row: ours 0 vs theirs 3",
-        "[1] quickFixes: ours [Change to <>::<>] vs theirs [Change to <::<, Add unique::, unique]",
+        "[1] explanation: ours \"In ref definition `Ref: parent.id - child.parent_id`, the operator `-` implies `parent.id` has at most one row.\n`parent.id` has no unique or primary key constraint.\" vs theirs \"In ref definition `Ref: parent.id - child.parent_id`, the operator `-` implies `child.parent_id` has at most one row.\n`child.parent_id` has no unique or primary key constraint.\"",
+        "[1] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to <::<::Make 'child.parent_id' many in the ref (change operator to '<')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::]",
         "[2] row: ours 2 vs theirs 5",
-        "[2] quickFixes: ours [Change to <>::<>, Add unique::, unique] vs theirs [Change to <::<, Add unique::, unique]",
+        "[2] quickFixes: ours [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to <::<::Make 'child.parent_id' many in the ref (change operator to '<')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::]",
         "[3] text: ours \"Column `child.parent_id` should be unique or primary key for operator `-`\" vs theirs \"Column `parent.id` should be unique or primary key for operator `-`\"",
         "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [Change to <>::<>, Add unique::, unique] vs theirs [Change to >::>, Add unique:: [unique]]"
+        "[3] explanation: ours \"In ref definition `Ref: parent.id - child.parent_id`, the operator `-` implies `child.parent_id` has at most one row.\n`child.parent_id` has no unique or primary key constraint.\" vs theirs \"In ref definition `Ref: parent.id - child.parent_id`, the operator `-` implies `parent.id` has at most one row.\n`parent.id` has no unique or primary key constraint.\"",
+        "[3] quickFixes: ours [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to >::>::Make 'parent.id' many in the ref (change operator to '>')::true, Add unique:: [unique]::Mark 'parent.id' as UNIQUE::]"
       ]
     },
     {
@@ -205,17 +212,17 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to >::>, Add unique::, unique]",
+        "[0] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to >::>::Make 'parent.id' many in the ref (change operator to '>')::true, Add unique::, unique::Mark 'parent.id' as UNIQUE::]",
         "[1] row: ours 2 vs theirs 3",
-        "[1] quickFixes: ours [Change to ?-::?-, Add not null::not null] vs theirs [Change to ?-::?-, Add not null::]",
+        "[1] quickFixes: ours [Change to ?-::?-::Make 'child.parent_id' optional in the ref (change operator to '?-')::true, Add not null::not null::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?-::?-::Make 'child.parent_id' optional in the ref (change operator to '?-')::true, Add not null::::Mark 'child.parent_id' as NOT NULL::]",
         "[2] row: ours 2 vs theirs 3",
-        "[2] quickFixes: ours [Change to <>::<>, Add unique::, unique] vs theirs [Change to <::<, Add unique::, unique]",
+        "[2] quickFixes: ours [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to <::<::Make 'child.parent_id' many in the ref (change operator to '<')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::]",
         "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [Change to ?-::?-, Add not null::not null] vs theirs [Change to ?-::?-, Add not null::]",
+        "[3] quickFixes: ours [Change to ?-::?-::Make 'child.parent_id' optional in the ref (change operator to '?-')::true, Add not null::not null::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?-::?-::Make 'child.parent_id' optional in the ref (change operator to '?-')::true, Add not null::::Mark 'child.parent_id' as NOT NULL::]",
         "[4] row: ours 4 vs theirs 5",
-        "[4] quickFixes: ours [Change to <>::<>, Add unique::, unique] vs theirs [Change to <::<, Add unique::, unique]",
+        "[4] quickFixes: ours [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to <::<::Make 'child.parent_id' many in the ref (change operator to '<')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::]",
         "[5] row: ours 4 vs theirs 5",
-        "[5] quickFixes: ours [Change to <>::<>] vs theirs [Change to >::>, Add unique::, unique]"
+        "[5] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to >::>::Make 'parent.id' many in the ref (change operator to '>')::true, Add unique::, unique::Mark 'parent.id' as UNIQUE::]"
       ]
     },
     {
@@ -226,22 +233,28 @@
         "count: ours 8 vs theirs 6",
         "[0] text: ours \"Column `parent.id` is nullable but operator `-` requires it to be NOT NULL\" vs theirs \"Column `parent.id` should be unique or primary key for operator `-`\"",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [Change to -?::-?, Add not null:: [not null]] vs theirs [Change to >::>, Add unique:: [unique]]",
+        "[0] explanation: ours \"In ref definition `Ref: parent.id - child.parent_id`, the operator `-` requires `parent.id` to reference an existing row.\nIn column definition `id integer`, the column is nullable, which allows rows with no parent.\" vs theirs \"In ref definition `Ref: parent.id - child.parent_id`, the operator `-` implies `parent.id` has at most one row.\n`parent.id` has no unique or primary key constraint.\"",
+        "[0] quickFixes: ours [Change to -?::-?::Make 'parent.id' optional in the ref (change operator to '-?')::true, Add not null:: [not null]::Mark 'parent.id' as NOT NULL::false] vs theirs [Change to >::>::Make 'parent.id' many in the ref (change operator to '>')::true, Add unique:: [unique]::Mark 'parent.id' as UNIQUE::]",
         "[1] text: ours \"Column `parent.id` should be unique or primary key for operator `-`\" vs theirs \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\"",
         "[1] row: ours 0 vs theirs 3",
-        "[1] quickFixes: ours [Change to <>::<>] vs theirs [Change to ?-::?-, Add not null::]",
+        "[1] explanation: ours \"In ref definition `Ref: parent.id - child.parent_id`, the operator `-` implies `parent.id` has at most one row.\n`parent.id` has no unique or primary key constraint.\" vs theirs \"In ref definition `Ref: parent.id - child.parent_id`, the operator `-` requires `child.parent_id` to reference an existing row.\nIn column definition `parent_id integer [null]`, the column is nullable, which allows rows with no parent.\"",
+        "[1] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to ?-::?-::Make 'child.parent_id' optional in the ref (change operator to '?-')::true, Add not null::::Mark 'child.parent_id' as NOT NULL::]",
         "[2] text: ours \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\" vs theirs \"Column `child.parent_id` should be unique or primary key for operator `-`\"",
         "[2] row: ours 2 vs theirs 3",
-        "[2] quickFixes: ours [Change to ?-::?-, Add not null::not null] vs theirs [Change to <::<, Add unique::, unique]",
+        "[2] explanation: ours \"In ref definition `Ref: parent.id - child.parent_id`, the operator `-` requires `child.parent_id` to reference an existing row.\nIn column definition `parent_id integer [null]`, the column is nullable, which allows rows with no parent.\" vs theirs \"In ref definition `Ref: parent.id - child.parent_id`, the operator `-` implies `child.parent_id` has at most one row.\n`child.parent_id` has no unique or primary key constraint.\"",
+        "[2] quickFixes: ours [Change to ?-::?-::Make 'child.parent_id' optional in the ref (change operator to '?-')::true, Add not null::not null::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to <::<::Make 'child.parent_id' many in the ref (change operator to '<')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::]",
         "[3] text: ours \"Column `child.parent_id` should be unique or primary key for operator `-`\" vs theirs \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\"",
         "[3] row: ours 2 vs theirs 5",
-        "[3] quickFixes: ours [Change to <>::<>, Add unique::, unique] vs theirs [Change to ?-::?-, Add not null::]",
+        "[3] explanation: ours \"In ref definition `Ref: parent.id - child.parent_id`, the operator `-` implies `child.parent_id` has at most one row.\n`child.parent_id` has no unique or primary key constraint.\" vs theirs \"In ref definition `Ref: parent.id - child.parent_id`, the operator `-` requires `child.parent_id` to reference an existing row.\nIn column definition `parent_id integer [null]`, the column is nullable, which allows rows with no parent.\"",
+        "[3] quickFixes: ours [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to ?-::?-::Make 'child.parent_id' optional in the ref (change operator to '?-')::true, Add not null::::Mark 'child.parent_id' as NOT NULL::]",
         "[4] text: ours \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\" vs theirs \"Column `child.parent_id` should be unique or primary key for operator `-`\"",
         "[4] row: ours 4 vs theirs 5",
-        "[4] quickFixes: ours [Change to ?-::?-, Add not null::not null] vs theirs [Change to <::<, Add unique::, unique]",
+        "[4] explanation: ours \"In ref definition `Ref: parent.id - child.parent_id`, the operator `-` requires `child.parent_id` to reference an existing row.\nIn column definition `parent_id integer [null]`, the column is nullable, which allows rows with no parent.\" vs theirs \"In ref definition `Ref: parent.id - child.parent_id`, the operator `-` implies `child.parent_id` has at most one row.\n`child.parent_id` has no unique or primary key constraint.\"",
+        "[4] quickFixes: ours [Change to ?-::?-::Make 'child.parent_id' optional in the ref (change operator to '?-')::true, Add not null::not null::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to <::<::Make 'child.parent_id' many in the ref (change operator to '<')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::]",
         "[5] text: ours \"Column `child.parent_id` should be unique or primary key for operator `-`\" vs theirs \"Column `parent.id` should be unique or primary key for operator `-`\"",
         "[5] row: ours 4 vs theirs 5",
-        "[5] quickFixes: ours [Change to <>::<>, Add unique::, unique] vs theirs [Change to >::>, Add unique:: [unique]]"
+        "[5] explanation: ours \"In ref definition `Ref: parent.id - child.parent_id`, the operator `-` implies `child.parent_id` has at most one row.\n`child.parent_id` has no unique or primary key constraint.\" vs theirs \"In ref definition `Ref: parent.id - child.parent_id`, the operator `-` implies `parent.id` has at most one row.\n`parent.id` has no unique or primary key constraint.\"",
+        "[5] quickFixes: ours [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to >::>::Make 'parent.id' many in the ref (change operator to '>')::true, Add unique:: [unique]::Mark 'parent.id' as UNIQUE::]"
       ]
     },
     {
@@ -250,15 +263,17 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to >::>, Add unique::, unique]",
+        "[0] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to >::>::Make 'parent.id' many in the ref (change operator to '>')::true, Add unique::, unique::Mark 'parent.id' as UNIQUE::]",
         "[1] row: ours 2 vs theirs 3",
+        "[1] quickFixes: ours [Change to ?-::?-::Make 'child.parent_id' optional in the ref (change operator to '?-')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?-::?-::Make 'child.parent_id' optional in the ref (change operator to '?-')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::]",
         "[2] row: ours 2 vs theirs 3",
-        "[2] quickFixes: ours [Change to <>::<>, Add unique:: [unique]] vs theirs [Change to <::<, Add unique:: [unique]]",
+        "[2] quickFixes: ours [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique:: [unique]::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to <::<::Make 'child.parent_id' many in the ref (change operator to '<')::true, Add unique:: [unique]::Mark 'child.parent_id' as UNIQUE::]",
         "[3] row: ours 4 vs theirs 5",
+        "[3] quickFixes: ours [Change to ?-::?-::Make 'child.parent_id' optional in the ref (change operator to '?-')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?-::?-::Make 'child.parent_id' optional in the ref (change operator to '?-')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::]",
         "[4] row: ours 4 vs theirs 5",
-        "[4] quickFixes: ours [Change to <>::<>, Add unique:: [unique]] vs theirs [Change to <::<, Add unique:: [unique]]",
+        "[4] quickFixes: ours [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique:: [unique]::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to <::<::Make 'child.parent_id' many in the ref (change operator to '<')::true, Add unique:: [unique]::Mark 'child.parent_id' as UNIQUE::]",
         "[5] row: ours 4 vs theirs 5",
-        "[5] quickFixes: ours [Change to <>::<>] vs theirs [Change to >::>, Add unique::, unique]"
+        "[5] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to >::>::Make 'parent.id' many in the ref (change operator to '>')::true, Add unique::, unique::Mark 'parent.id' as UNIQUE::]"
       ]
     },
     {
@@ -269,22 +284,28 @@
         "count: ours 8 vs theirs 6",
         "[0] text: ours \"Column `parent.id` is nullable but operator `-` requires it to be NOT NULL\" vs theirs \"Column `parent.id` should be unique or primary key for operator `-`\"",
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [Change to -?::-?, Add not null:: [not null]] vs theirs [Change to >::>, Add unique:: [unique]]",
+        "[0] explanation: ours \"In ref definition `Ref: parent.id - child.parent_id`, the operator `-` requires `parent.id` to reference an existing row.\nIn column definition `id integer`, the column is nullable, which allows rows with no parent.\" vs theirs \"In ref definition `Ref: parent.id - child.parent_id`, the operator `-` implies `parent.id` has at most one row.\n`parent.id` has no unique or primary key constraint.\"",
+        "[0] quickFixes: ours [Change to -?::-?::Make 'parent.id' optional in the ref (change operator to '-?')::true, Add not null:: [not null]::Mark 'parent.id' as NOT NULL::false] vs theirs [Change to >::>::Make 'parent.id' many in the ref (change operator to '>')::true, Add unique:: [unique]::Mark 'parent.id' as UNIQUE::]",
         "[1] text: ours \"Column `parent.id` should be unique or primary key for operator `-`\" vs theirs \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\"",
         "[1] row: ours 0 vs theirs 3",
-        "[1] quickFixes: ours [Change to <>::<>] vs theirs [Change to ?-::?-, Add not null:: [not null]]",
+        "[1] explanation: ours \"In ref definition `Ref: parent.id - child.parent_id`, the operator `-` implies `parent.id` has at most one row.\n`parent.id` has no unique or primary key constraint.\" vs theirs \"In ref definition `Ref: parent.id - child.parent_id`, the operator `-` requires `child.parent_id` to reference an existing row.\nIn column definition `parent_id integer`, the column is nullable, which allows rows with no parent.\"",
+        "[1] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to ?-::?-::Make 'child.parent_id' optional in the ref (change operator to '?-')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::]",
         "[2] text: ours \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\" vs theirs \"Column `child.parent_id` should be unique or primary key for operator `-`\"",
         "[2] row: ours 2 vs theirs 3",
-        "[2] quickFixes: ours [Change to ?-::?-, Add not null:: [not null]] vs theirs [Change to <::<, Add unique:: [unique]]",
+        "[2] explanation: ours \"In ref definition `Ref: parent.id - child.parent_id`, the operator `-` requires `child.parent_id` to reference an existing row.\nIn column definition `parent_id integer`, the column is nullable, which allows rows with no parent.\" vs theirs \"In ref definition `Ref: parent.id - child.parent_id`, the operator `-` implies `child.parent_id` has at most one row.\n`child.parent_id` has no unique or primary key constraint.\"",
+        "[2] quickFixes: ours [Change to ?-::?-::Make 'child.parent_id' optional in the ref (change operator to '?-')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to <::<::Make 'child.parent_id' many in the ref (change operator to '<')::true, Add unique:: [unique]::Mark 'child.parent_id' as UNIQUE::]",
         "[3] text: ours \"Column `child.parent_id` should be unique or primary key for operator `-`\" vs theirs \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\"",
         "[3] row: ours 2 vs theirs 5",
-        "[3] quickFixes: ours [Change to <>::<>, Add unique:: [unique]] vs theirs [Change to ?-::?-, Add not null:: [not null]]",
+        "[3] explanation: ours \"In ref definition `Ref: parent.id - child.parent_id`, the operator `-` implies `child.parent_id` has at most one row.\n`child.parent_id` has no unique or primary key constraint.\" vs theirs \"In ref definition `Ref: parent.id - child.parent_id`, the operator `-` requires `child.parent_id` to reference an existing row.\nIn column definition `parent_id integer`, the column is nullable, which allows rows with no parent.\"",
+        "[3] quickFixes: ours [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique:: [unique]::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to ?-::?-::Make 'child.parent_id' optional in the ref (change operator to '?-')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::]",
         "[4] text: ours \"Column `child.parent_id` is nullable but operator `-` requires it to be NOT NULL\" vs theirs \"Column `child.parent_id` should be unique or primary key for operator `-`\"",
         "[4] row: ours 4 vs theirs 5",
-        "[4] quickFixes: ours [Change to ?-::?-, Add not null:: [not null]] vs theirs [Change to <::<, Add unique:: [unique]]",
+        "[4] explanation: ours \"In ref definition `Ref: parent.id - child.parent_id`, the operator `-` requires `child.parent_id` to reference an existing row.\nIn column definition `parent_id integer`, the column is nullable, which allows rows with no parent.\" vs theirs \"In ref definition `Ref: parent.id - child.parent_id`, the operator `-` implies `child.parent_id` has at most one row.\n`child.parent_id` has no unique or primary key constraint.\"",
+        "[4] quickFixes: ours [Change to ?-::?-::Make 'child.parent_id' optional in the ref (change operator to '?-')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to <::<::Make 'child.parent_id' many in the ref (change operator to '<')::true, Add unique:: [unique]::Mark 'child.parent_id' as UNIQUE::]",
         "[5] text: ours \"Column `child.parent_id` should be unique or primary key for operator `-`\" vs theirs \"Column `parent.id` should be unique or primary key for operator `-`\"",
         "[5] row: ours 4 vs theirs 5",
-        "[5] quickFixes: ours [Change to <>::<>, Add unique:: [unique]] vs theirs [Change to >::>, Add unique:: [unique]]"
+        "[5] explanation: ours \"In ref definition `Ref: parent.id - child.parent_id`, the operator `-` implies `child.parent_id` has at most one row.\n`child.parent_id` has no unique or primary key constraint.\" vs theirs \"In ref definition `Ref: parent.id - child.parent_id`, the operator `-` implies `parent.id` has at most one row.\n`parent.id` has no unique or primary key constraint.\"",
+        "[5] quickFixes: ours [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique:: [unique]::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to >::>::Make 'parent.id' many in the ref (change operator to '>')::true, Add unique:: [unique]::Mark 'parent.id' as UNIQUE::]"
       ]
     },
     {
@@ -293,7 +314,9 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 2 vs theirs 3",
-        "[1] row: ours 4 vs theirs 5"
+        "[0] quickFixes: ours [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::]",
+        "[1] row: ours 4 vs theirs 5",
+        "[1] quickFixes: ours [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::]"
       ]
     },
     {
@@ -302,9 +325,13 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [Change to >?::>?::Make 'parent.id' optional in the ref (change operator to '>?')::true, Add not null:: [not null]::Mark 'parent.id' as NOT NULL::false] vs theirs [Change to >?::>?::Make 'parent.id' optional in the ref (change operator to '>?')::true, Add not null:: [not null]::Mark 'parent.id' as NOT NULL::]",
         "[1] row: ours 2 vs theirs 3",
+        "[1] quickFixes: ours [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::]",
         "[2] row: ours 4 vs theirs 5",
-        "[3] row: ours 4 vs theirs 5"
+        "[2] quickFixes: ours [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::]",
+        "[3] row: ours 4 vs theirs 5",
+        "[3] quickFixes: ours [Change to >?::>?::Make 'parent.id' optional in the ref (change operator to '>?')::true, Add not null:: [not null]::Mark 'parent.id' as NOT NULL::false] vs theirs [Change to >?::>?::Make 'parent.id' optional in the ref (change operator to '>?')::true, Add not null:: [not null]::Mark 'parent.id' as NOT NULL::]"
       ]
     },
     {
@@ -313,7 +340,9 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 2 vs theirs 3",
-        "[1] row: ours 4 vs theirs 5"
+        "[0] quickFixes: ours [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::]",
+        "[1] row: ours 4 vs theirs 5",
+        "[1] quickFixes: ours [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::]"
       ]
     },
     {
@@ -322,9 +351,13 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [Change to >?::>?::Make 'parent.id' optional in the ref (change operator to '>?')::true, Add not null:: [not null]::Mark 'parent.id' as NOT NULL::false] vs theirs [Change to >?::>?::Make 'parent.id' optional in the ref (change operator to '>?')::true, Add not null:: [not null]::Mark 'parent.id' as NOT NULL::]",
         "[1] row: ours 2 vs theirs 3",
+        "[1] quickFixes: ours [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::]",
         "[2] row: ours 4 vs theirs 5",
-        "[3] row: ours 4 vs theirs 5"
+        "[2] quickFixes: ours [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::]",
+        "[3] row: ours 4 vs theirs 5",
+        "[3] quickFixes: ours [Change to >?::>?::Make 'parent.id' optional in the ref (change operator to '>?')::true, Add not null:: [not null]::Mark 'parent.id' as NOT NULL::false] vs theirs [Change to >?::>?::Make 'parent.id' optional in the ref (change operator to '>?')::true, Add not null:: [not null]::Mark 'parent.id' as NOT NULL::]"
       ]
     },
     {
@@ -333,7 +366,9 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 2 vs theirs 3",
-        "[1] row: ours 4 vs theirs 5"
+        "[0] quickFixes: ours [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique:: [unique]::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique:: [unique]::Mark 'child.parent_id' as UNIQUE::]",
+        "[1] row: ours 4 vs theirs 5",
+        "[1] quickFixes: ours [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique:: [unique]::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique:: [unique]::Mark 'child.parent_id' as UNIQUE::]"
       ]
     },
     {
@@ -342,9 +377,13 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [Change to >?::>?::Make 'parent.id' optional in the ref (change operator to '>?')::true, Add not null:: [not null]::Mark 'parent.id' as NOT NULL::false] vs theirs [Change to >?::>?::Make 'parent.id' optional in the ref (change operator to '>?')::true, Add not null:: [not null]::Mark 'parent.id' as NOT NULL::]",
         "[1] row: ours 2 vs theirs 3",
+        "[1] quickFixes: ours [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique:: [unique]::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique:: [unique]::Mark 'child.parent_id' as UNIQUE::]",
         "[2] row: ours 4 vs theirs 5",
-        "[3] row: ours 4 vs theirs 5"
+        "[2] quickFixes: ours [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique:: [unique]::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to <>::<>::Make 'child.parent_id' many in the ref (change operator to '<>')::true, Add unique:: [unique]::Mark 'child.parent_id' as UNIQUE::]",
+        "[3] row: ours 4 vs theirs 5",
+        "[3] quickFixes: ours [Change to >?::>?::Make 'parent.id' optional in the ref (change operator to '>?')::true, Add not null:: [not null]::Mark 'parent.id' as NOT NULL::false] vs theirs [Change to >?::>?::Make 'parent.id' optional in the ref (change operator to '>?')::true, Add not null:: [not null]::Mark 'parent.id' as NOT NULL::]"
       ]
     },
     {
@@ -353,11 +392,13 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [Change to >::>, Make nullable::null] vs theirs [Change to >::>, Make nullable::]",
+        "[0] quickFixes: ours [Change to >::>::Make 'parent.id' required in the ref (change operator to '>')::true, Make nullable::null::Mark 'parent.id' as NULL::false] vs theirs [Change to >::>::Make 'parent.id' required in the ref (change operator to '>')::true, Make nullable::::Mark 'parent.id' as NULL::]",
         "[1] row: ours 2 vs theirs 3",
+        "[1] quickFixes: ours [Change to <>?::<>?::Make 'child.parent_id' many in the ref (change operator to '<>?')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to <>?::<>?::Make 'child.parent_id' many in the ref (change operator to '<>?')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::]",
         "[2] row: ours 4 vs theirs 5",
+        "[2] quickFixes: ours [Change to <>?::<>?::Make 'child.parent_id' many in the ref (change operator to '<>?')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to <>?::<>?::Make 'child.parent_id' many in the ref (change operator to '<>?')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::]",
         "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [Change to >::>, Make nullable::null] vs theirs [Change to >::>, Make nullable::]"
+        "[3] quickFixes: ours [Change to >::>::Make 'parent.id' required in the ref (change operator to '>')::true, Make nullable::null::Mark 'parent.id' as NULL::false] vs theirs [Change to >::>::Make 'parent.id' required in the ref (change operator to '>')::true, Make nullable::::Mark 'parent.id' as NULL::]"
       ]
     },
     {
@@ -366,7 +407,9 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 2 vs theirs 3",
-        "[1] row: ours 4 vs theirs 5"
+        "[0] quickFixes: ours [Change to <>?::<>?::Make 'child.parent_id' many in the ref (change operator to '<>?')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to <>?::<>?::Make 'child.parent_id' many in the ref (change operator to '<>?')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::]",
+        "[1] row: ours 4 vs theirs 5",
+        "[1] quickFixes: ours [Change to <>?::<>?::Make 'child.parent_id' many in the ref (change operator to '<>?')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to <>?::<>?::Make 'child.parent_id' many in the ref (change operator to '<>?')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::]"
       ]
     },
     {
@@ -375,11 +418,13 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [Change to >::>, Make nullable::null] vs theirs [Change to >::>, Make nullable::]",
+        "[0] quickFixes: ours [Change to >::>::Make 'parent.id' required in the ref (change operator to '>')::true, Make nullable::null::Mark 'parent.id' as NULL::false] vs theirs [Change to >::>::Make 'parent.id' required in the ref (change operator to '>')::true, Make nullable::::Mark 'parent.id' as NULL::]",
         "[1] row: ours 2 vs theirs 3",
+        "[1] quickFixes: ours [Change to <>?::<>?::Make 'child.parent_id' many in the ref (change operator to '<>?')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to <>?::<>?::Make 'child.parent_id' many in the ref (change operator to '<>?')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::]",
         "[2] row: ours 4 vs theirs 5",
+        "[2] quickFixes: ours [Change to <>?::<>?::Make 'child.parent_id' many in the ref (change operator to '<>?')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to <>?::<>?::Make 'child.parent_id' many in the ref (change operator to '<>?')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::]",
         "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [Change to >::>, Make nullable::null] vs theirs [Change to >::>, Make nullable::]"
+        "[3] quickFixes: ours [Change to >::>::Make 'parent.id' required in the ref (change operator to '>')::true, Make nullable::null::Mark 'parent.id' as NULL::false] vs theirs [Change to >::>::Make 'parent.id' required in the ref (change operator to '>')::true, Make nullable::::Mark 'parent.id' as NULL::]"
       ]
     },
     {
@@ -388,7 +433,9 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 2 vs theirs 3",
-        "[1] row: ours 4 vs theirs 5"
+        "[0] quickFixes: ours [Change to <>?::<>?::Make 'child.parent_id' many in the ref (change operator to '<>?')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to <>?::<>?::Make 'child.parent_id' many in the ref (change operator to '<>?')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::]",
+        "[1] row: ours 4 vs theirs 5",
+        "[1] quickFixes: ours [Change to <>?::<>?::Make 'child.parent_id' many in the ref (change operator to '<>?')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to <>?::<>?::Make 'child.parent_id' many in the ref (change operator to '<>?')::true, Add unique::, unique::Mark 'child.parent_id' as UNIQUE::]"
       ]
     },
     {
@@ -397,11 +444,13 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [Change to >::>, Make nullable::null] vs theirs [Change to >::>, Make nullable::]",
+        "[0] quickFixes: ours [Change to >::>::Make 'parent.id' required in the ref (change operator to '>')::true, Make nullable::null::Mark 'parent.id' as NULL::false] vs theirs [Change to >::>::Make 'parent.id' required in the ref (change operator to '>')::true, Make nullable::::Mark 'parent.id' as NULL::]",
         "[1] row: ours 2 vs theirs 3",
+        "[1] quickFixes: ours [Change to <>?::<>?::Make 'child.parent_id' many in the ref (change operator to '<>?')::true, Add unique:: [unique]::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to <>?::<>?::Make 'child.parent_id' many in the ref (change operator to '<>?')::true, Add unique:: [unique]::Mark 'child.parent_id' as UNIQUE::]",
         "[2] row: ours 4 vs theirs 5",
+        "[2] quickFixes: ours [Change to <>?::<>?::Make 'child.parent_id' many in the ref (change operator to '<>?')::true, Add unique:: [unique]::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to <>?::<>?::Make 'child.parent_id' many in the ref (change operator to '<>?')::true, Add unique:: [unique]::Mark 'child.parent_id' as UNIQUE::]",
         "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [Change to >::>, Make nullable::null] vs theirs [Change to >::>, Make nullable::]"
+        "[3] quickFixes: ours [Change to >::>::Make 'parent.id' required in the ref (change operator to '>')::true, Make nullable::null::Mark 'parent.id' as NULL::false] vs theirs [Change to >::>::Make 'parent.id' required in the ref (change operator to '>')::true, Make nullable::::Mark 'parent.id' as NULL::]"
       ]
     },
     {
@@ -410,7 +459,9 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 2 vs theirs 3",
-        "[1] row: ours 4 vs theirs 5"
+        "[0] quickFixes: ours [Change to <>?::<>?::Make 'child.parent_id' many in the ref (change operator to '<>?')::true, Add unique:: [unique]::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to <>?::<>?::Make 'child.parent_id' many in the ref (change operator to '<>?')::true, Add unique:: [unique]::Mark 'child.parent_id' as UNIQUE::]",
+        "[1] row: ours 4 vs theirs 5",
+        "[1] quickFixes: ours [Change to <>?::<>?::Make 'child.parent_id' many in the ref (change operator to '<>?')::true, Add unique:: [unique]::Mark 'child.parent_id' as UNIQUE::false] vs theirs [Change to <>?::<>?::Make 'child.parent_id' many in the ref (change operator to '<>?')::true, Add unique:: [unique]::Mark 'child.parent_id' as UNIQUE::]"
       ]
     },
     {
@@ -419,9 +470,9 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>::<>, Add unique::, unique]",
+        "[0] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true, Add unique::, unique::Mark 'parent.id' as UNIQUE::]",
         "[1] row: ours 4 vs theirs 5",
-        "[1] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>::<>, Add unique::, unique]"
+        "[1] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true, Add unique::, unique::Mark 'parent.id' as UNIQUE::]"
       ]
     },
     {
@@ -430,9 +481,9 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>::<>, Add unique:: [unique]]",
+        "[0] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true, Add unique:: [unique]::Mark 'parent.id' as UNIQUE::]",
         "[1] row: ours 4 vs theirs 5",
-        "[1] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>::<>, Add unique:: [unique]]"
+        "[1] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true, Add unique:: [unique]::Mark 'parent.id' as UNIQUE::]"
       ]
     },
     {
@@ -441,13 +492,13 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>::<>, Add unique::, unique]",
+        "[0] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true, Add unique::, unique::Mark 'parent.id' as UNIQUE::]",
         "[1] row: ours 2 vs theirs 3",
-        "[1] quickFixes: ours [Change to ?<::?<, Add not null::not null] vs theirs [Change to ?<::?<, Add not null::]",
+        "[1] quickFixes: ours [Change to ?<::?<::Make 'child.parent_id' optional in the ref (change operator to '?<')::true, Add not null::not null::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<::?<::Make 'child.parent_id' optional in the ref (change operator to '?<')::true, Add not null::::Mark 'child.parent_id' as NOT NULL::]",
         "[2] row: ours 4 vs theirs 5",
-        "[2] quickFixes: ours [Change to ?<::?<, Add not null::not null] vs theirs [Change to ?<::?<, Add not null::]",
+        "[2] quickFixes: ours [Change to ?<::?<::Make 'child.parent_id' optional in the ref (change operator to '?<')::true, Add not null::not null::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<::?<::Make 'child.parent_id' optional in the ref (change operator to '?<')::true, Add not null::::Mark 'child.parent_id' as NOT NULL::]",
         "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>::<>, Add unique::, unique]"
+        "[3] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true, Add unique::, unique::Mark 'parent.id' as UNIQUE::]"
       ]
     },
     {
@@ -456,13 +507,13 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>::<>, Add unique:: [unique]]",
+        "[0] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true, Add unique:: [unique]::Mark 'parent.id' as UNIQUE::]",
         "[1] row: ours 2 vs theirs 3",
-        "[1] quickFixes: ours [Change to ?<::?<, Add not null::not null] vs theirs [Change to ?<::?<, Add not null::]",
+        "[1] quickFixes: ours [Change to ?<::?<::Make 'child.parent_id' optional in the ref (change operator to '?<')::true, Add not null::not null::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<::?<::Make 'child.parent_id' optional in the ref (change operator to '?<')::true, Add not null::::Mark 'child.parent_id' as NOT NULL::]",
         "[2] row: ours 4 vs theirs 5",
-        "[2] quickFixes: ours [Change to ?<::?<, Add not null::not null] vs theirs [Change to ?<::?<, Add not null::]",
+        "[2] quickFixes: ours [Change to ?<::?<::Make 'child.parent_id' optional in the ref (change operator to '?<')::true, Add not null::not null::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<::?<::Make 'child.parent_id' optional in the ref (change operator to '?<')::true, Add not null::::Mark 'child.parent_id' as NOT NULL::]",
         "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>::<>, Add unique:: [unique]]"
+        "[3] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true, Add unique:: [unique]::Mark 'parent.id' as UNIQUE::]"
       ]
     },
     {
@@ -471,11 +522,13 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>::<>, Add unique::, unique]",
+        "[0] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true, Add unique::, unique::Mark 'parent.id' as UNIQUE::]",
         "[1] row: ours 2 vs theirs 3",
+        "[1] quickFixes: ours [Change to ?<::?<::Make 'child.parent_id' optional in the ref (change operator to '?<')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<::?<::Make 'child.parent_id' optional in the ref (change operator to '?<')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::]",
         "[2] row: ours 4 vs theirs 5",
+        "[2] quickFixes: ours [Change to ?<::?<::Make 'child.parent_id' optional in the ref (change operator to '?<')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<::?<::Make 'child.parent_id' optional in the ref (change operator to '?<')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::]",
         "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>::<>, Add unique::, unique]"
+        "[3] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true, Add unique::, unique::Mark 'parent.id' as UNIQUE::]"
       ]
     },
     {
@@ -484,11 +537,13 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>::<>, Add unique:: [unique]]",
+        "[0] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true, Add unique:: [unique]::Mark 'parent.id' as UNIQUE::]",
         "[1] row: ours 2 vs theirs 3",
+        "[1] quickFixes: ours [Change to ?<::?<::Make 'child.parent_id' optional in the ref (change operator to '?<')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<::?<::Make 'child.parent_id' optional in the ref (change operator to '?<')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::]",
         "[2] row: ours 4 vs theirs 5",
+        "[2] quickFixes: ours [Change to ?<::?<::Make 'child.parent_id' optional in the ref (change operator to '?<')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<::?<::Make 'child.parent_id' optional in the ref (change operator to '?<')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::]",
         "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>::<>, Add unique:: [unique]]"
+        "[3] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true, Add unique:: [unique]::Mark 'parent.id' as UNIQUE::]"
       ]
     },
     {
@@ -502,7 +557,9 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 0 vs theirs 1",
-        "[1] row: ours 4 vs theirs 5"
+        "[0] quickFixes: ours [Change to <>?::<>?::Make 'parent.id' optional in the ref (change operator to '<>?')::true, Add not null:: [not null]::Mark 'parent.id' as NOT NULL::false] vs theirs [Change to <>?::<>?::Make 'parent.id' optional in the ref (change operator to '<>?')::true, Add not null:: [not null]::Mark 'parent.id' as NOT NULL::]",
+        "[1] row: ours 4 vs theirs 5",
+        "[1] quickFixes: ours [Change to <>?::<>?::Make 'parent.id' optional in the ref (change operator to '<>?')::true, Add not null:: [not null]::Mark 'parent.id' as NOT NULL::false] vs theirs [Change to <>?::<>?::Make 'parent.id' optional in the ref (change operator to '<>?')::true, Add not null:: [not null]::Mark 'parent.id' as NOT NULL::]"
       ]
     },
     {
@@ -511,9 +568,9 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 2 vs theirs 3",
-        "[0] quickFixes: ours [Change to ?<>::?<>, Add not null::not null] vs theirs [Change to ?<>::?<>, Add not null::]",
+        "[0] quickFixes: ours [Change to ?<>::?<>::Make 'child.parent_id' optional in the ref (change operator to '?<>')::true, Add not null::not null::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<>::?<>::Make 'child.parent_id' optional in the ref (change operator to '?<>')::true, Add not null::::Mark 'child.parent_id' as NOT NULL::]",
         "[1] row: ours 4 vs theirs 5",
-        "[1] quickFixes: ours [Change to ?<>::?<>, Add not null::not null] vs theirs [Change to ?<>::?<>, Add not null::]"
+        "[1] quickFixes: ours [Change to ?<>::?<>::Make 'child.parent_id' optional in the ref (change operator to '?<>')::true, Add not null::not null::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<>::?<>::Make 'child.parent_id' optional in the ref (change operator to '?<>')::true, Add not null::::Mark 'child.parent_id' as NOT NULL::]"
       ]
     },
     {
@@ -522,11 +579,13 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [Change to <>?::<>?::Make 'parent.id' optional in the ref (change operator to '<>?')::true, Add not null:: [not null]::Mark 'parent.id' as NOT NULL::false] vs theirs [Change to <>?::<>?::Make 'parent.id' optional in the ref (change operator to '<>?')::true, Add not null:: [not null]::Mark 'parent.id' as NOT NULL::]",
         "[1] row: ours 2 vs theirs 3",
-        "[1] quickFixes: ours [Change to ?<>::?<>, Add not null::not null] vs theirs [Change to ?<>::?<>, Add not null::]",
+        "[1] quickFixes: ours [Change to ?<>::?<>::Make 'child.parent_id' optional in the ref (change operator to '?<>')::true, Add not null::not null::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<>::?<>::Make 'child.parent_id' optional in the ref (change operator to '?<>')::true, Add not null::::Mark 'child.parent_id' as NOT NULL::]",
         "[2] row: ours 4 vs theirs 5",
-        "[2] quickFixes: ours [Change to ?<>::?<>, Add not null::not null] vs theirs [Change to ?<>::?<>, Add not null::]",
-        "[3] row: ours 4 vs theirs 5"
+        "[2] quickFixes: ours [Change to ?<>::?<>::Make 'child.parent_id' optional in the ref (change operator to '?<>')::true, Add not null::not null::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<>::?<>::Make 'child.parent_id' optional in the ref (change operator to '?<>')::true, Add not null::::Mark 'child.parent_id' as NOT NULL::]",
+        "[3] row: ours 4 vs theirs 5",
+        "[3] quickFixes: ours [Change to <>?::<>?::Make 'parent.id' optional in the ref (change operator to '<>?')::true, Add not null:: [not null]::Mark 'parent.id' as NOT NULL::false] vs theirs [Change to <>?::<>?::Make 'parent.id' optional in the ref (change operator to '<>?')::true, Add not null:: [not null]::Mark 'parent.id' as NOT NULL::]"
       ]
     },
     {
@@ -535,7 +594,9 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 2 vs theirs 3",
-        "[1] row: ours 4 vs theirs 5"
+        "[0] quickFixes: ours [Change to ?<>::?<>::Make 'child.parent_id' optional in the ref (change operator to '?<>')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<>::?<>::Make 'child.parent_id' optional in the ref (change operator to '?<>')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::]",
+        "[1] row: ours 4 vs theirs 5",
+        "[1] quickFixes: ours [Change to ?<>::?<>::Make 'child.parent_id' optional in the ref (change operator to '?<>')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<>::?<>::Make 'child.parent_id' optional in the ref (change operator to '?<>')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::]"
       ]
     },
     {
@@ -544,9 +605,13 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 0 vs theirs 1",
+        "[0] quickFixes: ours [Change to <>?::<>?::Make 'parent.id' optional in the ref (change operator to '<>?')::true, Add not null:: [not null]::Mark 'parent.id' as NOT NULL::false] vs theirs [Change to <>?::<>?::Make 'parent.id' optional in the ref (change operator to '<>?')::true, Add not null:: [not null]::Mark 'parent.id' as NOT NULL::]",
         "[1] row: ours 2 vs theirs 3",
+        "[1] quickFixes: ours [Change to ?<>::?<>::Make 'child.parent_id' optional in the ref (change operator to '?<>')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<>::?<>::Make 'child.parent_id' optional in the ref (change operator to '?<>')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::]",
         "[2] row: ours 4 vs theirs 5",
-        "[3] row: ours 4 vs theirs 5"
+        "[2] quickFixes: ours [Change to ?<>::?<>::Make 'child.parent_id' optional in the ref (change operator to '?<>')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<>::?<>::Make 'child.parent_id' optional in the ref (change operator to '?<>')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::]",
+        "[3] row: ours 4 vs theirs 5",
+        "[3] quickFixes: ours [Change to <>?::<>?::Make 'parent.id' optional in the ref (change operator to '<>?')::true, Add not null:: [not null]::Mark 'parent.id' as NOT NULL::false] vs theirs [Change to <>?::<>?::Make 'parent.id' optional in the ref (change operator to '<>?')::true, Add not null:: [not null]::Mark 'parent.id' as NOT NULL::]"
       ]
     },
     {
@@ -555,9 +620,9 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [Change to <>::<>, Make nullable::null] vs theirs [Change to <>::<>, Make nullable::]",
+        "[0] quickFixes: ours [Change to <>::<>::Make 'parent.id' required in the ref (change operator to '<>')::true, Make nullable::null::Mark 'parent.id' as NULL::false] vs theirs [Change to <>::<>::Make 'parent.id' required in the ref (change operator to '<>')::true, Make nullable::::Mark 'parent.id' as NULL::]",
         "[1] row: ours 4 vs theirs 5",
-        "[1] quickFixes: ours [Change to <>::<>, Make nullable::null] vs theirs [Change to <>::<>, Make nullable::]"
+        "[1] quickFixes: ours [Change to <>::<>::Make 'parent.id' required in the ref (change operator to '<>')::true, Make nullable::null::Mark 'parent.id' as NULL::false] vs theirs [Change to <>::<>::Make 'parent.id' required in the ref (change operator to '<>')::true, Make nullable::::Mark 'parent.id' as NULL::]"
       ]
     },
     {
@@ -571,13 +636,13 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [Change to <>::<>, Make nullable::null] vs theirs [Change to <>::<>, Make nullable::]",
+        "[0] quickFixes: ours [Change to <>::<>::Make 'parent.id' required in the ref (change operator to '<>')::true, Make nullable::null::Mark 'parent.id' as NULL::false] vs theirs [Change to <>::<>::Make 'parent.id' required in the ref (change operator to '<>')::true, Make nullable::::Mark 'parent.id' as NULL::]",
         "[1] row: ours 2 vs theirs 3",
-        "[1] quickFixes: ours [Change to ?<>?::?<>?, Add not null::not null] vs theirs [Change to ?<>?::?<>?, Add not null::]",
+        "[1] quickFixes: ours [Change to ?<>?::?<>?::Make 'child.parent_id' optional in the ref (change operator to '?<>?')::true, Add not null::not null::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<>?::?<>?::Make 'child.parent_id' optional in the ref (change operator to '?<>?')::true, Add not null::::Mark 'child.parent_id' as NOT NULL::]",
         "[2] row: ours 4 vs theirs 5",
-        "[2] quickFixes: ours [Change to ?<>?::?<>?, Add not null::not null] vs theirs [Change to ?<>?::?<>?, Add not null::]",
+        "[2] quickFixes: ours [Change to ?<>?::?<>?::Make 'child.parent_id' optional in the ref (change operator to '?<>?')::true, Add not null::not null::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<>?::?<>?::Make 'child.parent_id' optional in the ref (change operator to '?<>?')::true, Add not null::::Mark 'child.parent_id' as NOT NULL::]",
         "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [Change to <>::<>, Make nullable::null] vs theirs [Change to <>::<>, Make nullable::]"
+        "[3] quickFixes: ours [Change to <>::<>::Make 'parent.id' required in the ref (change operator to '<>')::true, Make nullable::null::Mark 'parent.id' as NULL::false] vs theirs [Change to <>::<>::Make 'parent.id' required in the ref (change operator to '<>')::true, Make nullable::::Mark 'parent.id' as NULL::]"
       ]
     },
     {
@@ -586,9 +651,9 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 2 vs theirs 3",
-        "[0] quickFixes: ours [Change to ?<>?::?<>?, Add not null::not null] vs theirs [Change to ?<>?::?<>?, Add not null::]",
+        "[0] quickFixes: ours [Change to ?<>?::?<>?::Make 'child.parent_id' optional in the ref (change operator to '?<>?')::true, Add not null::not null::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<>?::?<>?::Make 'child.parent_id' optional in the ref (change operator to '?<>?')::true, Add not null::::Mark 'child.parent_id' as NOT NULL::]",
         "[1] row: ours 4 vs theirs 5",
-        "[1] quickFixes: ours [Change to ?<>?::?<>?, Add not null::not null] vs theirs [Change to ?<>?::?<>?, Add not null::]"
+        "[1] quickFixes: ours [Change to ?<>?::?<>?::Make 'child.parent_id' optional in the ref (change operator to '?<>?')::true, Add not null::not null::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<>?::?<>?::Make 'child.parent_id' optional in the ref (change operator to '?<>?')::true, Add not null::::Mark 'child.parent_id' as NOT NULL::]"
       ]
     },
     {
@@ -597,11 +662,13 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [Change to <>::<>, Make nullable::null] vs theirs [Change to <>::<>, Make nullable::]",
+        "[0] quickFixes: ours [Change to <>::<>::Make 'parent.id' required in the ref (change operator to '<>')::true, Make nullable::null::Mark 'parent.id' as NULL::false] vs theirs [Change to <>::<>::Make 'parent.id' required in the ref (change operator to '<>')::true, Make nullable::::Mark 'parent.id' as NULL::]",
         "[1] row: ours 2 vs theirs 3",
+        "[1] quickFixes: ours [Change to ?<>?::?<>?::Make 'child.parent_id' optional in the ref (change operator to '?<>?')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<>?::?<>?::Make 'child.parent_id' optional in the ref (change operator to '?<>?')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::]",
         "[2] row: ours 4 vs theirs 5",
+        "[2] quickFixes: ours [Change to ?<>?::?<>?::Make 'child.parent_id' optional in the ref (change operator to '?<>?')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<>?::?<>?::Make 'child.parent_id' optional in the ref (change operator to '?<>?')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::]",
         "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [Change to <>::<>, Make nullable::null] vs theirs [Change to <>::<>, Make nullable::]"
+        "[3] quickFixes: ours [Change to <>::<>::Make 'parent.id' required in the ref (change operator to '<>')::true, Make nullable::null::Mark 'parent.id' as NULL::false] vs theirs [Change to <>::<>::Make 'parent.id' required in the ref (change operator to '<>')::true, Make nullable::::Mark 'parent.id' as NULL::]"
       ]
     },
     {
@@ -610,7 +677,9 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 2 vs theirs 3",
-        "[1] row: ours 4 vs theirs 5"
+        "[0] quickFixes: ours [Change to ?<>?::?<>?::Make 'child.parent_id' optional in the ref (change operator to '?<>?')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<>?::?<>?::Make 'child.parent_id' optional in the ref (change operator to '?<>?')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::]",
+        "[1] row: ours 4 vs theirs 5",
+        "[1] quickFixes: ours [Change to ?<>?::?<>?::Make 'child.parent_id' optional in the ref (change operator to '?<>?')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<>?::?<>?::Make 'child.parent_id' optional in the ref (change operator to '?<>?')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::]"
       ]
     },
     {
@@ -619,9 +688,9 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>?::<>?, Add unique::, unique]",
+        "[0] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to <>?::<>?::Make 'parent.id' many in the ref (change operator to '<>?')::true, Add unique::, unique::Mark 'parent.id' as UNIQUE::]",
         "[1] row: ours 4 vs theirs 5",
-        "[1] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>?::<>?, Add unique::, unique]"
+        "[1] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to <>?::<>?::Make 'parent.id' many in the ref (change operator to '<>?')::true, Add unique::, unique::Mark 'parent.id' as UNIQUE::]"
       ]
     },
     {
@@ -630,9 +699,9 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>?::<>?, Add unique:: [unique]]",
+        "[0] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to <>?::<>?::Make 'parent.id' many in the ref (change operator to '<>?')::true, Add unique:: [unique]::Mark 'parent.id' as UNIQUE::]",
         "[1] row: ours 4 vs theirs 5",
-        "[1] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>?::<>?, Add unique:: [unique]]"
+        "[1] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to <>?::<>?::Make 'parent.id' many in the ref (change operator to '<>?')::true, Add unique:: [unique]::Mark 'parent.id' as UNIQUE::]"
       ]
     },
     {
@@ -641,13 +710,13 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>?::<>?, Add unique::, unique]",
+        "[0] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to <>?::<>?::Make 'parent.id' many in the ref (change operator to '<>?')::true, Add unique::, unique::Mark 'parent.id' as UNIQUE::]",
         "[1] row: ours 2 vs theirs 3",
-        "[1] quickFixes: ours [Change to ?<?::?<?, Add not null::not null] vs theirs [Change to ?<?::?<?, Add not null::]",
+        "[1] quickFixes: ours [Change to ?<?::?<?::Make 'child.parent_id' optional in the ref (change operator to '?<?')::true, Add not null::not null::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<?::?<?::Make 'child.parent_id' optional in the ref (change operator to '?<?')::true, Add not null::::Mark 'child.parent_id' as NOT NULL::]",
         "[2] row: ours 4 vs theirs 5",
-        "[2] quickFixes: ours [Change to ?<?::?<?, Add not null::not null] vs theirs [Change to ?<?::?<?, Add not null::]",
+        "[2] quickFixes: ours [Change to ?<?::?<?::Make 'child.parent_id' optional in the ref (change operator to '?<?')::true, Add not null::not null::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<?::?<?::Make 'child.parent_id' optional in the ref (change operator to '?<?')::true, Add not null::::Mark 'child.parent_id' as NOT NULL::]",
         "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>?::<>?, Add unique::, unique]"
+        "[3] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to <>?::<>?::Make 'parent.id' many in the ref (change operator to '<>?')::true, Add unique::, unique::Mark 'parent.id' as UNIQUE::]"
       ]
     },
     {
@@ -656,13 +725,13 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>?::<>?, Add unique:: [unique]]",
+        "[0] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to <>?::<>?::Make 'parent.id' many in the ref (change operator to '<>?')::true, Add unique:: [unique]::Mark 'parent.id' as UNIQUE::]",
         "[1] row: ours 2 vs theirs 3",
-        "[1] quickFixes: ours [Change to ?<?::?<?, Add not null::not null] vs theirs [Change to ?<?::?<?, Add not null::]",
+        "[1] quickFixes: ours [Change to ?<?::?<?::Make 'child.parent_id' optional in the ref (change operator to '?<?')::true, Add not null::not null::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<?::?<?::Make 'child.parent_id' optional in the ref (change operator to '?<?')::true, Add not null::::Mark 'child.parent_id' as NOT NULL::]",
         "[2] row: ours 4 vs theirs 5",
-        "[2] quickFixes: ours [Change to ?<?::?<?, Add not null::not null] vs theirs [Change to ?<?::?<?, Add not null::]",
+        "[2] quickFixes: ours [Change to ?<?::?<?::Make 'child.parent_id' optional in the ref (change operator to '?<?')::true, Add not null::not null::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<?::?<?::Make 'child.parent_id' optional in the ref (change operator to '?<?')::true, Add not null::::Mark 'child.parent_id' as NOT NULL::]",
         "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>?::<>?, Add unique:: [unique]]"
+        "[3] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to <>?::<>?::Make 'parent.id' many in the ref (change operator to '<>?')::true, Add unique:: [unique]::Mark 'parent.id' as UNIQUE::]"
       ]
     },
     {
@@ -671,11 +740,13 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>?::<>?, Add unique::, unique]",
+        "[0] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to <>?::<>?::Make 'parent.id' many in the ref (change operator to '<>?')::true, Add unique::, unique::Mark 'parent.id' as UNIQUE::]",
         "[1] row: ours 2 vs theirs 3",
+        "[1] quickFixes: ours [Change to ?<?::?<?::Make 'child.parent_id' optional in the ref (change operator to '?<?')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<?::?<?::Make 'child.parent_id' optional in the ref (change operator to '?<?')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::]",
         "[2] row: ours 4 vs theirs 5",
+        "[2] quickFixes: ours [Change to ?<?::?<?::Make 'child.parent_id' optional in the ref (change operator to '?<?')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<?::?<?::Make 'child.parent_id' optional in the ref (change operator to '?<?')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::]",
         "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>?::<>?, Add unique::, unique]"
+        "[3] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to <>?::<>?::Make 'parent.id' many in the ref (change operator to '<>?')::true, Add unique::, unique::Mark 'parent.id' as UNIQUE::]"
       ]
     },
     {
@@ -684,11 +755,13 @@
       "class": "semantic",
       "problems": [
         "[0] row: ours 0 vs theirs 1",
-        "[0] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>?::<>?, Add unique:: [unique]]",
+        "[0] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to <>?::<>?::Make 'parent.id' many in the ref (change operator to '<>?')::true, Add unique:: [unique]::Mark 'parent.id' as UNIQUE::]",
         "[1] row: ours 2 vs theirs 3",
+        "[1] quickFixes: ours [Change to ?<?::?<?::Make 'child.parent_id' optional in the ref (change operator to '?<?')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<?::?<?::Make 'child.parent_id' optional in the ref (change operator to '?<?')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::]",
         "[2] row: ours 4 vs theirs 5",
+        "[2] quickFixes: ours [Change to ?<?::?<?::Make 'child.parent_id' optional in the ref (change operator to '?<?')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::false] vs theirs [Change to ?<?::?<?::Make 'child.parent_id' optional in the ref (change operator to '?<?')::true, Add not null:: [not null]::Mark 'child.parent_id' as NOT NULL::]",
         "[3] row: ours 4 vs theirs 5",
-        "[3] quickFixes: ours [Change to <>::<>] vs theirs [Change to <>?::<>?, Add unique:: [unique]]"
+        "[3] quickFixes: ours [Change to <>::<>::Make 'parent.id' many in the ref (change operator to '<>')::true] vs theirs [Change to <>?::<>?::Make 'parent.id' many in the ref (change operator to '<>?')::true, Add unique:: [unique]::Mark 'parent.id' as UNIQUE::]"
       ]
     },
     {
@@ -697,7 +770,9 @@
       "class": "semantic",
       "problems": [
         "count: ours 2 vs theirs 1",
-        "[0] row: ours 6 vs theirs 7"
+        "[0] row: ours 6 vs theirs 7",
+        "[0] explanation: ours \"In ref definition `author_id integer [ref: > users.id]`, the operator `>` requires `posts.author_id` to reference an existing row.\nIn column definition `author_id integer [ref: > users.id]`, the column is nullable, which allows rows with no parent.\" vs theirs \"In ref definition `ref: > users.id`, the operator `>` requires `posts.author_id` to reference an existing row.\nIn column definition `author_id integer [ref: > users.id]`, the column is nullable, which allows rows with no parent.\"",
+        "[0] quickFixes: ours [Change to >?::>?::Make 'posts.author_id' optional in the ref (change operator to '>?')::true, Add not null::, not null::Mark 'posts.author_id' as NOT NULL::false] vs theirs [Change to >?::>?::Make 'posts.author_id' optional in the ref (change operator to '>?')::true, Add not null::, not null::Mark 'posts.author_id' as NOT NULL::]"
       ]
     },
     {
@@ -707,9 +782,13 @@
       "problems": [
         "count: ours 3 vs theirs 2",
         "[0] row: ours 3 vs theirs 4",
+        "[0] explanation: ours \"In ref definition `author_id integer [ref: > users.id]`, the operator `>` requires `posts.author_id` to reference an existing row.\nIn column definition `author_id integer [ref: > users.id]`, the column is nullable, which allows rows with no parent.\" vs theirs \"In ref definition `ref: > users.id`, the operator `>` requires `posts.author_id` to reference an existing row.\nIn column definition `author_id integer [ref: > users.id]`, the column is nullable, which allows rows with no parent.\"",
+        "[0] quickFixes: ours [Change to >?::>?::Make 'posts.author_id' optional in the ref (change operator to '>?')::true, Add not null::, not null::Mark 'posts.author_id' as NOT NULL::false] vs theirs [Change to >?::>?::Make 'posts.author_id' optional in the ref (change operator to '>?')::true, Add not null::, not null::Mark 'posts.author_id' as NOT NULL::]",
         "[1] text: ours \"Column `posts.author_id` is nullable but operator `>` requires it to be NOT NULL\" vs theirs \"FK violation: `posts.author_id` = `42` does not exist in `users.id`\"",
         "[1] row: ours 3 vs theirs 6",
-        "[1] quickFixes: ours [Change to >?::>?, Add not null::, not null] vs theirs []"
+        "[1] category: ours \"Mismatched optional ref constraints\" vs theirs \"Record constraint violations\"",
+        "[1] explanation: ours \"In ref definition `author_id integer [ref: > users.id]`, the operator `>` requires `posts.author_id` to reference an existing row.\nIn column definition `author_id integer [ref: > users.id]`, the column is nullable, which allows rows with no parent.\" vs theirs \"`posts.author_id` is a foreign key referencing `users.id`. Every non-null value in an FK must match an existing row in the referenced column.\"",
+        "[1] quickFixes: ours [Change to >?::>?::Make 'posts.author_id' optional in the ref (change operator to '>?')::true, Add not null::, not null::Mark 'posts.author_id' as NOT NULL::false] vs theirs []"
       ]
     },
     {
@@ -719,7 +798,10 @@
       "problems": [
         "[0] text: ours \"FK violation: `posts.author_id` = `` must not be NULL\" vs theirs \"FK violation: `posts.author_id` = `null` must not be NULL\"",
         "[0] row: ours 5 vs theirs 6",
-        "[1] row: ours 5 vs theirs 6"
+        "[0] explanation: ours \"\" vs theirs \"`posts.author_id` references `users.id`, so every row must have a non-null value.\"",
+        "[1] row: ours 5 vs theirs 6",
+        "[1] category: ours \"Record constraint violations\" vs theirs \"Record type errors\"",
+        "[1] explanation: ours \"\" vs theirs \"`author_id` is marked NOT NULL and has no default value or auto-increment.\""
       ]
     },
     {

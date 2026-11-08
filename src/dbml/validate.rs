@@ -33,6 +33,9 @@ pub struct QuickFix {
     pub short_title: String,
     pub span: Span,
     pub new_text: String,
+    /// Their convention: the operator-change fix is the preferred one;
+    /// column-setting edits are not.
+    pub is_preferred: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -217,6 +220,7 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
                         "The line still renders here; dbdiagram's grammar rejects it.".to_string(),
                     ],
                     quick_fixes: vec![QuickFix {
+                        is_preferred: false,
                         title: "Use bracketed settings".to_string(),
                         short_title: "Use bracketed settings".to_string(),
                         span: ix.span.clone(),
@@ -433,6 +437,7 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
                     short_title: format!("Change to {new_op}"),
                     span: op_offset..op_offset + op_len,
                     new_text: new_op.to_string(),
+                    is_preferred: true,
                 }
             };
             // the checked side's own columns' definition lines (the first
@@ -459,6 +464,7 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
                             setting_edit(&col.span, "null", "not null", ", not null")
                         {
                             fixes.push(QuickFix {
+                        is_preferred: false,
                                 title: format!("Mark '{}.{}' as NOT NULL", checked_table, c),
                                 short_title: "Add not null".to_string(),
                                 span: edit.0,
@@ -514,6 +520,7 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
                     if let Some(col) = column_of(checked_table, c) {
                         if let Some(edit) = setting_edit(&col.span, "not null", "null", ", null") {
                             fixes.push(QuickFix {
+                        is_preferred: false,
                                 title: format!("Mark '{}.{}' as NULL", checked_table, c),
                                 short_title: "Make nullable".to_string(),
                                 span: edit.0,
@@ -568,6 +575,7 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
                     op_for_bounds(other_many, other_many, true, false)
                 };
                 let fixes = vec![QuickFix {
+                    is_preferred: true,
                     title: format!(
                         "Make '{req_names}' one in the ref (change operator to '{new_op}')"
                     ),
@@ -623,6 +631,7 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
                     op_for_bounds(other_min_one, true, true, true)
                 };
                 let mut fixes = vec![QuickFix {
+                    is_preferred: true,
                     title: format!(
                         "Make '{req_names}' many in the ref (change operator to '{new_op}')"
                     ),
@@ -634,6 +643,7 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
                     if let Some(col) = column_of(other_cols_table, &other_cols[0]) {
                         if let Some(edit) = setting_edit(&col.span, "unique", "unique", ", unique") {
                             fixes.push(QuickFix {
+                        is_preferred: false,
                                 title: format!(
                                     "Mark '{}.{}' as UNIQUE",
                                     other_cols_table,

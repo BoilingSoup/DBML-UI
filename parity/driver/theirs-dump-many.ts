@@ -13,8 +13,16 @@ const dump = (ds: any[]) => ds.map((d: any) => ({
   type: d.type,
   text: d.text,
   row: d.startRow,
+  column: d.startColumn ?? null,
+  endRow: d.endRow ?? null,
+  endColumn: d.endColumn ?? null,
+  category: d.category ?? null,
+  explanation: d.explanation ?? null,
+  code: d.code ?? null,
   quickFixes: (d.quickFixes ?? []).map((q: any) => ({
-    shortTitle: q.shortTitle ?? q.title ?? null,
+    title: q.title ?? null,
+    shortTitle: q.shortTitle ?? null,
+    isPreferred: q.isPreferred ?? null,
     newText: (q.edits ?? []).map((e: any) => e.newText).join(' | '),
   })),
 }));

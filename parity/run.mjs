@@ -59,13 +59,21 @@ const sortDiags = (list) =>
   [...list].sort(
     (a, b) => a.row - b.row || a.type.localeCompare(b.type) || a.text.localeCompare(b.text),
   );
-const fixKey = (q) => `${q.shortTitle}::${q.newText}`;
+const fixKey = (q) => `${q.shortTitle}::${q.newText}::${q.title ?? ''}::${q.isPreferred ?? ''}`;
 const fixMultiset = (list) => {
   list = list ?? [];
   const m = new Map();
   for (const q of list) m.set(fixKey(q), (m.get(fixKey(q)) ?? 0) + 1);
   return [...m.entries()].sort().join('|');
 };
+// explanation normalization: their string carries "- " bullet prefixes;
+// ours is the bullet list. Both normalize to trimmed bullet lines.
+const normExpl = (s) =>
+  (s ?? '')
+    .split('\n')
+    .map((l) => l.trim().replace(/^- /, '').trim())
+    .filter(Boolean)
+    .join('\n');
 
 const report = [];
 let pass = 0;
@@ -93,6 +101,12 @@ for (const { name } of cases) {
     if (a.type !== b.type) problems.push(`[${i}] type: ours ${a.type} vs theirs ${b.type}`);
     if (a.text !== b.text) problems.push(`[${i}] text: ours "${a.text}" vs theirs "${b.text}"`);
     if (a.row !== b.row) problems.push(`[${i}] row: ours ${a.row} vs theirs ${b.row}`);
+    if ((a.category ?? null) !== (b.category ?? null)) {
+      problems.push(`[${i}] category: ours "${a.category ?? null}" vs theirs "${b.category ?? null}"`);
+    }
+    if (normExpl(a.explanation) !== normExpl(b.explanation)) {
+      problems.push(`[${i}] explanation: ours "${normExpl(a.explanation)}" vs theirs "${normExpl(b.explanation)}"`);
+    }
     if (fixMultiset(a.quickFixes ?? []) !== fixMultiset(b.quickFixes ?? [])) {
       problems.push(`[${i}] quickFixes: ours [${(a.quickFixes ?? []).map(fixKey).join(', ')}] vs theirs [${(b.quickFixes ?? []).map(fixKey).join(', ')}]`);
     }
