@@ -9,6 +9,7 @@ fn main() {
         let sev = match d.severity {
             dbml_ui::dbml::validate::Severity::Error => "error",
             dbml_ui::dbml::validate::Severity::Warning => "warn",
+            dbml_ui::dbml::validate::Severity::Info => "info",
         };
         println!(
             "  [{}{}] {}:{} {}",

@@ -740,17 +740,13 @@ impl Tab {
         self.parse_errors = out.errors;
         // dbdiagram-style diagnostics: strict-grammar warnings plus the
         // semantic pass (non-blocking — the doc still renders and formats).
-        // While ANY parse error stands, warnings are suppressed entirely
-        // (their pipeline clears parseWarning when errors exist).
-        let diags = dbml::validate::validate(&out.doc, src);
-        self.diagnostics = if !has_errors {
-            diags
+        // While ANY parse error stands the semantic pass is suppressed
+        // entirely — their pipeline surfaces only parse errors then
+        // (corpus-verified: no case mixes the two).
+        self.diagnostics = if has_errors {
+            Vec::new()
         } else {
-            use dbml::validate::Severity;
-            diags
-                .into_iter()
-                .filter(|d| d.severity == Severity::Error)
-                .collect()
+            dbml::validate::validate(&out.doc, src)
         };
     }
 
@@ -9886,8 +9882,13 @@ mod diagnostics_panel_tests {
     use super::*;
 
     fn diagapp() -> App {
-        // one dangling-ref diagnostic + one parse error
-        App::with_source("Table a {\n  id integer [pk]\n}\nRef: a.id > b.x\nTable {\n".into())
+        // two dangling-ref diagnostics (the table and the column), clean
+        // parse — while a parse error stands the semantic pass is
+        // suppressed entirely (their pipeline), so the fixture must not
+        // carry one
+        App::with_source(
+            "Table a {\n  id integer [pk]\n}\nRef: a.id > b.x\nRef: a.id > a.nope\n".into(),
+        )
     }
 
     #[test]
@@ -9960,7 +9961,7 @@ mod diagnostics_panel_tests {
         app.cur_mut()
             .set_source("Table t {\n  id integer\n  indexes {\n    (id), unique\n  }\n}\n");
         assert!(app.cur().parse_errors.is_empty());
-        assert!(app.all_diagnostics().iter().any(|d| d.severity == dbml::validate::Severity::Warning));
+        assert!(app.all_diagnostics().iter().any(|d| d.severity == dbml::validate::Severity::Info));
     }
 
     #[test]

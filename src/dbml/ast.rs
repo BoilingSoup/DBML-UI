@@ -136,6 +136,9 @@ pub struct InlineRef {
     pub to: Endpoint,
     /// Byte offset of the operator (see `Ref::op_offset`).
     pub op_offset: usize,
+    /// Byte offset of the `ref` keyword itself — the attribute's start
+    /// (their inline-ref right token anchors there).
+    pub attr_start: usize,
     /// Endpoint settings bracket `[color: …]` — the relationship's color.
     pub color: Option<String>,
 }

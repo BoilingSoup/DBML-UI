@@ -1,0 +1,2 @@
+Table t { id integer PK
+}

@@ -1717,7 +1717,7 @@ mod error_tests {
         let marks = error_marks(&app);
         assert_eq!(marks.len(), 1, "{marks:?}");
         assert!(!marks[0].warn);
-        assert_eq!(marks[0].message, "Table 'b' does not exist");
+        assert_eq!(marks[0].message, "Table 'b' does not exist in Schema 'public'");
 
         // strict-grammar recovery (comma index settings): soft-blue
         let app = App::with_source(

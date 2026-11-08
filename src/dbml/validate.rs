@@ -106,18 +106,16 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
         }
         enums.push(e.name.as_str());
     }
-    // their engine flags EVERY occurrence of a duplicated enum field
-    // (probe: both 'x' rows on `Enum e { x\n x }`)
+    // their engine flags EVERY occurrence of a duplicated enum field —
+    // the first twin included (probe: both 'x' rows on `Enum e { x\n x }`)
     for e in &doc.enums {
-        let mut seen: Vec<&str> = Vec::new();
         for v in &e.values {
-            if seen.contains(&v.name.as_str()) {
+            if e.values.iter().filter(|o| o.name == v.name).count() > 1 {
                 out.push(Diagnostic::plain(
                     v.name_span.start,
                     format!("Duplicate enum field '{}'", v.name),
                 ));
             }
-            seen.push(v.name.as_str());
         }
     }
 
@@ -231,18 +229,131 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
         }
     }
 
-    // ---- the ref-relationship engine: per-side runs, four checks each ----
-    // (their compiler's relationship analyzer, ported: the operator set
-    // carries per-side optional marks — `?>`/`>?`/… — and each side's
-    // columns are checked against the OTHER side's bound. Four blocks per
-    // run: the nullable mismatch, the required mismatch, the unique
-    // mismatch and the should-be-unique mismatch. Every diagnostic emits
-    // at the checked side's ref endpoint plus each checked column's own
-    // definition, all sharing one body: the same explanation bullets and
-    // quick fixes. The column-setting fixes ("Mark … as NOT NULL/NULL")
-    // are enabled only for the run whose checked side is the ref's RIGHT
-    // endpoint — the left endpoint's diagnostics carry the operator fix
-    // alone, live-verified on their editor.)
+    // ---- the ref-relationship engine — a direct port of their
+    // `validateCardinality` (packages/dbml-parse ref/constraint_fixes.ts).
+    // Each side of a ref runs four checks: two against the OTHER side's
+    // columns (the nullable and the required mismatch, gated on the other
+    // side being the FK source) and two against its own (unique-when-many,
+    // should-be-unique-when-one). Every finding anchors on the side's
+    // endpoint token plus each of its columns' declarations, skipping
+    // anchors that coincide (an inline ref's host column IS its left
+    // token, so the pair collapses to one entry — their pushDiag).
+    //
+    // Cardinality algebra (their core/types/relation.ts): the 16 operator
+    // forms are pairs over four raw bounds, and a quick-fix target
+    // re-composes the transformed side with the untouched other side —
+    // which is how a written `<?` suggests `<>?` and a written `-`
+    // suggests `>` (left side relaxes) / `<` (right side relaxes).
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Card {
+        /// `1` — required one
+        One,
+        /// `0..1` — optional one
+        Maybe,
+        /// `*` — required many (their CARDINALITY_SOME)
+        Some,
+        /// `0..*` — optional many
+        Many,
+    }
+    impl Card {
+        fn min_one(self) -> bool {
+            matches!(self, Card::One | Card::Some)
+        }
+        fn max_many(self) -> bool {
+            matches!(self, Card::Some | Card::Many)
+        }
+        /// min -> 0: `1` -> `0..1`, `*` -> `0..*` (their makeCardinalityOptional)
+        fn make_optional(self) -> Self {
+            match self {
+                Card::One => Card::Maybe,
+                Card::Some => Card::Many,
+                o => o,
+            }
+        }
+        /// min -> 1: `0..1` -> `1`, `0..*` -> `*` (their makeCardinalityRequired)
+        fn make_required(self) -> Self {
+            match self {
+                Card::Maybe => Card::One,
+                Card::Many => Card::Some,
+                o => o,
+            }
+        }
+        /// max -> many: `1` -> `*`, `0..1` -> `0..*` (their makeCardinalityMany)
+        fn make_many(self) -> Self {
+            match self {
+                Card::One => Card::Some,
+                Card::Maybe => Card::Many,
+                o => o,
+            }
+        }
+    }
+    // their RELATIONSHIP_OPS: written operator -> (left, right) raw bounds
+    let op_cards = |op: &str| -> (Card, Card) {
+        match op {
+            "-" => (Card::One, Card::One),
+            "<>" => (Card::Some, Card::Some),
+            ">" => (Card::Some, Card::One),
+            "<" => (Card::One, Card::Some),
+            "-?" => (Card::One, Card::Maybe),
+            "?-" => (Card::Maybe, Card::One),
+            "?-?" => (Card::Maybe, Card::Maybe),
+            "?>" => (Card::Many, Card::One),
+            ">?" => (Card::Some, Card::Maybe),
+            "?>?" => (Card::Many, Card::Maybe),
+            "?<" => (Card::Maybe, Card::Some),
+            "<?" => (Card::One, Card::Many),
+            "?<?" => (Card::Maybe, Card::Many),
+            "?<>" => (Card::Many, Card::Some),
+            "<>?" => (Card::Some, Card::Many),
+            "?<>?" => (Card::Many, Card::Many),
+            _ => (Card::Some, Card::Some),
+        }
+    };
+    // the inverse (their CARDINALITY_TO_OP / getRelationshipOp) — the 4x4
+    // pair space is exactly their 16-entry map, so no fallback exists
+    let card_to_op = |l: Card, r: Card| -> &'static str {
+        match (l, r) {
+            (Card::One, Card::One) => "-",
+            (Card::Some, Card::Some) => "<>",
+            (Card::Some, Card::One) => ">",
+            (Card::One, Card::Some) => "<",
+            (Card::One, Card::Maybe) => "-?",
+            (Card::Maybe, Card::One) => "?-",
+            (Card::Maybe, Card::Maybe) => "?-?",
+            (Card::Many, Card::One) => "?>",
+            (Card::Some, Card::Maybe) => ">?",
+            (Card::Many, Card::Maybe) => "?>?",
+            (Card::Maybe, Card::Some) => "?<",
+            (Card::One, Card::Many) => "<?",
+            (Card::Maybe, Card::Many) => "?<?",
+            (Card::Many, Card::Some) => "?<>",
+            (Card::Some, Card::Many) => "<>?",
+            (Card::Many, Card::Many) => "?<>?",
+        }
+    };
+    // the written operator for (cardinality, optional marks) — round-trips
+    // through op_cards
+    let op_str = |card: Cardinality, left_opt: bool, right_opt: bool| -> &'static str {
+        use super::ast::Cardinality::*;
+        match (card, left_opt, right_opt) {
+            (ManyToOne, true, true) => "?>?",
+            (ManyToOne, true, false) => "?>",
+            (ManyToOne, false, true) => ">?",
+            (ManyToOne, false, false) => ">",
+            (OneToMany, true, true) => "?<?",
+            (OneToMany, true, false) => "?<",
+            (OneToMany, false, true) => "<?",
+            (OneToMany, false, false) => "<",
+            (ManyToMany, true, true) => "?<>?",
+            (ManyToMany, true, false) => "?<>",
+            (ManyToMany, false, true) => "<>?",
+            (ManyToMany, false, false) => "<>",
+            (OneToOne, true, true) => "?-?",
+            (OneToOne, true, false) => "?-",
+            (OneToOne, false, true) => "-?",
+            (OneToOne, false, false) => "-",
+        }
+    };
     let column_of = |table: &str, col: &str| -> Option<&super::ast::Column> {
         doc.tables
             .iter()
@@ -250,11 +361,23 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
             .and_then(|t| t.columns.iter().find(|c| c.name == col))
     };
     let is_nullable = |table: &str, col: &str| -> bool {
+        // their ColumnSymbol.nullable: pk flag, auto-increment, membership
+        // in any pk index and the `not null` setting all imply NOT NULL
         column_of(table, col).is_some_and(|c| {
-            c.settings.not_null != Some(true) && !c.settings.pk
+            c.settings.not_null != Some(true)
+                && !c.settings.pk
+                && !c.settings.increment
+                && !doc
+                    .tables
+                    .iter()
+                    .find(|t| t.matches(table))
+                    .is_some_and(|t| {
+                        t.indexes
+                            .iter()
+                            .any(|ix| ix.pk && ix.columns.iter().any(|x| x == col))
+                    })
         })
     };
-    let is_required = |table: &str, col: &str| -> bool { !is_nullable(table, col) };
     let columns_unique = |table: &str, cols: &[String]| -> bool {
         if cols.is_empty() {
             return false;
@@ -280,455 +403,458 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
                 })
             })
     };
-    // the column-setting edit: swap a found word for `replace`, or grow
-    // the settings list (their QUt/XUt, adapted to this nullability model
-    // — the explicit swap keeps the semantics honest here)
-    let setting_edit = |span: &Span, find: &str, replace: &str, insert: &str| -> Option<(Span, String)> {
-        let text = src.get(span.start..span.end)?;
-        let bytes = text.as_bytes();
-        let word = |i: usize| {
-            let before_ok = i == 0
-                || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
-            let after = i + find.len();
-            let after_ok = after >= text.len()
-                || !(bytes[after].is_ascii_alphanumeric() || bytes[after] == b'_');
-            before_ok && after_ok
-        };
-        let mut i = 0;
-        while i + find.len() <= text.len() {
-            if text[i..].starts_with(find) && word(i) {
-                let start = span.start + i;
-                return Some((start..start + find.len(), replace.to_string()));
-            }
-            i += 1;
-        }
-        // no explicit setting: grow the bracket list, or open one
+    // their addSettingEdit: grow the bracket list (`, x` before `]`) or
+    // open one at the declaration end (` [x]`)
+    let add_setting_edit = |span: &Span, setting: &str| -> (Span, String) {
+        let text = src.get(span.start..span.end).unwrap_or("");
         if let Some(bracket) = text.find('[') {
             if let Some(close_rel) = text[bracket..].rfind(']') {
                 let close = span.start + bracket + close_rel;
-                return Some((close..close, insert.to_string()));
+                return (close..close, format!(", {setting}"));
             }
         }
-        Some((span.end..span.end, format!(" [{replace}]")))
+        (span.end..span.end, format!(" [{setting}]"))
     };
-    // the compose: the operator string for the flipped flags (their
-    // FVt over the y1t bound table)
-    let op_str = |card: Cardinality, left_opt: bool, right_opt: bool| -> &'static str {
-        use super::ast::Cardinality::*;
-        match (card, left_opt, right_opt) {
-            (ManyToOne, true, true) => "?>?",
-            (ManyToOne, true, false) => "?>",
-            (ManyToOne, false, true) => ">?",
-            (ManyToOne, false, false) => ">",
-            (OneToMany, true, true) => "?<?",
-            (OneToMany, true, false) => "?<",
-            (OneToMany, false, true) => "<?",
-            (OneToMany, false, false) => "<",
-            (ManyToMany, true, true) => "?<>?",
-            (ManyToMany, true, false) => "?<>",
-            (ManyToMany, false, true) => "<>?",
-            (ManyToMany, false, false) => "<>",
-            (OneToOne, true, true) => "?-?",
-            (OneToOne, true, false) => "?-",
-            (OneToOne, false, true) => "-?",
-            (OneToOne, false, false) => "-",
-        }
-    };
-    let emit_ref = |from_table: &str,
-                        from_cols: &[String],
-                        from_anchor: usize,
-                        to_table: &str,
-                        to_cols: &[String],
-                        to_anchor: usize,
-                        card: Cardinality,
-                        left_opt: bool,
-                        right_opt: bool,
-                        op_offset: usize,
-                        ref_line: &str,
-                        out: &mut Vec<Diagnostic>| {
-        let all_exist = from_cols.iter().all(|c| column_of(from_table, c).is_some())
-            && to_cols.iter().all(|c| column_of(to_table, c).is_some());
-        let ((l_min_one, l_many), (r_min_one, r_many)) = match card {
-            Cardinality::ManyToOne => ((true, true), (true, false)),
-            Cardinality::OneToMany => ((true, false), (true, true)),
-            Cardinality::OneToOne => ((true, false), (true, false)),
-            Cardinality::ManyToMany => ((true, true), (true, true)),
-        };
-        let l_min_one = l_min_one && !left_opt;
-        let r_min_one = r_min_one && !right_opt;
-        let op_now = op_str(card, left_opt, right_opt);
-        let op_len = op_now.len();
-        // the two runs (their nWt runs right first, then left): the run's
-        // side carries the REQUIREMENT bound; the OTHER side's columns are
-        // checked against it. The column-setting fixes are enabled only
-        // for the run whose requirement is the LEFT bound (the right
-        // endpoint's checked columns), live-verified on their editor.
-        for checked_from in [true, false] {
-            let (checked_table, checked_cols, checked_anchor, other_cols_table, other_cols) =
-                if checked_from {
-                    (from_table, from_cols, from_anchor, to_table, to_cols)
-                } else {
-                    (to_table, to_cols, to_anchor, from_table, from_cols)
-                };
-            let (checked_many, other_min_one, other_many) = if checked_from {
-                (l_many, r_min_one, r_many)
-            } else {
-                (r_many, l_min_one, l_many)
-            };
-            // their y: the checked side is the many side, or a one-to-one
-            // with the FK on the left (the requirement on the left bound).
-            // a plain one-to-one (`-`, neither side many) checks BOTH
-            // sides — their op-dash run emits each side's uniqueness
-            // finding (probe: 4 diagnostics on a two-table `-` ref)
-            let is_one_to_one = !l_many && !r_many;
-            let applies = checked_many || is_one_to_one || (!other_many && !checked_from);
-            if !applies || checked_cols.is_empty() || !all_exist {
+    // their removeSettingEdit: the named setting goes away with one
+    // separator (newText always empty); a sole setting takes the whole
+    // bracket list and the spaces ahead of it
+    let remove_setting_edit = |span: &Span, name: &str| -> Option<(Span, String)> {
+        let text = src.get(span.start..span.end)?;
+        let bracket = text.find('[')?;
+        let close_rel = bracket + text[bracket..].find(']')?;
+        // top-level comma split of the bracket interior (quotes and nested
+        // brackets hold commas of their own)
+        let inner = &text[bracket + 1..close_rel];
+        let mut parts: Vec<(usize, usize)> = Vec::new();
+        let (mut depth, mut start, mut quote) = (0i32, 0usize, None);
+        for (i, &b) in inner.as_bytes().iter().enumerate() {
+            if let Some(q) = quote {
+                if b == q {
+                    quote = None;
+                }
                 continue;
             }
-            let names = checked_cols
-                .iter()
-                .map(|c| format!("{checked_table}.{c}"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let req_names = other_cols
-                .iter()
-                .map(|c| format!("{other_cols_table}.{c}"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            // their b1t: the operator for a (left, right) bound pair —
-            // (min one?, allows many?) per side
-            let op_for_bounds = |l_min_one: bool, l_many: bool, r_min_one: bool, r_many: bool| -> &'static str {
-                match (l_min_one, l_many, r_min_one, r_many) {
-                    (true, false, true, false) => "-",
-                    (true, false, false, false) => "-?",
-                    (false, false, true, false) => "?-",
-                    (false, false, false, false) => "?-?",
-                    (true, true, true, false) => ">",
-                    (false, true, true, false) => "?>",
-                    (true, true, false, false) => ">?",
-                    (false, true, false, false) => "?>?",
-                    (true, false, true, true) => "<",
-                    (false, false, true, true) => "?<",
-                    (true, false, false, true) => "<?",
-                    (false, false, false, true) => "?<?",
-                    (true, true, true, true) => "<>",
-                    (false, true, true, true) => "?<>",
-                    (true, true, false, true) => "<>?",
-                    (false, true, false, true) => "?<>?",
+            match b {
+                b'\'' | b'"' | b'`' => quote = Some(b),
+                b'(' | b'[' => depth += 1,
+                b')' | b']' => depth -= 1,
+                b',' if depth == 0 => {
+                    parts.push((start, i));
+                    start = i + 1;
                 }
+                _ => {}
+            }
+        }
+        parts.push((start, inner.len()));
+        // trimmed [abs start, abs end] of a part, in source coordinates
+        let trimmed_bounds = |idx: usize| -> (usize, usize) {
+            let (s, e) = parts[idx];
+            let lead = inner[s..e].len() - inner[s..e].trim_start().len();
+            let len = inner[s..e].trim().len();
+            (span.start + bracket + 1 + s + lead, len)
+        };
+        let (idx, hit_start, hit_len) = parts
+            .iter()
+            .enumerate()
+            .map(|(idx, &(s, e))| (idx, inner[s..e].trim().to_string()))
+            .find(|(_, t)| t.eq_ignore_ascii_case(name))
+            .map(|(idx, _)| {
+                let (abs, len) = trimmed_bounds(idx);
+                (idx, abs, len)
+            })?;
+        let hit_end = hit_start + hit_len;
+        if parts.len() == 1 {
+            // the sole setting: the whole list goes, spaces included
+            let mut remove_start = span.start + bracket;
+            let bytes = src.as_bytes();
+            while remove_start > 0 && bytes[remove_start - 1] == b' ' {
+                remove_start -= 1;
+            }
+            return Some((remove_start..span.start + close_rel + 1, String::new()));
+        }
+        if idx == 0 {
+            // first of many: up to the next setting's first token
+            let (next_start, _) = trimmed_bounds(1);
+            return Some((hit_start..next_start, String::new()));
+        }
+        // later: from the previous setting's last token
+        let (prev_start, prev_len) = trimmed_bounds(idx - 1);
+        Some((prev_start + prev_len..hit_end, String::new()))
+    };
+    // the three column-setting fixes (their suggestMakeNotNull /
+    // suggestMakeNullable / suggestMakeUnique): never preferred
+    let quick = |title: String, short: &str, span: Span, new_text: String| -> QuickFix {
+        QuickFix {
+            title,
+            short_title: short.to_string(),
+            span,
+            new_text,
+            is_preferred: false,
+        }
+    };
+    let make_not_null = |table: &str, col: &str| -> Option<QuickFix> {
+        let c = column_of(table, col)?;
+        if c.settings.pk || c.settings.increment || c.settings.not_null == Some(true) {
+            return None;
+        }
+        let (span, new_text) = match remove_setting_edit(&c.span, "null") {
+            Some(edit) => edit,
+            None => add_setting_edit(&c.span, "not null"),
+        };
+        Some(quick(
+            format!("Mark '{table}.{col}' as NOT NULL"),
+            "Add not null",
+            span,
+            new_text,
+        ))
+    };
+    let make_nullable = |table: &str, col: &str| -> Option<QuickFix> {
+        let c = column_of(table, col)?;
+        let (span, new_text) = remove_setting_edit(&c.span, "not null")?;
+        Some(quick(
+            format!("Mark '{table}.{col}' as NULL"),
+            "Make nullable",
+            span,
+            new_text,
+        ))
+    };
+    let make_unique = |table: &str, col: &str| -> Option<QuickFix> {
+        let c = column_of(table, col)?;
+        if c.settings.unique || c.settings.pk {
+            return None;
+        }
+        let (span, new_text) = add_setting_edit(&c.span, "unique");
+        Some(quick(
+            format!("Mark '{table}.{col}' as UNIQUE"),
+            "Add unique",
+            span,
+            new_text,
+        ))
+    };
+    // one ref's two sides with their anchors: `token` is where the
+    // endpoint-level finding sits (the endpoint expression for a
+    // standalone `Ref:`, the host column's name for an inline ref's left
+    // side, the `ref:` keyword for its right side)
+    struct Side<'a> {
+        table: &'a str,
+        cols: &'a [String],
+        token: usize,
+    }
+    struct RefSides<'a> {
+        left: Side<'a>,
+        right: Side<'a>,
+        op: &'static str,
+        op_offset: usize,
+        /// their explanation quote: the whole statement line for a
+        /// standalone ref, the `ref: …` attribute for an inline one
+        ref_source: String,
+    }
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Run {
+        Left,
+        Right,
+    }
+    let qnames = |s: &Side| -> String {
+        s.cols
+            .iter()
+            .map(|c| format!("{}.{}", s.table, c))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    // the checked side's first column's declaration line (their
+    // i[0]?.declaration quote into the second bullet)
+    let col_line = |s: &Side| -> Option<String> {
+        column_of(s.table, s.cols.first()?)
+            .and_then(|c| src.get(c.span.start..c.span.end))
+            .map(|s| s.trim().to_string())
+    };
+    let push = |node: usize,
+                s: &Side,
+                message: &str,
+                explanation: Vec<String>,
+                fixes: Vec<QuickFix>,
+                out: &mut Vec<Diagnostic>| {
+        let mk = |offset: usize| Diagnostic {
+            offset,
+            message: message.to_string(),
+            severity: Severity::Info,
+            category: Some("Mismatched optional ref constraints".to_string()),
+            explanation: explanation.clone(),
+            quick_fixes: fixes.clone(),
+        };
+        out.push(mk(node));
+        for c in s.cols {
+            if let Some(col) = column_of(s.table, c) {
+                if col.name_span.start != node {
+                    out.push(mk(col.name_span.start));
+                }
+            }
+        }
+    };
+    // their suggestChangeOp: the transformed side re-composes with the
+    // untouched other side, and the pair reads back through the op table
+    let change_op = |sides: &RefSides,
+                     new_this: Card,
+                     other_raw: Card,
+                     run: Run,
+                     description: String|
+     -> QuickFix {
+        let (nl, nr) = match run {
+            Run::Left => (new_this, other_raw),
+            Run::Right => (other_raw, new_this),
+        };
+        let new_op = card_to_op(nl, nr);
+        QuickFix {
+            title: format!("{description} (change operator to '{new_op}')"),
+            short_title: format!("Change to {new_op}"),
+            span: sides.op_offset..sides.op_offset + sides.op.len(),
+            new_text: new_op.to_string(),
+            is_preferred: true,
+        }
+    };
+    // one run of their validateCardinality: `run` picks which side's
+    // columns are OWN (the requirement carrier) and which are OTHER (the
+    // checked material)
+    let run_side = |sides: &RefSides, run: Run, out: &mut Vec<Diagnostic>| {
+        let (own, other) = match run {
+            Run::Left => (&sides.left, &sides.right),
+            Run::Right => (&sides.right, &sides.left),
+        };
+        let (l_raw, r_raw) = op_cards(sides.op);
+        let (own_raw, other_raw) = match run {
+            Run::Left => (l_raw, r_raw),
+            Run::Right => (r_raw, l_raw),
+        };
+        // unresolved endpoints give the checks nothing to look at
+        let own_exist = own.cols.is_empty()
+            || own
+                .cols
+                .iter()
+                .all(|c| column_of(own.table, c).is_some());
+        let other_exist = other.cols.is_empty()
+            || other
+                .cols
+                .iter()
+                .all(|c| column_of(other.table, c).is_some());
+        if !own_exist || !other_exist {
+            return;
+        }
+        // Nullability checks on the other side only make sense when it is
+        // the source (FK) side — or a one-to-one validated from the left
+        // (their otherIsSource, asymmetry included)
+        let other_is_source = other_raw.max_many()
+            || (matches!(own_raw, Card::One | Card::Maybe)
+                && matches!(other_raw, Card::One | Card::Maybe)
+                && run == Run::Left);
+        // 1. the nullable mismatch: own requires a row, the source is
+        // all-nullable (their refNullableMismatch)
+        if own_raw.min_one()
+            && other_is_source
+            && !other.cols.is_empty()
+            && other.cols.iter().all(|c| is_nullable(other.table, c))
+        {
+            let names = qnames(other);
+            let mut fixes = vec![change_op(
+                sides,
+                own_raw.make_optional(),
+                other_raw,
+                run,
+                format!("Make '{names}' optional in the ref"),
+            )];
+            for c in other.cols {
+                if let Some(f) = make_not_null(other.table, c) {
+                    fixes.push(f);
+                }
+            }
+            let explanation = vec![
+                format!(
+                    "In ref definition `{}`, the operator `{}` requires `{names}` to reference an existing row.",
+                    sides.ref_source, sides.op
+                ),
+                match col_line(other) {
+                    Some(line) => format!(
+                        "In column definition `{line}`, the column is nullable, which allows rows with no parent."
+                    ),
+                    None => "A nullable column allows rows with no parent.".to_string(),
+                },
+            ];
+            let message = if other.cols.len() > 1 {
+                format!(
+                    "Columns (`{names}`) are all nullable but operator `{}` requires at least one to be NOT NULL",
+                    sides.op
+                )
+            } else {
+                format!(
+                    "Column `{names}` is nullable but operator `{}` requires it to be NOT NULL",
+                    sides.op
+                )
             };
-            let all_nullable = checked_cols.iter().all(|c| is_nullable(checked_table, c));
-            let all_required = checked_cols.iter().all(|c| is_required(checked_table, c));
-            // the operator fix: the requirement side's optional mark flips
-            // (their rWt: the new bound composes with the untouched side)
-            let op_fix = |relax: bool| {
-                let (nl, nr) = if checked_from {
-                    (left_opt, relax)
-                } else {
-                    (relax, right_opt)
-                };
-                let new_op = op_str(card, nl, nr);
-                QuickFix {
-                    title: format!(
-                        "Make '{names}' {} in the ref (change operator to '{}')",
-                        if relax { "optional" } else { "required" },
-                        new_op
-                    ),
-                    short_title: format!("Change to {new_op}"),
-                    span: op_offset..op_offset + op_len,
-                    new_text: new_op.to_string(),
-                    is_preferred: true,
+            push(other.token, other, &message, explanation, fixes, out);
+        }
+        // 2. the required mismatch: own is optional, the source is all
+        // NOT NULL (their refNotNullMismatch)
+        if !own_raw.min_one()
+            && other_is_source
+            && !other.cols.is_empty()
+            && other.cols.iter().all(|c| !is_nullable(other.table, c))
+        {
+            let names = qnames(other);
+            let mut fixes = vec![change_op(
+                sides,
+                own_raw.make_required(),
+                other_raw,
+                run,
+                format!("Make '{names}' required in the ref"),
+            )];
+            for c in other.cols {
+                if let Some(f) = make_nullable(other.table, c) {
+                    fixes.push(f);
                 }
+            }
+            let explanation = vec![
+                format!(
+                    "In ref definition `{}`, the operator `{}` marks `{names}` as optional.",
+                    sides.ref_source, sides.op
+                ),
+                match col_line(other) {
+                    Some(line) => {
+                        format!("In column definition `{line}`, the column is NOT NULL.")
+                    }
+                    None => "The column is NOT NULL.".to_string(),
+                },
+            ];
+            let message = if other.cols.len() > 1 {
+                format!(
+                    "Columns (`{names}`) are NOT NULL but operator `{}` allows them to be optional",
+                    sides.op
+                )
+            } else {
+                format!(
+                    "Column `{names}` is NOT NULL but operator `{}` allows it to be optional",
+                    sides.op
+                )
             };
-            // the checked side's own columns' definition lines (the first
-            // one quotes into the explanation, their i[0]?.declaration)
-            let col_lines = checked_cols
-                .iter()
-                .filter_map(|c| {
-                    column_of(checked_table, c).and_then(|c| {
-                        src.get(c.span.start..c.span.end)
-                            .map(|s| s.trim().to_string())
-                    })
-                })
-                .collect::<Vec<_>>();
-            // 1. the nullable mismatch: the requirement is one but the
-            // checked columns are nullable (their oUt)
-            if other_min_one && all_nullable {
-                let mut fixes = vec![op_fix(true)];
-                for c in checked_cols {
-                    if let Some(col) = column_of(checked_table, c) {
-                        if col.settings.pk || col.settings.increment {
-                            continue;
-                        }
-                        if let Some(edit) =
-                            setting_edit(&col.span, "null", "not null", ", not null")
-                        {
-                            fixes.push(QuickFix {
-                        is_preferred: false,
-                                title: format!("Mark '{}.{}' as NOT NULL", checked_table, c),
-                                short_title: "Add not null".to_string(),
-                                span: edit.0,
-                                new_text: edit.1,
-                            });
-                        }
-                    }
-                }
-                let explanation = vec![
-                    format!(
-                        "In ref definition `{ref_line}`, the operator `{op_now}` requires `{names}` to reference an existing row."
-                    ),
-                    match col_lines.first() {
-                        Some(line) => format!(
-                            "In column definition `{line}`, the column is nullable, which allows rows with no parent."
-                        ),
-                        None => "A nullable column allows rows with no parent.".to_string(),
-                    },
-                ];
-                let multi = checked_cols.len() > 1;
-                let message = if multi {
-                    format!("Columns (`{names}`) are all nullable but operator `{op_now}` requires at least one to be NOT NULL")
-                } else {
-                    format!("Column `{names}` is nullable but operator `{op_now}` requires it to be NOT NULL")
-                };
-                out.push(Diagnostic {
-                    offset: checked_anchor,
-                        message: message.clone(),
-                        severity: Severity::Info,
-                        category: Some("Mismatched optional ref constraints".to_string()),
-                        explanation: explanation.clone(),
-                        quick_fixes: fixes.clone(),
-                    });
-
-                for c in checked_cols {
-                    if let Some(col) = column_of(checked_table, c) {
-                        out.push(Diagnostic {
-                            offset: col.name_span.start,
-                            message: message.clone(),
-                            severity: Severity::Info,
-                            category: Some("Mismatched optional ref constraints".to_string()),
-                            explanation: explanation.clone(),
-                            quick_fixes: fixes.clone(),
-                        });
-                    }
+            push(other.token, other, &message, explanation, fixes, out);
+        }
+        // 3. the unique mismatch: own allows many but carries a unique
+        // constraint (their refUniqueMismatch) — the operator fix alone
+        if own_raw.max_many() && columns_unique(own.table, own.cols) {
+            let names = qnames(own);
+            let fixes = vec![change_op(
+                sides,
+                Card::One,
+                other_raw,
+                run,
+                format!("Make '{names}' one in the ref"),
+            )];
+            let explanation = vec![
+                format!(
+                    "In ref definition `{}`, the operator `{}` allows many.",
+                    sides.ref_source, sides.op
+                ),
+                format!("`{names}` has a unique constraint, so each value can appear at most once."),
+            ];
+            let message = if own.cols.len() > 1 {
+                format!(
+                    "Columns (`{names}`) have a unique index but operator `{}` allows many",
+                    sides.op
+                )
+            } else {
+                format!(
+                    "Column `{names}` is unique but operator `{}` allows many",
+                    sides.op
+                )
+            };
+            push(own.token, own, &message, explanation, fixes, out);
+        }
+        // 4. the should-be-unique mismatch: own must be unique but is not
+        // (their refNonUniqueMismatch)
+        if !own_raw.max_many() && !columns_unique(own.table, own.cols) {
+            let names = qnames(own);
+            let mut fixes = vec![change_op(
+                sides,
+                own_raw.make_many(),
+                other_raw,
+                run,
+                format!("Make '{names}' many in the ref"),
+            )];
+            if own.cols.len() == 1 {
+                if let Some(f) = make_unique(own.table, &own.cols[0]) {
+                    fixes.push(f);
                 }
             }
-            // 2. the required mismatch: the requirement is optional but the
-            // checked columns are NOT NULL (their sUt)
-            if !other_min_one && all_required {
-                let mut fixes = vec![op_fix(false)];
-                for c in checked_cols {
-                    if let Some(col) = column_of(checked_table, c) {
-                        if let Some(edit) = setting_edit(&col.span, "not null", "null", ", null") {
-                            fixes.push(QuickFix {
-                        is_preferred: false,
-                                title: format!("Mark '{}.{}' as NULL", checked_table, c),
-                                short_title: "Make nullable".to_string(),
-                                span: edit.0,
-                                new_text: edit.1,
-                            });
-                        }
-                    }
-                }
-                let explanation = vec![
-                    format!(
-                        "In ref definition `{ref_line}`, the operator `{op_now}` marks `{names}` as optional."
-                    ),
-                    match col_lines.first() {
-                        Some(line) => format!("In column definition `{line}`, the column is NOT NULL."),
-                        None => "The column is NOT NULL.".to_string(),
-                    },
-                ];
-                let multi = checked_cols.len() > 1;
-                let message = if multi {
-                    format!("Columns (`{names}`) are NOT NULL but operator `{op_now}` allows them to be optional")
-                } else {
-                    format!("Column `{names}` is NOT NULL but operator `{op_now}` allows it to be optional")
-                };
-                out.push(Diagnostic {
-                    offset: checked_anchor,
-                    message: message.clone(),
-                    severity: Severity::Info,
-                    category: Some("Mismatched optional ref constraints".to_string()),
-                    explanation: explanation.clone(),
-                    quick_fixes: fixes.clone(),
-                });
-                for c in checked_cols {
-                    if let Some(col) = column_of(checked_table, c) {
-                        out.push(Diagnostic {
-                            offset: col.name_span.start,
-                            message: message.clone(),
-                            severity: Severity::Info,
-                            category: Some("Mismatched optional ref constraints".to_string()),
-                            explanation: explanation.clone(),
-                            quick_fixes: fixes.clone(),
-                        });
-                    }
-                }
-            }
-            // 3. the unique mismatch: the requirement side allows many but
-            // its own columns carry a unique constraint (their cUt) —
-            // anchored on the requirement side
-            if other_many && columns_unique(other_cols_table, other_cols) {
-                let new_op = if checked_from {
-                    op_for_bounds(true, false, other_many, other_many)
-                } else {
-                    op_for_bounds(other_many, other_many, true, false)
-                };
-                let fixes = vec![QuickFix {
-                    is_preferred: true,
-                    title: format!(
-                        "Make '{req_names}' one in the ref (change operator to '{new_op}')"
-                    ),
-                    short_title: format!("Change to {new_op}"),
-                    span: op_offset..op_offset + op_len,
-                    new_text: new_op.to_string(),
-                }];
-                let explanation = vec![
-                    format!(
-                        "In ref definition `{ref_line}`, the operator `{op_now}` allows many."
-                    ),
-                    format!(
-                        "`{req_names}` has a unique constraint, so each value can appear at most once."
-                    ),
-                ];
-                let multi = other_cols.len() > 1;
-                let message = if multi {
-                    format!("Columns (`{req_names}`) have a unique index but operator `{op_now}` allows many")
-                } else {
-                    format!("Column `{req_names}` is unique but operator `{op_now}` allows many")
-                };
-                let anchor = if checked_from { to_anchor } else { from_anchor };
-                out.push(Diagnostic {
-                    offset: anchor,
-                    message: message.clone(),
-                    severity: Severity::Info,
-                    category: Some("Mismatched optional ref constraints".to_string()),
-                    explanation: explanation.clone(),
-                    quick_fixes: fixes.clone(),
-                });
-                for c in other_cols {
-                    if let Some(col) = column_of(other_cols_table, c) {
-                        out.push(Diagnostic {
-                            offset: col.name_span.start,
-                            message: message.clone(),
-                            severity: Severity::Info,
-                            category: Some("Mismatched optional ref constraints".to_string()),
-                            explanation: explanation.clone(),
-                            quick_fixes: fixes.clone(),
-                        });
-                    }
-                }
-            }
-            // 4. the should-be-unique mismatch: the requirement side is one
-            // but its own columns lack uniqueness (their lUt) — anchored on
-            // the requirement side
-            if !other_many && !columns_unique(other_cols_table, other_cols) {
-                // their RVt: the requirement side's max relaxes to many,
-                // its min kept
-                let new_op = if checked_from {
-                    op_for_bounds(true, true, other_min_one, true)
-                } else {
-                    op_for_bounds(other_min_one, true, true, true)
-                };
-                let mut fixes = vec![QuickFix {
-                    is_preferred: true,
-                    title: format!(
-                        "Make '{req_names}' many in the ref (change operator to '{new_op}')"
-                    ),
-                    short_title: format!("Change to {new_op}"),
-                    span: op_offset..op_offset + op_len,
-                    new_text: new_op.to_string(),
-                }];
-                if checked_from && other_cols.len() == 1 {
-                    if let Some(col) = column_of(other_cols_table, &other_cols[0]) {
-                        if let Some(edit) = setting_edit(&col.span, "unique", "unique", ", unique") {
-                            fixes.push(QuickFix {
-                        is_preferred: false,
-                                title: format!(
-                                    "Mark '{}.{}' as UNIQUE",
-                                    other_cols_table,
-                                    other_cols[0]
-                                ),
-                                short_title: "Add unique".to_string(),
-                                span: edit.0,
-                                new_text: edit.1,
-                            });
-                        }
-                    }
-                }
-                let explanation = vec![
-                    format!(
-                        "In ref definition `{ref_line}`, the operator `{op_now}` implies `{req_names}` has at most one row."
-                    ),
-                    format!("`{req_names}` has no unique or primary key constraint."),
-                ];
-                let multi = other_cols.len() > 1;
-                let message = if multi {
-                    format!("Columns (`{req_names}`) should have a composite unique index for operator `{op_now}`")
-                } else {
-                    format!("Column `{req_names}` should be unique or primary key for operator `{op_now}`")
-                };
-                let anchor = if checked_from { to_anchor } else { from_anchor };
-                out.push(Diagnostic {
-                    offset: anchor,
-                    message: message.clone(),
-                    severity: Severity::Info,
-                    category: Some("Mismatched optional ref constraints".to_string()),
-                    explanation: explanation.clone(),
-                    quick_fixes: fixes.clone(),
-                });
-                for c in other_cols {
-                    if let Some(col) = column_of(other_cols_table, c) {
-                        out.push(Diagnostic {
-                            offset: col.name_span.start,
-                            message: message.clone(),
-                            severity: Severity::Info,
-                            category: Some("Mismatched optional ref constraints".to_string()),
-                            explanation: explanation.clone(),
-                            quick_fixes: fixes.clone(),
-                        });
-                    }
-                }
-            }
+            let explanation = vec![
+                format!(
+                    "In ref definition `{}`, the operator `{}` implies `{names}` has at most one row.",
+                    sides.ref_source, sides.op
+                ),
+                format!("`{names}` has no unique or primary key constraint."),
+            ];
+            let message = if own.cols.len() > 1 {
+                format!(
+                    "Columns (`{names}`) should have a composite unique index for operator `{}`",
+                    sides.op
+                )
+            } else {
+                format!(
+                    "Column `{names}` should be unique or primary key for operator `{}`",
+                    sides.op
+                )
+            };
+            push(own.token, own, &message, explanation, fixes, out);
         }
     };
     for r in &doc.refs {
-        let ref_line = line_text(r.span.start);
-        emit_ref(
-            &r.from.table,
-            &r.from.columns,
-            r.from.span.start,
-            &r.to.table,
-            &r.to.columns,
-            r.to.span.start,
-            r.card,
-            r.left_optional,
-            r.right_optional,
-            r.op_offset,
-            &ref_line,
-            &mut out,
-        );
+        let op = op_str(r.card, r.left_optional, r.right_optional);
+        let sides = RefSides {
+            left: Side {
+                table: &r.from.table,
+                cols: &r.from.columns,
+                token: r.from.span.start,
+            },
+            right: Side {
+                table: &r.to.table,
+                cols: &r.to.columns,
+                token: r.to.span.start,
+            },
+            op,
+            op_offset: r.op_offset,
+            ref_source: line_text(r.span.start),
+        };
+        run_side(&sides, Run::Right, &mut out);
+        run_side(&sides, Run::Left, &mut out);
     }
+    // inline refs ride the same engine with the host column as the LEFT
+    // side (their RefMetadata on an AttributeNode): the left token is the
+    // column itself — its findings collapse onto one anchor — and the
+    // right token is the `ref:` attribute
     for t in &doc.tables {
         for c in &t.columns {
             let Some(ir) = &c.settings.inline_ref else {
                 continue;
             };
-            let ref_line = line_text(c.name_span.start);
-            emit_ref(
-                &t.name,
-                std::slice::from_ref(&c.name),
-                c.name_span.start,
-                &ir.to.table,
-                &ir.to.columns,
-                ir.to.span.start,
-                ir.card,
-                ir.left_optional,
-                ir.right_optional,
-                ir.op_offset,
-                &ref_line,
-                &mut out,
-            );
+            let op = op_str(ir.card, ir.left_optional, ir.right_optional);
+            let sides = RefSides {
+                left: Side {
+                    table: &t.name,
+                    cols: std::slice::from_ref(&c.name),
+                    token: c.name_span.start,
+                },
+                right: Side {
+                    table: &ir.to.table,
+                    cols: &ir.to.columns,
+                    token: ir.attr_start,
+                },
+                op,
+                op_offset: ir.op_offset,
+                ref_source: src
+                    .get(ir.attr_start..ir.to.span.end)
+                    .unwrap_or_default()
+                    .trim_end()
+                    .to_string(),
+            };
+            run_side(&sides, Run::Right, &mut out);
+            run_side(&sides, Run::Left, &mut out);
         }
     }
 
@@ -812,6 +938,8 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
                     // note and the must-not-be-NULL violation (probe:
                     // records-null-in-required)
                     let is_null = v.is_empty() || v.eq_ignore_ascii_case("null");
+                    // their message renders the empty string as `null`
+                    let shown = if v.is_empty() { "null" } else { v.as_str() };
                     if is_null {
                         let required = parent_vals.len() == 0
                             || parent_vals.iter().any(|(pv, _)| pv.is_empty());
@@ -830,19 +958,23 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
                                     "NULL not allowed for NOT NULL column `{fk_col}` without a default value or auto-increment"
                                 ),
                                 severity: Severity::Info,
-                                category: Some("Record constraint violations".to_string()),
-                                explanation: vec![],
+                                category: Some("Record type errors".to_string()),
+                                explanation: vec![format!(
+                                    "`{fk_col}` is marked NOT NULL and has no default value or auto-increment."
+                                )],
                                 quick_fixes: vec![],
                             });
                         }
                         out.push(Diagnostic {
                             offset: span.start,
                             message: format!(
-                                "FK violation: `{fk_tbl}.{fk_col}` = `{v}` must not be NULL"
+                                "FK violation: `{fk_tbl}.{fk_col}` = `{shown}` must not be NULL"
                             ),
                             severity: Severity::Info,
                             category: Some("Record constraint violations".to_string()),
-                            explanation: vec![],
+                            explanation: vec![format!(
+                                "`{fk_tbl}.{fk_col}` references `{parent_tbl}.{parent_col}`, so every row must have a non-null value."
+                            )],
                             quick_fixes: vec![],
                         });
                         continue;
@@ -855,7 +987,9 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
                             ),
                             severity: Severity::Info,
                             category: Some("Record constraint violations".to_string()),
-                            explanation: vec![],
+                            explanation: vec![format!(
+                                "`{fk_tbl}.{fk_col}` is a foreign key referencing `{parent_tbl}.{parent_col}`. Every non-null value in an FK must match an existing row in the referenced column."
+                            )],
                             quick_fixes: vec![],
                         });
                     }
@@ -945,8 +1079,16 @@ mod tests {
     #[test]
     fn duplicate_names_are_flagged_at_the_later_declaration() {
         let d = diags("Table a { id integer }\nTable a { x integer }\nEnum e { x }\nEnum e { y }\n");
-        assert!(d.iter().any(|m| m == "Table 'a' already exists"), "{d:?}");
-        assert!(d.iter().any(|m| m == "Enum 'e' already exists"), "{d:?}");
+        assert!(
+            d.iter()
+                .any(|m| m == "Table 'a' already exists in schema 'public'"),
+            "{d:?}"
+        );
+        assert!(
+            d.iter()
+                .any(|m| m == "Enum 'e' already exists in schema 'public'"),
+            "{d:?}"
+        );
         assert_eq!(d.len(), 2);
     }
 
@@ -954,9 +1096,12 @@ mod tests {
     fn ref_endpoints_resolve_or_flag() {
         // dbdiagram's exact phrasings (harvested from their editor)
         let d = diags("Table a { id integer [pk] }\nRef: b.x > a.nope\n");
-        assert!(d.contains(&"Table 'b' does not exist".to_string()), "{d:?}");
         assert!(
-            d.contains(&"Column 'nope' does not exist in Table 'a'".to_string()),
+            d.contains(&"Table 'b' does not exist in Schema 'public'".to_string()),
+            "{d:?}"
+        );
+        assert!(
+            d.contains(&"Column 'nope' does not exist in Table 'public.a'".to_string()),
             "{d:?}"
         );
     }
@@ -971,7 +1116,7 @@ mod tests {
         );
         assert_eq!(
             d,
-            vec!["Column 'nope' does not exist in Table 'a'".to_string()]
+            vec!["Column 'nope' does not exist in Table 'public.a'".to_string()]
         );
     }
 
@@ -980,7 +1125,10 @@ mod tests {
         let d = diags(
             "Table a { id integer }\nTableGroup g {\n  nope\n}\nTable c {\n  x integer\n  indexes {\n    (zzz) [unique]\n  }\n}\n",
         );
-        assert!(d.contains(&"Table 'nope' does not exist".to_string()), "{d:?}");
+        assert!(
+            d.contains(&"Table 'nope' does not exist".to_string()),
+            "{d:?}"
+        );
         assert!(
             d.contains(&"Column 'zzz' does not exist in Table 'c'".to_string()),
             "{d:?}"
@@ -992,7 +1140,10 @@ mod tests {
     fn aliases_satisfy_refs() {
         let d = diags("Table users as U { id integer [pk] }\nRef: posts.uid > U.id\n");
         // 'posts' itself is the unknown one; U resolves via the alias
-        assert_eq!(d, vec!["Table 'posts' does not exist".to_string()]);
+        assert_eq!(
+            d,
+            vec!["Table 'posts' does not exist in Schema 'public'".to_string()]
+        );
     }
 
     #[test]
@@ -1019,7 +1170,7 @@ mod tests {
         // column-setting fixes belong to the opposite run), live-verified
         // on their editor: the dropdown reads "Change to >?"
         for (i, d) in d.iter().enumerate() {
-            assert_eq!(d.severity, Severity::Warning);
+            assert_eq!(d.severity, Severity::Info);
             assert_eq!(
                 d.message,
                 "Column `b.a_id` is nullable but operator `>` requires it to be NOT NULL"
@@ -1043,20 +1194,35 @@ mod tests {
             );
             assert_eq!(d.quick_fixes[0].short_title, "Change to >?");
             assert_eq!(d.quick_fixes[0].new_text, ">?");
+            // their non-preferred fixes set no isPreferred at all; the
+            // column-setting edit rides both anchors (options default on)
+            assert!(!d.quick_fixes[0].is_preferred || d.quick_fixes[0].is_preferred);
+            assert!(d.quick_fixes[0].is_preferred, "the operator fix is preferred");
             assert_eq!(
                 d.quick_fixes[1].title, "Mark 'b.a_id' as NOT NULL",
                 "anchor {i}"
             );
             assert_eq!(d.quick_fixes[1].short_title, "Add not null", "anchor {i}");
+            assert!(!d.quick_fixes[1].is_preferred, "anchor {i}");
+            // removing the explicit `null` setting is their edit: empty
+            // newText over the bracket list
+            assert_eq!(d.quick_fixes[1].new_text, "", "anchor {i}");
         }
         assert_eq!(d[0].offset, out.doc.tables[1].columns[0].name_span.start);
         assert_eq!(d[1].offset, out.doc.refs[0].from.span.start);
-        // not-null FKs stay silent (the should-be-unique lint on the
-        // non-unique parent is its own test below)
+        // a satisfied FK stays silent; the unique parent behind the many
+        // operator raises their reverse "make one" check (both engines
+        // verified on this input) — that lint has its own assertions below
         let src = "Table a { id integer [pk] }\nTable b { a_id integer [not null, unique] }\nRef: a.id > b.a_id\n";
         let out = parser::parse(src);
         let d = validate(&out.doc, src);
-        assert!(d.is_empty(), "{d:?}");
+        assert_eq!(d.len(), 2, "{d:?}");
+        assert!(
+            d.iter().all(
+                |x| x.message == "Column `a.id` is unique but operator `>` allows many"
+            ),
+            "{d:?}"
+        );
     }
 
     /// The reverse mismatch: an optional operator (`>?` drops the right
@@ -1084,27 +1250,54 @@ mod tests {
         assert_eq!(fix.new_text, ">");
     }
 
-    /// A `>` ref whose parent column lacks unique/pk: their lUt asks for
-    /// the unique constraint (or the many-to-many operator).
+    /// A `>` ref whose parent column lacks unique/pk: their check asks for
+    /// the unique constraint (or the many-to-many operator) on the FK
+    /// side, while the parent's own uniqueness raises the reverse check —
+    /// "make one" (both engines verified on this exact input).
     #[test]
     fn non_unique_parent_gets_the_should_be_unique_lint() {
         let src =
             "Table a { id integer [pk] }\nTable b { a_id integer [not null] }\nRef: a.id > b.a_id\n";
         let out = parser::parse(src);
         let d = validate(&out.doc, src);
+        let non_unique: Vec<_> = d
+            .iter()
+            .filter(|x| {
+                x.message == "Column `b.a_id` should be unique or primary key for operator `>`"
+            })
+            .collect();
+        assert_eq!(non_unique.len(), 2, "{d:?}");
+        for x in &non_unique {
+            // the operator fix relaxes to many-to-many: `>` -> `<>`; the
+            // column fix appends `, unique` to the bracket list
+            let many = x
+                .quick_fixes
+                .iter()
+                .find(|f| f.short_title == "Change to <>")
+                .expect("the many fix");
+            assert_eq!(many.new_text, "<>");
+            assert!(many.is_preferred);
+            let uniq = x
+                .quick_fixes
+                .iter()
+                .find(|f| f.short_title == "Add unique")
+                .expect("the unique fix");
+            assert_eq!(uniq.new_text, ", unique");
+            assert!(!uniq.is_preferred);
+        }
+        // the parent is unique behind a many operator: their
+        // "make one" check suggests the one-to-one operator
         assert!(
-            d.iter().any(
-                |x| x.message == "Column `b.a_id` should be unique or primary key for operator `>`"
-            ),
+            d.iter()
+                .any(|x| x.message == "Column `a.id` is unique but operator `>` allows many"),
             "{d:?}"
         );
-        // the operator fix relaxes to many-to-many: `>` -> `<>`
-        let fix = d
+        let one = d
             .iter()
             .flat_map(|x| x.quick_fixes.iter())
-            .find(|f| f.short_title.starts_with("Change to "))
-            .expect("the many fix");
-        assert_eq!(fix.new_text, "<>", "{:?}", d.iter().flat_map(|x| x.quick_fixes.iter()).map(|f| (&f.short_title, &f.new_text)).collect::<Vec<_>>());
+            .find(|f| f.short_title == "Change to -")
+            .expect("the one fix");
+        assert_eq!(one.new_text, "-");
     }
 
     #[test]
@@ -1128,15 +1321,17 @@ mod tests {
         assert_eq!(violations.len(), 3, "{d:?}");
         // the FK side: author_id 1 and 7 miss users.id's (empty) records
         assert!(
-            violations
-                .iter()
-                .any(|x| x.message == "FK violation: posts.author_id = 1 does not exist in users.id"),
+            violations.iter().any(|x| {
+                x.message
+                    == "FK violation: `posts.author_id` = `1` does not exist in `users.id`"
+            }),
             "{d:?}"
         );
         assert!(
-            violations
-                .iter()
-                .any(|x| x.message == "FK violation: posts.author_id = 7 does not exist in users.id"),
+            violations.iter().any(|x| {
+                x.message
+                    == "FK violation: `posts.author_id` = `7` does not exist in `users.id`"
+            }),
             "{d:?}"
         );
         // a matching value passes: comments.post_id = 9 exists in ...

@@ -1304,27 +1304,9 @@ mod fixtures {
             let expected =
                 std::fs::read_to_string(root.join("output").join(format!("{stem}.out.{ext}")))
                     .unwrap();
-            // upstream artifact: their importer emits cardinalities as
-            // ?<<? etc. — normalize so our parser can read the golden
-            // upstream renders cardinalities with stray '?' glued on
-            // either side of the arrow; strip them all
-            let expected = expected
-                .replace("?<<?>>", "<>")
-                .replace("?<><?", "<>")
-                .replace("<<?>>", "<>")
-                .replace("?<<?", "<")
-                .replace("?>?", ">")
-                .replace("?<?", "<")
-                .replace("?-?", "-")
-                .replace("?<>", "<>")
-                .replace("<>? ", "<> ")
-                .replace("?<", "<")
-                .replace("?>", ">")
-                .replace("?-", "-")
-                .replace("<<?", "<")
-                .replace(">? ", "> ")
-                .replace("-? ", "- ")
-                .replace("<?", "<");
+            // the goldens carry upstream's verbatim optional marks
+            // (`?<?` …) — kept as-is now that the parser reads and the
+            // formatter round-trips every operator form
             let got_res = if direction == "exporter" {
                 export(&src, dialect).map(strip_records_blocks).map_err(|e| format!("ERR {e}"))
             } else {

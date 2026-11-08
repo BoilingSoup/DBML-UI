@@ -250,8 +250,11 @@ struct ICol {
 /// One index entry: (columns, name, unique, index_type, pk).
 type IndexDef = (Vec<String>, Option<String>, bool, Option<String>, bool);
 
-/// One table-level foreign key: (name, fk_table, fk_cols, ref_schema,
-/// ref_table, ref_cols, on_delete, on_update).
+/// One foreign key: (name, fk_table, fk_cols, ref_schema, ref_table,
+/// ref_cols, on_delete, on_update, inline). `inline` marks a column-level
+/// `REFERENCES` inside the column definition — the MSSQL importer gives
+/// it a different cardinality path than table-level/ALTER constraints
+/// (their MssqlASTGen: inline -> 0..*/0..1, table-level -> */1).
 type FkDef = (
     Option<String>,
     String,
@@ -261,6 +264,7 @@ type FkDef = (
     Vec<String>,
     Option<String>,
     Option<String>,
+    bool,
 );
 
 /// A queued PK/UNIQUE/KEY merge: (table, cols, is_pk, name, type,
@@ -730,6 +734,7 @@ impl Importer {
                                 rc,
                                 col.fk_delete.take(),
                                 col.fk_update.take(),
+                                true,
                             ));
                         }
                     }
@@ -1080,6 +1085,7 @@ impl Importer {
                     ref_cols,
                     on_delete,
                     on_update,
+                    false,
                 ));
             }
             consumed = i;
@@ -2181,8 +2187,8 @@ impl Importer {
         }
         // named FK constraints -> top-level Ref statements, LAST (the
         // golden convention; the formatter keeps this order now)
-        for (name, fk_table, fk_cols, ref_schema, ref_table, ref_cols, on_delete, on_update) in
-            &self.fks
+        for (name, fk_table, fk_cols, ref_schema, ref_table, ref_cols, on_delete, on_update, inline)
+            in &self.fks
         {
             let fks = fk_cols.iter().map(|c| q(c)).collect::<Vec<_>>().join(", ");
             let rcs = ref_cols.iter().map(|c| q(c)).collect::<Vec<_>>().join(", ");
@@ -2190,6 +2196,32 @@ impl Importer {
                 (fks.clone(), rcs.clone())
             } else {
                 (format!("({fks})"), format!("({rcs})"))
+            };
+            // their importer's cardinality rule, ported from dbml-core.
+            // Every dialect's ASTGen imports an FK as optional — FK side
+            // `0..*`, referenced side `0..1` — and database.ts
+            // `adjustCardinalitiesFromColumns` tightens the referenced
+            // side to required-one when EVERY FK column is
+            // not_null || pk || increment. The DbmlExporter then puts the
+            // one side on the left and reads the operator off the pair:
+            // `?<?` (nullable FK), `<?` (required FK). MSSQL's
+            // table-level and ALTER constraints are the exception — their
+            // ASTGen builds those endpoints as `*`/`1` directly, which the
+            // adjust step can no longer distinguish, so they always
+            // render as plain `<`.
+            let fk_required = fk_cols.iter().all(|c| {
+                self.tables
+                    .iter()
+                    .find(|t| &t.name == fk_table)
+                    .and_then(|t| t.cols.iter().find(|k| &k.name == c))
+                    .is_some_and(|k| k.not_null || k.pk || k.increment)
+            });
+            let op = if self.dialect == Dialect::MSSQL && !inline {
+                "<"
+            } else if fk_required {
+                "<?"
+            } else {
+                "?<?"
             };
             let ref_head = match ref_schema {
                 // mssql goldens drop schema qualifiers entirely
@@ -2216,18 +2248,20 @@ impl Importer {
             };
             match name {
                 Some(n) => out.push_str(&format!(
-                    "Ref {}: {}.{} < {}.{}{}\n\n",
+                    "Ref {}: {}.{} {} {}.{}{}\n\n",
                     q(n),
                     ref_head,
                     r,
+                    op,
                     q(fk_table),
                     f,
                     settings
                 )),
                 None => out.push_str(&format!(
-                    "Ref: {}.{} < {}.{}{}\n\n",
+                    "Ref: {}.{} {} {}.{}{}\n\n",
                     ref_head,
                     r,
+                    op,
                     q(fk_table),
                     f,
                     settings

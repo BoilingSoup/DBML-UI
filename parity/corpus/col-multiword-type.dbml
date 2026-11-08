@@ -1,0 +1,2 @@
+Table t { created_at timestamp with time zone
+}

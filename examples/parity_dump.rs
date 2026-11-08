@@ -54,7 +54,13 @@ fn line_col(src: &str, offset: usize) -> (usize, usize) {
 fn dump_path(path: &str) -> Case {
     let src = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
     let out = dbml_ui::dbml::parser::parse(&src);
-    let ds = dbml_ui::dbml::validate::validate(&out.doc, &src);
+    // their pipeline surfaces ONLY parse errors while any stand — the
+    // semantic pass never joins them (corpus-verified across the suite)
+    let ds = if out.errors.is_empty() {
+        dbml_ui::dbml::validate::validate(&out.doc, &src)
+    } else {
+        Vec::new()
+    };
     let mut diagnostics: Vec<Diagnostic> = out
         .errors
         .iter()
@@ -94,7 +100,9 @@ fn dump_path(path: &str) -> Case {
                 .map(|q| QuickFix {
                     title: q.title.clone(),
                     shortTitle: q.short_title.clone(),
-                    isPreferred: Some(q.is_preferred),
+                    // their non-preferred fixes carry no isPreferred at
+                    // all — only the operator change sets it
+                    isPreferred: if q.is_preferred { Some(true) } else { None },
                     newText: q.new_text.clone(),
                 })
                 .collect(),

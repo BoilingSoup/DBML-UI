@@ -1,0 +1,5 @@
+Table a { id integer [pk]
+}
+Table b { a_id integer [not null, unique]
+}
+Ref: a.id > b.a_id

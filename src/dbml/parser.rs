@@ -246,12 +246,12 @@ fn note_value(input: &mut &str, base: usize) -> R<String> {
     }
 }
 
-fn is_type_char(c: char) -> bool {
-    c.is_alphanumeric() || matches!(c, '_' | '(' | ')' | ',' | '.' | ' ' | '\t')
-}
-
 /// Column type, e.g. `varchar(255)`, `decimal(10,2)`, or a qualified /
 /// quoted name (`"Var Char"`, `user.e`, `"user"."e"`).
+/// Column type: one word — quoted, dotted, then optional parenthesized
+/// args (`varchar(255)`, `decimal(10, 2)`, `"character varying"`). Their
+/// grammar has no multi-word types: `timestamp with time zone` reads as
+/// type `timestamp` plus the bare fields `with`, `time`, `zone`.
 fn type_str(input: &mut &str, base: usize) -> R<String> {
     let mut out = String::new();
     loop {
@@ -265,9 +265,9 @@ fn type_str(input: &mut &str, base: usize) -> R<String> {
             *input = &rest[end + 1..];
         } else {
             let end = input
-                .find(|c: char| !(is_type_char(c) && c != '"' && c != '.'))
+                .find(|c: char| !(c.is_alphanumeric() || c == '_'))
                 .unwrap_or(input.len());
-            out.push_str(input[..end].trim_end());
+            out.push_str(&input[..end]);
             *input = &input[end..];
         }
         if out.is_empty() {
@@ -278,6 +278,31 @@ fn type_str(input: &mut &str, base: usize) -> R<String> {
         } else {
             break;
         }
+    }
+    // parenthesized args ride the word, spaces inside them intact —
+    // `decimal (10, 2)` keeps the gap, `varchar(255)` does not grow one
+    let save = *input;
+    sp(input);
+    if peek_is(input, "(") {
+        let mut depth = 0i32;
+        let mut end = input.len();
+        for (k, &c) in input.as_bytes().iter().enumerate() {
+            match c {
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = k + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        out.push_str(&input[..end]);
+        *input = &input[end..];
+    } else {
+        *input = save;
     }
     Ok(out)
 }
@@ -333,22 +358,22 @@ fn value(input: &mut &str, base: usize) -> R<String> {
 /// min cardinality to zero (the reference is optional).
 fn cardinality_full(input: &mut &str, base: usize) -> R<(Cardinality, bool, bool)> {
     let table: &[(&str, Cardinality, bool, bool)] = &[
-        // the longest forms first so a trailing `?` wins over a bare match
-        ("?>?", Cardinality::ManyToOne, true, true),
-        ("?>", Cardinality::ManyToOne, true, false),
-        (">?", Cardinality::ManyToOne, false, true),
-        (">", Cardinality::ManyToOne, false, false),
-        ("?<?", Cardinality::OneToMany, true, true),
-        ("?<", Cardinality::OneToMany, true, false),
-        ("<?", Cardinality::OneToMany, false, true),
+        // longest first, so `?<` cannot shadow `?<>` / `?<>?`
         ("?<>?", Cardinality::ManyToMany, true, true),
+        ("?>?", Cardinality::ManyToOne, true, true),
+        ("?<?", Cardinality::OneToMany, true, true),
+        ("?-?", Cardinality::OneToOne, true, true),
         ("?<>", Cardinality::ManyToMany, true, false),
         ("<>?", Cardinality::ManyToMany, false, true),
-        ("<>", Cardinality::ManyToMany, false, false),
-        ("<", Cardinality::OneToMany, false, false),
-        ("?-?", Cardinality::OneToOne, true, true),
+        ("?>", Cardinality::ManyToOne, true, false),
+        (">?", Cardinality::ManyToOne, false, true),
+        ("?<", Cardinality::OneToMany, true, false),
+        ("<?", Cardinality::OneToMany, false, true),
         ("?-", Cardinality::OneToOne, true, false),
         ("-?", Cardinality::OneToOne, false, true),
+        ("<>", Cardinality::ManyToMany, false, false),
+        (">", Cardinality::ManyToOne, false, false),
+        ("<", Cardinality::OneToMany, false, false),
         ("-", Cardinality::OneToOne, false, false),
     ];
     for (tok, kind, l, r) in table {
@@ -475,7 +500,7 @@ fn endpoint(input: &mut &str, base: usize) -> R<Endpoint> {
 
 enum SettingVal {
     Str(String),
-    Ref(Cardinality, bool, bool, Endpoint, usize, Option<String>),
+    Ref(Cardinality, bool, bool, Endpoint, usize, usize, Option<String>),
 }
 
 /// `[key, key: value, ref: > t.c, ...]` — parsed generically; callers
@@ -493,6 +518,7 @@ fn settings_list(input: &mut &str, base: usize) -> R<Vec<(String, Option<Setting
         if input.is_empty() {
             return fail(offset(input, base), "unterminated settings");
         }
+        let key_start = offset(input, base);
         let end = input
             .find(|c: char| !(c.is_alphanumeric() || c == '_' || c == ' ' || c == '\t'))
             .unwrap_or(input.len());
@@ -523,7 +549,7 @@ fn settings_list(input: &mut &str, base: usize) -> R<Vec<(String, Option<Setting
                         }
                     }
                 }
-                out.push((key, Some(SettingVal::Ref(card, l_opt, r_opt, to, op_offset, color))));
+                out.push((key, Some(SettingVal::Ref(card, l_opt, r_opt, to, op_offset, key_start, color))));
             } else if key == "default" {
                 // verbatim: quoted strings keep their quotes so exporters
                 // can distinguish literals from bare tokens
@@ -624,9 +650,9 @@ fn column_settings_from(kvs: Vec<(String, Option<SettingVal>)>) -> ColumnSetting
                 // any other key:value is a dbdiagram custom property
                 _ => s.custom.push((key, v)),
             },
-            Some(SettingVal::Ref(card, l_opt, r_opt, to, op_offset, color)) => {
+            Some(SettingVal::Ref(card, l_opt, r_opt, to, op_offset, attr_start, color)) => {
                 if s.inline_ref.is_none() {
-                    s.inline_ref = Some(InlineRef { card, left_optional: l_opt, right_optional: r_opt, to, op_offset, color });
+                    s.inline_ref = Some(InlineRef { card, left_optional: l_opt, right_optional: r_opt, to, op_offset, attr_start, color });
                 }
             }
         }
@@ -634,7 +660,7 @@ fn column_settings_from(kvs: Vec<(String, Option<SettingVal>)>) -> ColumnSetting
     s
 }
 
-fn column(input: &mut &str, base: usize) -> R<Column> {
+fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column> {
     let start = offset(input, base);
     let name_off = offset(input, base);
     let name = ident(input, base)?;
@@ -642,11 +668,51 @@ fn column(input: &mut &str, base: usize) -> R<Column> {
     sp(input);
     let ty = type_str(input, base)?;
     sp(input);
-    let settings = if peek_is(input, "[") {
+    // their column grammar's inline-settings fields: bare `pk`/`unique`
+    // words (case-insensitive) set the flag; any other bare word errs
+    // ("Inline column settings can only be `pk` or `unique`") — unless it
+    // drags a `{ … }` block behind it (`indexes {`, `notes {`), which
+    // errs twice ("These fields must be some inline settings optionally
+    // ended with a setting list", at the word and the brace) and swallows
+    // the balanced block before the column ends. The bracket setting
+    // list ends the fields.
+    let mut inline_pk = false;
+    let mut inline_unique = false;
+    loop {
+        sp(input);
+        if input.is_empty() || input.starts_with(['\n', '\r', '}', '#']) || peek_is(input, "[") {
+            break;
+        }
+        let off = offset(input, base);
+        let save = *input;
+        let Ok(word) = ident(input, base) else {
+            *input = save;
+            break;
+        };
+        sp(input);
+        if peek_is(input, "{") {
+            let msg = "These fields must be some inline settings optionally ended with a setting list";
+            errs.push(err_at(off, msg));
+            errs.push(err_at(offset(input, base), msg));
+            swallow_balanced_braces(input);
+            break;
+        }
+        match word.to_ascii_lowercase().as_str() {
+            "pk" => inline_pk = true,
+            "unique" => inline_unique = true,
+            _ => errs.push(err_at(
+                off,
+                "Inline column settings can only be `pk` or `unique`",
+            )),
+        }
+    }
+    let mut settings = if peek_is(input, "[") {
         column_settings_from(settings_list(input, base)?)
     } else {
         ColumnSettings::default()
     };
+    settings.pk |= inline_pk;
+    settings.unique |= inline_unique;
     Ok(Column {
         name,
         name_span: name_off..name_end,
@@ -654,6 +720,26 @@ fn column(input: &mut &str, base: usize) -> R<Column> {
         span: start..offset(input, base),
         settings,
     })
+}
+
+/// Skip a balanced `{ … }` block (nested braces included) — the recovery
+/// path after the misplaced-block field error.
+fn swallow_balanced_braces(input: &mut &str) {
+    let mut depth = 0i32;
+    for (k, &c) in input.as_bytes().iter().enumerate() {
+        match c {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    *input = &input[k + 1..];
+                    return;
+                }
+            }
+            _ => {}
+        }
+    }
+    *input = "";
 }
 
 /// Index column: an identifier. Upstream importers emit unquoted
@@ -1267,7 +1353,7 @@ fn table(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Table> 
             }
             continue;
         }
-        match column(input, base) {
+        match column(input, base, errs) {
             Ok(c) => t.columns.push(c),
             Err(e) => {
                 errs.push(err_at(e.offset, e.message));
@@ -1488,6 +1574,7 @@ fn table_group(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<T
         note: None,
         custom,
     };
+    let mut first_member: Option<usize> = None;
     loop {
         ws(input);
         if input.is_empty() {
@@ -1512,8 +1599,32 @@ fn table_group(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<T
             }
             continue;
         }
+        let member_start = offset(input, base);
         match qualified_name(input, base) {
-            Ok((sc, n)) => g.tables.push(sc.map_or(n.clone(), |s| format!("{s}.{n}"))),
+            Ok((sc, n)) => {
+                if first_member.is_none() {
+                    first_member = Some(member_start);
+                }
+                g.tables.push(sc.map_or(n.clone(), |s| format!("{s}.{n}")));
+                // the comma-separated member list reports ONCE, anchored at
+                // the first member (their `TableGroup g { a, b }` probe —
+                // one error, no membership findings)
+                sp(input);
+                if peek_is(input, ",") {
+                    errs.push(err_at(
+                        first_member.unwrap_or(member_start),
+                        "A TableGroup field must be of the form <table> or <schema>.<table>",
+                    ));
+                    match input.find(['\n', '}']) {
+                        Some(k) if input.as_bytes()[k] == b'}' => {
+                            *input = &input[k + 1..];
+                            break;
+                        }
+                        Some(k) => *input = &input[k + 1..],
+                        None => break,
+                    }
+                }
+            }
             Err(e) => {
                 // dbdiagram's phrasing for a member that is not a table
                 // reference (a comma, a setting, stray punctuation...)

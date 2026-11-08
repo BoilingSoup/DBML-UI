@@ -108,6 +108,18 @@ add("reported-index-pk",
     '\nTable "test2" {\n  "id" INT [not null]\n}\n'
     '\nRef: "test1"."id" < "test2"."id"\n')
 
+# --- the column field model (their column grammar: bare post-type words
+# are inline settings; `indexes {` drags the two-part block error) and the
+# reverse uniqueness check ---
+add("col-inline-bare-unique", "Table t { id integer unique\n}\n")
+add("col-inline-bare-pk", "Table t { id integer PK\n}\n")
+add("col-inline-bare-foo", "Table t { id integer foo\n}\n")
+add("col-multiword-type", "Table t { created_at timestamp with time zone\n}\n")
+add("col-keyword-block", "Table t { id integer indexes { (id) [pk] }\n}\n")
+add("op-gt-unique-parent",
+    "Table a { id integer [pk]\n}\nTable b { a_id integer [not null, unique]\n}\n"
+    "Ref: a.id > b.a_id\n")
+
 for name, src in sorted(cases.items()):
     with open(os.path.join(OUT, f"{name}.dbml"), "w") as f:
         f.write(src)
