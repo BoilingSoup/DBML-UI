@@ -19,6 +19,10 @@ pub struct ParseOutput {
     /// Their validateNode-class findings raised while parsing (broken-ref
     /// shape sets) — binder-class, gate the interpretation layer.
     pub binder_errors: Vec<(usize, String)>,
+    /// Left endpoints of application-wrapped refs (their field is not a
+    /// binary relationship, but the binder still resolves the left
+    /// endpoint's columns and flags them).
+    pub broken_refs: Vec<super::ast::Endpoint>,
 }
 
 struct Fail {
@@ -152,13 +156,30 @@ fn is_bare_ident(c: char) -> bool {
 /// Quotes are stripped.
 fn ident(input: &mut &str, base: usize) -> R<String> {
     if let Some(rest) = input.strip_prefix('"') {
-        let end = rest.find('"').ok_or(Fail {
-            offset: offset(input, base),
-            message: "unterminated quoted identifier".to_string(),
-        })?;
-        let name = rest[..end].to_string();
-        *input = &rest[end + 1..];
-        return Ok(name);
+        // their quotedVariable: consumeUntil("\"", raw: false) — escapes
+        // decode inline and cannot end the token
+        let mut name = String::new();
+        let mut r = rest;
+        loop {
+            if r.is_empty() {
+                return fail(offset(input, base), "unterminated quoted identifier");
+            }
+            if r.starts_with('\\') {
+                r = &r[1..];
+                let mut tmp = r;
+                let dec = escaped_string(&mut tmp, base)?;
+                name.push_str(&dec);
+                r = tmp;
+                continue;
+            }
+            if r.starts_with('"') {
+                *input = &r[1..];
+                return Ok(name);
+            }
+            let c = r.chars().next().unwrap();
+            name.push(c);
+            r = &r[c.len_utf8()..];
+        }
     }
     if let Some(rest) = input.strip_prefix('`') {
         let end = rest.find('`').ok_or(Fail {
@@ -1420,6 +1441,7 @@ fn top_item(
     base: usize,
     errs: &mut Vec<ParseError>,
     doc_binder_errors: &mut Vec<(usize, String)>,
+    broken_refs: &mut Vec<super::ast::Endpoint>,
 ) -> R<Item> {
     if peek_kw(input, "TableGroup") {
         table_group(input, base, errs).map(Item::Grp)
@@ -1428,7 +1450,7 @@ fn top_item(
     } else if peek_kw(input, "Project") {
         project(input, base, errs).map(Item::Prj)
     } else if peek_kw(input, "Ref") {
-        ref_stmt(input, base, errs, doc_binder_errors).map(|r| r.map_or(Item::Skip, Item::Ref))
+        ref_stmt(input, base, errs, doc_binder_errors, broken_refs).map(|r| r.map_or(Item::Skip, Item::Ref))
     } else if peek_kw(input, "Enum") {
         enum_def(input, base, errs).map(Item::Enm)
     } else if peek_kw(input, "Note") {
@@ -1629,6 +1651,7 @@ fn ref_stmt(
     base: usize,
     errs: &mut Vec<ParseError>,
     doc_binder_errors: &mut Vec<(usize, String)>,
+    broken_refs: &mut Vec<super::ast::Endpoint>,
 ) -> R<Option<Ref>> {
     let start = offset(input, base);
     if !eat(input, "Ref") {
@@ -1676,27 +1699,53 @@ fn ref_stmt(
     ws(input);
     let body_input = *input;
     let body_base = offset(input, base);
+    let body_field_off = body_base;
     // the strict attempt runs on a scratch copy so the fallback sees the
     // original body
     let mut scratch = body_input;
     // the scratch shares the source pointer, so sub-parsers keep taking
     // the source `base` — their offsets are pointer differences
     let mut ref_binder_errors: Vec<(usize, String)> = Vec::new();
-    let strict: R<(super::ast::Endpoint, super::ast::Endpoint, Cardinality, bool, bool, usize)> = (|| {
+    // the left endpoint parses FIRST (its application args decide the
+    // shape); args after it = an application-wrapped field: NOT a binary
+    // relationship — their set is must-be-binary @ the field, the per-arg
+    // errors, and the LEFT endpoint's column check; the ref does not bind
+    // (probe: `Ref r0: t1.odd col < t1.x` yields exactly those three)
+    let strict_from: R<super::ast::Endpoint> = (|| {
         let from = endpoint(&mut scratch, base)?;
         ws(&mut scratch);
-        // their application args between the endpoints: the ref binds
-        // from/op/to and each arg errs once (binder class)
         sp(&mut scratch);
+        let mut middle_args = 0usize;
         while scratch.starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '"' || c == '`') {
             let junk_start = offset(&mut scratch, base);
-            let _ = ident(&mut scratch, base);
+            // an unterminated quote fails ident WITHOUT consuming —
+            // breaking here is mandatory or the loop spins forever
+            if ident(&mut scratch, base).is_err() {
+                break;
+            }
             ref_binder_errors.push((
                 junk_start,
                 "A Ref field should only have a single binary relationship".to_string(),
             ));
+            middle_args += 1;
             sp(&mut scratch);
         }
+        if middle_args > 0 {
+            ref_binder_errors.push((
+                body_field_off,
+                "A Ref field must be a binary relationship".to_string(),
+            ));
+            broken_refs.push(from);
+            skip_line(input);
+            return Err(Fail {
+                offset: body_base,
+                message: "application-wrapped ref field".to_string(),
+            });
+        }
+        Ok(from)
+    })();
+    let strict: R<(super::ast::Endpoint, super::ast::Endpoint, Cardinality, bool, bool, usize)> = (|| {
+        let from = strict_from?;
         // the op binds to the next expression immediately (their Pratt
         // grammar) — no args can sit between the op and the right endpoint
         let op_offset = offset(&mut scratch, base);
@@ -1715,7 +1764,10 @@ fn ref_stmt(
             sp(input);
             while input.starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '"' || c == '`') {
                 let junk_start = offset(input, base);
-                let _ = ident(input, base);
+                // same mandatory break: a failing ident consumes nothing
+                if ident(input, base).is_err() {
+                    break;
+                }
                 ref_binder_errors.push((
                     junk_start,
                     "A Ref field should only have a single binary relationship".to_string(),
@@ -2227,7 +2279,7 @@ pub fn parse(src: &str) -> ParseOutput {
             continue;
         }
         let mut attempt = rest;
-        match top_item(&mut attempt, base, &mut out.errors, &mut out.binder_errors) {
+        match top_item(&mut attempt, base, &mut out.errors, &mut out.binder_errors, &mut out.broken_refs) {
             Ok(item) => {
                 rest = attempt;
                 match item {

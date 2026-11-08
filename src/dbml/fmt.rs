@@ -570,7 +570,7 @@ fn render(doc: &Document, cm: &CommentMap) -> String {
                         st.push(format!("headercolor: {c}"));
                     }
                     for (k, v) in &t.custom {
-                        st.push(format!("{k}: \"{v}\""));
+                        st.push(format!("{k}: \"{}\"", escape_value(v)));
                     }
                     header.push_str(&format!(" [{}]", st.join(", ")));
                 }
@@ -834,6 +834,21 @@ fn record_value_src(v: &super::ast::RecordValue) -> String {
 /// every char is a bare-ident char, double-quoted otherwise (a name with
 /// a space or `#` emitted bare would parse as junk — `Table Customer
 /// Data {` — and corrupt the file on the next format).
+/// their escapeString (compiler/queries/utils.ts): backslash and quote
+/// escaping for quoted value emissions — an embedded quote must round-trip
+/// through the lexer's `\` decoding.
+fn escape_value(v: &str) -> String {
+    let mut out = String::with_capacity(v.len() + 2);
+    for c in v.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 fn ident(n: &str) -> String {
     if !n.is_empty() && n.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
         n.to_string()
@@ -896,7 +911,7 @@ fn column_settings(st: &super::ast::ColumnSettings) -> Vec<String> {
     // custom properties re-emit double-quoted (dbdiagram's own style), so
     // values with spaces or empty strings round-trip
     for (k, v) in &st.custom {
-        out.push(format!("{k}: \"{v}\""));
+        out.push(format!("{k}: \"{}\"", escape_value(v)));
     }
     out
 }

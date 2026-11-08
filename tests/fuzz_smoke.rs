@@ -270,6 +270,9 @@ fn check_invariants(src: &str, label: &str) {
     }
     // formatting never panics, and is idempotent when it succeeds
     if let Some(f1) = dbml::fmt::format_source(src) {
+        if std::env::var("FUZZ_DUMP").is_ok() {
+            let _ = std::fs::write("/tmp/fuzz_last_src.dbml", src);
+        }
         let f2 = dbml::fmt::format_source(&f1);
         assert_eq!(
             f2.as_deref(),
