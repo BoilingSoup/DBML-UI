@@ -60,6 +60,30 @@ adjust step can no longer distinguish, so they always render as plain
 `<`. The fixture goldens carry upstream's verbatim marks (the old
 harness stripped them).
 
+## The differential-fuzz convergence
+
+`python3 parity/fuzz.py 300 && CORPUS_DIR=... node parity/run.mjs` →
+**237/300** and climbing (19 at the tier's birth, 44 → 86 → 137 → 199 →
+230 → 237 as the classes land). Every fix is a source read first:
+
+- the ref-shape classifier (their parse NEVER fails on broken bodies —
+  the Pratt parser wraps them as application args; validateFields
+  classifies) — probe-verified on the g1–g8 matrix, mw3, fuzz0022;
+- the binder-class channel (their errors() chains parse + binder
+  reports; the interpret layer's infos gate on `shouldInterpretNode`);
+- the group grammar (a comma-separated line is a comma-expression
+  callee → the form error; a juxtaposed word is an application arg →
+  per-juxtaposed-word errors, the membership on the callee only);
+- escape-aware quoted identifiers (`raw: false` — `\"` decodes and
+  cannot end the token) + escaped value emissions;
+- symbol-keyed same-endpoint/pair machinery (duplicates resolve to the
+  last declaration; unresolved sides stay out of the pair map).
+
+Known residual classes (each with the probes narrowed): anchor-row
+deltas on inline refs in multi-error files, duplicate-column
+multiplicity on the first-twin re-flag, and the settings-entry tokens
+(2 schema cases).
+
 ## The schema gate (M-P) — live
 
 `node parity/run_schema.mjs` → **75 pass / 0 divergent** on the corpus,
