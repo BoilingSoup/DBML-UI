@@ -437,16 +437,32 @@ pub fn validate_with_parse(
     }
 
     // their checkRefEndpoints (program/bind.ts): a ref whose two sides
-    // cover the SAME column set errs once ('Two endpoints are the same')
-    // and drops out of the pair map; the same unordered PAIR across refs
-    // flags both declarations ('References with same endpoints exist').
-    // Side identity = resolved table + its sorted column names; inline
-    // refs join the same map, anchored at their `ref:` attribute.
+    // resolve to the SAME SYMBOL SET errs once ('Two endpoints are the
+    // same') and drops out of the pair map; the same unordered PAIR across
+    // refs flags both declarations ('References with same endpoints
+    // exist'). Side identity = the RESOLVED column symbols (their interned
+    // symbols; duplicates resolve to the last declaration — probes:
+    // the self-ref on the first of three duplicate x columns binds two
+    // different symbols and stays silent, while the self-ref on the last
+    // duplicate fires); inline refs join the same map.
     let side_key = |ep: &super::ast::Endpoint| -> Option<String> {
-        let ti = doc.tables.iter().position(|t| t.matches(&ep.table))?;
-        let mut cols = ep.columns.clone();
-        cols.sort();
-        Some(format!("{ti}:{}", cols.join(",")))
+        let t = doc.tables.iter().find(|t| t.matches(&ep.table))?;
+        let mut ids: Vec<usize> = Vec::new();
+        for col in &ep.columns {
+            // an unresolved column keeps the ref out of the pair machinery
+            // entirely (probe: two refs sharing only missing endpoints
+            // never pair)
+            match t.columns.iter().rev().find(|c| c.name == *col) {
+                Some(c) => ids.push(c.name_span.start),
+                None => return None,
+            }
+        }
+        ids.sort_unstable();
+        Some(format!(
+            "{}:{}",
+            doc.tables.iter().position(|t2| std::ptr::eq(t2, t))?,
+            ids.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(",")
+        ))
     };
     let mut pair_first: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new(); // pair key -> first sighting's anchor
@@ -486,35 +502,23 @@ pub fn validate_with_parse(
             for c in &t.columns {
                 let Some(ir) = &c.settings.inline_ref else { continue };
                 let ti = doc.tables.iter().position(|x| std::ptr::eq(x, t));
-                // their endpoint binding is AMBIGUOUS when the target
-                // column name is duplicated in the table — the binding
-                // fails silently and the same-endpoint check never runs
-                // (probe: the self-ref on the first of three duplicate x
-                // columns produces NO same-endpoint finding, while the
-                // self-ref on a unique column does)
-                let target_self_and_duplicated = ti.is_some_and(|ti| {
-                    ir.to.columns.len() == 1
-                        && t.matches(&ir.to.table)
-                        && ir.to.columns[0] == c.name
-                        && doc.tables.get(ti).is_some_and(|t| {
-                            t.columns
-                                .iter()
-                                .filter(|x| x.name == ir.to.columns[0])
-                                .count()
-                                > 1
-                        })
-                });
-                if target_self_and_duplicated {
-                    continue;
-                }
-                let host_key = ti.map(|ti| {
-                    let mut cols = vec![c.name.clone()];
-                    cols.sort();
-                    format!("{ti}:{}", cols.join(","))
-                });
+                // the host side's symbol = the declaring column itself;
+                // the target side resolves through the symbol table
+                // (last declaration wins)
+                let host_key = ti.map(|tidx| format!("{tidx}:{}", c.name_span.start));
+                let other_key = if ir.to.table.is_empty() {
+                    // bare-word endpoint: the host table's column
+                    t.columns
+                        .iter()
+                        .rev()
+                        .find(|x| x.name == ir.to.columns[0])
+                        .map(|resolved| format!("{}:{}", ti.unwrap_or(0), resolved.name_span.start))
+                } else {
+                    side_key(&ir.to)
+                };
                 run(
                     host_key,
-                    side_key(&ir.to),
+                    other_key,
                     ir.attr_start,
                     &mut endpoint_errors,
                 );
