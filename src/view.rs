@@ -1315,6 +1315,29 @@ pub struct TabStrip<'a> {
 const TAB_W: f32 = TAB_SLOT_W - 4.0;
 pub const STRIP_H: f32 = 30.0;
 
+/// The two visible slivers of a tab partially covered by the dragged
+/// tab's rect: the part left of it and the part right of it (either may
+/// be empty). The covered tab paints only through these clips, so its
+/// title text and remnant-anchored asterisk hide exactly where the drag
+/// truly covers them.
+fn drag_slivers(rect: Rectangle, dr: Rectangle) -> [Rectangle; 2] {
+    [
+        // left of the dragged tab
+        Rectangle::new(
+            rect.position(),
+            Size::new((dr.x - rect.x).max(0.0).min(rect.width), rect.height),
+        ),
+        // right of the dragged tab
+        Rectangle::new(
+            Point::new(dr.x + dr.width, rect.y),
+            Size::new(
+                (rect.x + rect.width - (dr.x + dr.width)).max(0.0),
+                rect.height,
+            ),
+        ),
+    ]
+}
+
 /// Chrome's active-tab teardrop: convex rounded top corners, then bottom
 /// corners that flare outward (concave curls) meeting the strip's bottom
 /// line — where the tab, filled with the pane color, merges into the pane
@@ -1502,7 +1525,8 @@ impl canvas::Program<Message> for TabStrip<'_> {
                          on_top: bool,
                          hovered: bool,
                          close_hover: bool,
-                         width: f32| {
+                         width: f32,
+                         asterisk_floor: f32| {
             let tab = &self.app.tabs[i];
             if active || on_top {
                 // Chrome's teardrop: the shape runs flush to the strip's
@@ -1567,8 +1591,13 @@ impl canvas::Program<Message> for TabStrip<'_> {
                 // line, in its own slot so the label never shifts
                 if tab.is_modified() {
                     // +0.5 optical: the drawn spokes center a half-pixel
-                    // high of the × glyph's ink (measured off the strip)
-                    let c = Point::new(rect.x + 15.0, rect.center_y() + 0.5);
+                    // high of the × glyph's ink (measured off the strip).
+                    // A drag-covered tab anchors the mark to its visible
+                    // remnant (never under the dragged tab): it disappears
+                    // only when the remnant itself is gone — the same
+                    // rule the clipped title text follows — instead of
+                    // vanishing the moment the sweep passes its slot.
+                    let c = Point::new((rect.x + 15.0).max(asterisk_floor), rect.center_y() + 0.5);
                     let r = 4.5;
                     for i in 0..4 {
                         let a = i as f32 * std::f32::consts::FRAC_PI_4;
@@ -1646,23 +1675,19 @@ impl canvas::Program<Message> for TabStrip<'_> {
                 rect.intersection(dr).is_some_and(|r| r.width > 0.0 && r.height > 0.0)
             }) };
             match clipped_by {
-                None => paint_tab(&mut frame, i, rect, active, on_top, hovered, close_hover, width),
+                None => paint_tab(
+                    &mut frame,
+                    i,
+                    rect,
+                    active,
+                    on_top,
+                    hovered,
+                    close_hover,
+                    width,
+                    rect.x + 15.0,
+                ),
                 Some(dr) => {
-                    let slivers = [
-                        // left of the dragged tab
-                        Rectangle::new(
-                            rect.position(),
-                            Size::new((dr.x - rect.x).max(0.0).min(rect.width), rect.height),
-                        ),
-                        // right of the dragged tab
-                        Rectangle::new(
-                            Point::new(dr.x + dr.width, rect.y),
-                            Size::new(
-                                (rect.x + rect.width - (dr.x + dr.width)).max(0.0),
-                                rect.height,
-                            ),
-                        ),
-                    ];
+                    let slivers = drag_slivers(rect, dr);
                     for sliver in slivers {
                         if sliver.width < 2.0 {
                             continue;
@@ -1683,6 +1708,11 @@ impl canvas::Program<Message> for TabStrip<'_> {
                                 hovered,
                                 close_hover,
                                 width,
+                                // the draft frame is pre-translated to the
+                                // sliver's origin, so local x=0 is the
+                                // remnant's left edge — 1px pad + the 4.5
+                                // spoke radius keeps the mark fully inside
+                                5.5,
                             );
                         });
                     }
@@ -4782,6 +4812,49 @@ fn toast_overlay(app: &App) -> Element<'static, Message> {
         .align_x(iced::alignment::Horizontal::Right)
         .align_y(iced::alignment::Vertical::Bottom)
         .into()
+}
+
+#[cfg(test)]
+mod tab_drag_cover_tests {
+    use super::*;
+
+    /// The covered tab's asterisk rides its visible remnant: at every
+    /// sweep position of a rightward drag over the right neighbor, the
+    /// anchored mark sits inside the visible sliver (never under the
+    /// dragged tab), and it only loses its room when the remnant itself
+    /// is nearly gone — "disappears when truly covered", like the
+    /// clipped title text.
+    #[test]
+    fn covered_tab_asterisk_rides_the_visible_remnant() {
+        let rect = Rectangle::new(
+            Point::new(STRIP_LEFT + TAB_SLOT_W, 2.0),
+            Size::new(TAB_W, STRIP_H - 4.0),
+        );
+        // the dragged tab sweeping rightward over the neighbor: its left
+        // edge from first contact to past the midpoint swap
+        let first_contact = rect.x - TAB_W;
+        let swap = rect.x + 0.5 * TAB_SLOT_W - TAB_W;
+        let mut x = first_contact + 0.5;
+        while x < swap + TAB_W {
+            let dr = Rectangle::new(Point::new(x, 2.0), Size::new(TAB_W, STRIP_H - 4.0));
+            let [left, right] = drag_slivers(rect, dr);
+            // the mark anchors to the remnant's left edge + 1px pad + the
+            // 4.5px spoke radius (the clipped paint path's floor)
+            let remnant = if right.width >= left.width { right } else { left };
+            if remnant.width >= 11.0 {
+                let cx = remnant.x + 5.5;
+                assert!(
+                    cx >= remnant.x + 4.5 && cx + 4.5 <= remnant.x + remnant.width,
+                    "the mark fits inside the remnant at drag x={x}"
+                );
+                assert!(
+                    remnant.x >= dr.x + dr.width || remnant.x + remnant.width <= dr.x,
+                    "the remnant is outside the dragged rect at drag x={x}"
+                );
+            }
+            x += 4.0;
+        }
+    }
 }
 
 #[cfg(test)]
