@@ -2263,7 +2263,10 @@ mod tests {
     #[test]
     fn unique_rows_carry_the_fingerprint_in_the_cluster() {
         // fixture: Table a { id integer [pk, unique] email varchar }
-        let src = "Table a { id integer [pk, unique] email varchar }
+        let src = "Table a {
+  id integer [pk, unique]
+  email varchar
+}
 ";
         let l = dbml_ui::layout::layout(&dbml_ui::model::build(
             &dbml_ui::dbml::parser::parse(src).doc,
@@ -2293,7 +2296,10 @@ mod tests {
         // note — a pk+fk row must label its two markers separately (the
         // old row-level label showed "Primary Key" for both), and the
         // unique fingerprint gets its own tooltip
-        let src = "Table a { id integer [pk, ref: > b.id] email varchar [unique, note: 'hi'] }
+        let src = "Table a {
+  id integer [pk, ref: > b.id]
+  email varchar [unique, note: 'hi']
+}
 \
                    Table b { id integer }
 ";
@@ -2362,7 +2368,10 @@ mod tests {
         // pops NO pill (the card's Custom Properties section is the
         // affordance there). A plain pk row keeps the pill alone: no
         // card ever qualifies for it.
-        let src = "Table a { id integer [pk, owner: \"x\"] email integer [pk] }
+        let src = "Table a {
+  id integer [pk, owner: \"x\"]
+  email integer [pk]
+}
 ";
         let l = dbml_ui::layout::layout(&dbml_ui::model::build(
             &dbml_ui::dbml::parser::parse(src).doc,
@@ -2670,7 +2679,10 @@ Note n { '''x''' }";
     #[test]
     fn enum_pill_hit_tests_the_band_right_of_the_type() {
         let src = "Enum st { draft published archived }
-Table t { s st [not null] n integer }
+Table t {
+  s st [not null]
+  n integer
+}
 ";
         let l = dbml_ui::layout::layout(&dbml_ui::model::build(
             &dbml_ui::dbml::parser::parse(src).doc,
@@ -2725,7 +2737,11 @@ Table t { s st [not null] n integer }
 
     #[test]
     fn note_hit_tests_the_note_icon_slot() {
-        let src = "Table a { id integer [pk, note: 'the identifier'] user_id integer }
+        let src = "Table a {
+  id integer [pk, note:
+  'the identifier']
+  user_id integer
+}
 ";
         let l = dbml_ui::layout::layout(&dbml_ui::model::build(
             &dbml_ui::dbml::parser::parse(src).doc,
@@ -2802,7 +2818,11 @@ Table b { c integer }
 
     #[test]
     fn badge_flags_follow_settings() {
-        let src = "Table a { id integer [pk, not null, unique] email varchar(80) }
+        let src = "Table a {
+  id integer [pk,
+  not null, unique]
+  email varchar(80)
+}
 ";
         let l = dbml_ui::layout::layout(&dbml_ui::model::build(
             &dbml_ui::dbml::parser::parse(src).doc,

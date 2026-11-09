@@ -1280,8 +1280,14 @@ mod tests {
     #[test]
     fn boxes_do_not_overlap_and_edges_route() {
         let src = "
-Table a { id integer [pk] a_id integer }
-Table b { id integer [pk] b_ref integer }
+Table a {
+  id integer [pk]
+  a_id integer
+}
+Table b {
+  id integer [pk]
+  b_ref integer
+}
 Table c { id integer [pk] }
 Ref: b.b_ref > a.id
 Ref: c.id > b.id
@@ -1321,7 +1327,10 @@ Ref: c.id > b.id
     fn layout_is_deterministic() {
         let src = "
 Table a { id integer [pk] }
-Table b { id integer [pk] b_ref integer }
+Table b {
+  id integer [pk]
+  b_ref integer
+}
 Ref: b.b_ref > a.id
 ";
         let l1 = layout_of(src);
@@ -1334,8 +1343,14 @@ Ref: b.b_ref > a.id
     fn same_column_refs_route_between_nearest_sides() {
         // cycle: neither table can be layered before the other
         let src = "
-Table a { id integer [pk] rb integer }
-Table b { id integer [pk] ra integer }
+Table a {
+  id integer [pk]
+  rb integer
+}
+Table b {
+  id integer [pk]
+  ra integer
+}
 Ref: a.rb > b.id
 Ref: b.ra > a.id
 ";
@@ -1419,7 +1434,10 @@ Ref: b.ra > a.id
     #[test]
     fn self_reference_loops_out_one_side() {
         let l = layout_of(
-            "Table u { id integer [pk] referrer_id integer }\nRef: u.referrer_id > u.id\n",
+            "Table u {
+  id integer [pk]
+  referrer_id integer
+}\nRef: u.referrer_id > u.id\n",
         );
         let r = &l.edges[0];
         let b = &l.boxes[0];
@@ -1435,7 +1453,10 @@ Ref: b.ra > a.id
     fn overrides_move_boxes_and_recompute_extent() {
         let src = "
 Table a { id integer [pk] }
-Table b { id integer [pk] b_ref integer }
+Table b {
+  id integer [pk]
+  b_ref integer
+}
 Ref: b.b_ref > a.id
 ";
         let out = parser::parse(src);
@@ -1543,7 +1564,10 @@ Ref: b.b_ref > a.id
         // widest sibling (audit_log read as an accidental wide block)
         let src = "
 Table short { id integer }
-Table much_longer_name { id integer [pk] very_long_column integer }
+Table much_longer_name {
+  id integer [pk]
+  very_long_column integer
+}
 ";
         let l = layout_of(src);
         let ws: Vec<i32> = l.boxes.iter().map(|b| b.w).collect();
@@ -1864,8 +1888,14 @@ Ref: d.c_id > c.id
     #[test]
     fn auto_arrange_tolerates_cycles() {
         let (l, schema) = arrange_parts(
-            "Table a { id integer [pk] rb integer }
-Table b { id integer [pk] ra integer }
+            "Table a {
+  id integer [pk]
+  rb integer
+}
+Table b {
+  id integer [pk]
+  ra integer
+}
 Ref: a.rb > b.id
 Ref: b.ra > a.id
 ",

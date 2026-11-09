@@ -635,7 +635,9 @@ fn settings_list_occs(
     let mut occs: Vec<super::ast::SettingOcc> = Vec::new();
     let mut out = Vec::new();
     loop {
-        sp(input);
+        // their lexer treats newlines/comments as trivia inside the
+        // bracket list (probe: `[pk,\n not null, unique]` parses clean)
+        ws(input);
         if eat(input, "]") {
             return Ok((out, occs));
         }
@@ -656,6 +658,9 @@ fn settings_list_occs(
         let occ_before_value = input.len();
         let mut val_quoted = false;
         if eat(input, ":") {
+            sp(input);
+            // a newline between `:` and the value is trivia too
+            ws(input);
             sp(input);
             // quotedness must be read BEFORE the value parses — the
             // parsed value arrives unquoted (their
@@ -855,7 +860,40 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
     let name = ident(input, base)?;
     let name_end = offset(input, base);
     sp(input);
-    let ty = type_str(input, base)?;
+    let mut binder_errors: Vec<(usize, String)> = Vec::new();
+    // their validateFields (table/validate.ts:112): a column field with
+    // args=[] errs 'A column must have a type' anchored at the callee
+    // (the name). The type is missing when the line/scope ends — or when
+    // the type token was an invalid number, which their lexer gathered
+    // out (with its 'Invalid number' error) leaving only the name. An
+    // attribute LIST at the type position is the field's arg —
+    // 'Invalid column type' at that list (probe c5/c6).
+    let ty: String;
+    if input.is_empty() || input.starts_with(['\n', '\r', '}']) {
+        binder_errors.push((name_off, "A column must have a type".to_string()));
+        ty = String::new();
+    } else if input.starts_with('[') {
+        ty = String::new();
+    } else if input.starts_with(|c: char| c.is_ascii_digit())
+        && matches!(
+            numeric_lit_or_ident(input.as_bytes(), 0),
+            NumScan::Invalid(_)
+        )
+    {
+        // the type token is an invalid-number run (their invalid token is
+        // gathered out of the stream; args stay empty)
+        let run_start = offset(input, base);
+        let n = match numeric_lit_or_ident(input.as_bytes(), 0) {
+            NumScan::Invalid(n) => n,
+            _ => unreachable!(),
+        };
+        errs.push(err_at(run_start, "Invalid number"));
+        *input = &input[n..];
+        binder_errors.push((name_off, "A column must have a type".to_string()));
+        ty = String::new();
+    } else {
+        ty = type_str(input, base)?;
+    }
     sp(input);
     // their column grammar's inline-settings fields: bare `pk`/`unique`
     // words (case-insensitive) set the flag; any other bare word errs
@@ -863,15 +901,39 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
     // drags a `{ … }` block behind it (`indexes {`, `notes {`), which
     // errs twice ("These fields must be some inline settings optionally
     // ended with a setting list", at the word and the brace) and swallows
-    // the balanced block before the column ends. The bracket setting
-    // list ends the fields.
+    // the balanced block before the column ends. Words may follow a
+    // setting list too (probe c6: `id [pk] integer` errs at `integer`).
     let mut inline_pk = false;
     let mut inline_unique = false;
-    let mut binder_errors: Vec<(usize, String)> = Vec::new();
+    let mut settings: Option<super::ast::ColumnSettings> = None;
+    // the FIRST list stands in as the (invalid) type when neither
+    let mut ty_is_list = false;
     loop {
         sp(input);
-        if input.is_empty() || input.starts_with(['\n', '\r', '}', '#']) || peek_is(input, "[") {
+        if input.is_empty() || input.starts_with(['\n', '\r', '}', '#']) {
             break;
+        }
+        if peek_is(input, "[") {
+            let settings_start = offset(input, base);
+            let (kvs, occs) = settings_list_occs(input, base, errs)?;
+            if ty.is_empty() && !ty_is_list {
+                // the list became the field's arg — no valid column type
+                binder_errors.push((settings_start, "Invalid column type".to_string()));
+                ty_is_list = true;
+            }
+            // a SECOND bracket list on the same line is their fields error,
+            // anchored at both lists (probe: `int [] [pk]` errs at `[` and `[`)
+            sp(input);
+            if peek_is(input, "[") {
+                let msg = "These fields must be some inline settings optionally ended with a setting list";
+                binder_errors.push((settings_start, msg.to_string()));
+                binder_errors.push((offset(input, base), msg.to_string()));
+                swallow_balanced_braces(input);
+            }
+            let mut s = column_settings_from(kvs);
+            s.occurrences = occs;
+            settings = Some(s);
+            continue;
         }
         let off = offset(input, base);
         let save = *input;
@@ -898,34 +960,16 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
             )),
         }
     }
-    let settings_bracket = if peek_is(input, "[") {
-        let settings_start = offset(input, base);
-        let (kvs, occs) = settings_list_occs(input, base, errs)?;
-        // a SECOND bracket list on the same line is their fields error,
-        // anchored at both lists (probe: `int [] [pk]` errs at `[` and `[`)
-        sp(input);
-        if peek_is(input, "[") {
-            let msg = "These fields must be some inline settings optionally ended with a setting list";
-            binder_errors.push((settings_start, msg.to_string()));
-            binder_errors.push((offset(input, base), msg.to_string()));
-            swallow_balanced_braces(input);
-        }
-        let mut s = column_settings_from(kvs);
-        s.occurrences = occs;
-        Some(s)
-    } else {
-        None
-    };
-    let mut settings = settings_bracket.unwrap_or_default();
-    settings.pk |= inline_pk;
-    settings.unique |= inline_unique;
+    let mut out_settings = settings.unwrap_or_default();
+    out_settings.pk |= inline_pk;
+    out_settings.unique |= inline_unique;
     Ok(Column {
         name,
         name_span: name_off..name_end,
         ty,
         span: start..offset(input, base),
         binder_errors,
-        settings,
+        settings: out_settings,
     })
 }
 
@@ -1231,6 +1275,129 @@ fn number_len(input: &str) -> usize {
     i
 }
 
+/// Their numericLiteralOrIdentifier (lexer.ts:439) verbatim — reached at a
+/// DIGIT (`i0` is its offset; their scanTokens has already advance()d that
+/// first digit, so the walk starts one past it and the token always spans
+/// from `i0`):
+///
+/// - the run continues into alphanumerics → ONE identifier token (`2z3`,
+///   `1e+2x`, `1_000`, `2.e` — chars.ts isAlphaNumeric = \p{L}|_|\p{M}|digit);
+/// - dots count: a lone trailing `2.` before whitespace/other is a VALID
+///   literal whose text includes the dot; more than one dot, or an
+///   alphanumeric after the lone dot (`12.3abc`, `2.5x`), is an INVALID
+///   number: token kind NUMERIC_LITERAL isInvalid, gathered out of the
+///   stream by their gatherInvalid with an 'Invalid number' error;
+/// - one e-exponent: valid only with a digit after the optional +/- sign
+///   (`1e+2`); if alphanumerics continue after the exponent (`1e2abc`)
+///   the whole run is an identifier; an e without an exponent (`2e`, `2e+`)
+///   breaks — never consumed by the numeric walk — and the identifier run
+///   picks the alphanumerics up from there (`2e` → ident, `2e+` → ident `2e`
+///   plus an OP token).
+///
+/// The gathered-invalid arm is the reason a junk run inside a records row
+/// or a ref body vanishes instead of splitting into value/operand tokens.
+enum NumScan {
+    /// clean numeric literal (text length, includes any `2.` tail or `1e-2`)
+    Numeric(usize),
+    /// digit-led identifier (text length)
+    IdentToken(usize),
+    /// invalid number, token gathered out (text length)
+    Invalid(usize),
+}
+
+/// as above, but `sentinel` is the byte that follows this slice in the
+/// real source (`None` = the slice ends the file): their lexer scans the
+/// WHOLE source, so a run sitting at a line boundary (`2.` before the
+/// newline, an exponent at end-of-line) must evaluate against that next
+/// byte, not an artificial end-of-text. The sentinel is never consumed.
+fn numeric_lit_or_ident_sentinel(b: &[u8], i0: usize, sentinel: Option<u8>) -> NumScan {
+    let ch = |i: usize, look: usize| -> Option<u8> {
+        if i + look < b.len() {
+            Some(b[i + look])
+        } else {
+            sentinel
+        }
+    };
+    let is_alnum = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c >= 0x80;
+    let mut n_dots = 0usize;
+    let mut i = i0 + 1;
+    if ch(i, 0).is_none() {
+        return NumScan::Numeric(i - i0);
+    }
+    loop {
+        let c0 = match ch(i, 0) {
+            Some(c) => c,
+            None => break,
+        };
+        let is_dot = c0 == b'.';
+        if is_dot {
+            n_dots += 1;
+            if n_dots > 1 {
+                break;
+            }
+        }
+        // scientific notation: e/E then optional sign then digits — only
+        // consume it when the exponent is actually valid
+        if c0 == b'e' || c0 == b'E' {
+            let digit_pos = if matches!(ch(i, 1), Some(b'+') | Some(b'-')) {
+                ch(i, 2)
+            } else {
+                ch(i, 1)
+            };
+            if digit_pos.is_some_and(|c| c.is_ascii_digit()) {
+                i += 1; // the e
+                if matches!(ch(i, 0), Some(b'+') | Some(b'-')) {
+                    i += 1; // the sign
+                }
+                while ch(i, 0).is_some_and(|c| c.is_ascii_digit()) {
+                    i += 1;
+                }
+                // a clean exponent ending the run is the literal; trailing
+                // alphanumerics make it an identifier instead
+                if ch(i, 0).is_none() || !is_alnum(ch(i, 0).unwrap()) {
+                    return NumScan::Numeric(i - i0);
+                }
+                break;
+            }
+            // 'e' without an exponent: treat as identifier (never consumed)
+            break;
+        }
+        let is_last = ch(i + 1, 0).is_none();
+        // a digit as the last character of the text: valid literal
+        if !is_dot && is_last && c0.is_ascii_digit() {
+            return NumScan::Numeric(i + 1 - i0);
+        }
+        // a non-alphanumeric, non-dot character ahead: the literal ends
+        if !is_dot && !is_alnum(c0) {
+            return NumScan::Numeric(i - i0);
+        }
+        // letters after digits: identifier
+        if !is_dot && !c0.is_ascii_digit() {
+            break;
+        }
+        i += 1;
+    }
+    if n_dots > 0 {
+        // invalid number: gather all alphanumerics and dots of the run
+        while ch(i, 0).is_some_and(|c| c == b'.' || is_alnum(c)) {
+            i += 1;
+        }
+        NumScan::Invalid(i - i0)
+    } else {
+        // identifier
+        while ch(i, 0).is_some_and(is_alnum) {
+            i += 1;
+        }
+        NumScan::IdentToken(i - i0)
+    }
+}
+
+/// Slice-scanning entry: no sentinel (the slice IS the whole text).
+fn numeric_lit_or_ident(b: &[u8], i0: usize) -> NumScan {
+    numeric_lit_or_ident_sentinel(b, i0, None)
+}
+
+
 /// One value in a records row. An empty field (nothing before the next
 /// comma / end of line) is a literal null.
 fn record_value(input: &mut &str, base: usize) -> R<(RecordValue, Span)> {
@@ -1255,6 +1422,32 @@ fn record_value(input: &mut &str, base: usize) -> R<(RecordValue, Span)> {
         *input = &input[end + 1..];
         return Ok((RecordValue::Expr(v), start..offset(input, base)));
     }
+    // their numericLiteralOrIdentifier: digit-led runs are ONE token —
+    // clean numbers keep the full text (`1e+2`, `2.`), digit-led
+    // identifiers are invalid record values (the row drops before the
+    // model ever sees them), dot-junk runs (`2.5x`) are gathered invalid
+    // numbers, surfacing here as an EmptyNode-sized null
+    if input.starts_with(|c: char| c.is_ascii_digit()) {
+        match numeric_lit_or_ident(input.as_bytes(), 0) {
+            NumScan::Numeric(n) => {
+                let v = input[..n].to_string();
+                *input = &input[n..];
+                return Ok((RecordValue::Number(v), start..offset(input, base)));
+            }
+            NumScan::IdentToken(n) => {
+                let name = input[..n].to_string();
+                *input = &input[n..];
+                return Ok((RecordValue::Ident(name), start..offset(input, base)));
+            }
+            NumScan::Invalid(n) => {
+                *input = &input[n..];
+                return Ok((RecordValue::Null, start..offset(input, base)));
+            }
+        }
+    }
+    // a leading-dot numeric (`.5`): their lexer emits it as an OP token
+    // (rows with one never validate — seen as "Unexpected '.'"), the
+    // signed form is kept for the model
     let n = number_len(input);
     if n > 0 {
         let v = input[..n].to_string();
@@ -1480,7 +1673,31 @@ fn records_block(
         let row_start = offset(input, base);
         let line_end = input.find('\n').unwrap_or(input.len());
         let line = &input[..line_end];
-        let line_toks = ref_tokens(line, row_start);
+        let sentinel = if line_end < input.len() {
+            Some(b'\n')
+        } else {
+            None
+        };
+        let mut line_toks = ref_tokens(line, row_start, sentinel);
+        let mut line_errs: Vec<ParseError> = Vec::new();
+        line_toks = gather_invalid_num(line_toks, &mut line_errs);
+        errs.append(&mut line_errs);
+        // their blockExpression: a line whose only tokens are trivia and
+        // the closing brace (a gathered junk token leaves NOTHING) never
+        // becomes a field — no empty application, no operand errors
+        if !line_toks
+            .iter()
+            .any(|t| t.kind != RTKind::Eof && t.kind != RTKind::RBrace)
+        {
+            match input.find(['\n', '}']) {
+                Some(k) if input.as_bytes()[k] == b'}' => {
+                    *input = &input[k..];
+                }
+                Some(k) => *input = &input[k + 1..],
+                None => *input = &input[input.len()..],
+            }
+            continue;
+        }
         let mut rp = RParser {
             toks: line_toks,
             pos: 0,
@@ -1698,7 +1915,8 @@ fn table(
     loop {
         ws(input);
         if input.is_empty() {
-            errs.push(err_at(offset(input, base), "unterminated table block"));
+            // their expect('}') at the EOF token
+            errs.push(err_at(offset(input, base), "Expect a closing brace '}'"));
             break;
         }
         if eat(input, "}") {
@@ -2028,13 +2246,19 @@ struct RTok {
     end: usize,
     /// hasTrailingSpaces(previous) — a space/tab directly after the token
     space_after: bool,
+    /// their isInvalid token (an invalid numeric run): never reaches the
+    /// parser — gatherInvalid drops it, each one emitting 'Invalid number'
+    invalid: bool,
 }
 
 /// Their lexer over a single ref-body line: punctuation singles, the
 /// operator munching table (lexer.ts operator()), unicode identifiers
 /// (chars.ts: \p{L}|_|\p{M}), quoted variables, function expressions,
-/// numeric literals with e-notation.
-fn ref_tokens(body: &str, base: usize) -> Vec<RTok> {
+/// numeric literals with e-notation. `sentinel` is the byte following the
+/// slice in the real source (None at end-of-file): numeric runs at the
+/// slice edge evaluate against it (`2.` at a line end is a valid literal),
+/// but it is never tokenized.
+fn ref_tokens(body: &str, base: usize, sentinel: Option<u8>) -> Vec<RTok> {
     let b = body.as_bytes();
     let mut toks = Vec::new();
     let mut i = 0usize;
@@ -2044,6 +2268,7 @@ fn ref_tokens(body: &str, base: usize) -> Vec<RTok> {
         let mut kind = None;
         let mut value = String::new();
         let mut end = i + 1;
+        let mut invalid = false;
         match c {
             b' ' | b'\t' | b'\r' => {
                 i += 1;
@@ -2198,37 +2423,28 @@ fn ref_tokens(body: &str, base: usize) -> Vec<RTok> {
                 end = k;
             }
             _ if c.is_ascii_digit() => {
-                // numericLiteralOrIdentifier: digits, ONE dot, e-notation
-                let mut k = i;
-                let mut dots = 0usize;
-                while k < b.len() {
-                    let ch = b[k];
-                    if ch.is_ascii_digit() {
-                        k += 1;
-                    } else if ch == b'.' && dots == 0 {
-                        dots += 1;
-                        k += 1;
-                    } else if (ch == b'e' || ch == b'E')
-                        && k + 1 < b.len()
-                        && (b[k + 1].is_ascii_digit()
-                            || ((b[k + 1] == b'+' || b[k + 1] == b'-')
-                                && k + 2 < b.len()
-                                && b[k + 2].is_ascii_digit()))
-                    {
-                        k += 1;
-                        if k < b.len() && (b[k] == b'+' || b[k] == b'-') {
-                            k += 1;
-                        }
-                        while k < b.len() && b[k].is_ascii_digit() {
-                            k += 1;
-                        }
-                    } else {
-                        break;
+                // their numericLiteralOrIdentifier (the helper above):
+                // digit-led runs continue into alphanumerics as ONE
+                // identifier token; a dot-run like `12.3abc` is an invalid
+                // number token, gathered out with an 'Invalid number' error
+                match numeric_lit_or_ident_sentinel(b, start, sentinel) {
+                    NumScan::Numeric(n) => {
+                        kind = Some(RTKind::Num);
+                        value = body[start..start + n].to_string();
+                        end = start + n;
+                    }
+                    NumScan::IdentToken(n) => {
+                        kind = Some(RTKind::Ident);
+                        value = body[start..start + n].to_string();
+                        end = start + n;
+                    }
+                    NumScan::Invalid(n) => {
+                        kind = Some(RTKind::Num);
+                        value = body[start..start + n].to_string();
+                        end = start + n;
+                        invalid = true;
                     }
                 }
-                kind = Some(RTKind::Num);
-                value = body[start..k].to_string();
-                end = k;
             }
             _ if c.is_ascii_alphabetic() || c == b'_' || c >= 0x80 => {
                 // identifier(): \p{L}|_|\p{M} start, then alphanumeric run
@@ -2252,6 +2468,7 @@ fn ref_tokens(body: &str, base: usize) -> Vec<RTok> {
             start: base + start,
             end: base + end,
             space_after,
+            invalid,
         });
         i = end;
     }
@@ -2261,6 +2478,7 @@ fn ref_tokens(body: &str, base: usize) -> Vec<RTok> {
         start: base + b.len(),
         end: base + b.len(),
         space_after: false,
+        invalid: false,
     });
     toks
 }
@@ -2304,6 +2522,16 @@ struct RParser<'a> {
     toks: Vec<RTok>,
     pos: usize,
     errs: &'a mut Vec<ParseError>,
+}
+
+/// Their gatherInvalid (lexer.ts:247): invalid tokens never reach the
+/// parser; each emits its span-anchored 'Invalid number' error on the way
+/// out. The remaining stream is what their parser sees.
+fn gather_invalid_num(toks: Vec<RTok>, errs: &mut Vec<ParseError>) -> Vec<RTok> {
+    for t in toks.iter().filter(|t| t.invalid) {
+        errs.push(err_at(t.start, "Invalid number"));
+    }
+    toks.into_iter().filter(|t| !t.invalid).collect()
 }
 
 impl RParser<'_> {
@@ -3135,7 +3363,24 @@ fn ref_body_pipeline_mode(
 ) {
     let line_end = input.find('\n').unwrap_or(input.len());
     let body = &input[..line_end];
-    let toks = ref_tokens(body, base);
+    let sentinel = if line_end < input.len() {
+        Some(b'\n')
+    } else {
+        None
+    };
+    let mut toks = ref_tokens(body, base, sentinel);
+    let mut lex_errs: Vec<ParseError> = Vec::new();
+    toks = gather_invalid_num(toks, &mut lex_errs);
+    errs.append(&mut lex_errs);
+    // their blockExpression: a line with only trivia and the block's
+    // closing brace is not a field — an empty application would produce
+    // operand errors THEIR parser never reaches
+    if !toks
+        .iter()
+        .any(|t| t.kind != RTKind::Eof && t.kind != RTKind::RBrace)
+    {
+        return;
+    }
     let mut p = RParser {
         toks,
         pos: 0,
@@ -3398,7 +3643,31 @@ fn table_group(
         let brace = input[..line_end].find('}');
         let slice_end = brace.unwrap_or(line_end);
         let line = &input[..slice_end];
-        let line_toks = ref_tokens(line, line_start);
+        let sentinel = match brace {
+            Some(_) => Some(b'}'),
+            None if slice_end < input.len() => Some(b'\n'),
+            None => None,
+        };
+        let mut line_toks = ref_tokens(line, line_start, sentinel);
+        let mut lex_errs: Vec<ParseError> = Vec::new();
+        line_toks = gather_invalid_num(line_toks, &mut lex_errs);
+        errs.append(&mut lex_errs);
+        // their blockExpression: only trivia + the closing brace → not a field
+        if !line_toks
+            .iter()
+            .any(|t| t.kind != RTKind::Eof && t.kind != RTKind::RBrace)
+        {
+            // advance past the consumed slice (the parser worked on a copy)
+            *input = &input[slice_end..];
+            if brace.is_some() {
+                let _ = eat(input, "}");
+                break;
+            }
+            if input.is_empty() {
+                break;
+            }
+            continue;
+        }
         let mut lp = RParser {
             toks: line_toks,
             pos: 0,
@@ -3769,7 +4038,10 @@ Table users as U [note: 'Accounts', headercolor: #3498DB] {
     #[test]
     fn refs_standalone_inline_composite() {
         let src = r#"
-Table posts { id integer [pk] user_id integer [ref: > users.id] }
+Table posts {
+  id integer [pk]
+  user_id integer [ref: > users.id]
+}
 Table users { id integer [pk] }
 Table tenants { id integer [pk] org text }
 Ref: posts.user_id > users.id
