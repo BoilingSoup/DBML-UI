@@ -27,6 +27,15 @@ fn region_color(g: &GroupRegion) -> Color {
 }
 
 
+/// The group note glyph's center x: the label's TRUE shaped advance
+/// (the table-title convention, `measured_name_px`) plus the shared
+/// 0.6-cell gap — the gap is identical for every group, which the
+/// est_width classes could never guarantee.
+fn group_note_cx(name: &str, label_x: f32, s: Size) -> f32 {
+    label_x + crate::canvas::diagram::measured_name_px(name, true, 0.55 * s.height)
+        + 0.6 * s.width
+}
+
 /// Draw every group region (called from `diagram::paint` before edges):
 /// dbdiagram's CONTAINER look — translucent tinted body, a solid
 /// group-color header band carrying the name (like a table header), and
@@ -128,10 +137,7 @@ pub fn draw_groups(
         let has_info = g.note.is_some() || !g.custom.is_empty();
         let note_size = 0.5 * s.height;
         if has_info {
-            let label_w = dbml_ui::layout::Row::est_width(&g.name)
-                * crate::canvas::diagram::BOLD_TEXT
-                * s.width;
-            let n_cx = label_x + label_w + 0.6 * s.width + 0.5 * note_size;
+            let n_cx = group_note_cx(&g.name, label_x, s) + 0.5 * note_size;
             svg_icon(
                 frame,
                 Point::new(n_cx, top_left.y + band_h * 0.5),
@@ -242,6 +248,39 @@ fn group_icon_geometry(g: &GroupRegion, top_left: Point, s: Size) -> (Point, f32
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The group note glyph's gap is IDENTICAL for every group: the
+    /// label end is its TRUE shaped advance (the table-title
+    /// convention), not the est_width estimate.
+    #[test]
+    fn the_group_glyph_gap_is_identical_across_labels() {
+        let zoom = 20.0;
+        let s = cell_size(zoom);
+        let mut gap: Option<f32> = None;
+        for name in ["users", "launch_windows", "payloads", "WWW_aaaa"] {
+            let label_x = 100.0;
+            let end = label_x
+                + crate::canvas::diagram::measured_name_px(name, true, 0.55 * s.height);
+            let cx = group_note_cx(name, label_x, s);
+            // the convention itself: inset-relative end + the shared gap
+            assert_eq!(
+                cx,
+                label_x
+                    + crate::canvas::diagram::measured_name_px(name, true, 0.55 * s.height)
+                    + 0.6 * s.width,
+                "the glyph gap is measured for {name:?}"
+            );
+            let g = cx - end - 0.6 * s.width;
+            let _ = g;
+            match gap {
+                None => gap = Some(cx - end),
+                Some(prev) => assert!(
+                    (cx - end - prev).abs() < 0.01,
+                    "the glyph gap differs for {name:?}"
+                ),
+            }
+        }
+    }
 
     /// Real parser+layout pipeline with two groups: "one" wraps tables
     /// a+b (explicit color), "two" wraps c (no color).

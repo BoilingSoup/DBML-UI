@@ -195,7 +195,7 @@ fn shape_width_px(
 
 /// The row name's advance width in px at the row's font size, in the
 /// font iced actually renders it with.
-fn measured_name_px(text: &str, bold: bool, size: f32) -> f32 {
+pub(crate) fn measured_name_px(text: &str, bold: bool, size: f32) -> f32 {
     let mut shaper = shaper();
     let key = (text.to_string(), bold);
     if !shaper.cache.contains_key(&key) {
@@ -476,7 +476,13 @@ pub(crate) fn hovered_row_of(
 /// (note, records) hangs from, and the same measure the width
 /// computation reserves (Row::BOLD_TEXT on both sides keeps them in step).
 fn title_end_px(b: &TableBox, top_left: Point, s: Size) -> f32 {
-    top_left.x + 0.6 * s.width + Row::est_width(&b.title) * BOLD_TEXT * s.width
+    // the title's TRUE advance width, shaped in the exact font/weight the
+    // draw pass renders it with (bold, the row-name convention) — the gap
+    // before the header glyphs is therefore IDENTICAL for every table,
+    // which the est_width classes could never guarantee (launch_windows's
+    // underscores measured visibly different from their class)
+    let title_size = 0.55 * s.height;
+    top_left.x + 0.6 * s.width + measured_name_px(&b.title, true, title_size)
 }
 
 /// The note affordance's (center x, size) in frame px, right of the
@@ -2167,6 +2173,54 @@ fn badge_pill(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The header glyph gap is IDENTICAL for every table: the title's
+    /// end is its TRUE shaped advance (the row-name convention), not the
+    /// est_width class estimate — launch_windows-style titles used to
+    /// get visibly different gaps before their first glyph.
+    #[test]
+    fn the_header_glyph_gap_is_identical_across_titles() {
+        let src = "Table users [note: 'n'] { id integer }\n\
+                   Table launch_windows [owner: 'x'] { id integer }\n\
+                   Table payloads [note: 'n'] { id integer }\n\
+                   Table WWW_aaaa [note: 'n'] { id integer }\n";
+        let doc = dbml_ui::dbml::parser::parse(src).doc;
+        let lay = dbml_ui::layout::layout(&dbml_ui::model::build(&doc));
+        let zoom = 20.0;
+        let pan = Vector::new(0.0, 0.0);
+        let s = cell_size(zoom);
+        let mut gap: Option<f32> = None;
+        for b in &lay.boxes {
+            let top_left = to_px(b.x, b.y, zoom, pan);
+            // the convention itself: the title end is inset + the shaped
+            // advance (a regression to est_width fails here)
+            assert_eq!(
+                title_end_px(b, top_left, s),
+                top_left.x + 0.6 * s.width
+                    + measured_name_px(&b.title, true, 0.55 * s.height),
+                "title end is the measured advance for {:?}",
+                b.title
+            );
+            // and the glyph's gap after that end is the shared 0.6 cell
+            let (cx, size) =
+                note_icon_geometry(b, top_left, s).expect("the fixture tables carry notes");
+            let g = cx - title_end_px(b, top_left, s) - 0.5 * size;
+            match gap {
+                None => gap = Some(g),
+                Some(prev) => assert!(
+                    (g - prev).abs() < 0.01,
+                    "the glyph gap differs between {:?} and the previous table",
+                    b.title
+                ),
+            }
+            // the glyph never crosses the box's right edge
+            assert!(
+                cx + 0.5 * size < box_rect(b, zoom, pan).x + box_rect(b, zoom, pan).width,
+                "the note glyph stays inside the box for {:?}",
+                b.title
+            );
+        }
+    }
 
     fn layout() -> Layout {
         dbml_ui::layout::layout(&dbml_ui::model::build(
