@@ -1766,9 +1766,11 @@ fn ref_stmt(
         if !eat(input, "}") {
             return fail(offset(input, base), "expected '}' after ref body");
         }
-        let (on_delete, on_update, color) = ref_settings(input, base, errs);
+        let (on_delete, on_update, color) =
+            ref_settings(input, base, errs, doc_binder_errors);
         return Ok(Some(Ref {
             name,
+            clean_binary: true,
             binder_errors: Vec::new(),
             span: start..offset(input, base),
             from,
@@ -1794,7 +1796,6 @@ fn ref_stmt(
     let mut scratch = body_input;
     // the scratch shares the source pointer, so sub-parsers keep taking
     // the source `base` — their offsets are pointer differences
-    let mut ref_binder_errors: Vec<(usize, String)> = Vec::new();
     // their parse NEVER fails on these shapes — the body always parses
     // into an expression (their Pratt parser breaks at non-op
     // juxtapositions, wrapping the rest as application args) — so a
@@ -1813,26 +1814,40 @@ fn ref_stmt(
     match strict {
         Ok((from, to, card, l_opt, r_opt, op_offset)) => {
             *input = scratch;
-            let (on_delete, on_update, color) = ref_settings(input, base, errs);
-            // trailing args after the last endpoint (probe: `Ref: a.id >
-            // b.odd col` errs once at each arg) — consume them so the
-            // top-level loop continues
+            let (on_delete, on_update, color) =
+                ref_settings(input, base, errs, doc_binder_errors);
+            // trailing args after the last endpoint: their application
+            // parse rebinds the whole line — `junk` words become args
+            // (single-binary each) and an op-leading tail REBINDS the
+            // callee (`a.b > c.d - e.f` → infix(`-`) callee). The tree's
+            // diagnostics join with the callee shape errors + ARG chains
+            // only (the model ref checks the callee's endpoints).
             sp(input);
-            while input.starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '"' || c == '`') {
-                let junk_start = offset(input, base);
-                // same mandatory break: a failing ident consumes nothing
-                if ident(input, base).is_err() {
-                    break;
-                }
-                ref_binder_errors.push((
-                    junk_start,
-                    "A Ref field should only have a single binary relationship".to_string(),
-                ));
-                sp(input);
+            let mut callee_clean = true;
+            if !input.is_empty()
+                && !input.starts_with('\n')
+                && !input.starts_with('\r')
+                && !input.starts_with('}')
+            {
+                let mut shape = Vec::new();
+                let mut arg_chains = Vec::new();
+                ref_body_pipeline_mode(
+                    &mut body_input.clone(),
+                    body_base,
+                    errs,
+                    &mut shape,
+                    &mut arg_chains,
+                    true,
+                    &mut callee_clean,
+                );
+                doc_binder_errors.extend(shape);
+                binder_chains.extend(arg_chains);
+                skip_line(input);
             }
             Ok(Some(Ref {
                 name,
-                binder_errors: ref_binder_errors,
+                clean_binary: callee_clean,
+                binder_errors: Vec::new(),
                 span: start..offset(input, base),
                 from,
                 to,
@@ -1887,7 +1902,7 @@ enum RNode {
     /// FunctionApplicationNode — the juxtaposition wrapper
     App { callee: Box<RNode>, args: Vec<RNode>, start: usize },
     /// `[...]` consumed as an expression — ListExpressionNode
-    Array { start: usize },
+    Array { start: usize, end: usize },
     Block { start: usize },
     /// CommaExpressionNode (CSV-like, empty fields = Empty)
     Comma { elems: Vec<RNode>, start: usize },
@@ -1908,7 +1923,7 @@ impl RNode {
             | RNode::Group { start, .. }
             | RNode::Call { start, .. }
             | RNode::App { start, .. }
-            | RNode::Array { start }
+            | RNode::Array { start, .. }
             | RNode::Block { start }
             | RNode::Comma { start, .. }
             | RNode::Empty { start } => *start,
@@ -2022,6 +2037,19 @@ fn ref_tokens(body: &str, base: usize) -> Vec<RTok> {
                 end = k;
             }
             b'*' => kind = Some(RTKind::Wildcard),
+            b'/' if body[i..].starts_with("//") => {
+                // a comment: trivia through the line end
+                i = body.len();
+                continue;
+            }
+            b'/' if body[i..].starts_with("/*") => {
+                // a block comment: trivia through the closing */
+                match body[i + 2..].find("*/") {
+                    Some(k) => i = i + 2 + k + 2,
+                    None => i = body.len(),
+                }
+                continue;
+            }
             _ if is_op_char(c) => {
                 // their operator() munching table
                 let mut k = i + 1;
@@ -2338,9 +2366,13 @@ impl RParser<'_> {
                 if t.space_after {
                     break;
                 }
-                let _ = self.list_expression();
+                let list = self.list_expression();
                 let start = left.start();
-                left = RNode::Array { start };
+                let end = match list {
+                    RNode::Array { end, .. } => end,
+                    _ => start,
+                };
+                left = RNode::Array { start, end };
             } else if !matches!(t.kind, RTKind::Op | RTKind::Unknown) {
                 break;
             } else {
@@ -2420,8 +2452,12 @@ impl RParser<'_> {
                 RNode::Func { start: t.start }
             }
             RTKind::LBracket => {
-                let _ = self.list_expression();
-                RNode::Array { start: t.start }
+                let list = self.list_expression();
+                let end = match list {
+                    RNode::Array { end, .. } => end,
+                    _ => t.start,
+                };
+                RNode::Array { start: t.start, end }
             }
             RTKind::LBrace => {
                 let _ = self.block_expression();
@@ -2499,7 +2535,10 @@ impl RParser<'_> {
                 }
             }
         }
-        RNode::Array { start }
+        RNode::Array {
+            start,
+            end: self.prev().end,
+        }
     }
 
     /// blockExpression — scan to the matching brace
@@ -2682,9 +2721,25 @@ fn is_equal_tuple_operands(n: &RNode) -> bool {
 /// validateFields (local_modules/ref/validate.ts) + nodeSettings' args
 /// walk (local_modules/ref/index.ts): must-be-binary, per-side Invalid
 /// column reference, Unequal, and one single-binary per non-settings arg
-fn validate_fields(callee: &RNode, args: &[RNode], out: &mut Vec<(usize, String)>) {
+fn validate_fields(
+    callee: &RNode,
+    args: &[RNode],
+    out: &mut Vec<(usize, String)>,
+) {
+    let (callee_errors, arg_errors) = validate_fields_split(callee, args);
+    out.extend(callee_errors);
+    out.extend(arg_errors);
+}
+
+/// validateFields (local_modules/ref/validate.ts) split by source: the
+/// callee checks (must-be-binary, per-side Invalid column reference,
+/// Unequal) vs the nodeSettings args walk (one single-binary per
+/// non-settings arg)
+fn validate_fields_split(callee: &RNode, args: &[RNode]) -> (Vec<(usize, String)>, Vec<(usize, String)>) {
+    let mut callee_errors = Vec::new();
+    let mut arg_errors = Vec::new();
     if !is_binary_relationship(callee) {
-        out.push((
+        callee_errors.push((
             callee.start(),
             "A Ref field must be a binary relationship".to_string(),
         ));
@@ -2693,12 +2748,12 @@ fn validate_fields(callee: &RNode, args: &[RNode], out: &mut Vec<(usize, String)
         for side in [left.as_ref(), right.as_ref()] {
             let frag = destructure_cvt(side).unwrap_or_default();
             if frag.variables.len() + frag.tuple.len().min(1) < 2 {
-                out.push((side.start(), "Invalid column reference".to_string()));
+                callee_errors.push((side.start(), "Invalid column reference".to_string()));
             }
         }
     }
     if !is_equal_tuple_operands(callee) {
-        out.push((
+        callee_errors.push((
             callee.start(),
             "Unequal fields in ref endpoints".to_string(),
         ));
@@ -2712,11 +2767,12 @@ fn validate_fields(callee: &RNode, args: &[RNode], out: &mut Vec<(usize, String)
         rest.remove(0);
     }
     for a in rest {
-        out.push((
+        arg_errors.push((
             a.start(),
             "A Ref field should only have a single binary relationship".to_string(),
         ));
     }
+    (callee_errors, arg_errors)
 }
 
 // ---- bindFields (global_modules/ref/bind.ts): scan [callee, ...args],
@@ -2731,33 +2787,207 @@ fn var_pair(v: &RNode) -> (String, usize) {
     }
 }
 
-fn bind_fields(callee: &RNode, args: &[RNode], chains: &mut Vec<super::ast::BinderChain>) {
-    let mut bindees = Vec::new();
-    scan_binding(callee, &mut bindees);
+fn bind_fields(
+    callee: &RNode,
+    args: &[RNode],
+    chains: &mut Vec<super::ast::BinderChain>,
+) {
+    let (callee_chains, arg_chains) = bind_fields_split(callee, args);
+    chains.extend(callee_chains);
+    chains.extend(arg_chains);
+}
+
+/// bindFields (global_modules/ref/bind.ts): scan [callee, ...args]; the
+/// split keeps the callee's chains separable (the strict path's model
+/// ref already checks those endpoints)
+fn bind_fields_split(
+    callee: &RNode,
+    args: &[RNode],
+) -> (Vec<super::ast::BinderChain>, Vec<super::ast::BinderChain>) {
+    let scan_one = |n: &RNode, out: &mut Vec<super::ast::BinderChain>| {
+        let mut bindees = Vec::new();
+        scan_binding(n, &mut bindees);
+        for b in bindees {
+            if !b.tuple.is_empty() {
+                // columnBindees = tupleElements; tableBindee = variables.pop()
+                if b.variables.is_empty() {
+                    continue;
+                }
+                out.push(super::ast::BinderChain {
+                    vars: b.variables.iter().map(var_pair).collect(),
+                    tuple: b.tuple.iter().map(var_pair).collect(),
+                    group: false,
+                });
+            } else {
+                // columnBindees = variables.pop(); tableBindee = variables.pop()
+                if b.variables.len() < 2 {
+                    continue;
+                }
+                out.push(super::ast::BinderChain {
+                    vars: b.variables.iter().map(var_pair).collect(),
+                    tuple: Vec::new(),
+                    group: false,
+                });
+            }
+        }
+    };
+    let mut callee_chains = Vec::new();
+    let mut arg_chains = Vec::new();
+    scan_one(callee, &mut callee_chains);
     for a in args {
-        scan_binding(a, &mut bindees);
+        scan_one(a, &mut arg_chains);
     }
-    for b in bindees {
-        if !b.tuple.is_empty() {
-            // columnBindees = tupleElements; tableBindee = variables.pop()
-            if b.variables.is_empty() {
-                continue;
-            }
-            chains.push(super::ast::BinderChain {
-                vars: b.variables.iter().map(var_pair).collect(),
-                tuple: b.tuple.iter().map(var_pair).collect(),
-                group: false,
-            });
+    (callee_chains, arg_chains)
+}
+
+
+// ---- validateFieldSettings (local_modules/ref/validate.ts): the rules
+// over a ref's `[...]` settings; the occurrences carry each attribute's
+// span (the error anchors) -------------------------------------------
+
+/// isValidPolicy (ref/validate.ts): a bare word among the FK actions —
+/// quoted strings are NOT policies
+fn is_valid_policy(occ: &super::ast::SettingOcc) -> bool {
+    if occ.quoted || !occ.has_value {
+        return false;
+    }
+    let Some(v) = &occ.value else { return false };
+    matches!(
+        v.trim().to_ascii_lowercase().as_str(),
+        "cascade" | "no action" | "set null" | "set default" | "restrict"
+    )
+}
+
+fn validate_field_settings(occs: &[super::ast::SettingOcc], out: &mut Vec<(usize, String)>) {
+    // aggregateSettingList: group the attributes per lowercased name, in
+    // first-appearance order
+    let mut order: Vec<String> = Vec::new();
+    let mut groups: Vec<Vec<&super::ast::SettingOcc>> = Vec::new();
+    for o in occs {
+        if let Some(i) = order.iter().position(|k| *k == o.key) {
+            groups[i].push(o);
         } else {
-            // columnBindees = variables.pop(); tableBindee = variables.pop()
-            if b.variables.len() < 2 {
-                continue;
+            order.push(o.key.clone());
+            groups.push(vec![o]);
+        }
+    }
+    for (key, attrs) in order.into_iter().zip(groups.into_iter()) {
+        match key.as_str() {
+            "delete" | "update" => {
+                if attrs.len() > 1 {
+                    for a in &attrs {
+                        out.push((a.offset, format!("'{}' can only appear once", key)));
+                    }
+                }
+                for a in &attrs {
+                    if !is_valid_policy(a) {
+                        out.push((
+                            a.offset,
+                            format!(
+                                "'{}' can only have values \"cascade\", \"no action\", \
+                                 \"set null\", \"set default\" or \"restrict\"",
+                                key
+                            ),
+                        ));
+                    }
+                }
             }
-            chains.push(super::ast::BinderChain {
-                vars: b.variables.iter().map(var_pair).collect(),
-                tuple: Vec::new(),
-                group: false,
-            });
+            "color" => {
+                if attrs.len() > 1 {
+                    for a in &attrs {
+                        out.push((a.offset, "'color' can only appear once".to_string()));
+                    }
+                }
+                for a in &attrs {
+                    // extractHexColor: a color literal
+                    let ok = a
+                        .value
+                        .as_deref()
+                        .map(|v| {
+                            let v = v.trim();
+                            v.starts_with('#')
+                                && v.len() > 1
+                                && v[1..]
+                                    .chars()
+                                    .all(|c| c.is_ascii_hexdigit())
+                        })
+                        .unwrap_or(false)
+                        && !a.quoted;
+                    if !ok {
+                        out.push((
+                            a.offset,
+                            "'color' must be a color literal".to_string(),
+                        ));
+                    }
+                }
+            }
+            "note" => {
+                if attrs.len() > 1 {
+                    for a in &attrs {
+                        out.push((a.offset, "'note' can only appear once".to_string()));
+                    }
+                }
+                for a in &attrs {
+                    // extractNote: a string literal
+                    if !(a.quoted || a.value.as_deref().map(|v| v.starts_with('\'')).unwrap_or(false))
+                    {
+                        out.push((
+                            a.offset,
+                            "'note' must be a string literal".to_string(),
+                        ));
+                    }
+                }
+            }
+            "inactive" => {
+                if attrs.len() > 1 {
+                    for a in &attrs {
+                        out.push((
+                            a.offset,
+                            "'inactive' can only appear once".to_string(),
+                        ));
+                    }
+                }
+                for a in &attrs {
+                    if a.has_value {
+                        out.push((
+                            a.offset,
+                            "'inactive' cannot have a value".to_string(),
+                        ));
+                    }
+                }
+            }
+            _ => {
+                // validateCustomInlineMetadata
+                if attrs.len() > 1 {
+                    for a in &attrs {
+                        out.push((a.offset, format!("'{}' can only appear once", key)));
+                    }
+                }
+                for a in &attrs {
+                    // extractMetadataValue: bool / number / quoted string /
+                    // color — a bare word resolves to none of those
+                    let ok = a.quoted
+                        || a.value.as_deref().map(|v| {
+                            let v = v.trim();
+                            v == "true"
+                                || v == "false"
+                                || v.parse::<f64>().is_ok()
+                                || (v.starts_with('#')
+                                    && v.len() > 1
+                                    && v[1..].chars().all(|c| c.is_ascii_hexdigit()))
+                        }).unwrap_or(false);
+                    if !ok {
+                        out.push((
+                            a.offset,
+                            format!(
+                                "Custom setting '{}' must be a string, a color literal, a number \
+                                 literal, or a boolean literal",
+                                key
+                            ),
+                        ));
+                    }
+                }
+            }
         }
     }
 }
@@ -2773,6 +3003,25 @@ fn ref_body_pipeline(
     out: &mut Vec<(usize, String)>,
     chains: &mut Vec<super::ast::BinderChain>,
 ) {
+    ref_body_pipeline_mode(input, base, errs, out, chains, false, &mut true);
+}
+
+/// `args_only` = the strict path already consumed a clean binary ref:
+/// the model carries the callee's endpoint checks, so the diagnostics
+/// join from the tree's shape errors (their validateFields — the callee
+/// checks still fire: op-leading junk REBINDS the callee, e.g.
+/// `a.b > c.d - e.f` makes infix(`-`) the callee) and the ARG chains
+/// only. The settings rules ran in ref_settings already, so the Array
+/// arg is not re-validated here.
+fn ref_body_pipeline_mode(
+    input: &mut &str,
+    base: usize,
+    errs: &mut Vec<ParseError>,
+    out: &mut Vec<(usize, String)>,
+    chains: &mut Vec<super::ast::BinderChain>,
+    args_only: bool,
+    callee_clean: &mut bool,
+) {
     let line_end = input.find('\n').unwrap_or(input.len());
     let body = &input[..line_end];
     let toks = ref_tokens(body, base);
@@ -2783,8 +3032,49 @@ fn ref_body_pipeline(
     };
     let tree = p.application();
     if let RNode::App { callee, args, .. } = &tree {
-        validate_fields(callee, args, out);
-        bind_fields(callee, args, chains);
+        let (callee_errors, arg_errors) = validate_fields_split(callee, args);
+        let (callee_chains, arg_chains) = bind_fields_split(callee, args);
+        *callee_clean = callee_errors.is_empty();
+        if args_only {
+            // the callee's SHAPE errors still fire (op-leading junk
+            // rebinds the callee — `a.b > c.d - e.f` → infix(`-`) is not
+            // a binary relationship). The CHAINS follow the clean split:
+            // a clean callee's endpoint checks live in the model ref, an
+            // unclean one's checks live ONLY in the chains (validate.rs
+            // skips the non-clean ref's model checks — their interpret is
+            // gated by the file's errors)
+            out.extend(callee_errors);
+            out.extend(arg_errors);
+            if *callee_clean {
+                chains.extend(arg_chains);
+            } else {
+                chains.extend(callee_chains);
+                chains.extend(arg_chains);
+            }
+        } else {
+            out.extend(callee_errors);
+            out.extend(arg_errors);
+            chains.extend(callee_chains);
+            chains.extend(arg_chains);
+            // their nodeSettings validates the settings list (the Array
+            // arg) — validateFieldSettings
+            for a in args {
+                if let RNode::Array { start, end } = a {
+                    let slice_start = *start - base;
+                    let slice_end = (*end).min(base + body.len()) - base;
+                    if slice_start < slice_end {
+                        let mut sub = body[slice_start..slice_end].to_string();
+                        let mut cursor = sub.as_str();
+                        let mut sub_errs: Vec<ParseError> = Vec::new();
+                        if let Ok((_, occs)) =
+                            settings_list_occs(&mut cursor, *start, &mut sub_errs)
+                        {
+                            validate_field_settings(&occs, out);
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -2792,6 +3082,7 @@ fn ref_settings(
     input: &mut &str,
     base: usize,
     errs: &mut Vec<ParseError>,
+    binder_out: &mut Vec<(usize, String)>,
 ) -> (Option<String>, Option<String>, Option<String>) {
     let mut out = (None, None, None);
     // `ws` before the peek eats blank lines and comments too; when no
@@ -2806,7 +3097,9 @@ fn ref_settings(
         *input = before_ws;
         return out;
     }
-    if let Ok(kvs) = settings_list(input, base, errs) {
+    if let Ok((kvs, occs)) = settings_list_occs(input, base, errs) {
+        // their validateFieldSettings runs on every ref's settings list
+        validate_field_settings(&occs, binder_out);
         for (k, v) in kvs {
             if let Some(SettingVal::Str(v)) = v {
                 match k.as_str() {
@@ -3796,3 +4089,4 @@ ENUM post_status {
         assert_eq!((users.x, users.y), (0, 0));
     }
 }
+

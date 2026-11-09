@@ -129,9 +129,13 @@ the fuzz corpus 300/300.
 Both gates green end to end: diagnostics 75/75 + 300/300, schema
 75/75 + 300/300, and the Rust suites (624 tests) all pass. The app
 now feeds the FULL diagnostic pipeline (validate_with_parse with the
-binder channels) — the editor's panel matches the gate. Remaining
-follow-ups beyond parity: ref settings rules (`[delete: cascade,
-delete: restrict]` duplicates/values — their validateFieldSettings)
-are still unported; the strict ref path's trailing junk args only
-catch word-starting tokens (op-leading args fall to the top-level
-recovery).
+binder channels) — the editor's panel matches the gate. The strict ref path now runs their application parse over the whole
+line when trailing junk follows the clean relationship: word junk
+becomes args (one single-binary per comma-joined ARG, their nodeSettings
+walk), an op-leading tail REBINDS the callee (`a.b > c.d - e.f` →
+infix(`-`) is not isBinaryRelationship → must-be-binary + Unequal + the
+callee's chains, while the ref leaves the same-endpoint registry —
+their checkStandaloneRefs skip). Their validateFieldSettings runs on
+every ref's settings list: delete/update once-only + the FK-action
+policies, color/note literals, inactive valueless, custom metadata
+value kinds.

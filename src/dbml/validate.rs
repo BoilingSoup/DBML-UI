@@ -293,6 +293,13 @@ pub fn validate_with_parse(
         }
     }
     for r in &doc.refs {
+        if !r.clean_binary {
+            // their checkStandaloneRefs skips refs whose tree callee is
+            // not a clean binary relationship; the binder chains carry
+            // the endpoint checks instead, and the interpret-layer
+            // checks are gated off by the file's errors
+            continue;
+        }
         // the endpoint column checks run on BOTH sides regardless of the
         // tuple lengths (probe g5: a.(id, code) > b.x errs with Unequal
         // AND the missing 'code'; the earlier mc3 probe stayed silent
@@ -496,6 +503,9 @@ pub fn validate_with_parse(
             }
         };
         for r in &doc.refs {
+            if !r.clean_binary {
+                continue;
+            }
             run(
                 side_key(&r.from),
                 side_key(&r.to),
@@ -1057,6 +1067,9 @@ pub fn validate_with_parse(
         }
     };
     for r in &doc.refs {
+        if !r.clean_binary {
+            continue;
+        }
         let op = written_op(r.card, r.left_optional, r.right_optional);
         let sides = RefSides {
             left: Side {
@@ -1251,6 +1264,9 @@ pub fn validate_with_parse(
         }
     };
     for r in &doc.refs {
+        if !r.clean_binary {
+            continue;
+        }
         for (fc, tc) in r.from.columns.iter().zip(r.to.columns.iter()) {
             // ManyToOne: from is the FK (child) side, to the referenced
             // parent; OneToMany is mirrored

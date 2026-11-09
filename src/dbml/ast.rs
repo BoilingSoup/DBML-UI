@@ -253,6 +253,12 @@ pub struct Ref {
     /// `?` after the operator (`>?`, `-?`, `<>?`): the right side's
     /// reference is optional.
     pub right_optional: bool,
+    /// The strict parse found a clean binary relationship (`a.b > c.d`
+    /// with no op-leading junk). Their checkStandaloneRefs skips refs
+    /// whose tree callee is not `isBinaryRelationship` — they leave the
+    /// same-endpoint registry AND their interpret-layer checks alone
+    /// (the file errors gate the interpretation).
+    pub clean_binary: bool,
     /// `[delete: cascade]` and friends (uppercased by the parser).
     pub on_delete: Option<String>,
     pub on_update: Option<String>,
