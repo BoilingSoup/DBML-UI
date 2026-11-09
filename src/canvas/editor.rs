@@ -918,12 +918,26 @@ impl canvas::Program<Message> for EditorView<'_> {
         // canvas mouse_interaction is not bounds-gated by iced, so check
         // hover here: I-beam while typing or in Regular mode (where the
         // mouse selects text), plain arrow otherwise (normal/visual
-        // motions are keyboard-driven). Drags never change it — a
-        // scrollbar or text drag keeps the cursor it had at the click.
-        if cursor.position_over(bounds).is_some()
-            && (self.app.editor().mode == Mode::Insert || self.app.regular_mode())
-        {
-            return iced::mouse::Interaction::Text;
+        // motions are keyboard-driven). The overlay scrollbars always
+        // take the default arrow — the I-beam must never hover them,
+        // whatever the editor mode — and an active scrollbar drag keeps
+        // the arrow even when the pointer drifts off the band mid-drag.
+        if cursor.position_over(bounds).is_some() {
+            if self.app.scrollbar_drag.is_some() {
+                return iced::mouse::Interaction::default();
+            }
+            if let Some(p) = cursor.position_over(bounds) {
+                let local = iced::Point::new(p.x - bounds.x, p.y - bounds.y);
+                let (v, h) = scrollbar_layout(self.app, bounds);
+                if v.is_some_and(|b| b.band.contains(local))
+                    || h.is_some_and(|b| b.band.contains(local))
+                {
+                    return iced::mouse::Interaction::default();
+                }
+            }
+            if self.app.editor().mode == Mode::Insert || self.app.regular_mode() {
+                return iced::mouse::Interaction::Text;
+            }
         }
         iced::mouse::Interaction::default()
     }
@@ -1414,6 +1428,76 @@ mod doc_tests {
             ),
         );
         app
+    }
+
+    #[test]
+    fn hovering_a_scrollbar_shows_the_default_cursor_even_in_insert_mode() {
+        // the I-beam yields at the overlay bars, whatever the mode: a
+        // tall document arms the vertical bar, insert mode arms the
+        // Text cursor everywhere else
+        let mut app = App::with_source({
+            let mut s = String::new();
+            for i in 0..200 {
+                s.push_str(&format!("Table t{i} {{\n  id integer [pk]\n}}\n\n"));
+            }
+            s
+        });
+        app.config.vim = true;
+        app.focus = crate::app::Focus::Editor;
+        let _ = update(
+            &mut app,
+            crate::app::Message::KeyPressed(
+                crate::editor::KeyCode::Char('i'),
+                crate::editor::KeyModifiers::NONE,
+            ),
+        );
+        assert_eq!(app.editor().mode, crate::editor::Mode::Insert);
+        let bounds = iced::Rectangle::new(iced::Point::new(0.0, 0.0), iced::Size::new(800.0, 600.0));
+        let state = BlinkState::default();
+        use iced::mouse::{Cursor, Interaction};
+        use iced::widget::canvas::Program;
+
+        // in the vertical bar's band: the default arrow
+        {
+            let view = EditorView { app: &app };
+            let over_bar = Cursor::Available(iced::Point::new(bounds.width - 3.0, 100.0));
+            assert_eq!(
+                view.mouse_interaction(&state, bounds, over_bar),
+                Interaction::default(),
+                "the scrollbar band takes the arrow"
+            );
+        }
+        // over text: the I-beam (insert mode)
+        {
+            let view = EditorView { app: &app };
+            let over_text = Cursor::Available(iced::Point::new(100.0, 100.0));
+            assert_eq!(
+                view.mouse_interaction(&state, bounds, over_text),
+                Interaction::Text
+            );
+        }
+        // an active scrollbar drag keeps the arrow even off the band
+        let _ = update(
+            &mut app,
+            crate::app::Message::ScrollbarDragStart {
+                vertical: true,
+                grab: 0.0,
+                band_origin: 0.0,
+                span: 100.0,
+                max: 1000.0,
+                jump_to: None,
+            },
+        );
+        assert!(app.scrollbar_drag.is_some(), "the drag armed");
+        {
+            let view = EditorView { app: &app };
+            let off_band = Cursor::Available(iced::Point::new(100.0, 100.0));
+            assert_eq!(
+                view.mouse_interaction(&state, bounds, off_band),
+                Interaction::default(),
+                "a scrollbar drag keeps the arrow"
+            );
+        }
     }
 
     #[test]
