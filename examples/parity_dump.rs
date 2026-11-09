@@ -3,6 +3,9 @@
 //! dumps every file: [{path, diagnostics: [...]}].
 use serde::Serialize;
 
+// the field names ARE the JSON contract the JS drivers consume (camelCase
+// by design — their dump shapes) — silence the style lint for them
+#[allow(non_snake_case)]
 #[derive(Serialize)]
 struct QuickFix {
     title: String,
@@ -11,6 +14,7 @@ struct QuickFix {
     newText: String,
 }
 
+#[allow(non_snake_case)]
 #[derive(Serialize)]
 struct Diagnostic {
     r#type: &'static str,

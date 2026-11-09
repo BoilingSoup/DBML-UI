@@ -86,6 +86,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
+        if pid_hits > 0 {
+            println!("[{round}] pid hits: {pid_hits}");
+        }
         if app.is_none() {
             app = best.map(|(_, w)| w);
         }

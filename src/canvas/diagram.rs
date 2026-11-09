@@ -26,12 +26,6 @@ use iced::{font, Color, Font, Point, Rectangle, Size, Vector};
 /// Diagram cells around the content (matches the SVG renderer's margin).
 pub const MARGIN_CELLS: f32 = 1.0;
 
-// Bold text runs wider than the advance classes `Row::est_width` was
-// calibrated on — the factor lives in layout (`layout::BOLD_TEXT`) where
-// the box width reserves the header's glyph room with the same measure
-// the painter places glyphs with.
-pub use dbml_ui::layout::BOLD_TEXT;
-
 /// A diagram cell is half as wide as it is tall (mirrors the SVG unit
 /// ratio 10x20); `zoom` is the cell height in pixels.
 pub const CELL_ASPECT: f32 = 0.5;

@@ -847,36 +847,6 @@ fn typed_value(raw: &str) -> Value {
     }
 }
 
-/// their CustomMetadataValueType: color for #hex, else the literal kind.
-/// Each entry carries its settings-entry token when the span is known.
-fn custom_json(custom: &[(String, String)]) -> Value {
-    let mut m = Map::new();
-    for (k, v) in custom {
-        let ty = if v.starts_with('#') {
-            "color"
-        } else if v.starts_with('\'') {
-            "string"
-        } else if v == "true" || v == "false" {
-            "bool"
-        } else if v.parse::<f64>().is_ok() {
-            "number"
-        } else {
-            "string"
-        };
-        let value = if ty == "string" {
-            json!(v.trim_matches('\''))
-        } else if ty == "number" {
-            json!(v.parse::<f64>().unwrap_or(0.0))
-        } else if ty == "bool" {
-            json!(v == "true")
-        } else {
-            json!(v)
-        };
-        m.insert(k.clone(), json!({"value": value, "type": ty}));
-    }
-    Value::Object(m)
-}
-
 fn custom_json_spans(
     custom: &[(String, String)],
     src: &str,

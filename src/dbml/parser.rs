@@ -1617,12 +1617,11 @@ fn records_block(
             let block_close = input.find('}');
             let sync_local = match (to_comma, to_rparen, block_close) {
                 (Some(c), Some(p), Some(b)) => c.min(p) < b,
-                (Some(c), Some(p), None) => true,
                 (Some(c), None, Some(b)) => c < b,
-                (Some(c), None, None) => true,
                 (None, Some(p), Some(b)) => p < b,
-                (None, Some(p), None) => true,
                 (None, None, _) => false,
+                // no block close ahead: the tuple's own handler recovers
+                _ => true,
             };
             if sync_local {
                 loop {
@@ -2083,7 +2082,6 @@ fn ref_stmt(
     ws(input);
     let body_input = *input;
     let body_base = offset(input, base);
-    let body_field_off = body_base;
     // the strict attempt runs on a scratch copy so the fallback sees the
     // original body
     let mut scratch = body_input;
@@ -2124,8 +2122,9 @@ fn ref_stmt(
             {
                 let mut shape: Vec<(usize, usize, String)> = Vec::new();
                 let mut arg_chains = Vec::new();
+                let mut body_scratch = body_input;
                 ref_body_pipeline_mode(
-                    &mut body_input.clone(),
+                    &mut body_scratch,
                     body_base,
                     errs,
                     &mut shape,
@@ -2159,7 +2158,8 @@ fn ref_stmt(
             // their error set, recover at the line end — binder-class
             // errors, routed to the parse output's binder channel
             let mut shape: Vec<(usize, usize, String)> = Vec::new();
-            ref_body_pipeline(&mut body_input.clone(), body_base, errs, &mut shape, binder_chains);
+            let mut body_scratch = body_input;
+            ref_body_pipeline(&mut body_scratch, body_base, errs, &mut shape, binder_chains);
             doc_binder_errors.extend(shape);
             skip_line(input);
             Ok(None)
@@ -2274,7 +2274,7 @@ fn ref_tokens(body: &str, base: usize, sentinel: Option<u8>) -> Vec<RTok> {
     while i < b.len() {
         let c = b[i];
         let start = i;
-        let mut kind = None;
+        let kind;
         let mut value = String::new();
         let mut end = i + 1;
         let mut invalid = false;
@@ -2284,14 +2284,14 @@ fn ref_tokens(body: &str, base: usize, sentinel: Option<u8>) -> Vec<RTok> {
                 continue;
             }
             b'\n' => break,
-            b',' => kind = Some(RTKind::Comma),
-            b'(' => kind = Some(RTKind::LParen),
-            b')' => kind = Some(RTKind::RParen),
-            b'[' => kind = Some(RTKind::LBracket),
-            b']' => kind = Some(RTKind::RBracket),
-            b'{' => kind = Some(RTKind::LBrace),
-            b'}' => kind = Some(RTKind::RBrace),
-            b':' => kind = Some(RTKind::Colon),
+            b',' => kind = RTKind::Comma,
+            b'(' => kind = RTKind::LParen,
+            b')' => kind = RTKind::RParen,
+            b'[' => kind = RTKind::LBracket,
+            b']' => kind = RTKind::RBracket,
+            b'{' => kind = RTKind::LBrace,
+            b'}' => kind = RTKind::RBrace,
+            b':' => kind = RTKind::Colon,
             b'\'' => {
                 let mut k = i + 1;
                 while k < b.len() && b[k] != b'\'' && b[k] != b'\n' {
@@ -2303,7 +2303,7 @@ fn ref_tokens(body: &str, base: usize, sentinel: Option<u8>) -> Vec<RTok> {
                 if k < b.len() && b[k] == b'\'' {
                     k += 1;
                 }
-                kind = Some(RTKind::Str);
+                kind = RTKind::Str;
                 value = body[start..k.min(body.len())].to_string();
                 end = k;
             }
@@ -2319,7 +2319,7 @@ fn ref_tokens(body: &str, base: usize, sentinel: Option<u8>) -> Vec<RTok> {
                 if k < b.len() && b[k] == b'"' {
                     k += 1;
                 }
-                kind = Some(RTKind::Quoted);
+                kind = RTKind::Quoted;
                 end = k;
             }
             b'`' => {
@@ -2333,7 +2333,7 @@ fn ref_tokens(body: &str, base: usize, sentinel: Option<u8>) -> Vec<RTok> {
                 if k < b.len() && b[k] == b'`' {
                     k += 1;
                 }
-                kind = Some(RTKind::Func);
+                kind = RTKind::Func;
                 value = body[start..k.min(body.len())].to_string();
                 end = k;
             }
@@ -2342,11 +2342,11 @@ fn ref_tokens(body: &str, base: usize, sentinel: Option<u8>) -> Vec<RTok> {
                 while k < b.len() && b[k].is_ascii_alphanumeric() {
                     k += 1;
                 }
-                kind = Some(RTKind::Color);
+                kind = RTKind::Color;
                 value = body[start..k].to_string();
                 end = k;
             }
-            b'*' => kind = Some(RTKind::Wildcard),
+            b'*' => kind = RTKind::Wildcard,
             b'/' if body[i..].starts_with("//") => {
                 // a comment: trivia through the line end
                 i = body.len();
@@ -2427,7 +2427,7 @@ fn ref_tokens(body: &str, base: usize, sentinel: Option<u8>) -> Vec<RTok> {
                     }
                     _ => {}
                 }
-                kind = Some(RTKind::Op);
+                kind = RTKind::Op;
                 value = body[start..k].to_string();
                 end = k;
             }
@@ -2438,17 +2438,17 @@ fn ref_tokens(body: &str, base: usize, sentinel: Option<u8>) -> Vec<RTok> {
                 // number token, gathered out with an 'Invalid number' error
                 match numeric_lit_or_ident_sentinel(b, start, sentinel) {
                     NumScan::Numeric(n) => {
-                        kind = Some(RTKind::Num);
+                        kind = RTKind::Num;
                         value = body[start..start + n].to_string();
                         end = start + n;
                     }
                     NumScan::IdentToken(n) => {
-                        kind = Some(RTKind::Ident);
+                        kind = RTKind::Ident;
                         value = body[start..start + n].to_string();
                         end = start + n;
                     }
                     NumScan::Invalid(n) => {
-                        kind = Some(RTKind::Num);
+                        kind = RTKind::Num;
                         value = body[start..start + n].to_string();
                         end = start + n;
                         invalid = true;
@@ -2463,13 +2463,13 @@ fn ref_tokens(body: &str, base: usize, sentinel: Option<u8>) -> Vec<RTok> {
                 {
                     k += 1;
                 }
-                kind = Some(RTKind::Ident);
+                kind = RTKind::Ident;
                 value = body[start..k].to_string();
                 end = k;
             }
-            _ => kind = Some(RTKind::Unknown),
+            _ => kind = RTKind::Unknown,
         }
-        let kind = kind.unwrap();
+        let kind = kind;
         let space_after = b.get(end) == Some(&b' ') || b.get(end) == Some(&b'\t');
         toks.push(RTok {
             kind,
@@ -3045,16 +3045,6 @@ fn is_equal_tuple_operands(n: &RNode) -> bool {
 /// validateFields (local_modules/ref/validate.ts) + nodeSettings' args
 /// walk (local_modules/ref/index.ts): must-be-binary, per-side Invalid
 /// column reference, Unequal, and one single-binary per non-settings arg
-fn validate_fields(
-    callee: &RNode,
-    args: &[RNode],
-    out: &mut Vec<(usize, String)>,
-) {
-    let (callee_errors, arg_errors) = validate_fields_split(callee, args);
-    out.extend(callee_errors);
-    out.extend(arg_errors);
-}
-
 /// validateFields (local_modules/ref/validate.ts) split by source: the
 /// callee checks (must-be-binary, per-side Invalid column reference,
 /// Unequal) vs the nodeSettings args walk (one single-binary per
@@ -3109,16 +3099,6 @@ fn var_pair(v: &RNode) -> (String, usize) {
         RNode::Var { name, start } => (name.clone(), *start),
         other => (String::new(), other.start()),
     }
-}
-
-fn bind_fields(
-    callee: &RNode,
-    args: &[RNode],
-    chains: &mut Vec<super::ast::BinderChain>,
-) {
-    let (callee_chains, arg_chains) = bind_fields_split(callee, args);
-    chains.extend(callee_chains);
-    chains.extend(arg_chains);
 }
 
 /// bindFields (global_modules/ref/bind.ts): scan [callee, ...args]; the
@@ -3439,7 +3419,7 @@ fn ref_body_pipeline_mode(
                     let slice_start = *start - base;
                     let slice_end = (*end).min(base + body.len()) - base;
                     if slice_start < slice_end {
-                        let mut sub = body[slice_start..slice_end].to_string();
+                        let sub = body[slice_start..slice_end].to_string();
                         let mut cursor = sub.as_str();
                         let mut sub_errs: Vec<ParseError> = Vec::new();
                         if let Ok((_, occs)) =

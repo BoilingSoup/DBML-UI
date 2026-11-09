@@ -16,7 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .reply()?;
     let v: Vec<u32> = r.value32().map(|i| i.collect()).unwrap_or_default();
     println!("_NET_WORKAREA cardinals: {v:?}  (x, y, w, h per desktop)");
-    let (net_name, wm_name, pid_atom) = (
+    let (net_name, wm_name, _pid_atom) = (
         atom(b"_NET_WM_NAME")?, atom(b"WM_NAME")?, atom(b"_NET_WM_PID")?,
     );
     let title = |w: u32| -> Option<String> {
@@ -34,7 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .args(["--file-selection", "--title=zz-left-clamp"])
         .spawn()?;
     // two-level toplevel walk (frames -> clients)
-    let mut toplevels = || -> Vec<u32> {
+    let toplevels = || -> Vec<u32> {
         let mut out = Vec::new();
         if let Ok(c) = conn.query_tree(root) { if let Ok(f) = c.reply() {
             for w in f.children {
