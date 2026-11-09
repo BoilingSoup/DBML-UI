@@ -4039,15 +4039,12 @@ fn diagnostics_overlay(app: &App) -> Element<'_, Message> {
 
     // the panel's capture layer: a press anywhere inside the panel that
     // misses a button lands HERE instead of the backdrop below — the list
-    // never closes on its own text (their floating panel behaves the same)
+    // never closes on its own text (their floating panel behaves the same).
+    // A mouse_area, not a button: a button's own mouse_interaction paints
+    // the pointer hand across its whole bounds — the panel's dead space
+    // (padding, footer, gaps) would read as clickable.
     let panel = container(stack![
-        button(text(""))
-            .width(Fill)
-            .height(Fill)
-            .style(|_t, _s| iced::widget::button::Style {
-                background: None,
-                ..Default::default()
-            })
+        mouse_area(text("").width(Fill).height(Fill))
             .on_press(Message::PanelSwallowed),
         body,
     ])
@@ -4070,14 +4067,10 @@ fn diagnostics_overlay(app: &App) -> Element<'_, Message> {
         .align_x(iced::alignment::Horizontal::Right);
 
     // click anywhere outside dismisses (floating-vue's close-on-outside;
-    // our backdrop consumes the click, theirs lets it through)
-    let backdrop = button(text(""))
-        .width(Fill)
-        .height(Fill)
-        .style(|_t, _s| iced::widget::button::Style {
-            background: None,
-            ..Default::default()
-        })
+    // our backdrop consumes the click, theirs lets it through). A
+    // mouse_area, not a button: the button's own pointer hand would paint
+    // the WHOLE editor pane — the hand belongs to the list rows only.
+    let backdrop = mouse_area(text("").width(Fill).height(Fill))
         .on_press(Message::ToggleDiagnostics);
     stack![
         backdrop,
