@@ -736,7 +736,7 @@ impl Tab {
         if self.edge_anim.len() < self.diagram.edges.len() {
             self.edge_anim.resize(self.diagram.edges.len(), 0.0);
         }
-        self.parse_errors = out.errors;
+        self.parse_errors = out.errors.clone();
         // dbdiagram-style diagnostics: their provideErrors is
         // interpretFile().getErrors() — parse + binder + interpret errors
         // ALL flow, always; infos exist only where interpretation
@@ -747,6 +747,7 @@ impl Tab {
             &out.binder_errors,
             &out.binder_chains,
             &out.record_count_errors,
+            &out.errors,
         );
     }
 

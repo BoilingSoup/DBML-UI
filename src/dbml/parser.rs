@@ -9,6 +9,8 @@ use super::ast::*;
 #[derive(Debug, Clone)]
 pub struct ParseError {
     pub offset: usize,
+    /// The squiggle's end when the finding spans tokens (their endColumn)
+    pub end: Option<usize>,
     pub message: String,
 }
 
@@ -32,6 +34,7 @@ pub struct ParseOutput {
 
 struct Fail {
     offset: usize,
+    end: Option<usize>,
     message: String,
 }
 
@@ -47,6 +50,7 @@ fn offset(input: &str, base: usize) -> usize {
 fn fail<T>(o: usize, m: impl Into<String>) -> R<T> {
     Err(Fail {
         offset: o,
+        end: None,
         message: m.into(),
     })
 }
@@ -54,6 +58,7 @@ fn fail<T>(o: usize, m: impl Into<String>) -> R<T> {
 fn err_at(o: usize, m: &str) -> ParseError {
     ParseError {
         offset: o,
+        end: None,
         message: m.to_string(),
     }
 }
@@ -189,6 +194,7 @@ fn ident(input: &mut &str, base: usize) -> R<String> {
     if let Some(rest) = input.strip_prefix('`') {
         let end = rest.find('`').ok_or(Fail {
             offset: offset(input, base),
+            end: None,
             message: "unterminated backticked identifier".to_string(),
         })?;
         let name = rest[..end].to_string();
@@ -355,6 +361,7 @@ fn type_str(input: &mut &str, base: usize) -> R<String> {
         if let Some(rest) = input.strip_prefix('"') {
             let end = rest.find('"').ok_or(Fail {
                 offset: offset(input, base),
+                end: None,
                 message: "unterminated quoted type".to_string(),
             })?;
             out.push('"');
@@ -1416,7 +1423,8 @@ fn record_value(input: &mut &str, base: usize) -> R<(RecordValue, Span)> {
             .find('`')
             .ok_or(Fail {
                 offset: offset(input, base),
-                message: "unterminated backtick expression".to_string(),
+                end: None,
+                message: "unterminated record row".to_string(),
             })?
             + 1;
         let v = input[1..end].to_string();
@@ -1657,7 +1665,7 @@ fn records_block(
         value_spans: Vec::new(),
         example,
     };
-    loop {
+    'rows: loop {
         ws(input);
         if input.is_empty() {
             errs.push(err_at(offset(input, base), "unterminated records block"));
@@ -1671,41 +1679,114 @@ fn records_block(
         // structure invalid; non-simple values err per element. Both drop
         // the row.
         let row_start = offset(input, base);
-        let line_end = input.find('\n').unwrap_or(input.len());
-        let line = &input[..line_end];
-        let sentinel = if line_end < input.len() {
-            Some(b'\n')
-        } else {
-            None
-        };
-        let mut line_toks = ref_tokens(line, row_start, sentinel, errs);
-        let mut line_errs: Vec<ParseError> = Vec::new();
-        line_toks = gather_invalid_num(line_toks, &mut line_errs);
-        errs.append(&mut line_errs);
-        // their blockExpression: a line whose only tokens are trivia and
-        // the closing brace (a gathered junk token leaves NOTHING) never
-        // becomes a field — no empty application, no operand errors
-        if !line_toks
-            .iter()
-            .any(|t| t.kind != RTKind::Eof && t.kind != RTKind::RBrace)
-        {
+        let row_input: &str = *input;
+        // their blockExpression token stream has NO newlines (they are
+        // trivia): a line ending in a dropped invalid token loses its
+        // trailing newline WITH the removed token (gatherTrivia attached
+        // it to that token), so hasTrailingNewLines(previous) is false and
+        // the row's application CONTINUES onto the next line. Chain the
+        // line slices into one token stream while the tail stays dropped.
+        let mut toks: Vec<RTok> = Vec::new();
+        let mut chained = 0usize;
+        loop {
+            let line_end = input.find('\n').unwrap_or(input.len());
+            let line = &input[..line_end];
+            let line_base = offset(input, base);
+            let sentinel = if line_end < input.len() {
+                Some(b'\n')
+            } else {
+                None
+            };
+            let (mut line_toks, mut dropped) = ref_tokens(line, line_base, sentinel, errs);
+            // an invalid NUMBER gathered out at the tail takes the newline
+            // with it the same way — their gatherInvalid removes every
+            // invalid token, trivia attached
+            if !dropped {
+                dropped = line_toks
+                    .iter()
+                    .rev()
+                    .find(|t| t.kind != RTKind::Eof)
+                    .map(|t| t.invalid)
+                    .unwrap_or(false);
+            }
+            let mut lex_errs: Vec<ParseError> = Vec::new();
+            line_toks = gather_invalid_num(line_toks, &mut lex_errs);
+            errs.append(&mut lex_errs);
+            // their blockExpression: a line whose only tokens are trivia
+            // and the closing brace (a gathered junk token leaves NOTHING)
+            // never becomes a field — no empty application, no operand
+            // errors. First line only: a chained brace line APPENDS, the
+            // application's stop-kind sees the brace.
+            if chained == 0
+                && !line_toks
+                    .iter()
+                    .any(|t| t.kind != RTKind::Eof && t.kind != RTKind::RBrace)
+            {
+                match input.find(['\n', '}']) {
+                    Some(k) if input.as_bytes()[k] == b'}' => {
+                        *input = &input[k..];
+                    }
+                    Some(k) => *input = &input[k + 1..],
+                    None => *input = &input[input.len()..],
+                }
+                continue 'rows;
+            }
+            line_toks.pop(); // this line's Eof — one stream, one Eof
+            toks.extend(line_toks);
+            chained += 1;
+            // advance past the line — a same-line `}` stays for the block
+            // loop and ends the chain (the application stops at RBrace)
             match input.find(['\n', '}']) {
                 Some(k) if input.as_bytes()[k] == b'}' => {
                     *input = &input[k..];
+                    break;
                 }
                 Some(k) => *input = &input[k + 1..],
                 None => *input = &input[input.len()..],
             }
-            continue;
+            if !dropped || input.is_empty() {
+                break;
+            }
         }
+        toks.push(RTok {
+            kind: RTKind::Eof,
+            value: String::new(),
+            start: offset(input, base),
+            end: offset(input, base),
+            space_after: false,
+            invalid: false,
+        });
+        let chained_end: &str = *input;
         let mut rp = RParser {
-            toks: line_toks,
+            toks,
             pos: 0,
             errs,
+            poisoned: None,
         };
         let tree = rp.application();
-        // their error node = the ROW: the span covers the whole line's
-        // tokens (their endColumn = the last token's end)
+        // their leftExpression_bp THROWS on an invalid operand: the
+        // PartialParsingError propagates to the records ELEMENT, which
+        // drops entirely (rows after the damage included). Check BEFORE
+        // any binder pushes; skip this block's remaining lines to its
+        // closing brace — left for the block loop — and abort the block.
+        if let Some((pos, end, msg)) = rp.poisoned.clone() {
+            loop {
+                let line_end = input.find('\n').unwrap_or(input.len());
+                if input[..line_end].trim_start().starts_with('}') {
+                    break;
+                }
+                if line_end >= input.len() {
+                    *input = &input[input.len()..];
+                    break;
+                }
+                *input = &input[line_end + 1..];
+            }
+            return Err(Fail { offset: pos, end: end, message: msg });
+        }
+        // their error node = the ROW: SyntaxNode.end = the last child's
+        // endPos (types/nodes.ts) — the row's last token's end, no
+        // trailing trivia (probe: "Expected 2 values but got 3" ends at
+        // endColumn 21 on a 20-char row line)
         let row_end = rp.prev().end;
         let mut row_ok = true;
         if let RNode::App { callee, args, .. } = &tree {
@@ -1736,17 +1817,34 @@ fn records_block(
             }
         }
         if !row_ok {
-            // drop the damaged row: skip to the line end, leaving a
-            // same-line `}` for the block loop
-            match input.find(['\n', '}']) {
-                Some(k) if input.as_bytes()[k] == b'}' => {
-                    *input = &input[k..];
+            if chained >= 2 {
+                // the chain already consumed the swallowed lines; resume
+                // after them
+                *input = chained_end;
+            } else {
+                // drop the damaged row: skip to the line end, leaving a
+                // same-line `}` for the block loop
+                match input.find(['\n', '}']) {
+                    Some(k) if input.as_bytes()[k] == b'}' => {
+                        *input = &input[k..];
+                    }
+                    Some(k) => *input = &input[k + 1..],
+                    None => *input = &input[input.len()..],
                 }
-                Some(k) => *input = &input[k + 1..],
-                None => *input = &input[input.len()..],
             }
             continue;
         }
+        if chained >= 2 {
+            // their extractDataFromRow reads the AST — no text re-scan;
+            // the swallow always co-occurs with a lexer error, so their
+            // interpretation is gated and the merged row's values never
+            // surface. Drop it quietly: no re-scan errors, no count rule.
+            *input = chained_end;
+            continue;
+        }
+        // the chain consumed the row's own line; record_row re-scans the
+        // values from the text
+        *input = row_input;
         match record_row(input, base) {
             Ok((row, spans)) => {
                 // their extractDataFromRow count rule is INTERPRET-layer:
@@ -1956,7 +2054,11 @@ fn table(
             match records_block(input, base, errs, rec_start, count_errors, binder_out) {
                 Ok((_, rec)) => t.records = Some(rec),
                 Err(e) => {
-                    errs.push(err_at(e.offset, &e.message));
+                    // an empty message = the error already pushed (the
+                    // poisoned abort's marker)
+                    if !e.message.is_empty() {
+                        errs.push(err_at(e.offset, &e.message));
+                    }
                     // a bare `records` fails right at the table's closing
                     // brace — leave it for the block loop instead of
                     // swallowing the rest of the table
@@ -2242,6 +2344,7 @@ enum RTKind {
     LBrace,
     RBrace,
     Colon,
+    Semicolon,
     Wildcard,
     Unknown,
     Eof,
@@ -2267,15 +2370,21 @@ struct RTok {
 /// slice in the real source (None at end-of-file): numeric runs at the
 /// slice edge evaluate against it (`2.` at a line end is a valid literal),
 /// but it is never tokenized.
+/// Returns the tokens plus `tail_dropped`: the scan reached the slice
+/// end and dropped an invalid partial there (their gatherInvalid) — the
+/// line's trailing trivia (the newline) rode along with the removed
+/// token, so in their parser the enclosing application continues onto
+/// the next line (hasTrailingNewLines(previous) = false).
 fn ref_tokens(
     body: &str,
     base: usize,
     sentinel: Option<u8>,
     errs: &mut Vec<ParseError>,
-) -> Vec<RTok> {
+) -> (Vec<RTok>, bool) {
     let b = body.as_bytes();
     let mut toks = Vec::new();
     let mut i = 0usize;
+    let mut tail_dropped = false;
     while i < b.len() {
         let c = b[i];
         let start = i;
@@ -2283,6 +2392,7 @@ fn ref_tokens(
         let mut value = String::new();
         let mut end = i + 1;
         let mut invalid = false;
+        let mut dropped = false;
         match c {
             b' ' | b'\t' | b'\r' => {
                 i += 1;
@@ -2297,10 +2407,20 @@ fn ref_tokens(
             b'{' => kind = RTKind::LBrace,
             b'}' => kind = RTKind::RBrace,
             b':' => kind = RTKind::Colon,
+            b';' => {
+                kind = RTKind::Semicolon;
+                value = ";".to_string();
+            },
             b'\'' => {
-                // singleLineStringLiteral: allowNewline=false — a newline
-                // before the closing quote is their UNEXPECTED_NEWLINE;
-                // the partial token still lands in the stream
+                // singleLineStringLiteral (consumeUntil, allowNewline=false,
+                // allowEof=false): a newline or EOF before the closing quote
+                // is their UNEXPECTED_NEWLINE / UNEXPECTED_EOF, anchored on
+                // the PARTIAL TOKEN [start..scan-stop). The token itself is
+                // invalid — their gatherInvalid removes it from the stream,
+                // taking the line's trailing trivia (the newline) with it.
+                // A brace sentinel means the scan would continue past our
+                // slice — that cut is our artifact, not the truth: no
+                // error, and the partial lands as before.
                 let mut k = i + 1;
                 while k < b.len() && b[k] != b'\'' && b[k] != b'\n' {
                     if b[k] == b'\\' {
@@ -2312,27 +2432,40 @@ fn ref_tokens(
                 // says what follows it (their consumeUntil scans the whole
                 // file, so a scan reaching the slice end with a newline
                 // sentinel = their UNEXPECTED_NEWLINE, at true EOF =
-                // their EOF error; a brace sentinel means the scan would
-                // continue past our slice — no error here)
+                // their EOF error)
                 let at_end = k >= b.len();
                 if at_end && sentinel == Some(b'\n') {
-                    errs.push(err_at(
-                        base + k,
-                        "Invalid newline encountered while parsing",
-                    ));
+                    errs.push(ParseError {
+                        offset: base + start,
+                        end: Some(base + k),
+                        message: "Invalid newline encountered while parsing".to_string(),
+                    });
+                    dropped = true;
                 } else if at_end && sentinel.is_none() {
                     // allowEof=false: their consumeUntil errs at EOF too
-                    errs.push(err_at(base + k, "EOF reached while parsing"));
+                    errs.push(ParseError {
+                        offset: base + start,
+                        end: Some(base + k),
+                        message: "EOF reached while parsing".to_string(),
+                    });
+                    dropped = true;
                 }
-                if k < b.len() && b[k] == b'\'' {
-                    k += 1;
+                if dropped {
+                    kind = RTKind::Str;
+                    end = k;
+                } else {
+                    if k < b.len() && b[k] == b'\'' {
+                        k += 1;
+                    }
+                    kind = RTKind::Str;
+                    value = body[start..k.min(body.len())].to_string();
+                    end = k;
                 }
-                kind = RTKind::Str;
-                value = body[start..k.min(body.len())].to_string();
-                end = k;
             }
             b'"' => {
-                // quotedVariable: allowNewline=false — same newline rule
+                // quotedVariable: allowNewline=false — the same rule as the
+                // single-quoted string above: the error anchors the partial
+                // token and the token is dropped (their gatherInvalid)
                 let mut k = i + 1;
                 while k < b.len() && b[k] != b'"' && b[k] != b'\n' {
                     if b[k] == b'\\' {
@@ -2342,19 +2475,31 @@ fn ref_tokens(
                 }
                 let at_end = k >= b.len();
                 if at_end && sentinel == Some(b'\n') {
-                    errs.push(err_at(
-                        base + k,
-                        "Invalid newline encountered while parsing",
-                    ));
+                    errs.push(ParseError {
+                        offset: base + start,
+                        end: Some(base + k),
+                        message: "Invalid newline encountered while parsing".to_string(),
+                    });
+                    dropped = true;
                 } else if at_end && sentinel.is_none() {
-                    errs.push(err_at(base + k, "EOF reached while parsing"));
+                    errs.push(ParseError {
+                        offset: base + start,
+                        end: Some(base + k),
+                        message: "EOF reached while parsing".to_string(),
+                    });
+                    dropped = true;
                 }
-                value = body[start + 1..k.min(body.len())].to_string();
-                if k < b.len() && b[k] == b'"' {
-                    k += 1;
+                if dropped {
+                    kind = RTKind::Quoted;
+                    end = k;
+                } else {
+                    value = body[start + 1..k.min(body.len())].to_string();
+                    if k < b.len() && b[k] == b'"' {
+                        k += 1;
+                    }
+                    kind = RTKind::Quoted;
+                    end = k;
                 }
-                kind = RTKind::Quoted;
-                end = k;
             }
             b'`' => {
                 let mut k = i + 1;
@@ -2504,6 +2649,15 @@ fn ref_tokens(
             _ => kind = RTKind::Unknown,
         }
         let kind = kind;
+        if dropped {
+            // their gatherInvalid: the invalid partial never reaches the
+            // parser; the scan resumes after it. dropped only happens when
+            // the scan ran to the slice end (the newline/EOF failure), so
+            // the line's tail is what dropped.
+            tail_dropped = true;
+            i = end;
+            continue;
+        }
         let space_after = b.get(end) == Some(&b' ') || b.get(end) == Some(&b'\t');
         toks.push(RTok {
             kind,
@@ -2523,7 +2677,7 @@ fn ref_tokens(
         space_after: false,
         invalid: false,
     });
-    toks
+    (toks, tail_dropped)
 }
 
 fn is_op_char(c: u8) -> bool {
@@ -2565,6 +2719,10 @@ struct RParser<'a> {
     toks: Vec<RTok>,
     pos: usize,
     errs: &'a mut Vec<ParseError>,
+    /// An invalid operand (their INVALID_OPERAND): their parser THROWS
+    /// here, aborting the enclosing element — the flag defers the abort
+    /// to the caller (the whole records block drops).
+    poisoned: Option<(usize, Option<usize>, String)>,
 }
 
 /// Their gatherInvalid (lexer.ts:247): invalid tokens never reach the
@@ -2639,13 +2797,23 @@ impl RParser<'_> {
         let callee = self.comma_expression();
         let mut args = Vec::new();
         let mut prev_start = callee.start();
+        let mut prev_end = self.prev().end;
         while !self.should_stop() {
+            // their parser THREW on the invalid operand: the unwind
+            // happens before any further diagnostics
+            if self.poisoned.is_some() {
+                break;
+            }
             if !self.prev().space_after {
-                self.errs
-                    .push(err_at(prev_start, "Expect a following space"));
+                self.errs.push(ParseError {
+                    offset: prev_start,
+                    end: Some(prev_end),
+                    message: "Expect a following space".to_string(),
+                });
             }
             let arg = self.comma_expression();
             prev_start = arg.start();
+            prev_end = self.prev().end;
             args.push(arg);
         }
         RNode::App {
@@ -2668,6 +2836,9 @@ impl RParser<'_> {
         }
         let mut elems = vec![first];
         loop {
+            if self.poisoned.is_some() {
+                break;
+            }
             self.advance(); // the comma
             if self.should_stop_comma() {
                 elems.push(RNode::Empty {
@@ -2826,9 +2997,13 @@ impl RParser<'_> {
                 if self.at_end() {
                     self.errs.push(err_at(t.start, "Unexpected EOF"));
                 } else {
-                    self.errs.push(err_at(
+                    // their INVALID_OPERAND: logError + EmptyNode, then
+                    // leftExpression_bp THROWS — the error defers to the
+                    // element-level abort via the poisoned flag
+                    self.poisoned = Some((
                         t.start,
-                        &format!("Invalid start of operand \"{}\"", t.value),
+                        Some(t.end),
+                        format!("Invalid start of operand \"{}\"", t.value),
                     ));
                     self.advance();
                 }
@@ -3397,7 +3572,7 @@ fn ref_body_pipeline_mode(
     } else {
         None
     };
-    let mut toks = ref_tokens(body, base, sentinel, errs);
+    let (mut toks, _tail_dropped) = ref_tokens(body, base, sentinel, errs);
     let mut lex_errs: Vec<ParseError> = Vec::new();
     toks = gather_invalid_num(toks, &mut lex_errs);
     errs.append(&mut lex_errs);
@@ -3414,6 +3589,7 @@ fn ref_body_pipeline_mode(
         toks,
         pos: 0,
         errs,
+        poisoned: None,
     };
     let tree = p.application();
     if let RNode::App { callee, args, .. } = &tree {
@@ -3682,7 +3858,7 @@ fn table_group(
             None if slice_end < input.len() => Some(b'\n'),
             None => None,
         };
-        let mut line_toks = ref_tokens(line, line_start, sentinel, errs);
+        let (mut line_toks, _tail_dropped) = ref_tokens(line, line_start, sentinel, errs);
         let mut lex_errs: Vec<ParseError> = Vec::new();
         line_toks = gather_invalid_num(line_toks, &mut lex_errs);
         errs.append(&mut lex_errs);
@@ -3706,6 +3882,7 @@ fn table_group(
             toks: line_toks,
             pos: 0,
             errs,
+            poisoned: None,
         };
         let tree = lp.application();
         if let RNode::App { callee, args, .. } = &tree {
@@ -3874,10 +4051,15 @@ pub fn parse(src: &str) -> ParseOutput {
                     top_records.push((target, rec));
                 }
                 Err(e) => {
-                    out.errors.push(ParseError {
-                        offset: e.offset,
-                        message: e.message.to_string(),
-                    });
+                    // an empty message = the error already pushed (the
+                    // poisoned abort's marker)
+                    if !e.message.is_empty() {
+                        out.errors.push(ParseError {
+                            offset: e.offset,
+                            end: e.end,
+                            message: e.message.to_string(),
+                        });
+                    }
                     rest = recover(attempt);
                 }
             }
@@ -3900,6 +4082,7 @@ pub fn parse(src: &str) -> ParseOutput {
             Err(e) => {
                 out.errors.push(ParseError {
                     offset: e.offset,
+                    end: None,
                     message: e.message.to_string(),
                 });
                 rest = recover(attempt);
@@ -4419,6 +4602,7 @@ Table t {
             &out.binder_errors,
             &out.binder_chains,
             &out.record_count_errors,
+            &out.errors,
         );
         assert!(d
             .iter()
@@ -4534,3 +4718,129 @@ ENUM post_status {
     }
 }
 
+
+#[cfg(test)]
+mod errs2_tests {
+    use super::*;
+
+    #[test]
+    fn errs2_invalid_operand_drops_the_block() {
+        let src = std::fs::read_to_string("/home/boilingsoup/Desktop/errs2.dbml")
+            .expect("errs2 on the desktop");
+        let out = parse(&src);
+        for e in &out.errors {
+            println!("ERR {}..{:?}: {}", e.offset, e.end, e.message);
+        }
+        let users = out.doc.tables.iter().find(|t| t.name == "users").unwrap();
+        println!(
+            "users records: {:?}",
+            users.records.as_ref().map(|r| r.rows.len())
+        );
+        assert!(
+            out.errors.iter().any(|e| e.message.contains("Invalid start of operand")),
+            "the invalid operand error fires"
+        );
+        assert!(
+            users.records.is_none(),
+            "the damaged records block drops entirely"
+        );
+    }
+
+    /// Their gatherInvalid removes the failed string partial, taking the
+    /// line's trailing newline with it — the row's application continues
+    /// onto the next line (errs.dbml line 33-34, span-verified against
+    /// their engine: row 33 col 3 .. row 34 col 24, 1-based)
+    #[test]
+    fn dropped_partial_swallows_the_next_row() {
+        let src = r#"
+Table users {
+  id integer
+  username varchar
+    Records users(id, username) {
+    0, 'Alice, 'admin'
+    1, 'Bob', 'moderator'
+    2, 'Candice'
+  }
+}
+"#;
+        let out = parse(src);
+        let errs: Vec<&ParseError> = out
+            .errors
+            .iter()
+            .filter(|e| e.message != "Invalid record row structure")
+            .collect();
+        let row0 = src.find("0, 'Alice").unwrap();
+        let admin_quote = src.find("'admin'").unwrap() + "'admin'".len() - 1;
+        let moderator_end = src.find("'moderator'").unwrap() + "'moderator'".len();
+        // the lexer error anchors the PARTIAL token [quote..scan-stop)
+        assert!(
+            out.errors.iter().any(|e| {
+                e.message == "Invalid newline encountered while parsing"
+                    && e.offset == admin_quote
+                    && e.end == Some(admin_quote + 1)
+            }),
+            "the newline error anchors the partial token: {:?}",
+            out.errors
+        );
+        // the two MISSING_SPACES anchor the previous expression
+        assert_eq!(
+            errs.iter().filter(|e| e.message == "Expect a following space").count(),
+            2,
+            "two missing-space errors: {:?}",
+            errs
+        );
+        // the structure error (binder channel, surfaces through validate)
+        // spans the swallowed application: [row start .. last swallowed
+        // token end]
+        let d = crate::dbml::validate::validate_with_parse(
+            &out.doc,
+            src,
+            &out.binder_errors,
+            &out.binder_chains,
+            &out.record_count_errors,
+            &out.errors,
+        );
+        assert!(
+            d.iter().any(|x| {
+                x.message == "Invalid record row structure"
+                    && x.offset == row0
+                    && x.end == Some(moderator_end)
+            }),
+            "the structure error spans the swallow: {d:?}"
+        );
+        // the swallowed next row does not parse again; the third row stands
+        let users = out.doc.tables.iter().find(|t| t.name == "users").unwrap();
+        let rec = users.records.as_ref().unwrap();
+        assert_eq!(rec.rows.len(), 1, "only 'Candice' survives: {:?}", rec.rows);
+    }
+
+    /// c1 battery: a partial string in an otherwise-clean row merges the
+    /// next row's values into the callee (no structure error — the values
+    /// are comma elements) and the only diagnostic is the lexer error
+    #[test]
+    fn dropped_partial_merges_values_without_structure_error() {
+        let src = r#"
+Table t {
+  a int
+  b varchar
+  records (a, b) {
+    1, 'ok
+    2, 'fine'
+    3, 'x'
+  }
+}
+"#;
+        let out = parse(src);
+        assert_eq!(out.errors.len(), 1, "{:?}", out.errors);
+        let quote = src.find("'ok").unwrap();
+        assert_eq!(
+            (out.errors[0].offset, out.errors[0].end),
+            (quote, Some(quote + 3)),
+            "the newline error anchors the partial token 'ok"
+        );
+        assert_eq!(
+            out.errors[0].message,
+            "Invalid newline encountered while parsing"
+        );
+    }
+}

@@ -69,21 +69,31 @@ fn dump_path(path: &str) -> Case {
         &out.binder_errors,
         &out.binder_chains,
         &out.record_count_errors,
+        &out.errors,
     );
     let mut diagnostics: Vec<Diagnostic> = out
         .errors
         .iter()
-        .map(|e| Diagnostic {
+        .map(|e| {
+            // their provider serves Monaco: startColumn = 0-based col + 1,
+            // endColumn = the 0-based END col + 1 (exclusive, 1-based)
+            let (r, c) = line_col(&src, e.offset);
+            let (er, ec) = match e.end {
+                Some(end) => line_col(&src, end),
+                None => (r, c),
+            };
+            Diagnostic {
             r#type: "error",
             text: e.message.clone(),
-            row: row_of(&src, e.offset),
-            column: col_of(&src, e.offset),
-            endRow: row_of(&src, e.offset),
-            endColumn: col_of(&src, e.offset),
+            row: r,
+            column: c + 1,
+            endRow: er,
+            endColumn: ec + 1,
             category: None,
             explanation: String::new(),
             code: None,
             quickFixes: Vec::new(),
+        }
         })
         .collect();
     for d in &ds {
@@ -93,14 +103,17 @@ fn dump_path(path: &str) -> Case {
             dbml_ui::dbml::validate::Severity::Info => "info",
         };
         let (r, c) = line_col(&src, d.offset);
-        let ec = d.end.map(|e| line_col(&src, e).1).unwrap_or(c);
+        let (er, ec) = match d.end {
+            Some(e) => line_col(&src, e),
+            None => (r, c),
+        };
         diagnostics.push(Diagnostic {
             r#type: ty,
             text: d.message.clone(),
             row: r,
-            column: c,
-            endRow: r,
-            endColumn: ec,
+            column: c + 1,
+            endRow: er,
+            endColumn: ec + 1,
             category: d.category.clone(),
             explanation: d.explanation.join("\n"),
             code: None,
