@@ -1678,7 +1678,7 @@ fn records_block(
         } else {
             None
         };
-        let mut line_toks = ref_tokens(line, row_start, sentinel);
+        let mut line_toks = ref_tokens(line, row_start, sentinel, errs);
         let mut line_errs: Vec<ParseError> = Vec::new();
         line_toks = gather_invalid_num(line_toks, &mut line_errs);
         errs.append(&mut line_errs);
@@ -2267,7 +2267,12 @@ struct RTok {
 /// slice in the real source (None at end-of-file): numeric runs at the
 /// slice edge evaluate against it (`2.` at a line end is a valid literal),
 /// but it is never tokenized.
-fn ref_tokens(body: &str, base: usize, sentinel: Option<u8>) -> Vec<RTok> {
+fn ref_tokens(
+    body: &str,
+    base: usize,
+    sentinel: Option<u8>,
+    errs: &mut Vec<ParseError>,
+) -> Vec<RTok> {
     let b = body.as_bytes();
     let mut toks = Vec::new();
     let mut i = 0usize;
@@ -2293,12 +2298,31 @@ fn ref_tokens(body: &str, base: usize, sentinel: Option<u8>) -> Vec<RTok> {
             b'}' => kind = RTKind::RBrace,
             b':' => kind = RTKind::Colon,
             b'\'' => {
+                // singleLineStringLiteral: allowNewline=false — a newline
+                // before the closing quote is their UNEXPECTED_NEWLINE;
+                // the partial token still lands in the stream
                 let mut k = i + 1;
                 while k < b.len() && b[k] != b'\'' && b[k] != b'\n' {
                     if b[k] == b'\\' {
                         k += 1; // the escaped char rides along
                     }
                     k += 1;
+                }
+                // the slice excludes the trailing newline; the sentinel
+                // says what follows it (their consumeUntil scans the whole
+                // file, so a scan reaching the slice end with a newline
+                // sentinel = their UNEXPECTED_NEWLINE, at true EOF =
+                // their EOF error; a brace sentinel means the scan would
+                // continue past our slice — no error here)
+                let at_end = k >= b.len();
+                if at_end && sentinel == Some(b'\n') {
+                    errs.push(err_at(
+                        base + k,
+                        "Invalid newline encountered while parsing",
+                    ));
+                } else if at_end && sentinel.is_none() {
+                    // allowEof=false: their consumeUntil errs at EOF too
+                    errs.push(err_at(base + k, "EOF reached while parsing"));
                 }
                 if k < b.len() && b[k] == b'\'' {
                     k += 1;
@@ -2308,12 +2332,22 @@ fn ref_tokens(body: &str, base: usize, sentinel: Option<u8>) -> Vec<RTok> {
                 end = k;
             }
             b'"' => {
+                // quotedVariable: allowNewline=false — same newline rule
                 let mut k = i + 1;
                 while k < b.len() && b[k] != b'"' && b[k] != b'\n' {
                     if b[k] == b'\\' {
                         k += 1;
                     }
                     k += 1;
+                }
+                let at_end = k >= b.len();
+                if at_end && sentinel == Some(b'\n') {
+                    errs.push(err_at(
+                        base + k,
+                        "Invalid newline encountered while parsing",
+                    ));
+                } else if at_end && sentinel.is_none() {
+                    errs.push(err_at(base + k, "EOF reached while parsing"));
                 }
                 value = body[start + 1..k.min(body.len())].to_string();
                 if k < b.len() && b[k] == b'"' {
@@ -3363,7 +3397,7 @@ fn ref_body_pipeline_mode(
     } else {
         None
     };
-    let mut toks = ref_tokens(body, base, sentinel);
+    let mut toks = ref_tokens(body, base, sentinel, errs);
     let mut lex_errs: Vec<ParseError> = Vec::new();
     toks = gather_invalid_num(toks, &mut lex_errs);
     errs.append(&mut lex_errs);
@@ -3648,7 +3682,7 @@ fn table_group(
             None if slice_end < input.len() => Some(b'\n'),
             None => None,
         };
-        let mut line_toks = ref_tokens(line, line_start, sentinel);
+        let mut line_toks = ref_tokens(line, line_start, sentinel, errs);
         let mut lex_errs: Vec<ParseError> = Vec::new();
         line_toks = gather_invalid_num(line_toks, &mut lex_errs);
         errs.append(&mut lex_errs);
