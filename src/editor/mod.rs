@@ -939,14 +939,17 @@ _ => Action::None,
             self.toggle_find();
             return Action::None;
         }
-        // the app-wide select-all chord works in insert mode too
+        // the app-wide select-all chord works in insert mode too — the
+        // cursor parks on the last CONTENT line's end (never the phantom
+        // EOL row a trailing newline keeps), and the app skips the
+        // view-follow for this chord (gedit keeps the scroll)
         if key.modifiers.contains(KeyModifiers::CONTROL)
             && key.code == KeyCode::Char('a')
         {
             self.buf.cancel_selection();
             self.buf.move_cursor(CursorMove::Jump(0, 0));
             self.buf.start_selection();
-            let last = self.buf.line_count().saturating_sub(1);
+            let last = self.buf.last_content_row();
             self.buf.move_cursor(CursorMove::Jump(last, usize::MAX));
             return Action::None;
         }
@@ -3935,6 +3938,14 @@ mod tests {
         // the selection is live: typing over it replaces everything
         e.handle_key(key('x'));
         assert_eq!(e.text(), "x");
+
+        // a trailing newline keeps a phantom empty last row: select-all
+        // parks the cursor on the last CONTENT line, never the phantom
+        e = editor("one\ntwo\n");
+        e.handle_key(key('i'));
+        e.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert!(e.buf.selection_range().is_some(), "select-all engaged");
+        assert_eq!(e.buf.pos().row, 1, "the cursor rests on 'two', not the phantom row");
     }
 
     #[test]

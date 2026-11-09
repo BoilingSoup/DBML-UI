@@ -4290,17 +4290,22 @@ impl App {
             KeyCode::PageDown => self.half_page(1.0),
             KeyCode::Esc => self.editor_mut().buf.cancel_selection(),
             KeyCode::Char('a') => {
-                // Ctrl+A: select all
+                // Ctrl+A: select all — anchored at the buffer start, the
+                // cursor on the last CONTENT line's end (never the
+                // phantom EOL row a trailing newline keeps). The view
+                // stays put (gedit): the caret hides during the
+                // selection, so there is nothing to follow — skip the
+                // keep-cursor-visible tail below.
                 self.editor_mut().buf.cancel_selection();
                 self.editor_mut()
                     .buf
                     .move_cursor(editor::buffer::Move::Jump(0, 0));
                 self.editor_mut().buf.start_selection();
-                let last = self.editor_mut().buf.line_count().saturating_sub(1);
+                let last = self.editor_mut().buf.last_content_row();
                 self.editor_mut()
                     .buf
                     .move_cursor(editor::buffer::Move::Jump(last, usize::MAX));
-                self.editor_mut().buf.move_cursor(editor::buffer::Move::End);
+                return;
             }
             KeyCode::Char('c') => {
                 // Ctrl+C: copy the selection (register + system clipboard),
@@ -5791,6 +5796,12 @@ impl App {
             }
         }
         let was_insert = self.editor_mut().mode == editor::Mode::Insert;
+        // the select-all chord leaves the view alone (gedit): the engine
+        // selects and parks the cursor on the last content line, and the
+        // caret is hidden during the selection — nothing to follow
+        let select_all = was_insert
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+            && key.code == KeyCode::Char('a');
         let action = self.editor_mut().handle_key(key);
         // auto-triggers fire only for keys typed while ALREADY in insert:
         // the i/a/o/s keys that enter insert mode must not pop completions
@@ -5806,8 +5817,10 @@ impl App {
         self.after_edit(action);
         // keep the cursor on screen after every key, motions included
         // (Action::None never reached the follow inside after_edit)
-        self.follow_cursor_horizontal();
-        self.keep_cursor_visible();
+        if !select_all {
+            self.follow_cursor_horizontal();
+            self.keep_cursor_visible();
+        }
     }
 
     /// After a selection move: keep `selected` inside the visible window,
@@ -9665,6 +9678,54 @@ mod scroll_tests {
             v.max,
             app.max_scroll()
         );
+    }
+}
+
+#[cfg(test)]
+mod select_all_tests {
+    use super::*;
+
+    fn tall_source() -> String {
+        let mut s = String::new();
+        for i in 0..200 {
+            s.push_str(&format!("Table t{i} {{\n  id integer [pk]\n}}\n\n"));
+        }
+        s
+    }
+
+    #[test]
+    fn ctrl_a_selects_all_keeping_the_view_in_regular_mode() {
+        let mut app = App::with_source(tall_source());
+        app.focus = Focus::Editor;
+        // park the view mid-document; the chord must not move it
+        app.cur_mut().editor_scroll = 40.0;
+        let before = app.cur().editor_scroll;
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert_eq!(app.cur().editor_scroll, before, "the scroll stays");
+        // the cursor rests on the last CONTENT line, never the phantom
+        // EOL row a trailing newline keeps
+        let last = app.editor().buf.last_content_row();
+        assert_eq!(app.editor().buf.pos().row, last);
+        // the whole buffer is selected
+        assert_eq!(
+            app.editor().buf.selection_text().as_deref(),
+            Some(app.editor().buf.text().as_str()),
+            "the whole buffer selected"
+        );
+    }
+
+    #[test]
+    fn ctrl_a_selects_all_keeping_the_view_in_vim_insert_mode() {
+        let mut app = App::with_source(tall_source());
+        app.config.vim = true;
+        app.focus = Focus::Editor;
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('i'), KeyModifiers::NONE));
+        assert_eq!(app.editor().mode, editor::Mode::Insert);
+        app.cur_mut().editor_scroll = 40.0;
+        let before = app.cur().editor_scroll;
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert_eq!(app.cur().editor_scroll, before, "the scroll stays");
+        assert_eq!(app.editor().buf.pos().row, app.editor().buf.last_content_row());
     }
 }
 

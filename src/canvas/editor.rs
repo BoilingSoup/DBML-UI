@@ -236,6 +236,15 @@ pub fn caret_blinking(app: &App) -> bool {
     app.focus == Focus::Editor
         && app.maximized != Maximized::Diagram
         && app.doc_open()
+        // gedit-style: a live selection hides the blinking caret — in
+        // insert mode (regular and vim alike). Vim visual keeps its
+        // block cursor on the band.
+        && !(app.editor().mode == crate::editor::Mode::Insert
+            && app
+                .editor()
+                .buf
+                .selection_range()
+                .is_some_and(|(a, b)| a != b))
 }
 
 /// The glyph to repaint inverted under the block cursor: the character at
@@ -1405,6 +1414,57 @@ mod doc_tests {
             ),
         );
         app
+    }
+
+    #[test]
+    fn a_live_selection_hides_the_blinking_caret_in_insert_mode() {
+        // gedit-style: with a selection live the caret is hidden — the
+        // select-all chord highlights without a blinking cursor
+        let mut app = app();
+        assert!(caret_blinking(&app), "no selection: the caret blinks");
+        let _ = update(
+            &mut app,
+            crate::app::Message::KeyPressed(
+                crate::editor::KeyCode::Char('a'),
+                crate::editor::KeyModifiers::CONTROL,
+            ),
+        );
+        assert!(
+            app.editor().buf.selection_range().is_some_and(|(a, b)| a != b),
+            "the whole buffer selected"
+        );
+        assert!(!caret_blinking(&app), "the caret hides during the selection");
+        // any cursor move collapses it and the caret returns
+        let _ = update(
+            &mut app,
+            crate::app::Message::KeyPressed(crate::editor::KeyCode::Left, crate::editor::KeyModifiers::NONE),
+        );
+        assert!(app.editor().buf.selection_range().is_none());
+        assert!(caret_blinking(&app));
+    }
+
+    #[test]
+    fn visual_mode_keeps_the_block_cursor_on_the_band() {
+        // vim visual is not a gedit selection: the block cursor stays
+        let mut app = app();
+        let _ = update(
+            &mut app,
+            crate::app::Message::KeyPressed(crate::editor::KeyCode::Esc, crate::editor::KeyModifiers::NONE),
+        ); // back to normal
+        let _ = update(
+            &mut app,
+            crate::app::Message::KeyPressed(crate::editor::KeyCode::Char('v'), crate::editor::KeyModifiers::NONE),
+        );
+        let _ = update(
+            &mut app,
+            crate::app::Message::KeyPressed(crate::editor::KeyCode::Right, crate::editor::KeyModifiers::NONE),
+        );
+        assert_eq!(app.editor().mode, crate::editor::Mode::Visual);
+        assert!(
+            app.editor().buf.selection_range().is_some_and(|(a, b)| a != b),
+            "a visual selection is live"
+        );
+        assert!(caret_blinking(&app), "visual keeps the block cursor");
     }
 
     #[test]
