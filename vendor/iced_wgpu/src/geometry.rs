@@ -401,6 +401,20 @@ impl geometry::frame::Backend for Frame {
     }
 
     fn paste(&mut self, frame: Frame) {
+        // PATCH(dbml-ui): flush the buffers drawn so far into meshes
+        // BEFORE the draft's meshes — into_geometry appends this frame's
+        // own buffer-derived meshes AFTER every pasted draft, so a
+        // with_clip draft's content (e.g. a drag-covered tab's remnant
+        // asterisk) rendered UNDER the background/tabs/teardrop that
+        // follow it: the whole main mesh paints over the draft. Flushing
+        // at the paste point keeps the painter's order: main-so-far,
+        // draft, main-rest.
+        let flushed = std::mem::replace(
+            &mut self.buffers,
+            BufferStack::new(),
+        );
+        self.meshes.extend(flushed.into_meshes(self.clip_bounds));
+
         self.meshes.extend(frame.meshes);
         self.meshes
             .extend(frame.buffers.into_meshes(frame.clip_bounds));
