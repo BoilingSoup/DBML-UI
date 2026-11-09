@@ -411,10 +411,23 @@ impl Engine {
                 // unstamped (infinite) one keeps the old behavior. The
                 // mask is restored afterwards: the caller re-uses it for
                 // the remaining text items at the layer's clip.
+                // PATCH(dbml-ui): the stamped bounds double as the DRAW
+                // origin (they start at the text's anchor), so the clip
+                // intersection must widen them upward by ~1.5em — the ink
+                // of a vertically-centered glyph run extends above the
+                // anchor, and an unstamped-widened clip whose y-range
+                // starts near the anchor cut the glyph tops (a
+                // drag-covered tab's title rendered as its bottom slice
+                // only).
                 let own = if text_bounds.width.is_finite()
                     || text_bounds.height.is_finite()
                 {
-                    clip_bounds.intersection(&(*text_bounds * transformation))
+                    let ink_bounds = Rectangle {
+                        y: text_bounds.y - size.0 * 1.5,
+                        height: text_bounds.height + size.0 * 1.5,
+                        ..*text_bounds
+                    };
+                    clip_bounds.intersection(&(ink_bounds * transformation))
                 } else {
                     Some(clip_bounds)
                 };

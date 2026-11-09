@@ -216,17 +216,9 @@ impl geometry::frame::Backend for Frame {
                 )
             };
 
-            // PATCH(dbml-ui): the stamped bounds start ~1.5em ABOVE the
-            // anchor, not at it — the ink of a vertically-centered glyph
-            // run extends above and below the anchor, and a stamped clip
-            // that begins at the anchor cuts the glyph tops whenever the
-            // enclosing with_clip region's y-range starts near the text
-            // (a drag-covered tab's title rendered as its bottom slice
-            // only). The x stays at the anchor: horizontal ink starts
-            // there for Left-aligned runs.
             let bounds = Rectangle {
                 x: position.x,
-                y: position.y - size.0 * 1.5,
+                y: position.y,
                 width: f32::INFINITY,
                 height: f32::INFINITY,
             };

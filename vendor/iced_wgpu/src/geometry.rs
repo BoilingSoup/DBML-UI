@@ -322,13 +322,9 @@ impl geometry::frame::Backend for Frame {
                     (position, size, line_height)
                 };
 
-            // PATCH(dbml-ui): stamp ~1.5em above the anchor — see the
-            // iced_tiny_skia copy for the full note (a stamped clip that
-            // begins at the anchor cuts the glyph tops of a
-            // vertically-centered run inside tight with_clip regions).
             let bounds = Rectangle {
                 x: position.x,
-                y: position.y - size.0 * 1.5,
+                y: position.y,
                 width: f32::INFINITY,
                 height: f32::INFINITY,
             };
