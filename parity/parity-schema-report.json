@@ -1,307 +1,1207 @@
 {
   "pinnedCommit": "6b0c25b5d87ef8f44236eeb1e9dc149848e1503e",
-  "pass": 75,
+  "pass": 300,
   "fail": 0,
   "cases": [
     {
-      "name": "clean-minimal",
-      "status": "ok"
-    },
-    {
-      "name": "col-inline-bare-foo",
+      "name": "fuzz0000",
       "status": "ok-both-null"
     },
     {
-      "name": "col-inline-bare-pk",
-      "status": "ok"
-    },
-    {
-      "name": "col-inline-bare-unique",
-      "status": "ok"
-    },
-    {
-      "name": "col-keyword-block",
+      "name": "fuzz0001",
       "status": "ok-both-null"
     },
     {
-      "name": "col-multiword-type",
+      "name": "fuzz0002",
       "status": "ok-both-null"
     },
     {
-      "name": "dup-enum",
+      "name": "fuzz0003",
       "status": "ok-both-null"
     },
     {
-      "name": "dup-table-and-enum",
-      "status": "ok"
-    },
-    {
-      "name": "dup-table",
+      "name": "fuzz0004",
       "status": "ok-both-null"
     },
     {
-      "name": "enum-duplicate-member",
+      "name": "fuzz0005",
       "status": "ok-both-null"
     },
     {
-      "name": "enum-ref-member",
+      "name": "fuzz0006",
       "status": "ok-both-null"
     },
     {
-      "name": "group-missing-member",
+      "name": "fuzz0007",
       "status": "ok-both-null"
     },
     {
-      "name": "group-ok",
+      "name": "fuzz0008",
       "status": "ok-both-null"
     },
     {
-      "name": "key-col-pk-inline-gt",
+      "name": "fuzz0009",
       "status": "ok"
     },
     {
-      "name": "key-col-pk-lt",
-      "status": "ok"
-    },
-    {
-      "name": "key-col-unique-inline-gt",
-      "status": "ok"
-    },
-    {
-      "name": "key-col-unique-lt",
-      "status": "ok"
-    },
-    {
-      "name": "key-composite-missing",
-      "status": "ok"
-    },
-    {
-      "name": "key-composite-ok",
-      "status": "ok"
-    },
-    {
-      "name": "key-idx-pk-inline-gt",
+      "name": "fuzz0010",
       "status": "ok-both-null"
     },
     {
-      "name": "key-idx-pk-lt",
+      "name": "fuzz0011",
       "status": "ok-both-null"
     },
     {
-      "name": "key-idx-unique-inline-gt",
+      "name": "fuzz0012",
       "status": "ok-both-null"
     },
     {
-      "name": "key-idx-unique-lt",
+      "name": "fuzz0013",
       "status": "ok-both-null"
     },
     {
-      "name": "key-none-inline-gt",
-      "status": "ok"
-    },
-    {
-      "name": "key-none-lt",
-      "status": "ok"
-    },
-    {
-      "name": "op-dash-nn-nn",
-      "status": "ok"
-    },
-    {
-      "name": "op-dash-nn-unspec",
-      "status": "ok"
-    },
-    {
-      "name": "op-dash-null-nn",
-      "status": "ok"
-    },
-    {
-      "name": "op-dash-null-unspec",
-      "status": "ok"
-    },
-    {
-      "name": "op-dash-unspec-nn",
-      "status": "ok"
-    },
-    {
-      "name": "op-dash-unspec-unspec",
-      "status": "ok"
-    },
-    {
-      "name": "op-gt-nn-nn",
-      "status": "ok"
-    },
-    {
-      "name": "op-gt-nn-unspec",
-      "status": "ok"
-    },
-    {
-      "name": "op-gt-null-nn",
-      "status": "ok"
-    },
-    {
-      "name": "op-gt-null-unspec",
-      "status": "ok"
-    },
-    {
-      "name": "op-gt-unique-parent",
-      "status": "ok"
-    },
-    {
-      "name": "op-gt-unspec-nn",
-      "status": "ok"
-    },
-    {
-      "name": "op-gt-unspec-unspec",
-      "status": "ok"
-    },
-    {
-      "name": "op-gtq-nn-nn",
-      "status": "ok"
-    },
-    {
-      "name": "op-gtq-nn-unspec",
-      "status": "ok"
-    },
-    {
-      "name": "op-gtq-null-nn",
-      "status": "ok"
-    },
-    {
-      "name": "op-gtq-null-unspec",
-      "status": "ok"
-    },
-    {
-      "name": "op-gtq-unspec-nn",
-      "status": "ok"
-    },
-    {
-      "name": "op-gtq-unspec-unspec",
-      "status": "ok"
-    },
-    {
-      "name": "op-lt-nn-nn",
-      "status": "ok"
-    },
-    {
-      "name": "op-lt-nn-unspec",
-      "status": "ok"
-    },
-    {
-      "name": "op-lt-null-nn",
-      "status": "ok"
-    },
-    {
-      "name": "op-lt-null-unspec",
-      "status": "ok"
-    },
-    {
-      "name": "op-lt-unspec-nn",
-      "status": "ok"
-    },
-    {
-      "name": "op-lt-unspec-unspec",
-      "status": "ok"
-    },
-    {
-      "name": "op-ltgt-nn-nn",
-      "status": "ok"
-    },
-    {
-      "name": "op-ltgt-nn-unspec",
-      "status": "ok"
-    },
-    {
-      "name": "op-ltgt-null-nn",
-      "status": "ok"
-    },
-    {
-      "name": "op-ltgt-null-unspec",
-      "status": "ok"
-    },
-    {
-      "name": "op-ltgt-unspec-nn",
-      "status": "ok"
-    },
-    {
-      "name": "op-ltgt-unspec-unspec",
-      "status": "ok"
-    },
-    {
-      "name": "op-ltgtq-nn-nn",
-      "status": "ok"
-    },
-    {
-      "name": "op-ltgtq-nn-unspec",
-      "status": "ok"
-    },
-    {
-      "name": "op-ltgtq-null-nn",
-      "status": "ok"
-    },
-    {
-      "name": "op-ltgtq-null-unspec",
-      "status": "ok"
-    },
-    {
-      "name": "op-ltgtq-unspec-nn",
-      "status": "ok"
-    },
-    {
-      "name": "op-ltgtq-unspec-unspec",
-      "status": "ok"
-    },
-    {
-      "name": "op-ltq-nn-nn",
-      "status": "ok"
-    },
-    {
-      "name": "op-ltq-nn-unspec",
-      "status": "ok"
-    },
-    {
-      "name": "op-ltq-null-nn",
-      "status": "ok"
-    },
-    {
-      "name": "op-ltq-null-unspec",
-      "status": "ok"
-    },
-    {
-      "name": "op-ltq-unspec-nn",
-      "status": "ok"
-    },
-    {
-      "name": "op-ltq-unspec-unspec",
-      "status": "ok"
-    },
-    {
-      "name": "records-fk-clean",
-      "status": "ok"
-    },
-    {
-      "name": "records-fk-violation",
-      "status": "ok"
-    },
-    {
-      "name": "records-null-in-required",
-      "status": "ok"
-    },
-    {
-      "name": "ref-missing-column",
+      "name": "fuzz0014",
       "status": "ok-both-null"
     },
     {
-      "name": "ref-missing-composite-half",
+      "name": "fuzz0015",
       "status": "ok-both-null"
     },
     {
-      "name": "ref-missing-table",
+      "name": "fuzz0016",
       "status": "ok-both-null"
     },
     {
-      "name": "reported-index-pk",
+      "name": "fuzz0017",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0018",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0019",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0020",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0021",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0022",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0023",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0024",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0025",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0026",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0027",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0028",
       "status": "ok"
+    },
+    {
+      "name": "fuzz0029",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0030",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0031",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0032",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0033",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0034",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0035",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0036",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0037",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0038",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0039",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0040",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0041",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0042",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0043",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0044",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0045",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0046",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0047",
+      "status": "ok"
+    },
+    {
+      "name": "fuzz0048",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0049",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0050",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0051",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0052",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0053",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0054",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0055",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0056",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0057",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0058",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0059",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0060",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0061",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0062",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0063",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0064",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0065",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0066",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0067",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0068",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0069",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0070",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0071",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0072",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0073",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0074",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0075",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0076",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0077",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0078",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0079",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0080",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0081",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0082",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0083",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0084",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0085",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0086",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0087",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0088",
+      "status": "ok"
+    },
+    {
+      "name": "fuzz0089",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0090",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0091",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0092",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0093",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0094",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0095",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0096",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0097",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0098",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0099",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0100",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0101",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0102",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0103",
+      "status": "ok"
+    },
+    {
+      "name": "fuzz0104",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0105",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0106",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0107",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0108",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0109",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0110",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0111",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0112",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0113",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0114",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0115",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0116",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0117",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0118",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0119",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0120",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0121",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0122",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0123",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0124",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0125",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0126",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0127",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0128",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0129",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0130",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0131",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0132",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0133",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0134",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0135",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0136",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0137",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0138",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0139",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0140",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0141",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0142",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0143",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0144",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0145",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0146",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0147",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0148",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0149",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0150",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0151",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0152",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0153",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0154",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0155",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0156",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0157",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0158",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0159",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0160",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0161",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0162",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0163",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0164",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0165",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0166",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0167",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0168",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0169",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0170",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0171",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0172",
+      "status": "ok"
+    },
+    {
+      "name": "fuzz0173",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0174",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0175",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0176",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0177",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0178",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0179",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0180",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0181",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0182",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0183",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0184",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0185",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0186",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0187",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0188",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0189",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0190",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0191",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0192",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0193",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0194",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0195",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0196",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0197",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0198",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0199",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0200",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0201",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0202",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0203",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0204",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0205",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0206",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0207",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0208",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0209",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0210",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0211",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0212",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0213",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0214",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0215",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0216",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0217",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0218",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0219",
+      "status": "ok"
+    },
+    {
+      "name": "fuzz0220",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0221",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0222",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0223",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0224",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0225",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0226",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0227",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0228",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0229",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0230",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0231",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0232",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0233",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0234",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0235",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0236",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0237",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0238",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0239",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0240",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0241",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0242",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0243",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0244",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0245",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0246",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0247",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0248",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0249",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0250",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0251",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0252",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0253",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0254",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0255",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0256",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0257",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0258",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0259",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0260",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0261",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0262",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0263",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0264",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0265",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0266",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0267",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0268",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0269",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0270",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0271",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0272",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0273",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0274",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0275",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0276",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0277",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0278",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0279",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0280",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0281",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0282",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0283",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0284",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0285",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0286",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0287",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0288",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0289",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0290",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0291",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0292",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0293",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0294",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0295",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0296",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0297",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0298",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "fuzz0299",
+      "status": "ok-both-null"
     }
   ]
 }

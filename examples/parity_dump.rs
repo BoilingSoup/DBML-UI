@@ -89,13 +89,14 @@ fn dump_path(path: &str) -> Case {
             dbml_ui::dbml::validate::Severity::Info => "info",
         };
         let (r, c) = line_col(&src, d.offset);
+        let ec = d.end.map(|e| line_col(&src, e).1).unwrap_or(c);
         diagnostics.push(Diagnostic {
             r#type: ty,
             text: d.message.clone(),
             row: r,
             column: c,
             endRow: r,
-            endColumn: c,
+            endColumn: ec,
             category: d.category.clone(),
             explanation: d.explanation.join("\n"),
             code: None,

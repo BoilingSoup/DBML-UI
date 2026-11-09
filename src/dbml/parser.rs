@@ -17,8 +17,9 @@ pub struct ParseOutput {
     pub doc: Document,
     pub errors: Vec<ParseError>,
     /// Their validateNode-class findings raised while parsing (broken-ref
-    /// shape sets) — binder-class, gate the interpretation layer.
-    pub binder_errors: Vec<(usize, String)>,
+    /// shape sets) — binder-class, gate the interpretation layer. Each
+    /// carries its token end (their endColumn) when the node spans.
+    pub binder_errors: Vec<(usize, usize, String)>,
     /// The ref-body binder requests (their bindFields scan) — resolved
     /// against the document in validate.rs.
     pub binder_chains: Vec<super::ast::BinderChain>,
@@ -26,7 +27,7 @@ pub struct ParseOutput {
     /// (anchor, expected, got) — their extractDataFromRow rule; the
     /// error is interpret-layer and only exists while the file is
     /// otherwise clean (gated in validate.rs).
-    pub record_count_errors: Vec<(usize, usize, usize)>,
+    pub record_count_errors: Vec<(usize, usize, usize, usize)>,
 }
 
 struct Fail {
@@ -1562,8 +1563,8 @@ fn records_block(
     base: usize,
     errs: &mut Vec<ParseError>,
     rec_start: usize,
-    count_errors: &mut Vec<(usize, usize, usize)>,
-    binder_out: &mut Vec<(usize, String)>,
+    count_errors: &mut Vec<(usize, usize, usize, usize)>,
+    binder_out: &mut Vec<(usize, usize, String)>,
 ) -> R<(Option<String>, TableRecords)> {
     sp(input);
     // The target binds on the SAME line only: a bare `records` mid-typing
@@ -1704,10 +1705,17 @@ fn records_block(
             errs,
         };
         let tree = rp.application();
+        // their error node = the ROW: the span covers the whole line's
+        // tokens (their endColumn = the last token's end)
+        let row_end = rp.prev().end;
         let mut row_ok = true;
         if let RNode::App { callee, args, .. } = &tree {
             if !args.is_empty() {
-                binder_out.push((callee.start(), "Invalid record row structure".to_string()));
+                binder_out.push((
+                    callee.start(),
+                    row_end,
+                    "Invalid record row structure".to_string(),
+                ));
                 row_ok = false;
             } else {
                 let elems: Vec<&RNode> = match &**callee {
@@ -1718,6 +1726,7 @@ fn records_block(
                     if !is_valid_record_value(e) {
                         binder_out.push((
                             e.start(),
+                            row_end,
                             "Records can only contain simple values (literals, null, true, \
                              false, or enum references). Complex expressions are not allowed."
                                 .to_string(),
@@ -1752,7 +1761,7 @@ fn records_block(
                 };
                 if let Some(n) = expected {
                     if row.len() != n {
-                        count_errors.push((row_start, n, row.len()));
+                        count_errors.push((row_start, row_end, n, row.len()));
                         continue;
                     }
                 }
@@ -1794,9 +1803,9 @@ fn top_item(
     input: &mut &str,
     base: usize,
     errs: &mut Vec<ParseError>,
-    doc_binder_errors: &mut Vec<(usize, String)>,
+    doc_binder_errors: &mut Vec<(usize, usize, String)>,
     binder_chains: &mut Vec<super::ast::BinderChain>,
-    record_count_errors: &mut Vec<(usize, usize, usize)>,
+    record_count_errors: &mut Vec<(usize, usize, usize, usize)>,
 ) -> R<Item> {
     if peek_kw(input, "TableGroup") {
         table_group(input, base, errs, doc_binder_errors, binder_chains).map(Item::Grp)
@@ -1855,8 +1864,8 @@ fn table(
     input: &mut &str,
     base: usize,
     errs: &mut Vec<ParseError>,
-    count_errors: &mut Vec<(usize, usize, usize)>,
-    binder_out: &mut Vec<(usize, String)>,
+    count_errors: &mut Vec<(usize, usize, usize, usize)>,
+    binder_out: &mut Vec<(usize, usize, String)>,
 ) -> R<Table> {
     let start = offset(input, base);
     if !eat(input, "Table") {
@@ -2023,7 +2032,7 @@ fn ref_stmt(
     input: &mut &str,
     base: usize,
     errs: &mut Vec<ParseError>,
-    doc_binder_errors: &mut Vec<(usize, String)>,
+    doc_binder_errors: &mut Vec<(usize, usize, String)>,
     binder_chains: &mut Vec<super::ast::BinderChain>,
 ) -> R<Option<Ref>> {
     let start = offset(input, base);
@@ -2113,7 +2122,7 @@ fn ref_stmt(
                 && !input.starts_with('\r')
                 && !input.starts_with('}')
             {
-                let mut shape = Vec::new();
+                let mut shape: Vec<(usize, usize, String)> = Vec::new();
                 let mut arg_chains = Vec::new();
                 ref_body_pipeline_mode(
                     &mut body_input.clone(),
@@ -2149,7 +2158,7 @@ fn ref_stmt(
             // + the field-args walk): classify the broken body, emit
             // their error set, recover at the line end — binder-class
             // errors, routed to the parse output's binder channel
-            let mut shape = Vec::new();
+            let mut shape: Vec<(usize, usize, String)> = Vec::new();
             ref_body_pipeline(&mut body_input.clone(), body_base, errs, &mut shape, binder_chains);
             doc_binder_errors.extend(shape);
             skip_line(input);
@@ -3197,7 +3206,7 @@ fn is_valid_policy(occ: &super::ast::SettingOcc) -> bool {
     )
 }
 
-fn validate_field_settings(occs: &[super::ast::SettingOcc], out: &mut Vec<(usize, String)>) {
+fn validate_field_settings(occs: &[super::ast::SettingOcc], out: &mut Vec<(usize, usize, String)>) {
     // aggregateSettingList: group the attributes per lowercased name, in
     // first-appearance order
     let mut order: Vec<String> = Vec::new();
@@ -3215,13 +3224,14 @@ fn validate_field_settings(occs: &[super::ast::SettingOcc], out: &mut Vec<(usize
             "delete" | "update" => {
                 if attrs.len() > 1 {
                     for a in &attrs {
-                        out.push((a.offset, format!("'{}' can only appear once", key)));
+                        out.push((a.offset, a.end, format!("'{}' can only appear once", key)));
                     }
                 }
                 for a in &attrs {
                     if !is_valid_policy(a) {
                         out.push((
                             a.offset,
+                            a.end,
                             format!(
                                 "'{}' can only have values \"cascade\", \"no action\", \
                                  \"set null\", \"set default\" or \"restrict\"",
@@ -3234,7 +3244,7 @@ fn validate_field_settings(occs: &[super::ast::SettingOcc], out: &mut Vec<(usize
             "color" => {
                 if attrs.len() > 1 {
                     for a in &attrs {
-                        out.push((a.offset, "'color' can only appear once".to_string()));
+                        out.push((a.offset, a.end, "'color' can only appear once".to_string()));
                     }
                 }
                 for a in &attrs {
@@ -3255,6 +3265,7 @@ fn validate_field_settings(occs: &[super::ast::SettingOcc], out: &mut Vec<(usize
                     if !ok {
                         out.push((
                             a.offset,
+                            a.end,
                             "'color' must be a color literal".to_string(),
                         ));
                     }
@@ -3263,7 +3274,7 @@ fn validate_field_settings(occs: &[super::ast::SettingOcc], out: &mut Vec<(usize
             "note" => {
                 if attrs.len() > 1 {
                     for a in &attrs {
-                        out.push((a.offset, "'note' can only appear once".to_string()));
+                        out.push((a.offset, a.end, "'note' can only appear once".to_string()));
                     }
                 }
                 for a in &attrs {
@@ -3272,6 +3283,7 @@ fn validate_field_settings(occs: &[super::ast::SettingOcc], out: &mut Vec<(usize
                     {
                         out.push((
                             a.offset,
+                            a.end,
                             "'note' must be a string literal".to_string(),
                         ));
                     }
@@ -3282,6 +3294,7 @@ fn validate_field_settings(occs: &[super::ast::SettingOcc], out: &mut Vec<(usize
                     for a in &attrs {
                         out.push((
                             a.offset,
+                            a.end,
                             "'inactive' can only appear once".to_string(),
                         ));
                     }
@@ -3290,6 +3303,7 @@ fn validate_field_settings(occs: &[super::ast::SettingOcc], out: &mut Vec<(usize
                     if a.has_value {
                         out.push((
                             a.offset,
+                            a.end,
                             "'inactive' cannot have a value".to_string(),
                         ));
                     }
@@ -3299,7 +3313,7 @@ fn validate_field_settings(occs: &[super::ast::SettingOcc], out: &mut Vec<(usize
                 // validateCustomInlineMetadata
                 if attrs.len() > 1 {
                     for a in &attrs {
-                        out.push((a.offset, format!("'{}' can only appear once", key)));
+                        out.push((a.offset, a.end, format!("'{}' can only appear once", key)));
                     }
                 }
                 for a in &attrs {
@@ -3318,6 +3332,7 @@ fn validate_field_settings(occs: &[super::ast::SettingOcc], out: &mut Vec<(usize
                     if !ok {
                         out.push((
                             a.offset,
+                            a.end,
                             format!(
                                 "Custom setting '{}' must be a string, a color literal, a number \
                                  literal, or a boolean literal",
@@ -3339,7 +3354,7 @@ fn ref_body_pipeline(
     input: &mut &str,
     base: usize,
     errs: &mut Vec<ParseError>,
-    out: &mut Vec<(usize, String)>,
+    out: &mut Vec<(usize, usize, String)>,
     chains: &mut Vec<super::ast::BinderChain>,
 ) {
     ref_body_pipeline_mode(input, base, errs, out, chains, false, &mut true);
@@ -3356,7 +3371,7 @@ fn ref_body_pipeline_mode(
     input: &mut &str,
     base: usize,
     errs: &mut Vec<ParseError>,
-    out: &mut Vec<(usize, String)>,
+    out: &mut Vec<(usize, usize, String)>,
     chains: &mut Vec<super::ast::BinderChain>,
     args_only: bool,
     callee_clean: &mut bool,
@@ -3391,6 +3406,11 @@ fn ref_body_pipeline_mode(
         let (callee_errors, arg_errors) = validate_fields_split(callee, args);
         let (callee_chains, arg_chains) = bind_fields_split(callee, args);
         *callee_clean = callee_errors.is_empty();
+        let widen = |v: Vec<(usize, String)>| {
+            v.into_iter()
+                .map(|(o, m)| (o, o, m))
+                .collect::<Vec<(usize, usize, String)>>()
+        };
         if args_only {
             // the callee's SHAPE errors still fire (op-leading junk
             // rebinds the callee — `a.b > c.d - e.f` → infix(`-`) is not
@@ -3399,8 +3419,8 @@ fn ref_body_pipeline_mode(
             // unclean one's checks live ONLY in the chains (validate.rs
             // skips the non-clean ref's model checks — their interpret is
             // gated by the file's errors)
-            out.extend(callee_errors);
-            out.extend(arg_errors);
+            out.extend(widen(callee_errors));
+            out.extend(widen(arg_errors));
             if *callee_clean {
                 chains.extend(arg_chains);
             } else {
@@ -3408,8 +3428,8 @@ fn ref_body_pipeline_mode(
                 chains.extend(arg_chains);
             }
         } else {
-            out.extend(callee_errors);
-            out.extend(arg_errors);
+            out.extend(widen(callee_errors));
+            out.extend(widen(arg_errors));
             chains.extend(callee_chains);
             chains.extend(arg_chains);
             // their nodeSettings validates the settings list (the Array
@@ -3438,7 +3458,7 @@ fn ref_settings(
     input: &mut &str,
     base: usize,
     errs: &mut Vec<ParseError>,
-    binder_out: &mut Vec<(usize, String)>,
+    binder_out: &mut Vec<(usize, usize, String)>,
 ) -> (Option<String>, Option<String>, Option<String>) {
     let mut out = (None, None, None);
     // `ws` before the peek eats blank lines and comments too; when no
@@ -3560,7 +3580,7 @@ fn table_group(
     input: &mut &str,
     base: usize,
     errs: &mut Vec<ParseError>,
-    doc_binder_errors: &mut Vec<(usize, String)>,
+    doc_binder_errors: &mut Vec<(usize, usize, String)>,
     binder_chains: &mut Vec<super::ast::BinderChain>,
 ) -> R<TableGroup> {
     let start = offset(input, base);
@@ -3603,7 +3623,7 @@ fn table_group(
         custom_spans: Vec::new(),
         note_span: None,
     };
-    let mut out_group_errors: Vec<(usize, String)> = Vec::new();
+    let mut out_group_errors: Vec<(usize, usize, String)> = Vec::new();
     loop {
         ws(input);
         if input.is_empty() {
@@ -3680,12 +3700,14 @@ fn table_group(
             if destructure_complex_variable(callee).is_none() {
                 out_group_errors.push((
                     callee.start(),
+                    callee.start(),
                     "A TableGroup field must be of the form <table> or <schema>.<table>"
                         .to_string(),
                 ));
             }
             for a in args {
                 out_group_errors.push((
+                    a.start(),
                     a.start(),
                     "A TableGroup field should only have a single Table name".to_string(),
                 ));
@@ -3820,7 +3842,7 @@ pub fn parse(src: &str) -> ParseOutput {
     let mut rest = src;
     let mut out = ParseOutput::default();
     let mut top_records: Vec<(Option<String>, TableRecords)> = Vec::new();
-    let mut record_count_errors: Vec<(usize, usize, usize)> = Vec::new();
+    let mut record_count_errors: Vec<(usize, usize, usize, usize)> = Vec::new();
     loop {
         ws(&mut rest);
         if rest.is_empty() {
@@ -4369,7 +4391,13 @@ Table t {
         assert!(out.errors.is_empty(), "{:?}", out.errors);
         assert_eq!(
             out.record_count_errors,
-            vec![(src.find("2, 'too'").unwrap(), 2, 3)]
+            vec![(
+                src.find("2, 'too'").unwrap(),
+                // the row span ends at the row's last token (their endColumn)
+                src.find("'many'").unwrap() + "'many'".len(),
+                2,
+                3,
+            )]
         );
         let d = crate::dbml::validate::validate_with_parse(
             &out.doc,

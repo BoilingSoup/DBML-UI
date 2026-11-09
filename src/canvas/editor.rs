@@ -984,19 +984,35 @@ pub struct DocHover {
 pub fn error_marks(app: &App) -> Vec<Mark> {
     let src = app.source();
     let mut marks = Vec::new();
-    let mut push = |offset: usize, message: &str, warn: bool| {
+    let mut push = |offset: usize, end_off: Option<usize>, message: &str, warn: bool| {
         let (row, byte_col) = dbml_ui::dbml::parser::line_col_at(src, offset);
         let Some(line) = src.split('\n').nth(row) else {
             return;
         };
         let at = byte_col.min(line.len());
         let start = line[..at].chars().count();
-        let end_byte = line[at..]
-            .char_indices()
-            .take_while(|(_, c)| c.is_alphanumeric() || *c == '_')
-            .last()
-            .map(|(i, c)| at + i + c.len_utf8())
-            .unwrap_or(at);
+        // a spanned finding (their endColumn): the squiggle covers the
+        // node — for record-row errors that is the whole row, first to
+        // last non-whitespace char, like dbdiagram
+        let end_byte = end_off
+            .filter(|&e| e > offset)
+            .and_then(|e| {
+                let (erow, ecol) = dbml_ui::dbml::parser::line_col_at(src, e);
+                if erow == row {
+                    Some(ecol.min(line.len()))
+                } else {
+                    // a multi-line node: underline through the row's end
+                    Some(line.trim_end().len())
+                }
+            })
+            .unwrap_or_else(|| {
+                line[at..]
+                    .char_indices()
+                    .take_while(|(_, c)| c.is_alphanumeric() || *c == '_')
+                    .last()
+                    .map(|(i, c)| at + i + c.len_utf8())
+                    .unwrap_or(at)
+            });
         let mut end = line[..end_byte.min(line.len())].chars().count();
         if end <= start {
             end = start + 1;
@@ -1010,14 +1026,15 @@ pub fn error_marks(app: &App) -> Vec<Mark> {
         });
     };
     for e in &app.cur().parse_errors {
-        push(e.offset, &e.message, false);
+        push(e.offset, None, &e.message, false);
     }
     for d in &app.cur().diagnostics {
         push(
-                        d.offset,
-                        &d.message,
-                        d.severity != dbml_ui::dbml::validate::Severity::Error,
-                    );
+            d.offset,
+            d.end,
+            &d.message,
+            d.severity != dbml_ui::dbml::validate::Severity::Error,
+        );
     }
     marks
 }

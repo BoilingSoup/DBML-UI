@@ -41,6 +41,10 @@ pub struct QuickFix {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
     pub offset: usize,
+    /// The finding's token end (their endColumn) when the offending node
+    /// spans past the anchor — the squiggle covers the node, not just
+    /// its first char.
+    pub end: Option<usize>,
     pub message: String,
     pub severity: Severity,
     /// Group header in the diagnostics panel; None groups under "Other"
@@ -52,9 +56,18 @@ pub struct Diagnostic {
 }
 
 impl Diagnostic {
+    pub fn spanned(offset: usize, end: usize, message: String) -> Self {
+        let mut d = Self::plain(offset, message);
+        if end > offset {
+            d.end = Some(end);
+        }
+        d
+    }
+
     pub fn plain(offset: usize, message: String) -> Self {
         Self {
             offset,
+            end: None,
             message,
             severity: Severity::Error,
             category: None,
@@ -196,9 +209,9 @@ pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
 pub fn validate_with_parse(
     doc: &Document,
     src: &str,
-    parse_binder: &[(usize, String)],
+    parse_binder: &[(usize, usize, String)],
     binder_chains: &[super::ast::BinderChain],
-    record_count_errors: &[(usize, usize, usize)],
+    record_count_errors: &[(usize, usize, usize, usize)],
 ) -> Vec<Diagnostic> {
     // the trimmed source line containing `offset` — their explanation
     // quotes the ref statement and the column definition as written
@@ -583,6 +596,7 @@ pub fn validate_with_parse(
                     format!("({list}) [{}]", st.join(", "))
                 };
                 out.push(Diagnostic {
+            end: None,
                     offset: ix.span.start,
                     message: "An index field must be an identifier, a quoted identifier, a functional expression or a tuple of such".to_string(),
                     severity: Severity::Error,
@@ -838,6 +852,7 @@ pub fn validate_with_parse(
                 fixes: Vec<QuickFix>,
                 out: &mut Vec<Diagnostic>| {
         let mk = |offset: usize| Diagnostic {
+            end: None,
             offset,
             message: message.to_string(),
             severity: Severity::Info,
@@ -1220,6 +1235,7 @@ pub fn validate_with_parse(
                             .unwrap_or(false);
                         if col_required {
                             out.push(Diagnostic {
+            end: None,
                                 offset: span.start,
                                 message: format!(
                                     "NULL not allowed for NOT NULL column `{fk_col}` without a default value or auto-increment"
@@ -1233,6 +1249,7 @@ pub fn validate_with_parse(
                             });
                         }
                         out.push(Diagnostic {
+            end: None,
                             offset: span.start,
                             message: format!(
                                 "FK violation: `{fk_tbl}.{fk_col}` = `{shown}` must not be NULL"
@@ -1248,6 +1265,7 @@ pub fn validate_with_parse(
                     }
                     if !parent_vals.iter().any(|(pv, _)| pv == v) {
                         out.push(Diagnostic {
+            end: None,
                             offset: span.start,
                             message: format!(
                                 "FK violation: `{fk_tbl}.{fk_col}` = `{v}` does not exist in `{parent_tbl}.{parent_col}`"
@@ -1467,8 +1485,8 @@ pub fn validate_with_parse(
     }
 
     // the parse-side binder findings (ref-body shape sets)
-    for (offset, msg) in parse_binder {
-        out.push(Diagnostic::plain(*offset, msg.clone()));
+    for (offset, end, msg) in parse_binder {
+        out.push(Diagnostic::spanned(*offset, *end, msg.clone()));
     }
     // the ref-body binder chains (their bindFields scan →
     // nodeRefereeOfRefEndpoint): resolve each dotted chain against the
@@ -1496,9 +1514,10 @@ pub fn validate_with_parse(
     // INTERPRET-layer: the error exists only while shouldInterpretNode
     // holds — the file must be otherwise clean
     if record_count_errors.len() > 0 && !out.iter().any(|d| d.severity == Severity::Error) {
-        for (anchor, expected, got) in record_count_errors {
-            out.push(Diagnostic::plain(
+        for (anchor, end, expected, got) in record_count_errors {
+            out.push(Diagnostic::spanned(
                 *anchor,
+                *end,
                 format!("Expected {} values but got {}", expected, got),
             ));
         }
