@@ -1003,53 +1003,84 @@ pub struct DocHover {
 
 /// Parse errors and diagnostics as per-line underline ranges: the token
 /// at the finding's offset, one char minimum (point findings still get a
-/// visible mark). Errors first so hover resolution prefers them.
+/// visible mark). Errors first so hover resolution prefers them. A span
+/// crossing rows emits one mark PER row — Monaco draws the range's
+/// portion on every line (their structure error squiggles both the
+/// damaged row and the swallowed one), so a single clipped mark is not
+/// what dbdiagram shows.
 pub fn error_marks(app: &App) -> Vec<Mark> {
     let src = app.source();
+    let lines: Vec<&str> = src.split('\n').collect();
     let mut marks = Vec::new();
     let mut push = |offset: usize, end_off: Option<usize>, message: &str, warn: bool| {
         let (row, byte_col) = dbml_ui::dbml::parser::line_col_at(src, offset);
-        let Some(line) = src.split('\n').nth(row) else {
+        let Some(line) = lines.get(row) else {
             return;
         };
         let at = byte_col.min(line.len());
         let start = line[..at].chars().count();
+        let mut mark = |r: usize, s: usize, e: usize, message: &str, warn: bool| {
+            let mut e = e;
+            if e <= s {
+                e = s + 1;
+            }
+            marks.push(Mark {
+                row: r,
+                start: s,
+                end: e,
+                message: message.to_string(),
+                warn,
+            });
+        };
         // a spanned finding (their endColumn): the squiggle covers the
-        // node — for record-row errors that is the whole row, first to
-        // last non-whitespace char, like dbdiagram
-        let end_byte = end_off
+        // node — for record-row errors that is the whole row; a range
+        // ending on a LATER row squiggles every line it crosses, like
+        // Monaco: first row start-col to line end, middle rows whole,
+        // last row its start to the end column
+        match end_off
             .filter(|&e| e > offset)
-            .and_then(|e| {
-                let (erow, ecol) = dbml_ui::dbml::parser::line_col_at(src, e);
-                if erow == row {
-                    Some(ecol.min(line.len()))
-                } else {
-                    // a multi-line node: underline through the row's end
-                    Some(line.trim_end().len())
+            .map(|e| dbml_ui::dbml::parser::line_col_at(src, e))
+        {
+            Some((erow, ecol)) if erow > row => {
+                mark(row, start, line.chars().count(), message, warn);
+                for mid in (row + 1)..erow {
+                    if let Some(ml) = lines.get(mid) {
+                        mark(mid, 0, ml.chars().count(), message, warn);
+                    }
                 }
-            })
-            .unwrap_or_else(|| {
-                line[at..]
+                if let Some(ll) = lines.get(erow) {
+                    let s = ll[..ecol.min(ll.len())].chars().count();
+                    mark(erow, 0, s, message, warn);
+                }
+            }
+            Some((_, ecol)) => {
+                let end_byte = ecol.min(line.len());
+                mark(row, start, line[..end_byte].chars().count(), message, warn);
+            }
+            None => {
+                // a point finding: the token at the offset, one char
+                // minimum — the mark stays visible
+                let end_byte = line[at..]
                     .char_indices()
                     .take_while(|(_, c)| c.is_alphanumeric() || *c == '_')
                     .last()
                     .map(|(i, c)| at + i + c.len_utf8())
-                    .unwrap_or(at)
-            });
-        let mut end = line[..end_byte.min(line.len())].chars().count();
-        if end <= start {
-            end = start + 1;
+                    .unwrap_or(at);
+                mark(
+                    row,
+                    start,
+                    line[..end_byte.min(line.len())].chars().count(),
+                    message,
+                    warn,
+                );
+            }
         }
-        marks.push(Mark {
-            row,
-            start,
-            end,
-            message: message.to_string(),
-            warn,
-        });
     };
     for e in &app.cur().parse_errors {
-        push(e.offset, None, &e.message, false);
+        // the lexer/parser errors carry their own spans now (their
+        // Monaco endColumn): the partial-token anchors and the
+        // MISSING_SPACES node spans
+        push(e.offset, e.end, &e.message, false);
     }
     for d in &app.cur().diagnostics {
         push(
@@ -1904,6 +1935,45 @@ mod error_tests {
         }
         // the sample's error sits on the first line
         assert_eq!(marks[0].row, 0);
+    }
+
+    #[test]
+    fn a_span_crossing_rows_marks_every_line_like_monaco() {
+        // their structure error (errs.dbml lines 33-34): the swallowed row
+        // makes the diagnostic span TWO rows — dbdiagram (Monaco) draws
+        // the range's portion on every line; the old single mark clipped
+        // to the first row
+        let app = App::with_source(
+            "Table users {\n  id integer\n  username varchar\n  Records users(id, username) {\n    0, 'Alice, 'admin'\n    1, 'Bob', 'moderator'\n    2, 'Candice'\n  }\n}\n".into(),
+        );
+        let marks = error_marks(&app);
+        let structure: Vec<&Mark> = marks
+            .iter()
+            .filter(|m| m.message == "Invalid record row structure")
+            .collect();
+        assert_eq!(structure.len(), 2, "one mark per crossed row: {marks:?}");
+        assert_eq!(structure[0].row, 4);
+        assert_eq!(structure[1].row, 5);
+        // first row: from the '0' column to the line end
+        assert_eq!(structure[0].start, 4);
+        assert_eq!(structure[0].end, app.editor().buf.line(4).chars().count());
+        // last row: line start to the end column ('moderator' end)
+        assert_eq!(structure[1].start, 0);
+        assert_eq!(structure[1].end, "    1, 'Bob', 'moderator'".chars().count());
+        // hover on the second row resolves the same diagnostic
+        let p = pos_to_px(
+            crate::editor::buffer::Pos {
+                row: 5,
+                col: structure[1].start,
+            },
+            app.cur().editor_scroll,
+            app.cur().editor_hscroll,
+        );
+        let hit = mark_hover_at(&app, &marks, p);
+        assert_eq!(
+            hit.map(|m| m.message.as_str()),
+            Some("Invalid record row structure")
+        );
     }
 
     #[test]
