@@ -188,7 +188,7 @@ pub fn written_op(card: Cardinality, left_opt: bool, right_opt: bool) -> &'stati
 /// bullets their raw source-line quotes (the ref statement and the column
 /// definition, verbatim).
 pub fn validate(doc: &Document, src: &str) -> Vec<Diagnostic> {
-    validate_with_parse(doc, src, &[], &[])
+    validate_with_parse(doc, src, &[], &[], &[])
 }
 
 /// The parse-level binder findings join the same gate (their errors()
@@ -198,6 +198,7 @@ pub fn validate_with_parse(
     src: &str,
     parse_binder: &[(usize, String)],
     binder_chains: &[super::ast::BinderChain],
+    record_count_errors: &[(usize, usize, usize)],
 ) -> Vec<Diagnostic> {
     // the trimmed source line containing `offset` — their explanation
     // quotes the ref statement and the column definition as written
@@ -1491,6 +1492,18 @@ pub fn validate_with_parse(
     }
 
     out.sort_by_key(|d| d.offset);
+    // their extractDataFromRow count rule (records/interpret.ts) is
+    // INTERPRET-layer: the error exists only while shouldInterpretNode
+    // holds — the file must be otherwise clean
+    if record_count_errors.len() > 0 && !out.iter().any(|d| d.severity == Severity::Error) {
+        for (anchor, expected, got) in record_count_errors {
+            out.push(Diagnostic::plain(
+                *anchor,
+                format!("Expected {} values but got {}", expected, got),
+            ));
+        }
+        out.sort_by_key(|d| d.offset);
+    }
     // their shouldInterpretNode (core/global_modules/utils.ts): the
     // interpretation layer runs only while bindFile reports no errors —
     // binder-class (Error-severity) findings suppress the infos; raw
@@ -1590,7 +1603,7 @@ mod tests {
         // (their tableGroup binder), so this test runs the full pipeline
         let src = "Table a { id integer }\nTableGroup g {\n  nope\n}\nTable c {\n  x integer\n  indexes {\n    (zzz) [unique]\n  }\n}\n";
         let out = super::super::parser::parse(src);
-        let d: Vec<String> = validate_with_parse(&out.doc, src, &out.binder_errors, &out.binder_chains)
+        let d: Vec<String> = validate_with_parse(&out.doc, src, &out.binder_errors, &out.binder_chains, &out.record_count_errors)
             .into_iter()
             .map(|x| x.message)
             .collect();

@@ -22,6 +22,11 @@ pub struct ParseOutput {
     /// The ref-body binder requests (their bindFields scan) — resolved
     /// against the document in validate.rs.
     pub binder_chains: Vec<super::ast::BinderChain>,
+    /// Records rows whose value count mismatches the column list
+    /// (anchor, expected, got) — their extractDataFromRow rule; the
+    /// error is interpret-layer and only exists while the file is
+    /// otherwise clean (gated in validate.rs).
+    pub record_count_errors: Vec<(usize, usize, usize)>,
 }
 
 struct Fail {
@@ -1284,36 +1289,29 @@ fn sp_comment(input: &mut &str) {
 /// One comma-separated records row (the caller has positioned us at its
 /// first value). Rows end at a newline, `}`, or EOF; when `ncols` is
 /// known the count must match — a mismatch fails the row, not the block.
-fn record_row(
-    input: &mut &str,
-    base: usize,
-    ncols: Option<usize>,
-) -> R<(Vec<RecordValue>, Vec<Span>)> {
+fn record_row(input: &mut &str, base: usize) -> R<(Vec<RecordValue>, Vec<Span>)> {
     let mut row = Vec::new();
     let mut spans = Vec::new();
     loop {
-        let (v, span) = record_value(input, base)?;
-        row.push(v);
-        spans.push(span);
+        sp_comment(input);
+        let start = offset(input, base);
+        // their commaExpression: empty fields (a leading, consecutive or
+        // trailing comma) are EmptyNode values
+        if input.is_empty()
+            || input.starts_with(['\n', '\r'])
+            || peek_is(input, ",")
+            || peek_is(input, "}")
+        {
+            row.push(RecordValue::Null);
+            spans.push(start..start);
+        } else {
+            let (v, span) = record_value(input, base)?;
+            row.push(v);
+            spans.push(span);
+        }
         sp_comment(input);
         if !eat(input, ",") {
             break;
-        }
-        sp_comment(input);
-        if input.is_empty() || input.starts_with(['\n', '\r']) {
-            // trailing comma: an empty final field
-            let end = offset(input, base);
-            row.push(RecordValue::Null);
-            spans.push(end..end);
-            break;
-        }
-    }
-    if let Some(n) = ncols {
-        if row.len() != n {
-            return fail(
-                offset(input, base),
-                "record row does not match the column list",
-            );
         }
     }
     Ok((row, spans))
@@ -1371,6 +1369,8 @@ fn records_block(
     base: usize,
     errs: &mut Vec<ParseError>,
     rec_start: usize,
+    count_errors: &mut Vec<(usize, usize, usize)>,
+    binder_out: &mut Vec<(usize, String)>,
 ) -> R<(Option<String>, TableRecords)> {
     sp(input);
     // The target binds on the SAME line only: a bare `records` mid-typing
@@ -1473,13 +1473,72 @@ fn records_block(
         if eat(input, "}") {
             break;
         }
-        let ncols = if rec.columns.is_empty() {
-            None
-        } else {
-            Some(rec.columns.len())
+        // their validateDataRow (local_modules/records/validate.ts): the
+        // row line is an application — juxtaposed values (args) make the
+        // structure invalid; non-simple values err per element. Both drop
+        // the row.
+        let row_start = offset(input, base);
+        let line_end = input.find('\n').unwrap_or(input.len());
+        let line = &input[..line_end];
+        let line_toks = ref_tokens(line, row_start);
+        let mut rp = RParser {
+            toks: line_toks,
+            pos: 0,
+            errs,
         };
-        match record_row(input, base, ncols) {
+        let tree = rp.application();
+        let mut row_ok = true;
+        if let RNode::App { callee, args, .. } = &tree {
+            if !args.is_empty() {
+                binder_out.push((callee.start(), "Invalid record row structure".to_string()));
+                row_ok = false;
+            } else {
+                let elems: Vec<&RNode> = match &**callee {
+                    RNode::Comma { elems, .. } => elems.iter().collect(),
+                    other => vec![other],
+                };
+                for e in elems {
+                    if !is_valid_record_value(e) {
+                        binder_out.push((
+                            e.start(),
+                            "Records can only contain simple values (literals, null, true, \
+                             false, or enum references). Complex expressions are not allowed."
+                                .to_string(),
+                        ));
+                        row_ok = false;
+                    }
+                }
+            }
+        }
+        if !row_ok {
+            // drop the damaged row: skip to the line end, leaving a
+            // same-line `}` for the block loop
+            match input.find(['\n', '}']) {
+                Some(k) if input.as_bytes()[k] == b'}' => {
+                    *input = &input[k..];
+                }
+                Some(k) => *input = &input[k + 1..],
+                None => *input = &input[input.len()..],
+            }
+            continue;
+        }
+        match record_row(input, base) {
             Ok((row, spans)) => {
+                // their extractDataFromRow count rule is INTERPRET-layer:
+                // the row is dropped from the model and the error only
+                // exists while the file is otherwise clean (gated in
+                // validate.rs)
+                let expected = if rec.columns.is_empty() {
+                    None
+                } else {
+                    Some(rec.columns.len())
+                };
+                if let Some(n) = expected {
+                    if row.len() != n {
+                        count_errors.push((row_start, n, row.len()));
+                        continue;
+                    }
+                }
                 rec.rows.push(row);
                 rec.value_spans.push(spans);
             }
@@ -1520,11 +1579,12 @@ fn top_item(
     errs: &mut Vec<ParseError>,
     doc_binder_errors: &mut Vec<(usize, String)>,
     binder_chains: &mut Vec<super::ast::BinderChain>,
+    record_count_errors: &mut Vec<(usize, usize, usize)>,
 ) -> R<Item> {
     if peek_kw(input, "TableGroup") {
         table_group(input, base, errs, doc_binder_errors, binder_chains).map(Item::Grp)
     } else if peek_kw(input, "Table") {
-        table(input, base, errs).map(Item::Tbl)
+        table(input, base, errs, record_count_errors, doc_binder_errors).map(Item::Tbl)
     } else if peek_kw(input, "Project") {
         project(input, base, errs).map(Item::Prj)
     } else if peek_kw(input, "Ref") {
@@ -1574,7 +1634,13 @@ fn sticky_note(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<S
     })
 }
 
-fn table(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Table> {
+fn table(
+    input: &mut &str,
+    base: usize,
+    errs: &mut Vec<ParseError>,
+    count_errors: &mut Vec<(usize, usize, usize)>,
+    binder_out: &mut Vec<(usize, String)>,
+) -> R<Table> {
     let start = offset(input, base);
     if !eat(input, "Table") {
         return fail(offset(input, base), "expected 'Table'");
@@ -1661,7 +1727,7 @@ fn table(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Table> 
             // shown in the record view
             let rec_start = offset(input, base);
             let _ = eat(input, "Records");
-            match records_block(input, base, errs, rec_start) {
+            match records_block(input, base, errs, rec_start, count_errors, binder_out) {
                 Ok((_, rec)) => t.records = Some(rec),
                 Err(e) => {
                     errs.push(err_at(e.offset, &e.message));
@@ -1885,8 +1951,9 @@ fn ref_stmt(
 enum RNode {
     /// PrimaryExpression(VariableNode) — identifier or quoted variable
     Var { name: String, start: usize },
-    /// PrimaryExpression(LiteralNode) — number/string/color literal
-    Lit { start: usize },
+    /// PrimaryExpression(LiteralNode) — number/string literal (color
+    /// literals flagged: their isValidRecordValue rejects them)
+    Lit { start: usize, color: bool },
     Wildcard { start: usize },
     /// backtick function expression
     Func { start: usize },
@@ -1914,7 +1981,7 @@ impl RNode {
     fn start(&self) -> usize {
         match self {
             RNode::Var { start, .. }
-            | RNode::Lit { start }
+            | RNode::Lit { start, .. }
             | RNode::Wildcard { start }
             | RNode::Func { start }
             | RNode::Infix { start, .. }
@@ -1994,6 +2061,9 @@ fn ref_tokens(body: &str, base: usize) -> Vec<RTok> {
             b'\'' => {
                 let mut k = i + 1;
                 while k < b.len() && b[k] != b'\'' && b[k] != b'\n' {
+                    if b[k] == b'\\' {
+                        k += 1; // the escaped char rides along
+                    }
                     k += 1;
                 }
                 if k < b.len() && b[k] == b'\'' {
@@ -2006,6 +2076,9 @@ fn ref_tokens(body: &str, base: usize) -> Vec<RTok> {
             b'"' => {
                 let mut k = i + 1;
                 while k < b.len() && b[k] != b'"' && b[k] != b'\n' {
+                    if b[k] == b'\\' {
+                        k += 1;
+                    }
                     k += 1;
                 }
                 value = body[start + 1..k.min(body.len())].to_string();
@@ -2018,6 +2091,9 @@ fn ref_tokens(body: &str, base: usize) -> Vec<RTok> {
             b'`' => {
                 let mut k = i + 1;
                 while k < b.len() && b[k] != b'`' && b[k] != b'\n' {
+                    if b[k] == b'\\' {
+                        k += 1;
+                    }
                     k += 1;
                 }
                 if k < b.len() && b[k] == b'`' {
@@ -2285,13 +2361,21 @@ impl RParser<'_> {
 
     /// expression() — the application loop: callee then juxtaposed args.
     /// Their parse ALWAYS returns a FunctionApplicationNode (even for a
-    /// lone expression — callee only, empty args)
+    /// lone expression — callee only, empty args); an arg following
+    /// without a space logs their MISSING_SPACES
     fn application(&mut self) -> RNode {
         let start = self.peek().start;
         let callee = self.comma_expression();
         let mut args = Vec::new();
+        let mut prev_start = callee.start();
         while !self.should_stop() {
-            args.push(self.comma_expression());
+            if !self.prev().space_after {
+                self.errs
+                    .push(err_at(prev_start, "Expect a following space"));
+            }
+            let arg = self.comma_expression();
+            prev_start = arg.start();
+            args.push(arg);
         }
         RNode::App {
             callee: Box::new(callee),
@@ -2438,7 +2522,10 @@ impl RParser<'_> {
             }
             RTKind::Num | RTKind::Str | RTKind::Color => {
                 self.advance();
-                RNode::Lit { start: t.start }
+                RNode::Lit {
+                    start: t.start,
+                    color: t.kind == RTKind::Color,
+                }
             }
             RTKind::Quoted | RTKind::Ident => {
                 self.advance();
@@ -2847,6 +2934,30 @@ fn bind_fields_split(
 
 /// isValidPolicy (ref/validate.ts): a bare word among the FK actions —
 /// quoted strings are NOT policies
+/// isValidRecordValue (local_modules/records/validate.ts): empty fields,
+/// signed numbers, quoted strings, backtick expressions, the null/true/
+/// false keywords, and dotted enum references — everything else errs
+fn is_valid_record_value(v: &RNode) -> bool {
+    match v {
+        RNode::Empty { .. } => true,
+        RNode::Lit { color, .. } => !*color,
+        RNode::Func { .. } => true,
+        RNode::Var { name, .. } => {
+            matches!(name.to_ascii_lowercase().as_str(), "null" | "true" | "false")
+        }
+        // member access: enum field references (status.active) — any
+        // dotted chain passes the validate layer
+        RNode::Infix { op, .. } if op == "." => true,
+        // signed numbers: a prefix +/- on a literal
+        RNode::Prefix { op, expr, .. }
+            if matches!(op.as_str(), "+" | "-") && matches!(**expr, RNode::Lit { color: false, .. }) =>
+        {
+            true
+        }
+        _ => false,
+    }
+}
+
 fn is_valid_policy(occ: &super::ast::SettingOcc) -> bool {
     if occ.quoted || !occ.has_value {
         return false;
@@ -3440,6 +3551,7 @@ pub fn parse(src: &str) -> ParseOutput {
     let mut rest = src;
     let mut out = ParseOutput::default();
     let mut top_records: Vec<(Option<String>, TableRecords)> = Vec::new();
+    let mut record_count_errors: Vec<(usize, usize, usize)> = Vec::new();
     loop {
         ws(&mut rest);
         if rest.is_empty() {
@@ -3451,7 +3563,7 @@ pub fn parse(src: &str) -> ParseOutput {
             let mut attempt = rest;
             let _ = eat(&mut attempt, "Records");
             let rec_start = offset(&mut attempt, base);
-            match records_block(&mut attempt, base, &mut out.errors, rec_start) {
+            match records_block(&mut attempt, base, &mut out.errors, rec_start, &mut record_count_errors, &mut out.binder_errors) {
                 Ok((target, rec)) => {
                     rest = attempt;
                     top_records.push((target, rec));
@@ -3467,7 +3579,7 @@ pub fn parse(src: &str) -> ParseOutput {
             continue;
         }
         let mut attempt = rest;
-        match top_item(&mut attempt, base, &mut out.errors, &mut out.binder_errors, &mut out.binder_chains) {
+        match top_item(&mut attempt, base, &mut out.errors, &mut out.binder_errors, &mut out.binder_chains, &mut record_count_errors) {
             Ok(item) => {
                 rest = attempt;
                 match item {
@@ -3492,6 +3604,7 @@ pub fn parse(src: &str) -> ParseOutput {
     // Top-level records blocks attach to their table, which may be defined
     // later in the file (the target matches by name or alias; unmatched
     // targets are dropped — the diagram simply has nothing to show).
+    out.record_count_errors = record_count_errors;
     for (target, rec) in top_records {
         let Some(name) = target else {
             continue;
@@ -3862,8 +3975,8 @@ Table posts {
   status post_status
   created_at timestamp
   records (id, title, published, views, score, status, created_at) [example] {
-    1, 'First Post', true, 2.50, 1e3, draft, `now()`
-    2, 'It''s fine', false, -3, .5, NULL,
+    1, 'First Post', true, 2.50, 1e3, 'draft', `now()`
+    2, 'It\'s fine', false, -3, 0.5, NULL,
   }
 }
 "#;
@@ -3887,7 +4000,7 @@ Table posts {
                 Bool(true),
                 Number("2.50".into()),
                 Number("1e3".into()),
-                Ident("draft".into()),
+                Text("draft".into()),
                 Expr("now()".into()),
             ]
         );
@@ -3900,7 +4013,7 @@ Table posts {
                 Text("It's fine".into()),
                 Bool(false),
                 Number("-3".into()),
-                Number(".5".into()),
+                Number("0.5".into()),
                 Null,
                 Null,
             ]
@@ -3978,7 +4091,24 @@ Table t {
 }
 "#;
         let out = parse(src);
-        assert_eq!(out.errors.len(), 1, "{:?}", out.errors);
+        // their extractDataFromRow: the row is dropped and the count
+        // error is interpret-layer ("Expected 2 values but got 3",
+        // emitted only while the file is otherwise clean)
+        assert!(out.errors.is_empty(), "{:?}", out.errors);
+        assert_eq!(
+            out.record_count_errors,
+            vec![(src.find("2, 'too'").unwrap(), 2, 3)]
+        );
+        let d = crate::dbml::validate::validate_with_parse(
+            &out.doc,
+            src,
+            &out.binder_errors,
+            &out.binder_chains,
+            &out.record_count_errors,
+        );
+        assert!(d
+            .iter()
+            .any(|x| x.message == "Expected 2 values but got 3"), "{d:?}");
         let rec = tables(&out)[0].records.as_ref().unwrap();
         assert_eq!(
             rec.rows,

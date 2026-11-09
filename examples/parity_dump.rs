@@ -64,6 +64,7 @@ fn dump_path(path: &str) -> Case {
         &src,
         &out.binder_errors,
         &out.binder_chains,
+        &out.record_count_errors,
     );
     let mut diagnostics: Vec<Diagnostic> = out
         .errors

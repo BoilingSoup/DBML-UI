@@ -14,6 +14,7 @@ fn dump_path(path: &str) -> Value {
             &src,
             &out.binder_errors,
             &out.binder_chains,
+            &out.record_count_errors,
         )
         .iter()
         .any(|d| d.severity == dbml_ui::dbml::validate::Severity::Error);

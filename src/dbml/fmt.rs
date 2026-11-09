@@ -645,7 +645,16 @@ fn render(doc: &Document, cm: &CommentMap) -> String {
                 if let Some(rec) = &t.records {
                     let mut blob = String::from("records");
                     if !rec.columns.is_empty() {
-                        blob.push_str(&format!(" ({})", rec.columns.join(", ")));
+                        // quoted when the name is not a plain identifier —
+                        // an unquoted two-word name would not re-parse
+                        blob.push_str(&format!(
+                            " ({})",
+                            rec.columns
+                                .iter()
+                                .map(|c| ident(c))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ));
                     }
                     if rec.example {
                         blob.push_str(" [example]");
