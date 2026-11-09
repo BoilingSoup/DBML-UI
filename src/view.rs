@@ -1560,10 +1560,39 @@ fn paint_tab<R: iced::advanced::graphics::geometry::Renderer>(
         }
 }
 
+/// DBML_UI_STRIP_DUMP: render the tab strip to a PNG headlessly (the
+/// tiny-skia renderer — same geometry pipeline, software path). The
+/// asterisk hunt compares these frames against the live wgpu output.
+pub fn dump_strip_frame(app: &App, path: &str) {
+    use iced_tiny_skia::{Renderer, graphics::geometry::Renderer as _};
+    let bounds = Rectangle::new(Point::new(0.0, 0.0), Size::new(400.0, STRIP_H));
+    let mut renderer = Renderer::new(Font::DEFAULT, 12.0.into());
+    let mut frame = iced::widget::canvas::Frame::new(&renderer, bounds.size());
+    paint_tab_strip(&mut frame, app, bounds, None);
+    renderer.draw_geometry(frame.into_geometry());
+    let w = bounds.width as u32;
+    let h = bounds.height as u32;
+    let mut pixmap = tiny_skia::Pixmap::new(w, h).expect("pixmap");
+    let mut mask = tiny_skia::Mask::new(w, h).expect("mask");
+    let viewport = iced_tiny_skia::graphics::Viewport::with_physical_size(
+        Size::new(w, h),
+        1.0,
+    );
+    renderer.draw(
+        &mut pixmap.as_mut(),
+        &mut mask,
+        &viewport,
+        &[bounds],
+        Color::from_rgb8(1, 2, 3),
+        &[] as &[&str],
+    );
+    let _ = pixmap.save_png(path);
+}
+
 /// The tab strip's full paint — extracted from the canvas program so the
 /// pixel-level tests can drive it headlessly (the tiny-skia frame is just
 /// another geometry Backend).
-fn paint_tab_strip<R: iced::advanced::graphics::geometry::Renderer>(
+pub fn paint_tab_strip<R: iced::advanced::graphics::geometry::Renderer>(
     frame: &mut canvas::Frame<R>,
     app: &App,
     _bounds: Rectangle,
@@ -4951,9 +4980,11 @@ mod tab_drag_cover_tests {
         // the REAL gesture through the message pipeline: two tabs, both
         // modified; press the RIGHT tab and drag it LEFT — the covered
         // (left) tab's asterisk must stay visible from first contact
-        // until its remnant is truly gone
+        // until its remnant is truly gone. The diff runs between two
+        // apps swept IDENTICALLY (marked vs unmodified), so the only
+        // differing pixels ARE the marks.
         use crate::app::update;
-        let marked = || {
+        let build = |modified: bool| {
             let mut app = App::with_source("Table a { id integer }".to_string());
             let _ = update(&mut app, Message::NewTab);
             for (i, t) in [
@@ -4963,68 +4994,89 @@ mod tab_drag_cover_tests {
             .into_iter()
             .enumerate()
             {
-                app.tabs[i].editor.set_text(t);
+                let t = if modified {
+                    t.to_string()
+                } else {
+                    t.trim_end_matches(" // edit").to_string()
+                };
+                app.tabs[i].editor.set_text(&t);
+                // the control's tabs must be UNMODIFIED (is_modified
+                // compares the buffer against saved_text — a blank tab's
+                // saved_text is empty, so sync it or the control draws
+                // marks too and the diff is blind)
+                if !modified {
+                    app.tabs[i].saved_text = t;
+                }
             }
             app.focus = crate::app::Focus::Editor;
             app
         };
-        let plain = || {
-            let mut app = App::with_source("Table a { id integer }".to_string());
-            let _ = update(&mut app, Message::NewTab);
-            for (i, t) in ["Table a { id integer }", "Table b { id integer }"]
-                .into_iter()
-                .enumerate()
-            {
-                app.tabs[i].editor.set_text(t);
-            }
-            app.focus = crate::app::Focus::Editor;
-            app
-        };
-
-        let mut app = marked();
+        let mut app = build(true);
+        let mut plain = build(false);
         // press the right tab at its center (window coords), then sweep
         // the pointer left through the whole overlap; every update ticks
         // the slide anims like the real loop does
         let _ = update(&mut app, Message::MouseMovedWindow(STRIP_LEFT + TAB_SLOT_W + 80.0, 12.0));
+        let _ = update(&mut plain, Message::MouseMovedWindow(STRIP_LEFT + TAB_SLOT_W + 80.0, 12.0));
         let _ = update(&mut app, Message::TabPressed(1));
-        let mut stage_ink = Vec::new();
+        let _ = update(&mut plain, Message::TabPressed(1));
         // window x: the dragged tab's left edge = window_x - grab_dx where
         // grab_dx = press_x - 1*SLOT = (170+80) - 164 = 86; sweep the drag
         // edge from first contact (166) to the covered tab's left edge (6)
         let grab_dx = (STRIP_LEFT + TAB_SLOT_W + 80.0) - TAB_SLOT_W;
         let mut wx = STRIP_LEFT + TAB_W + grab_dx; // first contact
+        let mut failures = Vec::new();
         while wx > STRIP_LEFT + 4.0 {
             let _ = update(&mut app, Message::MouseMovedWindow(wx, 12.0));
-            let (d, min_x) = asterisk_diff(&app, &plain());
-            let Some(drag) = app.tab_drag.as_ref() else {
-                wx -= 10.0;
-                continue;
-            };
-            let off = app.tab_anim.get(drag.from).copied().unwrap_or(0.0);
-            let drag_left = STRIP_LEFT + drag.from as f32 * TAB_SLOT_W + off;
-            stage_ink.push((wx, drag_left, d, min_x));
+            let _ = update(&mut plain, Message::MouseMovedWindow(wx, 12.0));
+            let (d, min_x) = asterisk_diff(&app, &plain);
+            if let Some(drag) = app.tab_drag.as_ref() {
+                let off = app.tab_anim.get(drag.from).copied().unwrap_or(0.0);
+                let drag_left = STRIP_LEFT + drag.from as f32 * TAB_SLOT_W + off;
+                let states: Vec<String> = app
+                    .tabs
+                    .iter()
+                    .map(|t| {
+                        format!(
+                            "{}({})",
+                            t.title(),
+                            if t.is_modified() { "*" } else { "-" }
+                        )
+                    })
+                    .collect();
+                println!(
+                    "PROBE wx={wx:.0} drag_left={drag_left:.0} ink={d} at_x={min_x} tabs={} active={}",
+                    states.join(", "),
+                    app.active
+                );
+                // the marks must differ somewhere while the tabs' visual
+                // states are otherwise identical
+                if d < 8 {
+                    failures.push(format!("wx={wx:.0} drag_left={drag_left:.0} ink={d}"));
+                }
+            }
             wx -= 10.0;
         }
-        for (wx, drag_left, d, min_x) in &stage_ink {
-            println!("PROBE wx={wx:.0} drag_left={drag_left:.0} ink={d} at_x={min_x}");
-        }
-        // the mark must draw at first contact and stay drawn while any
-        // remnant is visible
-        let (first_wx, _, first_d, _) = stage_ink[0];
-        assert!(first_d > 8, "the mark draws at first contact");
-        for (wx, drag_left, d, min_x) in &stage_ink[1..] {
-            // once the remnant is gone (the covered tab fully right of the
-            // drag edge or fully under it), zero ink is correct
-            let remnant_visible = *drag_left > STRIP_LEFT + 2.0
-                && *drag_left < STRIP_LEFT + TAB_SLOT_W - 2.0;
-            if remnant_visible {
-                assert!(
-                    *d > 8,
-                    "the mark must ride the visible remnant at wx={wx} (ink={d})"
-                );
-            }
-            let _ = min_x;
-        }
+        // dump the final frames BEFORE the assert so a failure still
+        // leaves the evidence on disk
+        let _ = render_strip(&app).save_png("/tmp/strip_marked_post.png");
+        let _ = render_strip(&plain).save_png("/tmp/strip_plain_post.png");
+        // also dump the mid-slide stage
+        let mut app2 = build(true);
+        let mut plain2 = build(false);
+        let _ = update(&mut app2, Message::MouseMovedWindow(STRIP_LEFT + TAB_SLOT_W + 80.0, 12.0));
+        let _ = update(&mut plain2, Message::MouseMovedWindow(STRIP_LEFT + TAB_SLOT_W + 80.0, 12.0));
+        let _ = update(&mut app2, Message::TabPressed(1));
+        let _ = update(&mut plain2, Message::TabPressed(1));
+        let _ = update(&mut app2, Message::MouseMovedWindow(82.0, 12.0));
+        let _ = update(&mut plain2, Message::MouseMovedWindow(82.0, 12.0));
+        let _ = render_strip(&app2).save_png("/tmp/strip_marked_mid.png");
+        let _ = render_strip(&plain2).save_png("/tmp/strip_plain_mid.png");
+        assert!(
+            failures.is_empty(),
+            "the covered tab's mark vanishes during the drag: {}",
+            failures.join("; ")
+        );
     }
 }
 

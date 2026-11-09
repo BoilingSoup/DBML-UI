@@ -20,6 +20,7 @@ iced_tiny_skia = { path = "vendor/iced_tiny_skia" }
 iced_wgpu = { path = "vendor/iced_wgpu" }
 
 [dependencies]
+iced_tiny_skia = { path = "vendor/iced_tiny_skia" }
 serde_json = "1"
 # measured text widths for the diagram's icon clusters: shape through the
 # same stack iced renders with (version pinned to iced's own copy)

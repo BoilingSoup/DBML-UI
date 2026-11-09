@@ -847,6 +847,8 @@ pub struct App {
     pub maximized: Maximized,
     /// An active overlay-scrollbar drag (see `ScrollbarDrag`).
     pub scrollbar_drag: Option<ScrollbarDrag>,
+    /// DBML_UI_STRIP_DUMP frame sequence (the drag-render hunt).
+    pub tab_dump_seq: usize,
     /// Persisted preferences (vim/Regular) and the recent-files list.
     pub config: crate::config::Config,
     /// Animation clock in seconds; drives the hover glow's breathing.
@@ -989,6 +991,7 @@ impl App {
             focus: Focus::Editor,
             maximized: Maximized::None,
             scrollbar_drag: None,
+            tab_dump_seq: 0,
             config: crate::config::Config::default(),
             anim_clock: 0.0,
             chain_save_as: false,
@@ -3620,6 +3623,18 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
             // reordering while you drag, then drops on any release)
             if app.tab_drag.is_some() {
                 app.tab_drag_moved(x - STRIP_LEFT + app.tab_scroll);
+                // DBML_UI_STRIP_DUMP=1: archive the strip's rendered frame
+                // on every drag move (the wgpu-vs-fallback asterisk hunt —
+                // the frames land in /tmp/dbml-ui-strip/)
+                if std::env::var_os("DBML_UI_STRIP_DUMP").is_some() {
+                    std::fs::create_dir_all("/tmp/dbml-ui-strip").ok();
+                    let n = app.tab_dump_seq;
+                    app.tab_dump_seq += 1;
+                    crate::view::dump_strip_frame(
+                        app,
+                        &format!("/tmp/dbml-ui-strip/{n:03}.png"),
+                    );
+                }
             }
             // a Regular-mode selection drag also follows the pointer
             // window-wide: dragging below the pane or into the diagram
