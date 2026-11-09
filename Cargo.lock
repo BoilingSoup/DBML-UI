@@ -823,6 +823,7 @@ dependencies = [
  "arboard",
  "cosmic-text",
  "iced",
+ "iced_tiny_skia",
  "image",
  "log",
  "regex",

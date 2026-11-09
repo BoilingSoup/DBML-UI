@@ -1424,33 +1424,162 @@ impl TabStrip<'_> {
     }
 }
 
-impl canvas::Program<Message> for TabStrip<'_> {
-    type State = ();
 
-    fn draw(
-        &self,
-        _state: &Self::State,
-        renderer: &iced::Renderer,
-        _theme: &iced::Theme,
-        bounds: Rectangle,
-        cursor: iced::mouse::Cursor,
-    ) -> Vec<canvas::Geometry> {
-        let mut frame = canvas::Frame::new(renderer, bounds.size());
-        frame.fill_rectangle(Point::ORIGIN, bounds.size(), theme::BG);
-        let pointer = cursor
-            .position()
-            .map(|c| Point::new(c.x - bounds.x, c.y - bounds.y));
-        let hover_i = pointer.and_then(|l| self.tab_at(l.x, l.y));
+/// One tab's full paint (fill, border, title, unsaved asterisk, close
+/// glyph) — shared by the normal path and the clipped-sliver path.
+fn paint_tab<R: iced::advanced::graphics::geometry::Renderer>(
+    frame: &mut canvas::Frame<R>,
+    app: &App,
+    i: usize,
+    rect: Rectangle,
+    active: bool,
+    on_top: bool,
+    hovered: bool,
+    close_hover: bool,
+    width: f32,
+    asterisk_floor: f32,
+) {
+        let tab = &app.tabs[i];
+        if active || on_top {
+            // Chrome's teardrop: the shape runs flush to the strip's
+            // bottom line, where its PANEL fill merges into the pane
+            // below; the stroke stays open across that merge
+            let path = teardrop_path(
+                rect.x,
+                rect.x + rect.width,
+                rect.y,
+                STRIP_H,
+                7.0,
+                6.0,
+            );
+            frame.fill(&path, theme::PANEL);
+            frame.stroke(
+                &path,
+                canvas::Stroke {
+                    style: theme::BORDER.into(),
+                    width: 1.0,
+                    ..Default::default()
+                },
+            );
+        } else if hovered {
+            // Chrome's inactive hover: an inset stadium pill
+            let pill = Rectangle::new(
+                Point::new(rect.x, 3.0),
+                Size::new(rect.width, STRIP_H - 6.0),
+            );
+            frame.fill(
+                &canvas::Path::rounded_rectangle(
+                    pill.position(),
+                    pill.size(),
+                    iced::border::Radius::from(7.0),
+                ),
+                Color::from_rgba(0.11, 0.129, 0.157, 0.5),
+            );
+        }
+        if close_hover {
+            // Chrome's close button: a round disc behind the ×
+            let disc = close_disc(rect.x, width, rect.center_y());
+            let c = Point::new(disc.center_x(), rect.center_y());
+            frame.fill(
+                &canvas::Path::circle(c, 8.5),
+                Color::from_rgba(1.0, 1.0, 1.0, 0.09),
+            );
+        }
+        let mut title = tab.title();
+        if tab.liveness != FileLiveness::InSync {
+            // disk problem (conflict / deleted / moved): the durable
+            // signal; the toast is the moment signal
+            title = format!("! {title}");
+        }
+        // during the open grow the content fades in past half width
+        // (canvas text can't clip to the growing rect)
+        let grow = (width / TAB_W).clamp(0.0, 1.0);
+        if grow > 0.5 {
+            let mut base = if active { theme::TEXT } else { theme::DIM };
+            base.a = grow;
+            // the unsaved marker: an eight-spoked asterisk DRAWN on
+            // the canvas (the mono face has no ✳ glyph — text renders
+            // a ? for it) — vertically centered on the tab text's
+            // line, in its own slot so the label never shifts
+            if tab.is_modified() {
+                // +0.5 optical: the drawn spokes center a half-pixel
+                // high of the × glyph's ink (measured off the strip).
+                // A drag-covered tab anchors the mark to its visible
+                // remnant (never under the dragged tab): it disappears
+                // only when the remnant itself is gone — the same
+                // rule the clipped title text follows — instead of
+                // vanishing the moment the sweep passes its slot.
+                let c = Point::new((rect.x + 15.0).max(asterisk_floor), rect.center_y() + 0.5);
+                let r = 4.5;
+                for i in 0..4 {
+                    let a = i as f32 * std::f32::consts::FRAC_PI_4;
+                    let (dx, dy) = (r * a.cos(), r * a.sin());
+                    frame.stroke(
+                        &canvas::Path::line(
+                            Point::new(c.x - dx, c.y - dy),
+                            Point::new(c.x + dx, c.y + dy),
+                        ),
+                        canvas::Stroke {
+                            style: base.into(),
+                            width: 1.4,
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
+            frame.fill_text(canvas::Text {
+                // 20px inset so the label doesn't hug the tab's left
+                // edge; vertically CENTERED on the same line the ×
+                // centers on (the old 2px optical lift lifted the
+                // label high of the glyph — the eye catches that)
+                content: truncate_title(&title, 16),
+                // +1.5 optical: the font centers the ink high of the
+                // × glyph's band (measured off the strip)
+                position: Point::new(rect.x + 25.0, rect.center_y() + 1.0),
+                color: base,
+                size: 12.0.into(),
+                vertical_alignment: iced::alignment::Vertical::Center,
+                ..Default::default()
+            });
+            frame.fill_text(canvas::Text {
+                content: "\u{00d7}".to_string(),
+                // CENTER-aligned: the position is the click zone's
+                // center — with the old Left default the glyph's left
+                // edge sat here and it overran the tab's right side
+                position: Point::new(rect.x + width - 19.0, rect.center_y()),
+                color: if close_hover {
+                    Color { a: grow, ..theme::TEXT }
+                } else {
+                    Color { a: grow, ..theme::DIM }
+                },
+                size: 14.0.into(),
+                horizontal_alignment: iced::alignment::Horizontal::Center,
+                vertical_alignment: iced::alignment::Vertical::Center,
+                ..Default::default()
+            });
+        }
+}
+
+/// The tab strip's full paint — extracted from the canvas program so the
+/// pixel-level tests can drive it headlessly (the tiny-skia frame is just
+/// another geometry Backend).
+fn paint_tab_strip<R: iced::advanced::graphics::geometry::Renderer>(
+    frame: &mut canvas::Frame<R>,
+    app: &App,
+    _bounds: Rectangle,
+    pointer: Option<Point>,
+) {
+    let hover_i = pointer.and_then(|l| tab_at(app, l.x, l.y));
         // the scroll shift: strip-space content x moves LEFT by this much
         // (the slots, ghosts, separators and the + all live in content
         // space; hit tests add it back)
-        let scroll = self.app.tab_scroll;
+        let scroll = app.tab_scroll;
         // Chrome's short separators between tab slots, hidden around the
         // active tab (its merge makes one redundant) and the dragged tab
-        let dragged_now = self.app.tab_drag.as_ref().map(|d| d.from);
-        if self.app.tabs.len() > 1 {
-            for i in 1..self.app.tabs.len() {
-                if !separator_visible(i, self.app.active, dragged_now) {
+        let dragged_now = app.tab_drag.as_ref().map(|d| d.from);
+        if app.tabs.len() > 1 {
+            for i in 1..app.tabs.len() {
+                if !separator_visible(i, app.active, dragged_now) {
                     continue;
                 }
                 // centered in the 4px gap before the slot
@@ -1468,11 +1597,11 @@ impl canvas::Program<Message> for TabStrip<'_> {
         // the dragged tab draws LAST and OPAQUE (Chrome): while it overlaps
         // a displaced neighbor mid-slide, the neighbor's text must not
         // bleed through it
-        let mut order: Vec<usize> = (0..self.app.tabs.len()).collect();
+        let mut order: Vec<usize> = (0..app.tabs.len()).collect();
         // closing ghosts draw BEHIND everything (Chromium z-orders the
         // closing tab below): a dimming slab shrinking in place, its title
         // fading out with the width (canvas text can't clip to a rect)
-        for g in &self.app.tab_closing {
+        for g in &app.tab_closing {
             let rect = Rectangle::new(
                 Point::new(STRIP_LEFT + g.x - scroll, 2.0),
                 Size::new(g.w, STRIP_H - 4.0),
@@ -1501,7 +1630,7 @@ impl canvas::Program<Message> for TabStrip<'_> {
         // Chrome's drag z-order: the dragged tab draws LAST (on top) and
         // opaque, so a displaced tab sliding beneath is hidden; everything
         // else draws inactive-first, active last as before.
-        let dragged = self.app.tab_drag.as_ref().map(|d| d.from);
+        let dragged = app.tab_drag.as_ref().map(|d| d.from);
         // the dragged tab's drawn rect: any tab intersecting it is HIDDEN
         // (skipped entirely) while the drag is over it. Draw order cannot
         // do this: iced flattens one canvas widget's fills into a single
@@ -1509,158 +1638,29 @@ impl canvas::Program<Message> for TabStrip<'_> {
         // dragged tab's opaque fill covers a neighbor's body but never its
         // title — the overlapped tab must simply not draw.
         let drag_rect = dragged.map(|i| {
-            let off = self.app.tab_anim.get(i).copied().unwrap_or(0.0);
+            let off = app.tab_anim.get(i).copied().unwrap_or(0.0);
             Rectangle::new(
                 Point::new(STRIP_LEFT + i as f32 * TAB_SLOT_W + off - scroll, 2.0),
                 Size::new(TAB_W, STRIP_H - 4.0),
             )
         });
-        order.sort_by_key(|&i| i == self.app.active || Some(i) == dragged);
+        order.sort_by_key(|&i| i == app.active || Some(i) == dragged);
         // one tab's full paint (fill, border, title, close glyph), shared
         // by the normal path and the clipped-sliver path below
-        let paint_tab = |frame: &mut canvas::Frame,
-                         i: usize,
-                         rect: Rectangle,
-                         active: bool,
-                         on_top: bool,
-                         hovered: bool,
-                         close_hover: bool,
-                         width: f32,
-                         asterisk_floor: f32| {
-            let tab = &self.app.tabs[i];
-            if active || on_top {
-                // Chrome's teardrop: the shape runs flush to the strip's
-                // bottom line, where its PANEL fill merges into the pane
-                // below; the stroke stays open across that merge
-                let path = teardrop_path(
-                    rect.x,
-                    rect.x + rect.width,
-                    rect.y,
-                    STRIP_H,
-                    7.0,
-                    6.0,
-                );
-                frame.fill(&path, theme::PANEL);
-                frame.stroke(
-                    &path,
-                    canvas::Stroke {
-                        style: theme::BORDER.into(),
-                        width: 1.0,
-                        ..Default::default()
-                    },
-                );
-            } else if hovered {
-                // Chrome's inactive hover: an inset stadium pill
-                let pill = Rectangle::new(
-                    Point::new(rect.x, 3.0),
-                    Size::new(rect.width, STRIP_H - 6.0),
-                );
-                frame.fill(
-                    &canvas::Path::rounded_rectangle(
-                        pill.position(),
-                        pill.size(),
-                        iced::border::Radius::from(7.0),
-                    ),
-                    Color::from_rgba(0.11, 0.129, 0.157, 0.5),
-                );
-            }
-            if close_hover {
-                // Chrome's close button: a round disc behind the ×
-                let disc = close_disc(rect.x, width, rect.center_y());
-                let c = Point::new(disc.center_x(), rect.center_y());
-                frame.fill(
-                    &canvas::Path::circle(c, 8.5),
-                    Color::from_rgba(1.0, 1.0, 1.0, 0.09),
-                );
-            }
-            let mut title = tab.title();
-            if tab.liveness != FileLiveness::InSync {
-                // disk problem (conflict / deleted / moved): the durable
-                // signal; the toast is the moment signal
-                title = format!("! {title}");
-            }
-            // during the open grow the content fades in past half width
-            // (canvas text can't clip to the growing rect)
-            let grow = (width / TAB_W).clamp(0.0, 1.0);
-            if grow > 0.5 {
-                let mut base = if active { theme::TEXT } else { theme::DIM };
-                base.a = grow;
-                // the unsaved marker: an eight-spoked asterisk DRAWN on
-                // the canvas (the mono face has no ✳ glyph — text renders
-                // a ? for it) — vertically centered on the tab text's
-                // line, in its own slot so the label never shifts
-                if tab.is_modified() {
-                    // +0.5 optical: the drawn spokes center a half-pixel
-                    // high of the × glyph's ink (measured off the strip).
-                    // A drag-covered tab anchors the mark to its visible
-                    // remnant (never under the dragged tab): it disappears
-                    // only when the remnant itself is gone — the same
-                    // rule the clipped title text follows — instead of
-                    // vanishing the moment the sweep passes its slot.
-                    let c = Point::new((rect.x + 15.0).max(asterisk_floor), rect.center_y() + 0.5);
-                    let r = 4.5;
-                    for i in 0..4 {
-                        let a = i as f32 * std::f32::consts::FRAC_PI_4;
-                        let (dx, dy) = (r * a.cos(), r * a.sin());
-                        frame.stroke(
-                            &canvas::Path::line(
-                                Point::new(c.x - dx, c.y - dy),
-                                Point::new(c.x + dx, c.y + dy),
-                            ),
-                            canvas::Stroke {
-                                style: base.into(),
-                                width: 1.4,
-                                ..Default::default()
-                            },
-                        );
-                    }
-                }
-                frame.fill_text(canvas::Text {
-                    // 20px inset so the label doesn't hug the tab's left
-                    // edge; vertically CENTERED on the same line the ×
-                    // centers on (the old 2px optical lift lifted the
-                    // label high of the glyph — the eye catches that)
-                    content: truncate_title(&title, 16),
-                    // +1.5 optical: the font centers the ink high of the
-                    // × glyph's band (measured off the strip)
-                    position: Point::new(rect.x + 25.0, rect.center_y() + 1.0),
-                    color: base,
-                    size: 12.0.into(),
-                    vertical_alignment: iced::alignment::Vertical::Center,
-                    ..Default::default()
-                });
-                frame.fill_text(canvas::Text {
-                    content: "\u{00d7}".to_string(),
-                    // CENTER-aligned: the position is the click zone's
-                    // center — with the old Left default the glyph's left
-                    // edge sat here and it overran the tab's right side
-                    position: Point::new(rect.x + width - 19.0, rect.center_y()),
-                    color: if close_hover {
-                        Color { a: grow, ..theme::TEXT }
-                    } else {
-                        Color { a: grow, ..theme::DIM }
-                    },
-                    size: 14.0.into(),
-                    horizontal_alignment: iced::alignment::Horizontal::Center,
-                    vertical_alignment: iced::alignment::Vertical::Center,
-                    ..Default::default()
-                });
-            }
-        };
         for i in order {
-            let off = self.app.tab_anim.get(i).copied().unwrap_or(0.0);
-            let active = i == self.app.active;
+            let off = app.tab_anim.get(i).copied().unwrap_or(0.0);
+            let active = i == app.active;
             let on_top = Some(i) == dragged;
             let x = STRIP_LEFT + i as f32 * TAB_SLOT_W + off - scroll;
             // the open animation: the newest tab grows rightward from the
             // preceding tab's edge (Chromium's left-glued sliver)
-            let width = if self.app.tab_opening.is_some() && i + 1 == self.app.tabs.len() {
-                self.app.tab_opening.unwrap_or(TAB_W)
+            let width = if app.tab_opening.is_some() && i + 1 == app.tabs.len() {
+                app.tab_opening.unwrap_or(TAB_W)
             } else {
                 TAB_W
             };
             let rect = Rectangle::new(Point::new(x, 2.0), Size::new(width, STRIP_H - 4.0));
-            let hovered = hover_i == Some(i) && self.app.tab_drag.is_none();
+            let hovered = hover_i == Some(i) && app.tab_drag.is_none();
             // the × disc lights up when the pointer sits in its click zone
             let close_hover = pointer.is_some_and(|p| {
                 hovered && p.x >= x + width - 28.0 && p.x <= x + width - 10.0
@@ -1676,7 +1676,8 @@ impl canvas::Program<Message> for TabStrip<'_> {
             }) };
             match clipped_by {
                 None => paint_tab(
-                    &mut frame,
+                    &mut *frame,
+                    app,
                     i,
                     rect,
                     active,
@@ -1701,6 +1702,7 @@ impl canvas::Program<Message> for TabStrip<'_> {
                             );
                             paint_tab(
                                 f,
+                                app,
                                 i,
                                 local,
                                 active,
@@ -1723,11 +1725,11 @@ impl canvas::Program<Message> for TabStrip<'_> {
         // right-most tab — sliding with the tabs on open/close (its
         // offset eases alongside the slots', so a sliding tab never
         // overlaps a snapped-in-place +)
-        let cx = self.plus_center_x() - scroll + self.app.plus_anim;
+        let cx = plus_center_x(app) - scroll + app.plus_anim;
         let c = Point::new(cx, STRIP_H * 0.5);
         let plus_hover = pointer.is_some_and(|p| {
             (p.x - c.x).abs() <= 11.0 && (p.y - c.y).abs() <= 11.0
-        }) && self.app.tab_drag.is_none();
+        }) && app.tab_drag.is_none();
         if plus_hover {
             frame.fill(
                 &canvas::Path::circle(c, 10.5),
@@ -1745,8 +1747,47 @@ impl canvas::Program<Message> for TabStrip<'_> {
             vertical_alignment: iced::alignment::Vertical::Center,
             ..Default::default()
         });
+}
+
+/// The + glyph/disc center: 8px past the last tab's right edge
+/// (Chrome tucks it right up against the strip's last tab), in
+
+fn plus_center_x(app: &App) -> f32 {
+    STRIP_LEFT + app.tabs.len() as f32 * TAB_SLOT_W + 8.0
+}
+
+fn tab_at(app: &App, y: f32, x: f32) -> Option<usize> {
+    if !(0.0..STRIP_H).contains(&y) {
+        return None;
+    }
+    let x = x + app.tab_scroll;
+    let i = ((x - STRIP_LEFT) / TAB_SLOT_W).floor();
+    if !(0.0..app.tabs.len() as f32).contains(&i) {
+        return None;
+    }
+    let i = i as usize;
+    (0.0..TAB_W).contains(&(x - STRIP_LEFT - i as f32 * TAB_SLOT_W)).then_some(i)
+}
+impl canvas::Program<Message> for TabStrip<'_> {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &iced::Renderer,
+        _theme: &iced::Theme,
+        bounds: Rectangle,
+        cursor: iced::mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        frame.fill_rectangle(Point::ORIGIN, bounds.size(), theme::BG);
+        let pointer = cursor
+            .position()
+            .map(|c| Point::new(c.x - bounds.x, c.y - bounds.y));
+        paint_tab_strip(&mut frame, self.app, bounds, pointer);
         vec![frame.into_geometry()]
     }
+
 
     fn update(
         &self,
@@ -4853,6 +4894,136 @@ mod tab_drag_cover_tests {
                 );
             }
             x += 4.0;
+        }
+    }
+
+    /// Render the strip headlessly; return the rendered pixmap.
+    fn render_strip(app: &App) -> tiny_skia::Pixmap {
+        use iced_tiny_skia::{Renderer, graphics::geometry::Renderer as _};
+        let w = 400usize;
+        let h = (STRIP_H as usize).max(1);
+        let bounds = Rectangle::new(Point::new(0.0, 0.0), Size::new(w as f32, h as f32));
+        let mut renderer = Renderer::new(Font::DEFAULT, 12.0.into());
+        let mut frame = iced::widget::canvas::Frame::new(&renderer, bounds.size());
+        paint_tab_strip(&mut frame, app, bounds, None);
+        renderer.draw_geometry(frame.into_geometry());
+        let mut pixmap = tiny_skia::Pixmap::new(w as u32, h as u32).expect("pixmap");
+        pixmap.fill(tiny_skia::Color::from_rgba8(1, 2, 3, 255));
+        let mut mask = tiny_skia::Mask::new(w as u32, h as u32).expect("mask");
+        let viewport = iced_tiny_skia::graphics::Viewport::with_physical_size(
+            Size::new(w as u32, h as u32),
+            1.0,
+        );
+        renderer.draw(
+            &mut pixmap.as_mut(),
+            &mut mask,
+            &viewport,
+            &[bounds],
+            Color::from_rgb8(1, 2, 3),
+            &[] as &[&str],
+        );
+        pixmap
+    }
+
+    /// Differing pixels between two renders across the whole strip —
+    /// the mark's ink wherever it rides.
+    fn asterisk_diff(app_marked: &App, app_plain: &App) -> (usize, i32) {
+        let a = render_strip(app_marked);
+        let b = render_strip(app_plain);
+        let (w, h) = (a.width() as i32, a.height() as i32);
+        let mut hits = 0usize;
+        let mut min_x = i32::MAX;
+        for y in 0..h {
+            for x in 0..w {
+                let pa = a.pixel(x as u32, y as u32).unwrap();
+                let pb = b.pixel(x as u32, y as u32).unwrap();
+                if pa != pb {
+                    hits += 1;
+                    min_x = min_x.min(x);
+                }
+            }
+        }
+        (hits, if hits > 0 { min_x } else { -1 })
+    }
+
+    #[test]
+    fn covered_tab_asterisk_survives_first_contact_pixels() {
+        // the REAL gesture through the message pipeline: two tabs, both
+        // modified; press the RIGHT tab and drag it LEFT — the covered
+        // (left) tab's asterisk must stay visible from first contact
+        // until its remnant is truly gone
+        use crate::app::update;
+        let marked = || {
+            let mut app = App::with_source("Table a { id integer }".to_string());
+            let _ = update(&mut app, Message::NewTab);
+            for (i, t) in [
+                "Table a { id integer } // edit",
+                "Table b { id integer } // edit",
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                app.tabs[i].editor.set_text(t);
+            }
+            app.focus = crate::app::Focus::Editor;
+            app
+        };
+        let plain = || {
+            let mut app = App::with_source("Table a { id integer }".to_string());
+            let _ = update(&mut app, Message::NewTab);
+            for (i, t) in ["Table a { id integer }", "Table b { id integer }"]
+                .into_iter()
+                .enumerate()
+            {
+                app.tabs[i].editor.set_text(t);
+            }
+            app.focus = crate::app::Focus::Editor;
+            app
+        };
+
+        let mut app = marked();
+        // press the right tab at its center (window coords), then sweep
+        // the pointer left through the whole overlap; every update ticks
+        // the slide anims like the real loop does
+        let _ = update(&mut app, Message::MouseMovedWindow(STRIP_LEFT + TAB_SLOT_W + 80.0, 12.0));
+        let _ = update(&mut app, Message::TabPressed(1));
+        let mut stage_ink = Vec::new();
+        // window x: the dragged tab's left edge = window_x - grab_dx where
+        // grab_dx = press_x - 1*SLOT = (170+80) - 164 = 86; sweep the drag
+        // edge from first contact (166) to the covered tab's left edge (6)
+        let grab_dx = (STRIP_LEFT + TAB_SLOT_W + 80.0) - TAB_SLOT_W;
+        let mut wx = STRIP_LEFT + TAB_W + grab_dx; // first contact
+        while wx > STRIP_LEFT + 4.0 {
+            let _ = update(&mut app, Message::MouseMovedWindow(wx, 12.0));
+            let (d, min_x) = asterisk_diff(&app, &plain());
+            let Some(drag) = app.tab_drag.as_ref() else {
+                wx -= 10.0;
+                continue;
+            };
+            let off = app.tab_anim.get(drag.from).copied().unwrap_or(0.0);
+            let drag_left = STRIP_LEFT + drag.from as f32 * TAB_SLOT_W + off;
+            stage_ink.push((wx, drag_left, d, min_x));
+            wx -= 10.0;
+        }
+        for (wx, drag_left, d, min_x) in &stage_ink {
+            println!("PROBE wx={wx:.0} drag_left={drag_left:.0} ink={d} at_x={min_x}");
+        }
+        // the mark must draw at first contact and stay drawn while any
+        // remnant is visible
+        let (first_wx, _, first_d, _) = stage_ink[0];
+        assert!(first_d > 8, "the mark draws at first contact");
+        for (wx, drag_left, d, min_x) in &stage_ink[1..] {
+            // once the remnant is gone (the covered tab fully right of the
+            // drag edge or fully under it), zero ink is correct
+            let remnant_visible = *drag_left > STRIP_LEFT + 2.0
+                && *drag_left < STRIP_LEFT + TAB_SLOT_W - 2.0;
+            if remnant_visible {
+                assert!(
+                    *d > 8,
+                    "the mark must ride the visible remnant at wx={wx} (ink={d})"
+                );
+            }
+            let _ = min_x;
         }
     }
 }

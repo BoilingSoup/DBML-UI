@@ -1560,7 +1560,7 @@ impl App {
     }
 
     /// A tab was pressed: activate it and begin click & drag tracking.
-    fn tab_pressed(&mut self, idx: usize) {
+    pub fn tab_pressed(&mut self, idx: usize) {
         self.tab_menu = None;
         self.table_header_menu = None;
         self.activate_tab(idx);
@@ -1583,7 +1583,7 @@ impl App {
     /// offset); when its edge crosses a neighboring slot's midpoint the
     /// two swap, and the displaced neighbor starts a slot away so it
     /// slides animatedly to the vacated position. `x` is strip-relative.
-    fn tab_drag_moved(&mut self, x: f32) {
+    pub fn tab_drag_moved(&mut self, x: f32) {
         let Some(drag) = self.tab_drag.as_mut() else {
             return;
         };

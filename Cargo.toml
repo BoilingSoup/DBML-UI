@@ -87,4 +87,5 @@ lto = "fat"
 codegen-units = 1
 
 [dev-dependencies]
+iced_tiny_skia = { path = "vendor/iced_tiny_skia" }
 serde = { version = "1", features = ["derive"] }
