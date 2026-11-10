@@ -14,34 +14,35 @@ Both engines emit, for every diagnostic:
 |------------|----------------------------------------------------|--------------------------------|
 | `type`     | `Severity::Error` → `"error"`, `Warning` → `"warning"` | `type` verbatim (`error`/`warning`/`info`) |
 | `text`     | `message` verbatim                                 | `text` verbatim                |
-| `row`      | byte offset → 0-based line of the source           | `startRow` (already 0-based)   |
+| `row`      | byte offset → 1-based line of the source           | `startRow` (Monaco, 1-based)   |
+| `column`   | byte offset → **UTF-16 code unit** within the line | `startColumn` (Monaco, UTF-16) |
+| `endRow`/`endColumn` | the finding's end offset, same conversion | `endRow`/`endColumn` (exclusive end) |
 | `quickFixes` | `short_title` + `new_text` per fix               | `shortTitle` + each edit's `newText` |
 
 Parse errors from both engines are diagnostics too (`type: "error"`, no quick fixes).
 
 ## Comparison contract (what the runner gates on)
 
-Per corpus case, both diagnostic lists are compared as **multisets of
-`(type, text, row)`** — order-free, multiplicity-significant (a finding anchored
-twice must be anchored twice in both engines). Any difference fails the case.
+Per corpus case, both diagnostic lists are compared as **sorted multisets of
+the full span tuple `(type, text, row, column, endRow, endColumn)`** —
+order-free, multiplicity-significant, spans exact. Their positions are
+Monaco-style: 1-based rows, UTF-16 code-unit columns, exclusive end; our dump
+converts per line (a multi-byte char like `ñ` is one UTF-16 unit, two bytes —
+the fuzz corpus caught it).
 
 Per diagnostic, the **quick-fix multisets of `(shortTitle, newText)`** must match
 exactly. A missing quick fix, an extra one, or a different edit text fails the
 case.
 
-## Recorded, not gated (yet)
+## Superseded (spec v1 -> v2)
 
-- `category`, `explanation` (multi-line), the full quick-fix `title`, and the
-  column within the row — dumped into the report for the porting work. Their
-  phrasings differ from ours in places (the new compiler rephrased explanations);
-  each mismatch becomes a port when explanations are promoted to gated.
-
-## Known intentional gaps (spec v1)
-
-- **Column parity inside a row is not compared**: the two engines anchor at
-  different constructs (our byte-offset spans vs their token spans), so columns
-  can differ legitimately while pointing at the same finding. The ROW must match.
-- **Explanations are recorded but not gated** until the phrasing port lands.
+Spec v1 gated only `(type, text, row)` and recorded the column as "not
+compared — the two engines anchor at different constructs". The span-parity
+mission closed that: the columns are gated at UTF-16 fidelity, and every
+family of point-span divergence found since (the fragment anchors, the node
+spans, the UTF-16 conversion) is ported. Explanations and categories are
+gated with the contract above. See `parity/parity.md` for the standing plan
+(the mutation campaign, the quick-fix edit ranges).
 
 ## Running
 

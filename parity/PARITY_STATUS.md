@@ -1,14 +1,17 @@
 # Parity status
 
-`node parity/run.mjs` → **75 pass / 0 divergent** against
+`node parity/run.mjs` → **78 pass / 0 divergent** against
 `holistics/dbml@6b0c25b` (`packages/dbml-parse`, the open compiler).
-Full per-case detail: `parity/parity-report.json`.
+Full per-case detail: `parity/parity-report.json`. The corpus includes
+the user's own files (`desktop-errs/errs2/test`) so that shape class is
+gate-covered permanently.
 
 The suite gates the full-fidelity diagnostic contract
-(`parity/PARITY_SPEC.md`): type, text, row, category, explanation, and
-the quick-fix multiset (title/shortTitle/newText/isPreferred). Both
-engines' outputs are compared as sorted multisets; one-based rows
-(their provider serves Monaco).
+(`parity/PARITY_SPEC.md`): type, text, and the FULL SPAN (row, column,
+endRow, endColumn at UTF-16 fidelity), category, explanation, and the
+quick-fix multiset (title/shortTitle/newText/isPreferred). Both
+engines' outputs are compared as sorted multisets; Monaco-style
+1-based rows and UTF-16 columns.
 
 ## What the engine now ports (source-read, not output-guessed)
 
@@ -79,8 +82,12 @@ harness stripped them).
 - symbol-keyed same-endpoint/pair machinery (duplicates resolve to the
   last declaration; unresolved sides stay out of the pair map).
 
-CONVERGED: the diagnostic gates are at FULL parity — corpus 75/75 and
-the 300-case fuzz corpus 300/300. The path there: (1) the records
+CONVERGED at message level first, then at SPAN level: corpus 75/75 and
+the 300-case fuzz corpus 300/300. The span-parity mission added: their
+anchors carry node/token spans everywhere (endpoint fragment spans,
+chain fragment ends, the callee/side/arg node spans), their positions
+are UTF-16 columns, and the 39-probe span battery lives in
+`parity/battery/` — all span-identical. The path there: (1) the records
 header ports their tupleExpression exactly (one element, then a
 comma-terminated loop; a missing comma errs once at the offending
 token and synchronizeTuple skips silently to the next `,`/`)`; the
@@ -121,13 +128,19 @@ Position indexes UTF-16 CODE UNITS, so our byte offsets convert
 per-char at emission (a multi-byte char like `ñ` is one unit there,
 two bytes here — caught by the fuzz corpus).
 
-CONVERGED: the schema gates are at FULL parity too — corpus 75/75 and
+CONVERGED: the schema gates are at FULL parity too — corpus 78/78 and
 the fuzz corpus 300/300.
 
 ## Standing state
 
-Both gates green end to end: diagnostics 75/75 + 300/300, schema
-75/75 + 300/300, and the Rust suites (624 tests) all pass. The app
+Both gates green end to end: diagnostics 78/78 + 300/300 (span-level),
+schema 78/78 + 300/300, and the Rust suites all pass. Since this
+document's last full pass, the recovery surfaces landed too (the
+swallow/gather mechanism, the handler dispatch, the custom-element
+general parse, the identifier-stream values, the top-level and
+nested-element rules) — see `parity/parity.md` for the standing plan:
+the mutation campaign (`parity/mutate.py`, 210/600 and converging) and
+the quick-fix edit-range parity are the remaining units. The app
 now feeds the FULL diagnostic pipeline (validate_with_parse with the
 binder channels) — the editor's panel matches the gate. The strict ref path now runs their application parse over the whole
 line when trailing junk follows the clean relationship: word junk
