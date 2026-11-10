@@ -432,20 +432,45 @@ tools below. Never say done when the sweep still finds shapes.
        nested parse's field walk (the ref_stmt's block-form loop)
        needs the unterminated-string handling the same way the body
        child loop's junk-line path does (the note_value/sq_string
-       route). ROUND-41 RESULT (the combined port as one unit, the
-       base = the round-37 code + (a) the child_spans depth scoping +
-       the delta-advance fix): (a) LANDED — the element/inline-field
-       spans NOW MATCH for nl1 AND e43 (2,3..4,19 / 3,5..4,19 and
-       5,1..7,14 — the round-33/35/37 span deltas RESOLVED); e42 PASS.
-       The remaining deltas: nl1's newline error LOST (the nested ref
-       parse consumed the field string — delta (b), the nested field
-       walk's unterminated-string handling); e43's extra close (8,1)
-       REMAINS (the child_spans skip removed the nested braces but the
-       close still fires — the depth after the skip = 1 → one close
-       where theirs = none); e44's spans unchanged (5,12). The battery
-       = 77/82 with the attempt — REVERTED per the all-or-nothing
-       acceptance; the next session implements (b) + the e43 close
-       scoping + the e44 spans on THIS base. The port (round 33): the
+       route). ROUND-42 RESULT — THE CHILD LOOP LANDED (abe734b):
+       seven attempts, all-or-nothing met. The final mechanics: (a)
+       the child_spans depth scoping (the nested parse's consumed
+       region's braces skip the enclosing count — e43/e44's good2
+       brace must not deepen the Tabl-oops body's own scan); (b)
+       delta (b) RESOLVED DIFFERENTLY than sketched — the newline
+       error was never the nested ref parse's field walk: the `Ref`
+       token + `{` ride the custom element's ARG walk (their element
+       = {type: c, name: id, body: BlockExpression (3,5)-(4,19)}),
+       the body child loop's NON-KEYWORD line walk tokenizes the
+       line and the unterminated string errs via note_value on the
+       REST-OF-INPUT slice (the line slice alone would read the
+       newline as EOF → the wrong message; the real newline anchors
+       3,14-3,19); the quote walk steps past well-terminated strings
+       so their close quotes do not re-scan; (c) the child_last_end
+       union end — the body block's unclosed-branch union = the LAST
+       REAL TOKEN across ALL child lines, keyword or not (e44's
+       `T`/`able good2 {`/`id in` lines end the block at `in` 9,8;
+       nl1's nested `Table b { id int }` ends it at 4,19) — the
+       keyword arm AND the non-keyword arm both feed it;
+       (d) the closed-nested suppression (d7): their blockExpression
+       child = an APPLICATION with a block argument — a CLOSED
+       nested element swallows its field-level diagnostics entirely
+       (the `!!!broken` junk line inside the nested good2 errs
+       nothing); an UNCLOSED one keeps its close consume error
+       (e43: two closes at the EOF token); the closed test = the
+       consumed region's last real char is the element's own `}`;
+       (e) the round-37 snapshot-end panic fixed for good: the
+       depth-0 `}`'s snapshot index resyncs to the advanced input by
+       the absolute delta (close_abs = bs+1+end; the skip clamps so
+       a close line already consumed as a junk child fails the eat
+       safely). Battery = 84/84 (nl1 PROMOTED), corpus 78/78 with
+       ranges, lib tests 84/84. KNOWN OPEN inside the cluster: the
+       t1 shape (a junk `!!!broken` line in a TOP-LEVEL table) —
+       ours errs the operand storm + the column pair (10), theirs
+       the column pair only (2), 3,3-3,12 — a fresh pre-existing
+       cluster OUTSIDE the child loop (the operand-retry walk); and
+       the nested-CLOSED-with-junk-string shapes unmeasured — the
+       fresh-seed clustering will refine. The port (round 33): the
        custom-element body's child parse — their element = {type: c,
        name: id, body: the BlockExpression (3,5)-(4,19)} (the block =
        the `{` at 3,5 through the last real token), the inline-field
@@ -453,15 +478,7 @@ tools below. Never say done when the sweep still finds shapes.
        errs the newline error — the structure: the body = the child
        loop (the ref block = a nested element parsed inside), the
        element span = the union ending at the last real token (4,19),
-       the battery probe = nl1. IMPLEMENTATION SKETCH: the
-       custom_element's body block-scan keeps the brace balance; the
-       child loop parses the block's LINES as elements/applications
-       (the `Ref {` line = a nested element via the existing
-       dispatch), the unterminated string in the ref block's field
-       errs via the existing note_value/sq_string path (the
-       'Invalid newline' message + the partial-token anchor); the
-       element span ends at the last real token before the swallow
-       tail (the body's union end)
+       the battery probe = nl1
      * the custom-setting check anchors the value node ?? the name (the
        round-17 finding: probe x1 PASS: `uniEnum e` spans 42..51, the
        `{` junk point excluded); m43_0230/0255 PASS. The custom-setting check anchors
