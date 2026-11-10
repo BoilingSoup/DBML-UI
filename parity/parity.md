@@ -306,13 +306,15 @@ tools below. Never say done when the sweep still finds shapes.
      line-token build: keep chaining while the braces stay open, the
      stream ends at the block's balance or the EOF), then the
      application's block_expression sees the whole file and the
-     round-23 close lands at the true EOF. ROUND-24 RESULT: the chain
-     condition now chains the unclosed-`{` lines (landed, the gates
-     green) — but q1's ref is the INLINE named form (`Ref r0: ...`),
-     whose application runs on the SINGLE-LINE stream — the chain is
-     the BLOCK-form loop only; the inline form's block-arg crossing is
-     the remaining blocker (the inline application needs the same
-     file-end span for its unclosed block args)
+     round-23 close lands at the true EOF. ROUND-24/25 RESULT: the
+     chain condition landed in BOTH the ref-fields loop and the
+     standalone ref's line chain (the block form's unclosed-`{` lines
+     chain, the gates green) — q1's ref is the INLINE named form
+     (`Ref r0: ...`, the `:`-form path in ref_stmt), whose application
+     runs on the SINGLE-LINE stream — the inline path's block-arg
+     crossing is the remaining blocker (the inline application needs
+     the same file-end span for its unclosed block args; the path sits
+     in ref_stmt after the `:` eat, before the field-error walk)
    - the unclosed-block close errors = ONE PER UNCLOSED DEPTH: their
      blockExpression nesting errs every unclosed block's close consume
      at the EOF token (probe m43_0110/0122: a swallowed custom element

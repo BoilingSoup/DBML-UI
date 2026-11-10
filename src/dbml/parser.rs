@@ -4610,7 +4610,15 @@ fn ref_stmt(
                     Some(k) => *input = &input[k + 1..],
                     None => *input = &input[input.len()..],
                 }
-                if !dropped || input.is_empty() {
+                // their blockExpression sees the WHOLE file for the
+                // unclosed block args: an unclosed-`{` stream chains the
+                // following lines the same way the dropped case does
+                // (probe q1: `Ref r0: ... p {user_id` + the following
+                // Enum lines — the swallowed block's close errs at the
+                // TRUE EOF)
+                let open_braces = toks.iter().filter(|t| t.kind == RTKind::LBrace).count()
+                    - toks.iter().filter(|t| t.kind == RTKind::RBrace).count();
+                if (!dropped || input.is_empty()) && open_braces == 0 {
                     break;
                 }
             }
