@@ -104,7 +104,7 @@ tools below. Never say done when the sweep still finds shapes.
   driver resolves `path` from cwd).
 - Corpus gates: 78/78 + 78/78. Focused tests 42/42 + editor 61/61.
 - The user's three desktop files: span-identical, folded into the corpus.
-- The mutation campaign (round 19, seed 43): **292/600 span-identical** —
+- The mutation campaign (round 21, seed 43): **294/600 span-identical** —
   rounds 2-19 landed (the mechanisms below); the identifier-stream
   attribute-name flow PORTED (the key scan crosses the trivia newlines,
   the real_end uses the occ's own end — the battery grew to e41-e42;
@@ -289,6 +289,13 @@ tools below. Never say done when the sweep still finds shapes.
      true/false/null, a backtick function, or a 2-3 fragment enum
      reference; the anchor = the value node ?? the name — probes a1-a8
      PASS)
+   - the unclosed-block close errors = ONE PER UNCLOSED DEPTH: their
+     blockExpression nesting errs every unclosed block's close consume
+     at the EOF token (probe m43_0110/0122: a swallowed custom element
+     with a nested `Table good2 {` errs TWO closes at the same point;
+     the n1 control with good2 CLOSED errs one) — the custom-element
+     body's unclosed arm pushes `depth` errors; the battery grew to
+     e43/e44
    - the identifier-stream attribute-name flow PORTED (round 19): the
      settings-list key scan crosses the trivia newlines (the idents
      with any trivia between, the whitespace normalized in the key

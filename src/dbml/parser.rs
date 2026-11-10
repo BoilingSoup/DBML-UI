@@ -3927,7 +3927,13 @@ fn custom_element(
                 last = offset(&probe, base);
             }
             *input = &input[input.len()..];
-            errs.push(err_at(offset(input, base), "Expect a closing brace '}'"));
+            // their blockExpression nesting: EVERY unclosed block's close
+            // consume errs at the EOF token — the depth counts them
+            // (probe m43_0110/0122: a swallowed custom element with a
+            // nested `Table good2 {` errs two closes at the same point)
+            for _ in 0..depth.max(1) {
+                errs.push(err_at(offset(input, base), "Expect a closing brace '}'"));
+            }
             body_span = Some(bs..last.max(bs + 1));
         } else {
             *input = &input[end..];
