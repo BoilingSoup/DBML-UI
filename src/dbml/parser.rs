@@ -3871,6 +3871,7 @@ fn table(
             || peek_kw(input, "Project")
         {
             let nested_start = offset(input, base);
+            let orig = *input;
             let mut nested_errs: Vec<ParseError> = Vec::new();
             let mut nested_binder: Vec<(usize, usize, String)> = Vec::new();
             let mut nested_chains: Vec<super::ast::BinderChain> = Vec::new();
@@ -3894,7 +3895,16 @@ fn table(
                         Item::Prj(_) => "A Project can only appear top-level",
                         _ => "Table must appear top-level",
                     };
-                    binder_out.push((nested_start, offset(&nested_attempt, base), msg.to_string()));
+                    // the element node = the keyword .. the last REAL token
+                    // (the union rule — an unclosed block's swallow tail
+                    // rides in no node)
+                    let consumed_end = offset(&nested_attempt, base);
+                    let region = &orig[..(consumed_end - nested_start).min(orig.len())];
+                    binder_out.push((
+                        nested_start,
+                        last_real_token_end(region, nested_start),
+                        msg.to_string(),
+                    ));
                     // the nested element binds NOWHERE (their bind walks the
                     // program's top level - the nested chains die); its
                     // own diagnostics ride along

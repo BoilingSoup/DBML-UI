@@ -268,7 +268,15 @@ pub(crate) fn column_setting_errors(
         match name {
             "pk" | "primary key" | "not null" | "null" | "unique" | "increment" => {
                 if a.has_value {
-                    out.push((a.offset, None, format!("'{name}' must not have a value")));
+                    // their anchor = the VALUE expression node (probe
+                    // m43_0155: `not null: parent.id` anchors parent.id);
+                    // a value node that never parsed still rides the key
+                    let (vs, ve) = if a.value_span.start != a.value_span.end {
+                        (a.value_span.start, Some(a.value_span.end))
+                    } else {
+                        (a.offset, Some(a.end))
+                    };
+                    out.push((vs, ve, format!("'{name}' must not have a value")));
                 }
             }
             "note" => {

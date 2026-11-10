@@ -97,8 +97,9 @@ tools below. Never say done when the sweep still finds shapes.
   driver resolves `path` from cwd).
 - Corpus gates: 78/78 + 78/78. Focused tests 42/42 + editor 61/61.
 - The user's three desktop files: span-identical, folded into the corpus.
-- The mutation campaign (round 2, seed 43): **242/600 span-identical** —
-  the round-2 ports landed (see the mechanisms below).
+- The mutation campaign (round 3, seed 43): **245/600 span-identical** —
+  the round-2 ports + the must-not-have-a-value value-node anchor and
+  the table-loop's nested-element last-real-token span.
 
 ## Round-2 mechanisms (ported; do not re-derive)
 
@@ -154,11 +155,25 @@ tools below. Never say done when the sweep still finds shapes.
    / 'Unexpected EOF' gaps, the 'default' value cascade ('EOF reached
    while parsing'), our invented messages on secondary subsystems
    (indexes block, note body, enum header), 'A Ref must appear
-   top-level' vs 'Table must appear top-level' dispatch, and 15 pure
+   top-level' vs 'Table must appear top-level' dispatch, and pure
    span-only cases. Iterate: cluster -> probe their engine on the
    minimal shape -> port -> promote the reproducer into
    parity/battery/ -> gates. Iterate until a full round adds zero new
    mechanisms.
+2. **Round-3 findings so far** (probed, ported):
+   - "'not null' must not have a value" anchors the VALUE node (the
+     key when the value never parsed).
+   - the table-loop's nested-element context error anchors the element
+     node = the keyword .. the last REAL token (last_real_token_end on
+     the captured region — the same rule as the project loop).
+   - OPEN: the column junk cascade — a swallowed settings list at EOF
+     is followed by TWO binder errors at the EOF point ('A column must
+     have a type' + 'A column name must be an identifier or a quoted
+     identifier') — their field parse runs a NEXT field at EOF whose
+     name = the EmptyNode point (probe m43_0096/0082: line 9's
+     `"odd col" e_status [` swallows to EOF; both errors at (9,27) =
+     the EOF point; ours emits the invented 'expected column type'
+     instead and misses both).
 2. **Quick-fix EDIT-range parity**: their quickFixes carry edits
    [{start, end, newText}] in UTF-16 offsets; our QuickFix has no ranges
    and the dump emits only the joined text. Add the edit ranges to our
