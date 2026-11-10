@@ -1314,6 +1314,11 @@ fn settings_list_occs(
             .find(|c: char| !(c.is_alphanumeric() || c == '_' || c == ' ' || c == '\t'))
             .unwrap_or(input.len());
         let key = input[..end].trim().to_ascii_lowercase();
+        // their attribute-name node = the identifier STREAM (the union of
+        // the ident tokens) — the trivia spaces between/after the idents
+        // stay out of the span (probe x1: `uniEnum e` spans 42..51, the
+        // trailing space rides in no node)
+        let key_end = key_start + input[..end].trim_end().len();
         if key.is_empty() {
             // their attribute-position dispatch: `,`/`:` at the name
             // position log EMPTY_ATTRIBUTE_NAME and the list continues
@@ -1382,7 +1387,6 @@ fn settings_list_occs(
         }
         let occ_key = key.clone();
         *input = &input[end..];
-        let key_end = offset(input, base);
         sp(input);
         let occ_before_value = input.len();
         let mut val_quoted = false;
@@ -1394,8 +1398,10 @@ fn settings_list_occs(
         // the VALUE node's span: their settings-note checks anchor the
         // value expression, not the key
         let mut v_span = offset(input, base)..offset(input, base);
+        let mut value_attempted = false;
         if eat(input, ":") {
             item_had_colon = true;
+            value_attempted = true;
             sp(input);
             // a newline between `:` and the value is trivia too
             ws(input);
@@ -2073,6 +2079,9 @@ fn settings_list_occs(
             }
         } else {
             out.push((key, None));
+            // the value never parsed (their attr.value = undefined) — the
+            // attribute node is the NAME stream alone
+            value_attempted = false;
         }
         // the key's occurrence: the value text when it parsed as a plain
         // string (verbatim, quotes kept), plus whether the value was a
@@ -2092,7 +2101,11 @@ fn settings_list_occs(
                 // .. the value) — the trailing ws the list's trivia ws
                 // crossed stays out (probe m43_0251: the ref value ends
                 // at `nope.n`, not at the swallowed next line)
-                end: v_span.end.max(key_end),
+                end: if value_attempted {
+                    v_span.end.max(key_end)
+                } else {
+                    key_end
+                },
                 has_value: occ_before_value != input.len(),
                 quoted: val_quoted,
                 value: last_val,

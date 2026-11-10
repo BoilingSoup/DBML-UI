@@ -1,0 +1,3 @@
+Table t {
+  user_id "character varying" [not null, uniEnum e {que]
+}

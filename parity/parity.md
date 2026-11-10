@@ -97,8 +97,8 @@ tools below. Never say done when the sweep still finds shapes.
   driver resolves `path` from cwd).
 - Corpus gates: 78/78 + 78/78. Focused tests 42/42 + editor 61/61.
 - The user's three desktop files: span-identical, folded into the corpus.
-- The mutation campaign (round 7, seed 43): **264/600 span-identical** —
-  rounds 2-7 landed (the mechanisms below).
+- The mutation campaign (round 8, seed 43): **266/600 span-identical** —
+  rounds 2-8 landed (the mechanisms below).
 
 ## Round-2 mechanisms (ported; do not re-derive)
 
@@ -234,9 +234,11 @@ tools below. Never say done when the sweep still finds shapes.
      (column_spans[0]) — the hard-won rule applied to the inline-ref
      check (validate.rs 534; probe m43_0193 PASS: `poref` spans 44-49)
    - OPEN (probed, port next):
-     * m43_0230/0255 (the custom-setting value end: ours ONE past
-       theirs — the value node end; probe their attribute parse on
-       `uniEnum e {que]` with elemprobe before porting)
+     * the attr-name node = the identifier STREAM: the key span trims
+       the trailing trivia spaces, and a value-less attribute's node is
+       the NAME stream alone (the value never parses when junk follows
+       — probe x1 PASS: `uniEnum e` spans 42..51, the `{` junk point
+       excluded); m43_0230/0255 PASS
      * the remaining ~340 spread across small clusters — keep
        clustering from the round dump (the compare tool:
        /tmp/cluster2.py pattern — ours in 6 batch files, theirs in
