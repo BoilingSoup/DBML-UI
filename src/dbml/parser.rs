@@ -872,8 +872,8 @@ enum SwallowEnd {
 /// broken-string flow, so route there instead of scanning verbatim.
 fn default_string_is_broken(input: &str) -> bool {
     if !input.starts_with('\'') {
-        // only a `'`-led value is a string token; backtick expressions and
-        // bare tokens keep their verbatim arm
+        // only a `'`-led value is a string token; other bare tokens keep
+        // their verbatim arm
         return false;
     }
     let b = input.as_bytes();

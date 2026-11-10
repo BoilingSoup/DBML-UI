@@ -245,7 +245,14 @@ tools below. Never say done when the sweep still finds shapes.
        'EOF reached while parsing' + the operand 'Unexpected EOF' + the
        'default' check at the EOF point — probe w1 PASS; the remaining
        delta needs the full default-validity check — their list:
-       enum/string/number/function/true/false/null), m43_0254/0526
+       enum/string/number/function/true/false/null); m43_0254/0526
+       (the TRUNCATED BACKTICK variant stays OPEN with the finding: the
+       route reaches the plain arm and the backtick fail fires ('EOF
+       reached while parsing' on [backtick..EOF)), but the downstream
+       swallow-gather treats the backtick run as junk ('Invalid start
+       of operand "`now("') and the cascade lands at the wrong offsets —
+       the gather's Func-token operand semantics need porting first;
+       b2 (the closed backtick) passes via the verbatim arm),
        (the TRUNCATED BACKTICK default at EOF: their FUNCTION token
        scan errs 'EOF reached while parsing' on the partial token +
        the operand EOF + the default check — our default arm's
