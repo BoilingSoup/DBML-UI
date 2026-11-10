@@ -3892,11 +3892,148 @@ fn custom_element(
     if peek_is(input, "{") {
         let bs = offset(input, base);
         let _ = eat(input, "{");
+        // the body's CHILD LOOP: the block's lines parse as the nested
+        // elements/applications (their blockExpression — probe nl1: the
+        // `Ref {` line = a nested element, the ref block's field string
+        // errs 'Invalid newline encountered while parsing' at the
+        // partial token). The nested elements' diagnostics ride the
+        // binder channel; the body span's union end = the last real
+        // token (the child loop tracks it via last_real_token_end at
+        // the exit). The keyword-element dispatch covers the nested
+        // `Ref`/`Table`/`Enum` lines; the junk lines skip per-line.
+        // the nested parses' consumed regions: their braces belong to the
+        // nested elements, NOT the enclosing count (round-41 (a): the
+        // depth scan skips them — e43's good2 brace must not deepen the
+        // Tabl-oops body's own scan)
+        let mut child_spans: Vec<(usize, usize)> = Vec::new();
+        // e44: their block node = the open brace + the parsed children —
+        // the union ends at the LAST REAL TOKEN across ALL child lines,
+        // keyword or not (e44's `T`/`able good2 {`/`id in` lines end the
+        // block at `in` 9,8, never at the swallow tail)
+        let mut child_last_end: Option<usize> = None;
+        // the body-region snapshot: the enclosing brace-scan counts the
+        // braces INDEPENDENTLY of what the child loop consumed (the
+        // round-37 fix shape — the e43's two-close cascade)
+        let body_snapshot: Vec<u8> = input.as_bytes().to_vec();
+        loop {
+            ws(input);
+            if input.is_empty() || peek_is(input, "}") {
+                break;
+            }
+            let child_start = offset(input, base);
+            if peek_kw(input, "Ref") || peek_kw(input, "Table")
+                || peek_kw(input, "Enum") || peek_kw(input, "TableGroup")
+                || peek_kw(input, "Note") || peek_kw(input, "Records")
+                || peek_kw(input, "Project")
+            {
+                let orig = *input;
+                let mut n_errs: Vec<ParseError> = Vec::new();
+                let mut n_binder: Vec<(usize, usize, String)> = Vec::new();
+                let mut n_chains: Vec<super::ast::BinderChain> = Vec::new();
+                let mut n_counts: Vec<(usize, usize, usize, usize)> = Vec::new();
+                let mut n_attempt = *input;
+                let item = top_item(
+                    &mut n_attempt,
+                    base,
+                    &mut n_errs,
+                    &mut n_binder,
+                    &mut n_chains,
+                    &mut n_counts,
+                );
+                let consumed_end = offset(&n_attempt, base);
+                child_spans.push((child_start, consumed_end));
+                let region = &orig[..(consumed_end - child_start).min(orig.len())];
+                let elem_end = last_real_token_end(region, child_start);
+                let _ = item;
+                // d7: their custom body's blockExpression child is an
+                // APPLICATION with a block argument — a CLOSED nested
+                // element swallows its field-level diagnostics entirely
+                // (the `!!!broken` junk line inside the nested good2 errs
+                // nothing); an UNCLOSED one keeps only the close consume
+                // error (probe e43: two closes at the EOF token). The
+                // closed test = the consumed region's last real char is
+                // the element's own `}`.
+                let trimmed = region.trim_end();
+                let nested_closed = trimmed.ends_with('}');
+                if nested_closed {
+                    let _ = n_errs;
+                    let _ = n_binder;
+                } else {
+                    errs.append(&mut n_errs);
+                    doc_binder_errors.extend(n_binder);
+                }
+                let _ = n_chains;
+                let _ = n_counts;
+                // the round-37 fix: the input does NOT advance — the
+                // enclosing brace-scan counts the braces independently
+                // (the e43's two-close cascade: the nested good2's
+                // close from the nested parse + the enclosing
+                // Tabl-oops' close from the depth rule at depth=2)
+                child_last_end = Some(child_last_end.map_or(elem_end, |e| e.max(elem_end)));
+                // skip this line so the loop progresses
+                let line_nl = orig.find('\n').map(|k| k + 1).unwrap_or(orig.len());
+                *input = &input[line_nl..];
+                continue;
+            }
+            // a non-keyword line: their application walk still tokenizes
+            // it — an unterminated string errs the newline error at the
+            // partial token (probe nl1: `a.id > 'b.id` errs 3,14-3,19,
+            // the scan stop = the REAL newline, so the string probe runs
+            // on the rest of the input — the line slice alone would read
+            // the newline as EOF and the wrong message). The quote walk
+            // steps past well-terminated strings so their close quotes
+            // do not re-scan. The line's last REAL token feeds the
+            // block's union end (probe e44: the block ends at `in` 9,8).
+            let line_nl = input.find('\n').unwrap_or(input.len());
+            let line = &input[..line_nl];
+            let line_abs = offset(input, base);
+            let line_end = last_real_token_end(line, line_abs);
+            child_last_end = Some(child_last_end.map_or(line_end, |e| e.max(line_end)));
+            let mut scan_pos = 0usize;
+            loop {
+                let Some(q) = line[scan_pos..].find('\'') else {
+                    break;
+                };
+                let q = scan_pos + q;
+                let mut t = &input[q..];
+                match note_value(&mut t, base) {
+                    Ok(_) => {
+                        let consumed_end = q + (input.len() - q - t.len());
+                        if consumed_end >= line_nl {
+                            // the string crossed the newline (a ''' note)
+                            // — the line's tail is inside it
+                            break;
+                        }
+                        scan_pos = consumed_end;
+                    }
+                    Err(e) => {
+                        errs.push(ParseError { offset: e.offset, end: e.end, message: e.message });
+                        scan_pos = q + 1;
+                    }
+                }
+            }
+            *input = &input[line_nl..];
+            let _ = child_start;
+            if input.is_empty() {
+                break;
+            }
+            let _ = eat(input, "\n");
+            if input.is_empty() {
+                break;
+            }
+        }
         let mut depth = 1i32;
-        let bytes = input.as_bytes();
+        let bytes: &[u8] = &body_snapshot;
         let mut end = bytes.len();
         let mut unclosed = true;
         for (k, &bc) in bytes.iter().enumerate() {
+            let pos = bs + 1 + k;
+            if child_spans.iter().any(|&(cs, ce)| pos >= cs && pos < ce) {
+                // the brace lives inside a nested element's consumed
+                // region — the nested parse owns it, the enclosing count
+                // does not
+                continue;
+            }
             if bc == b'{' {
                 depth += 1;
             } else if bc == b'}' {
@@ -3926,6 +4063,12 @@ fn custom_element(
                 }
                 last = offset(&probe, base);
             }
+            // the union end: the token walk's last OR the child loop's
+            // last real token across the child lines (nested element or
+            // application — the body's last real token)
+            if let Some(ce) = child_last_end {
+                last = last.max(ce);
+            }
             *input = &input[input.len()..];
             // their blockExpression nesting: EVERY unclosed block's close
             // consume errs at the EOF token — the depth counts them
@@ -3936,9 +4079,18 @@ fn custom_element(
             }
             body_span = Some(bs..last.max(bs + 1));
         } else {
-            *input = &input[end..];
+            // `end` is SNAPSHOT-relative (the depth-0 `}` at abs bs+1+end)
+            // but the child loop advanced input line-by-line — resync by
+            // the absolute delta (the round-37 panic: the snapshot index
+            // applied to the shrunken input). If the child loop already
+            // consumed the close line (a mid-line `}` inside a junk
+            // child), the skip clamps to 0 and the eat fails — the span
+            // then ends at the child loop's exit point.
+            let close_abs = bs + 1 + end;
+            let skip = close_abs.saturating_sub(offset(input, base)).min(input.len());
+            *input = &input[skip..];
             let _ = eat(input, "}");
-            body_span = Some(bs..offset(input, base));
+            body_span = Some(bs..offset(input, base).max(bs + 1));
         }
         body_is_block = true;
     } else if eat(input, ":") {
