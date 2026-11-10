@@ -363,12 +363,14 @@ tools below. Never say done when the sweep still finds shapes.
        error (3,5)-(4,19), and the ref block's field string `'b.id`
        errs 'Invalid newline encountered while parsing' at the partial
        token (3,14)-(3,19); ours = the element spans to the swallow
-       tail (5,1), no newline error — ROUND-33: the child loop LANDED
-       and the newline error NOW MATCHES (the ref block's field string
-       errs via the note_value path); the remaining delta = the
-       element/inline-field spans end at (3,6) instead of (4,19) — the
-       child loop's span tracking (the nested element's consumed end +
-       the last real token before the swallow tail). The port (round 33): the
+       tail (5,1), no newline error. ROUND-33 ATTEMPT: the child loop
+       landed and the newline error matched (the ref block's field
+       string errs via the note_value path), BUT the loop broke FIVE
+       battery shapes (d4/d5/d7/e43/e44) and the element/inline-field
+       spans ended at (3,6) — the span tracking (the nested element's
+       consumed end + the last real token) isn't ready; the child loop
+       is REVERTED and the port waits for the span-tracking design.
+       The port (round 33): the
        custom-element body's child parse — their element = {type: c,
        name: id, body: the BlockExpression (3,5)-(4,19)} (the block =
        the `{` at 3,5 through the last real token), the inline-field
