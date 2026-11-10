@@ -228,7 +228,11 @@ pub(crate) fn column_setting_errors(
         let attrs = attrs_of(name);
         if attrs.len() > 1 {
             for a in attrs {
-                out.push((a.offset, None, format!("'{name}' can only appear once")));
+                out.push((
+                    a.offset,
+                    Some(a.end),
+                    format!("'{name}' can only appear once"),
+                ));
             }
         }
     }
@@ -247,9 +251,10 @@ pub(crate) fn column_setting_errors(
     let nu = attrs_of("null");
     if !nn.is_empty() && !nu.is_empty() {
         for a in nn.iter().chain(nu.iter()) {
+            // their anchor = the setting entry's token span
             out.push((
                 a.offset,
-                None,
+                Some(a.end),
                 "'not null' and 'null' can not be set at the same time".to_string(),
             ));
         }
@@ -365,9 +370,10 @@ pub fn validate_with_parse(
     for t in &doc.tables {
         if tables.contains(&t.name.as_str()) {
             // their dup marker anchors the duplicate declaration's NAME
-            // token (probe: three multi-line dups flag each later name)
-            out.push(Diagnostic::plain(
+            // token span (probe: three multi-line dups flag each later name)
+            out.push(Diagnostic::spanned(
                 t.name_span.start,
+                t.name_span.end,
                 format!("Table '{}' already exists in schema 'public'", t.name),
             ));
         }
@@ -391,8 +397,14 @@ pub fn validate_with_parse(
         for (i, c) in t.columns.iter().enumerate() {
             if let Some(&first) = seen.get(c.name.as_str()) {
                 let msg = format!("Duplicate column '{}'", c.name);
-                out.push(Diagnostic::plain(t.columns[first].name_span.start, msg.clone()));
-                out.push(Diagnostic::plain(c.name_span.start, msg));
+                // their anchor = the column's full node (name through the
+                // settings list — fuzz-span parity)
+                out.push(Diagnostic::spanned(
+                    t.columns[first].span.start,
+                    t.columns[first].span.end,
+                    msg.clone(),
+                ));
+                out.push(Diagnostic::spanned(c.span.start, c.span.end, msg));
             } else {
                 seen.insert(c.name.as_str(), i);
             }
@@ -416,11 +428,21 @@ pub fn validate_with_parse(
     // refs and inline `ref:` settings alike)
     fn check_endpoint(doc: &Document, ep: &super::ast::Endpoint, anchor: usize, out: &mut Vec<Diagnostic>) {
         // recovered endpoints can carry an empty span — anchor those on
-        // the caller-provided position instead of offset 0
-        let at = if ep.span.is_empty() { anchor } else { ep.span.start };
+        // the caller-provided position instead of offset 0. Their anchors
+        // carry the FRAGMENT tokens: the missing table anchors the table
+        // token, the missing column the column token.
+        let frag = |sp: &Span, fallback: usize| -> Span {
+            if sp.is_empty() {
+                fallback..fallback
+            } else {
+                sp.clone()
+            }
+        };
+        let table_frag = frag(&ep.table_span, anchor);
         match doc.tables.iter().find(|t| t.matches(&ep.table)) {
-            None => out.push(Diagnostic::plain(
-                at,
+            None => out.push(Diagnostic::spanned(
+                table_frag.start,
+                table_frag.end,
                 format!(
                     "Table '{}' does not exist in Schema 'public'",
                     ep.table
@@ -428,10 +450,17 @@ pub fn validate_with_parse(
             )),
             Some(t) => {
                 let schema = t.schema.as_deref().unwrap_or("public");
-                for col in &ep.columns {
+                for (i, col) in ep.columns.iter().enumerate() {
                     if !t.columns.iter().any(|c| &c.name == col) {
-                        out.push(Diagnostic::plain(
-                            at,
+                        let csp = ep
+                            .column_spans
+                            .get(i)
+                            .cloned()
+                            .unwrap_or_else(|| ep.span.clone());
+                        let cfrag = frag(&csp, anchor);
+                        out.push(Diagnostic::spanned(
+                            cfrag.start,
+                            cfrag.end,
                             format!(
                                 "Column '{}' does not exist in Table '{}.{}'",
                                 col, schema, ep.table
@@ -478,10 +507,11 @@ pub fn validate_with_parse(
                     let at = r
                         .column_spans
                         .get(i)
-                        .map(|s| s.start)
-                        .unwrap_or(t.name_span.start);
-                    out.push(Diagnostic::plain(
-                        at,
+                        .cloned()
+                        .unwrap_or_else(|| t.name_span.start..t.name_span.end);
+                    out.push(Diagnostic::spanned(
+                        at.start,
+                        at.end,
                         format!("Column '{}' does not exist in Table '{}'", cname, t.name),
                     ));
                 }
@@ -560,26 +590,28 @@ pub fn validate_with_parse(
     };
     let mut pair_first: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new(); // pair key -> first sighting's anchor
-    let mut endpoint_errors: Vec<(usize, String)> = Vec::new();
+    let mut endpoint_errors: Vec<(usize, Option<usize>, String)> = Vec::new();
     {
         let mut run = |host_key: Option<String>,
                         other_key: Option<String>,
                         anchor: usize,
-                        emissions: &mut Vec<(usize, String)>| {
+                        end: Option<usize>,
+                        emissions: &mut Vec<(usize, Option<usize>, String)>| {
             let (Some(l), Some(rt)) = (host_key, other_key) else {
                 return;
             };
             if l == rt {
-                emissions.push((anchor, "Two endpoints are the same".to_string()));
+                emissions.push((anchor, end, "Two endpoints are the same".to_string()));
                 return;
             }
             let key = if l < rt { format!("{l}-{rt}") } else { format!("{rt}-{l}") };
             if let Some(&first_anchor) = pair_first.get(&key) {
                 emissions.push((
                     first_anchor,
+                    None,
                     "References with same endpoints exist".to_string(),
                 ));
-                emissions.push((anchor, "References with same endpoints exist".to_string()));
+                emissions.push((anchor, None, "References with same endpoints exist".to_string()));
             } else {
                 pair_first.insert(key, anchor);
             }
@@ -588,10 +620,12 @@ pub fn validate_with_parse(
             if !r.clean_binary {
                 continue;
             }
+            // their anchor = the whole ref NODE span
             run(
                 side_key(&r.from),
                 side_key(&r.to),
                 r.span.start,
+                Some(r.span.end),
                 &mut endpoint_errors,
             );
         }
@@ -617,13 +651,14 @@ pub fn validate_with_parse(
                     host_key,
                     other_key,
                     ir.attr_start,
+                    Some(ir.to.span.end),
                     &mut endpoint_errors,
                 );
             }
         }
     }
-    for (anchor, msg) in endpoint_errors {
-        out.push(Diagnostic::plain(anchor, msg));
+    for (anchor, end, msg) in endpoint_errors {
+        out.push(Diagnostic::spanned(anchor, end.unwrap_or(anchor), msg));
     }
 
     // index columns must exist when they are plain identifiers
@@ -636,9 +671,14 @@ pub fn validate_with_parse(
                 if plain && !t.columns.iter().any(|c| &c.name == col) {
                     // their index-column check: the message differs from
                     // the ref-endpoint one and anchors at the column
-                    let at = ix.column_spans.get(ci).map(|s| s.start).unwrap_or(ix.span.start);
-                    out.push(Diagnostic::plain(
-                        at,
+                    let at = ix
+                        .column_spans
+                        .get(ci)
+                        .cloned()
+                        .unwrap_or_else(|| ix.span.start..ix.span.start);
+                    out.push(Diagnostic::spanned(
+                        at.start,
+                        at.end,
                         format!("No column named '{}' inside Table '{}'", col, t.name),
                     ));
                 }
@@ -1420,7 +1460,7 @@ pub fn validate_with_parse(
 
     fn resolve_prefix<'a>(
         doc: &'a Document,
-        vars: &'a [(String, usize)],
+        vars: &'a [(String, usize, usize)],
         k: usize,
         full_len: usize,
         group: bool,
@@ -1430,7 +1470,9 @@ pub fn validate_with_parse(
         if k == 0 {
             return Some(Sym::Schema("public"));
         }
-        let (name, off) = &vars[k - 1];
+        let (name, off, vend) = &vars[k - 1];
+        // their anchors carry the fragment TOKEN span
+        let frag = *off..*vend;
         if k == 1 {
             if full_len >= 3 || (group && full_len >= 2) {
                 // the left-of-access context: a schema lookup
@@ -1438,8 +1480,9 @@ pub fn validate_with_parse(
                     return Some(Sym::Schema(name));
                 }
                 if emit {
-                    out.push(Diagnostic::plain(
-                        *off,
+                    out.push(Diagnostic::spanned(
+                        frag.start,
+                        frag.end,
                         format!("Schema '{}' does not exist", name),
                     ));
                 }
@@ -1450,8 +1493,9 @@ pub fn validate_with_parse(
                 Some(t) => Some(Sym::Table(t)),
                 None => {
                     if emit {
-                        out.push(Diagnostic::plain(
-                            *off,
+                        out.push(Diagnostic::spanned(
+                            frag.start,
+                            frag.end,
                             format!("Table '{}' does not exist in Schema 'public'", name),
                         ));
                     }
@@ -1486,8 +1530,9 @@ pub fn validate_with_parse(
                 } else {
                     let schema = t.schema.as_deref().unwrap_or("public");
                     if emit {
-                        out.push(Diagnostic::plain(
-                            *off,
+                        out.push(Diagnostic::spanned(
+                            frag.start,
+                            frag.end,
                             format!(
                                 "Column '{}' does not exist in Table '{}.{}'",
                                 name, schema, t.name
@@ -1544,10 +1589,11 @@ pub fn validate_with_parse(
                 resolve_prefix(doc, &chain.vars, n, n + 1, false, false, &mut Vec::new())
             {
                 let schema = t.schema.as_deref().unwrap_or("public");
-                for (cname, coff) in &chain.tuple {
+                for (cname, coff, cend) in &chain.tuple {
                     if !t.columns.iter().any(|c| c.name == *cname) {
-                        out.push(Diagnostic::plain(
+                        out.push(Diagnostic::spanned(
                             *coff,
+                            *cend,
                             format!(
                                 "Column '{}' does not exist in Table '{}.{}'",
                                 cname, schema, t.name
@@ -1572,8 +1618,8 @@ pub fn validate_with_parse(
     // the column-parse binder findings (their validateNode class)
     for t in &doc.tables {
         for c in &t.columns {
-            for (offset, msg) in &c.binder_errors {
-                out.push(Diagnostic::plain(*offset, msg.clone()));
+            for (offset, end, msg) in &c.binder_errors {
+                out.push(Diagnostic::spanned(*offset, *end, msg.clone()));
             }
         }
     }

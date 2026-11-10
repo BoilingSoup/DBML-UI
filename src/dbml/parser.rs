@@ -575,9 +575,19 @@ fn ref_block_side_end(rp: &RParser, side_start: usize) -> usize {
 fn ref_block_endpoint(rp: &RParser, n: &RNode) -> Option<super::ast::Endpoint> {
     let frag = destructure_cvt(n)?;
     let span = n.start()..ref_block_side_end(rp, n.start());
+    // the fragment TOKEN spans: each fragment node's start finds its token
+    let frag_span =
+        |start: usize| -> Span {
+            match rp.toks.iter().find(|t| t.start == start) {
+                Some(t) => t.start..t.end,
+                None => start..start,
+            }
+        };
     if !frag.tuple.is_empty() {
         let mut vars = frag.variables.clone();
-        let table = var_name(&vars.pop()?)?;
+        let last = vars.pop()?;
+        let table = var_name(&last)?;
+        let table_span = frag_span(last.start());
         return Some(super::ast::Endpoint {
             schema: None,
             table,
@@ -587,6 +597,8 @@ fn ref_block_endpoint(rp: &RParser, n: &RNode) -> Option<super::ast::Endpoint> {
                 .map(var_name)
                 .collect::<Option<Vec<String>>>()?,
             span,
+            table_span,
+            column_spans: frag.tuple.iter().map(|v| frag_span(v.start())).collect(),
         });
     }
     let names: Vec<String> = frag.variables.iter().map(var_name).collect::<Option<_>>()?;
@@ -596,12 +608,16 @@ fn ref_block_endpoint(rp: &RParser, n: &RNode) -> Option<super::ast::Endpoint> {
             table: names[0].clone(),
             columns: vec![names[1].clone()],
             span,
+            table_span: frag_span(frag.variables[0].start()),
+            column_spans: vec![frag_span(frag.variables[1].start())],
         }),
         3 => Some(super::ast::Endpoint {
             schema: Some(names[0].clone()),
             table: names[1].clone(),
             columns: vec![names[2].clone()],
             span,
+            table_span: frag_span(frag.variables[1].start()),
+            column_spans: vec![frag_span(frag.variables[2].start())],
         }),
         _ => None,
     }
@@ -647,17 +663,36 @@ fn qualified_name(input: &mut &str, base: usize) -> R<(Option<String>, String)> 
 }
 
 /// Reference path: `[schema.]table.column` (each part may be quoted).
-fn path(input: &mut &str, base: usize) -> R<(Option<String>, String, String)> {
-    let mut parts = vec![ident(input, base)?];
+/// (schema, table, column, table span, column span) — the fragment
+/// TOKEN spans ride along for their fragment-anchored diagnostics.
+fn path(
+    input: &mut &str,
+    base: usize,
+) -> R<(Option<String>, String, String, Span, Span)> {
+    let p0s = offset(input, base);
+    let p0 = ident(input, base)?;
+    let p0e = offset(input, base);
+    let mut parts = vec![(p0, p0s, p0e)];
     while eat(input, ".") {
-        parts.push(ident(input, base)?);
+        let ps = offset(input, base);
+        let p = ident(input, base)?;
+        let pe = offset(input, base);
+        parts.push((p, ps, pe));
         if parts.len() == 3 {
             break;
         }
     }
     match parts.as_slice() {
-        [t, c] => Ok((None, t.clone(), c.clone())),
-        [sc, t, c] => Ok((Some(sc.clone()), t.clone(), c.clone())),
+        [(t, ts, _), (c, cs, ce)] => {
+            Ok((None, t.clone(), c.clone(), *ts..*ts, *cs..*ce))
+        }
+        [(sc, _, _), (t, ts, te), (c, cs, ce)] => Ok((
+            Some(sc.clone()),
+            t.clone(),
+            c.clone(),
+            *ts..*te,
+            *cs..*ce,
+        )),
         _ => fail(offset(input, base), "expected [schema.]table.column"),
     }
 }
@@ -667,13 +702,19 @@ fn path(input: &mut &str, base: usize) -> R<(Option<String>, String, String)> {
 fn endpoint(input: &mut &str, base: usize) -> R<Endpoint> {
     let start = offset(input, base);
     let mut columns: Vec<String> = Vec::new();
+    let mut column_spans: Vec<Span> = Vec::new();
     let (schema, table);
+    let mut table_span: Span = start..start;
     if eat(input, "(") {
         // legacy composite: (table.a, table.b)
         let mut first: Option<(Option<String>, String)> = None;
         loop {
             ws(input);
-            let (sc, t, c) = path(input, base)?;
+            let (sc, t, c, tsp, csp) = path(input, base)?;
+            column_spans.push(csp);
+            if first.is_none() {
+                table_span = tsp;
+            }
             if let Some((s0, t0)) = &first {
                 if (s0.clone(), t0.clone()) != (sc, t) {
                     return fail(offset(input, base), "composite endpoints share one table");
@@ -700,7 +741,9 @@ fn endpoint(input: &mut &str, base: usize) -> R<Endpoint> {
         schema = s0;
         table = t0;
     } else {
+        let p1s = offset(input, base);
         let p1 = ident(input, base)?;
+        let p1e = offset(input, base);
         if !eat(input, ".") {
             return fail(offset(input, base), "expected '.' in reference");
         }
@@ -708,16 +751,22 @@ fn endpoint(input: &mut &str, base: usize) -> R<Endpoint> {
             // table.(a, b)
             table = p1;
             schema = None;
+            table_span = p1s..p1e;
         } else {
+            let p2s = offset(input, base);
             let p2 = ident(input, base)?;
+            let p2e = offset(input, base);
             if eat(input, ".") {
                 // schema.table.(a, b) or schema.table.col
                 schema = Some(p1);
                 table = p2;
+                table_span = p2s..p2e;
             } else {
                 columns.push(p2);
+                column_spans.push(p2s..p2e);
                 schema = None;
                 table = p1;
+                table_span = p1s..p1e;
             }
         }
         if columns.is_empty() {
@@ -725,7 +774,9 @@ fn endpoint(input: &mut &str, base: usize) -> R<Endpoint> {
                 let _ = eat(input, "(");
                 loop {
                     ws(input);
+                    let cs = offset(input, base);
                     columns.push(ident(input, base)?);
+                    column_spans.push(cs..offset(input, base));
                     ws(input);
                     if !eat(input, ",") {
                         break;
@@ -738,7 +789,9 @@ fn endpoint(input: &mut &str, base: usize) -> R<Endpoint> {
                     );
                 }
             } else {
+                let cs = offset(input, base);
                 columns.push(ident(input, base)?);
+                column_spans.push(cs..offset(input, base));
             }
         }
     }
@@ -748,6 +801,8 @@ fn endpoint(input: &mut &str, base: usize) -> R<Endpoint> {
         schema,
         columns,
         span: start..end,
+        table_span,
+        column_spans,
     })
 }
 
@@ -1594,6 +1649,9 @@ fn settings_list_occs(
                             schema: None,
                             columns: vec![w],
                             span: ep_start_off..offset(input, base),
+                            // the host table: their anchor = the caller's
+                            table_span: ep_start_off..ep_start_off,
+                            column_spans: vec![ep_start_off..offset(input, base)],
                         }
                     }
                 };
@@ -2049,7 +2107,7 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
     let name = ident(input, base)?;
     let name_end = offset(input, base);
     sp(input);
-    let mut binder_errors: Vec<(usize, String)> = Vec::new();
+    let mut binder_errors: Vec<(usize, usize, String)> = Vec::new();
     // their validateFields (table/validate.ts:112): a column field with
     // args=[] errs 'A column must have a type' anchored at the callee
     // (the name). The type is missing when the line/scope ends — or when
@@ -2059,7 +2117,7 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
     // 'Invalid column type' at that list (probe c5/c6).
     let ty: String;
     if input.is_empty() || input.starts_with(['\n', '\r', '}']) {
-        binder_errors.push((name_off, "A column must have a type".to_string()));
+        binder_errors.push((name_off, name_end, "A column must have a type".to_string()));
         ty = String::new();
     } else if input.starts_with('[') {
         ty = String::new();
@@ -2078,7 +2136,7 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
         };
         errs.push(err_at(run_start, "Invalid number"));
         *input = &input[n..];
-        binder_errors.push((name_off, "A column must have a type".to_string()));
+        binder_errors.push((name_off, name_end, "A column must have a type".to_string()));
         ty = String::new();
     } else {
         ty = type_str(input, base)?;
@@ -2108,8 +2166,13 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
             let settings_start = offset(input, base);
             let (kvs, occs) = settings_list_occs(input, base, errs, true)?;
             if ty.is_empty() && !ty_is_list {
-                // the list became the field's arg — no valid column type
-                binder_errors.push((settings_start, "Invalid column type".to_string()));
+                // the list became the field's arg — no valid column type;
+                // their anchor = the list node
+                binder_errors.push((
+                    settings_start,
+                    offset(input, base),
+                    "Invalid column type".to_string(),
+                ));
                 ty_is_list = true;
             }
             // a SECOND bracket list on the same line is their fields error,
@@ -2117,8 +2180,9 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
             sp(input);
             if peek_is(input, "[") {
                 let msg = "These fields must be some inline settings optionally ended with a setting list";
-                binder_errors.push((settings_start, msg.to_string()));
-                binder_errors.push((offset(input, base), msg.to_string()));
+                binder_errors.push((settings_start, offset(input, base), msg.to_string()));
+                let second = offset(input, base);
+                binder_errors.push((second, second, msg.to_string()));
                 swallow_balanced_braces(input);
             }
             let mut s = column_settings_from(kvs);
@@ -2137,8 +2201,9 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
             // their validateNode class — these gate the interpretation
             // layer, so they ride the column for validate() to emit
             let msg = "These fields must be some inline settings optionally ended with a setting list";
-            binder_errors.push((off, msg.to_string()));
-            binder_errors.push((offset(input, base), msg.to_string()));
+            binder_errors.push((off, offset(input, base), msg.to_string()));
+            let second = offset(input, base);
+            binder_errors.push((second, second, msg.to_string()));
             swallow_balanced_braces(input);
             break;
         }
@@ -2147,6 +2212,7 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
             "unique" => inline_unique = true,
             _ => binder_errors.push((
                 off,
+                offset(input, base),
                 "Inline column settings can only be `pk` or `unique`".to_string(),
             )),
         }
@@ -3959,8 +4025,14 @@ fn ref_stmt(
 
 #[derive(Debug, Clone, PartialEq)]
 enum RNode {
-    /// PrimaryExpression(VariableNode) — identifier or quoted variable
-    Var { name: String, start: usize },
+    /// PrimaryExpression(VariableNode) — identifier or quoted variable.
+    /// `end` = the raw token's end: their chain anchors carry the
+    /// fragment TOKEN spans.
+    Var {
+        name: String,
+        start: usize,
+        end: usize,
+    },
     /// PrimaryExpression(LiteralNode) — number/string literal (color
     /// literals flagged: their isValidRecordValue rejects them)
     Lit { start: usize, color: bool },
@@ -4694,6 +4766,7 @@ impl RParser<'_> {
                 RNode::Var {
                     name: t.value.clone(),
                     start: t.start,
+                    end: t.end,
                 }
             }
             RTKind::Func => {
@@ -5023,10 +5096,10 @@ fn validate_fields_split(callee: &RNode, args: &[RNode]) -> (Vec<(usize, String)
 // surviving chains to validate.rs for their nodeReferee resolution (the
 // document may declare the tables after the ref, so resolution happens
 // at validate time)
-fn var_pair(v: &RNode) -> (String, usize) {
+fn var_pair(v: &RNode) -> (String, usize, usize) {
     match v {
-        RNode::Var { name, start } => (name.clone(), *start),
-        other => (String::new(), other.start()),
+        RNode::Var { name, start, end } => (name.clone(), *start, *end),
+        other => (String::new(), other.start(), other.start()),
     }
 }
 
@@ -5315,14 +5388,76 @@ fn ref_body_pipeline_mode(
     };
     let tree = p.application();
     if let RNode::App { callee, args, .. } = &tree {
-        let (callee_errors, arg_errors) = validate_fields_split(callee, args);
+        // their CompileError anchors carry NODE spans: the callee errors
+        // anchor field.callee [start..callee end], the per-side column
+        // checks each side expression, the arg errors each arg node
+        let callee_errors: Vec<(usize, usize, String)> = {
+            let mut v = Vec::new();
+            if !is_binary_relationship(callee) {
+                v.push((
+                    callee.start(),
+                    p.callee_end,
+                    "A Ref field must be a binary relationship".to_string(),
+                ));
+            } else if let RNode::Infix { left, right, .. } = &**callee {
+                for side in [left.as_ref(), right.as_ref()] {
+                    let frag = destructure_cvt(side).unwrap_or_default();
+                    if frag.variables.len() + frag.tuple.len().min(1) < 2 {
+                        v.push((
+                            side.start(),
+                            ref_block_side_end(&p, side.start()),
+                            "Invalid column reference".to_string(),
+                        ));
+                    }
+                }
+            }
+            if !is_equal_tuple_operands(callee) {
+                v.push((
+                    callee.start(),
+                    p.callee_end,
+                    "Unequal fields in ref endpoints".to_string(),
+                ));
+            }
+            v
+        };
+        let arg_errors: Vec<(usize, usize, String)> = {
+            // nodeSettings: a trailing or leading `[...]` is the settings
+            // list; every other arg errs once [arg node span]
+            let mut rest: Vec<&RNode> = args.iter().collect();
+            if matches!(rest.last(), Some(RNode::Array { .. })) {
+                rest.pop();
+            } else if matches!(rest.first(), Some(RNode::Array { .. })) {
+                rest.remove(0);
+            }
+            let mut arg_ends: Vec<usize> = p
+                .arg_spans
+                .iter()
+                .map(|(_, e)| *e)
+                .collect();
+            // the rest list may skip a leading Array: align the ends by
+            // walking args with the same skip
+            let mut skip_head = matches!(args.first(), Some(RNode::Array { .. }))
+                && !matches!(args.last(), Some(RNode::Array { .. }));
+            arg_ends = arg_ends
+                .into_iter()
+                .enumerate()
+                .filter(|(i, _)| !(skip_head && *i == 0))
+                .map(|(_, e)| e)
+                .collect();
+            skip_head = false;
+            rest.iter()
+                .zip(arg_ends.iter())
+                .map(|(a, e)| {
+                    (
+                        a.start(),
+                        *e,
+                        "A Ref field should only have a single binary relationship".to_string(),
+                    )
+                })
+                .collect()
+        };
         let (callee_chains, arg_chains) = bind_fields_split(callee, args);
         *callee_clean = callee_errors.is_empty();
-        let widen = |v: Vec<(usize, String)>| {
-            v.into_iter()
-                .map(|(o, m)| (o, o, m))
-                .collect::<Vec<(usize, usize, String)>>()
-        };
         if args_only {
             // the callee's SHAPE errors still fire (op-leading junk
             // rebinds the callee — `a.b > c.d - e.f` → infix(`-`) is not
@@ -5331,8 +5466,8 @@ fn ref_body_pipeline_mode(
             // unclean one's checks live ONLY in the chains (validate.rs
             // skips the non-clean ref's model checks — their interpret is
             // gated by the file's errors)
-            out.extend(widen(callee_errors));
-            out.extend(widen(arg_errors));
+            out.extend(callee_errors);
+            out.extend(arg_errors);
             if *callee_clean {
                 chains.extend(arg_chains);
             } else {
@@ -5340,8 +5475,8 @@ fn ref_body_pipeline_mode(
                 chains.extend(arg_chains);
             }
         } else {
-            out.extend(widen(callee_errors));
-            out.extend(widen(arg_errors));
+            out.extend(callee_errors);
+            out.extend(arg_errors);
             chains.extend(callee_chains);
             chains.extend(arg_chains);
             // their nodeSettings validates the settings list (the Array

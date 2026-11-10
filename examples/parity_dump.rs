@@ -41,13 +41,16 @@ fn row_of(src: &str, offset: usize) -> usize {
     src[..offset.min(src.len())].bytes().filter(|&b| b == b'\n').count() + 1
 }
 
-/// The byte column within the line for a byte offset.
+/// The UTF-16 column within the line for a byte offset: their Monaco
+/// positions count UTF-16 code units, not bytes (a `ñ` is one unit, two
+/// bytes - fuzz-span parity on non-ASCII lines).
 fn col_of(src: &str, offset: usize) -> usize {
     let off = offset.min(src.len());
-    match src[..off].rfind('\n') {
-        Some(nl) => off - nl - 1,
-        None => off,
-    }
+    let line_start = match src[..off].rfind('\n') {
+        Some(nl) => nl + 1,
+        None => 0,
+    };
+    src[line_start..off].chars().map(|c| c.len_utf16()).sum()
 }
 
 /// (row, column) for a byte offset.

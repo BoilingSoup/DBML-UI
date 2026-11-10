@@ -125,8 +125,9 @@ pub struct Column {
     pub settings: ColumnSettings,
     /// Their validateNode-class findings raised while parsing this
     /// column (the inline-settings field errors) — they gate the
-    /// interpretation layer like every binder error.
-    pub binder_errors: Vec<(usize, String)>,
+    /// interpretation layer like every binder error. The anchors carry
+    /// the offending TOKEN spans.
+    pub binder_errors: Vec<(usize, usize, String)>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -280,6 +281,11 @@ pub struct Endpoint {
     pub schema: Option<String>,
     pub columns: Vec<String>,
     pub span: Span,
+    /// Their anchors carry the FRAGMENT nodes: the missing-table
+    /// diagnostic anchors the table token, the missing-column one each
+    /// column token (fuzz-span parity).
+    pub table_span: Span,
+    pub column_spans: Vec<Span>,
 }
 
 /// A ref-body binder request: a dotted chain (schema..., table, column)
@@ -289,8 +295,9 @@ pub struct Endpoint {
 /// per their nodeRefereeOfRefEndpoint.
 #[derive(Debug, Clone)]
 pub struct BinderChain {
-    pub vars: Vec<(String, usize)>,
-    pub tuple: Vec<(String, usize)>,
+    /// (name, start, end) — their anchors carry the fragment TOKEN spans.
+    pub vars: Vec<(String, usize, usize)>,
+    pub tuple: Vec<(String, usize, usize)>,
     /// TableGroup members resolve with their own nodeReferee
     /// (nodeRefereeOfTableGroupField): one fragment per bindee, the
     /// schema context from depth 2, and the unresolved-left fall-through

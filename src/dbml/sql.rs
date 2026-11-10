@@ -361,6 +361,8 @@ impl<'a> Exporter<'a> {
                                 table: t.name.clone(),
                                 columns: vec![c.name.clone()],
                                 span: 0..0,
+                                table_span: 0..0,
+                                column_spans: vec![0..0],
                             },
                         );
                     } else if self.d != Dialect::SQLite {
