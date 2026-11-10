@@ -84,8 +84,13 @@ x11rb = { version = "0.13", features = ["xtest", "xkb"] }
 # Per-frame CPU work (lyon tessellation, cosmic-text shaping, glyph atlas
 # uploads) shrinks measurably under LTO + one codegen unit.
 [profile.release]
-lto = "fat"
-codegen-units = 1
+# thin LTO + parallel codegen: fat LTO re-optimized the whole dependency
+# graph single-threaded at link time on every build (~2.5min, memory-
+# heavy); thin keeps cross-crate inlining at a fraction of the cost, and
+# incremental reuse works when LTO is off/thin
+lto = "thin"
+codegen-units = 16
+incremental = true
 
 [dev-dependencies]
 iced_tiny_skia = { path = "vendor/iced_tiny_skia" }
