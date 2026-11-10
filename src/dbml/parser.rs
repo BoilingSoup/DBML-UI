@@ -1438,6 +1438,7 @@ fn settings_list_occs(
                 // when the value never parsed
                 if !occ_key.is_empty() {
                     occs.push(super::ast::SettingOcc {
+                        broken: true,
                         key: occ_key,
                         offset: key_start,
                         end: b0,
@@ -1620,6 +1621,7 @@ fn settings_list_occs(
                                                                 && toks[0].kind == RTKind::Ident
                                                             {
                                                                 occs.push(super::ast::SettingOcc {
+                                                                    broken: true,
                                                                     key: occ_key,
                                                                     offset: key_start,
                                                                     end: stop
@@ -1914,6 +1916,7 @@ fn settings_list_occs(
                                         v_span = vs.clone();
                                         let text = whole[vs.start - whole_start..vs.end - whole_start].to_string();
                                         occs.push(super::ast::SettingOcc {
+                                            broken: true,
                                             key: occ_key,
                                             offset: key_start,
                                             end: vs.end,
@@ -1947,6 +1950,7 @@ fn settings_list_occs(
                                     v_span = vs.clone();
                                     let text = whole[vs.start - whole_start..vs.end - whole_start].to_string();
                                     occs.push(super::ast::SettingOcc {
+                                        broken: true,
                                         key: occ_key,
                                         offset: key_start,
                                         end: vs.end,
@@ -1972,6 +1976,7 @@ fn settings_list_occs(
                                         ),
                                     });
                                     occs.push(super::ast::SettingOcc {
+                                        broken: true,
                                         key: occ_key,
                                         offset: key_start,
                                         end: ct.end,
@@ -1988,6 +1993,7 @@ fn settings_list_occs(
                                     v_span = vs.clone();
                                     let text = whole[vs.start - whole_start..vs.end - whole_start].to_string();
                                     occs.push(super::ast::SettingOcc {
+                                        broken: true,
                                         key: occ_key,
                                         offset: key_start,
                                         end: vs.end,
@@ -2053,6 +2059,7 @@ fn settings_list_occs(
                                     v_span = vs.clone();
                                     let text = whole[vs.start - whole_start..vs.end - whole_start].to_string();
                                     occs.push(super::ast::SettingOcc {
+                                        broken: true,
                                         key: occ_key,
                                         offset: key_start,
                                         end: bt.start,
@@ -2071,6 +2078,7 @@ fn settings_list_occs(
                                     }
                                 } else {
                                     occs.push(super::ast::SettingOcc {
+                                        broken: true,
                                         key: occ_key,
                                         offset: key_start,
                                         end: bt.start,
@@ -2144,6 +2152,7 @@ fn settings_list_occs(
                     key_end
                 },
                 has_value: occ_before_value != input.len(),
+                broken: false,
                 quoted: val_quoted,
                 value: last_val,
                 value_span: v_span,

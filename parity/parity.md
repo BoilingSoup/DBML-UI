@@ -97,16 +97,12 @@ tools below. Never say done when the sweep still finds shapes.
   driver resolves `path` from cwd).
 - Corpus gates: 78/78 + 78/78. Focused tests 42/42 + editor 61/61.
 - The user's three desktop files: span-identical, folded into the corpus.
-- The mutation campaign (round 14, seed 43): **280/600 span-identical** —
-  rounds 2-14 landed (the mechanisms below). OPEN: their checkDefault
-  (isValidDefaultValue: quoted string, signed number, true/false/null,
-  backtick function, 2-3 fragment enum reference — the anchor = the
-  value node ?? the name) needs the partial-attribute semantics first:
-  a dispatched-broken default (probe e21: `[default: 'x\n}`) never
-  reaches their check because the consume-thrown attribute's
-  partialNode stays out of the setting list; the truncated backtick
-  default at EOF (m43_0254/0526) errs their FUNCTION token scan's
-  'EOF reached while parsing' + the operand EOF + the check.
+- The mutation campaign (round 15, seed 43): **280/600 span-identical** —
+  rounds 2-15 landed (the mechanisms below). OPEN: the enum-reference
+  default BINDS in their binder and resolves (`[default:
+  schema.enum.val]` errs 'Schema schema does not exist' at the value —
+  probe a6) — our check passes validity but the enum-ref resolution is
+  a binder surface still to port.
 
 ## Round-2 mechanisms (ported; do not re-derive)
 
@@ -272,6 +268,14 @@ tools below. Never say done when the sweep still finds shapes.
    - the bare-word endpoint's missing-column anchors the COLUMN TOKEN
      (column_spans[0]) — the hard-won rule applied to the inline-ref
      check (validate.rs 534; probe m43_0193 PASS: `poref` spans 44-49)
+   - the partial-attribute semantics: the SettingOcc carries `broken` —
+     the swallow-gather/dispatch routes mark their occurrences broken
+     and the validity checks skip them: a dispatched-broken default
+     never reaches their check (probe e21 PASS); checkDefault PORTED
+     (their isValidDefaultValue: a quoted string, a signed number,
+     true/false/null, a backtick function, or a 2-3 fragment enum
+     reference; the anchor = the value node ?? the name — probes a1-a8
+     PASS)
    - OPEN (probed, port next):
      * the attr-name node = the identifier STREAM: the key span trims
        the trailing trivia spaces, and a value-less attribute's node is

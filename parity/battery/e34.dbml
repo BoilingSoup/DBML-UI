@@ -1,0 +1,3 @@
+Table t {
+  id int [default: foo bar]
+}

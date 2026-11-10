@@ -175,6 +175,10 @@ pub struct SettingOcc {
     /// the settings-entry tokens).
     pub end: usize,
     pub has_value: bool,
+    /// The value came from a BROKEN gather (the swallowed/merged run or
+    /// a dispatched operand) — their partial attribute: their checkDefault
+    /// never sees these (probe e21), so the validity checks skip them.
+    pub broken: bool,
     /// The verbatim value text (quotes kept) when the value parsed as a
     /// plain string.
     pub value: Option<String>,

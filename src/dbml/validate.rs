@@ -266,15 +266,39 @@ pub(crate) fn column_setting_errors(
             a.key.as_str()
         };
         match name {
-            // OPEN: their checkDefault (isValidDefaultValue: a quoted
-            // string, a signed number, true/false/null, a backtick
-            // function, a 2-3 fragment enum reference — the anchor = the
-            // value node ?? the name) needs the partial-attribute
-            // semantics first: a dispatched-broken default (probe e21:
-            // `[default: 'x\n}`) never reaches their check because the
-            // consume-thrown attribute's partialNode stays out of the
-            // list — our occ from the broken-gather route would fire
-            // spuriously
+            "default" => {
+                // their checkDefault (isValidDefaultValue): a quoted
+                // string, a signed number, true/false/null, a backtick
+                // function expression, or a 2-3 fragment enum reference;
+                // the anchor = the VALUE node ?? the NAME (a1: the
+                // value-less default errs at the name; a3/a4: the parsed
+                // invalid value errs at the value node). The
+                // partial-attribute semantics: a dispatched-broken
+                // default (probe e21: `[default: 'x\n}`) never reaches
+                // their check — the broken flag skips our swallow-route
+                // occurrences
+                if a.broken {
+                    continue;
+                }
+                let (vs, ve) = if a.has_value && a.value_span.start != a.value_span.end {
+                    (a.value_span.start, Some(a.value_span.end))
+                } else {
+                    (a.offset, Some(a.end))
+                };
+                let v = a.value.as_deref().unwrap_or("").trim();
+                let frags: Vec<&str> = v.split('.').collect();
+                let valid = a.quoted
+                    || v.starts_with('`')
+                    || v == "true"
+                    || v == "false"
+                    || v == "null"
+                    || v.parse::<f64>().is_ok()
+                    || ((frags.len() == 2 || frags.len() == 3)
+                        && frags.iter().all(|f| !f.is_empty()));
+                if !valid {
+                    out.push((vs, ve, "'default' must be an enum value, a string literal, number literal, function expression, true, false or null".to_string()));
+                }
+            }
             "pk" | "primary key" | "not null" | "null" | "unique" | "increment" => {
                 if a.has_value {
                     // their anchor = the VALUE expression node (probe
