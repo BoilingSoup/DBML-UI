@@ -260,7 +260,15 @@ tools below. Never say done when the sweep still finds shapes.
        the trailing trivia spaces, and a value-less attribute's node is
        the NAME stream alone (the value never parses when junk follows
        — probe x1 PASS: `uniEnum e` spans 42..51, the `{` junk point
-       excluded); m43_0230/0255 PASS
+       excluded); m43_0230/0255 PASS. The custom-setting check anchors
+       attr.value ?? attr.name: the VALUE node when it parsed, the name
+       stream when it didn't (x1 still PASS). OPEN: m43_0316 — the
+       value = a tuple-plus-block application (`defaultrecords (a) {: …`)
+       our value() leaves empty (no tuple arm at the settings-value
+       position); m43_0240/0254/0526 (the default cascade: the string
+       token's 'EOF reached while parsing' does not surface);
+       m43_0308 ('Expect an identifier' anchored at a LATER token — the
+       sync advanced differently)
      * the remaining ~340 spread across small clusters — keep
        clustering from the round dump (the compare tool:
        /tmp/cluster2.py pattern — ours in 6 batch files, theirs in

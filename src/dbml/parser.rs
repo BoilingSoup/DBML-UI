@@ -6095,9 +6095,20 @@ fn validate_field_settings(occs: &[super::ast::SettingOcc], out: &mut Vec<(usize
                                     && v[1..].chars().all(|c| c.is_ascii_hexdigit()))
                         }).unwrap_or(false);
                     if !ok {
+                        // their check anchors attr.value ?? attr.name: the
+                        // VALUE node when it parsed, the key stream when it
+                        // didn't (probe m43_0316: the value node; probe x1:
+                        // the name stream)
+                        let (vs, ve) = if a.has_value
+                            && a.value_span.start != a.value_span.end
+                        {
+                            (a.value_span.start, a.value_span.end)
+                        } else {
+                            (a.offset, a.end)
+                        };
                         out.push((
-                            a.offset,
-                            a.end,
+                            vs,
+                            ve,
                             format!(
                                 "Custom setting '{}' must be a string, a color literal, a number \
                                  literal, or a boolean literal",
