@@ -194,6 +194,141 @@ pub fn written_op(card: Cardinality, left_opt: bool, right_opt: bool) -> &'stati
     }
 }
 
+/// Their column-settings rules (tablePartial/validate.ts), operating on a
+/// single column's setting occurrences: once-only names, the pk/primary-key
+/// and not-null/null conflicts (each error anchored at EVERY offending
+/// occurrence), and the flag/value rules. Returns `(start, end, message)`
+/// triples — `end: None` for the token-anchored (plain) findings, `Some`
+/// for the node-spanned ones. Shared by the model validate path and the
+/// parser's sentinel path, where a `}` aborts the list and the partial
+/// attributes still validate (their validator walks the partial nodes —
+/// probes c25h/c25j).
+pub(crate) fn column_setting_errors(
+    occs: &[super::ast::SettingOcc],
+) -> Vec<(usize, Option<usize>, String)> {
+    let mut out = Vec::new();
+    let attrs_of = |name: &str| -> Vec<&super::ast::SettingOcc> {
+        occs.iter()
+            .filter(|o| {
+                o.key == name
+                    || (name == "primary key" && o.key == "primary_key")
+            })
+            .collect()
+    };
+    for name in [
+        "note",
+        "primary key",
+        "pk",
+        "not null",
+        "null",
+        "unique",
+        "increment",
+        "default",
+    ] {
+        let attrs = attrs_of(name);
+        if attrs.len() > 1 {
+            for a in attrs {
+                out.push((a.offset, None, format!("'{name}' can only appear once")));
+            }
+        }
+    }
+    let pk = attrs_of("pk");
+    let pkey = attrs_of("primary key");
+    if !pk.is_empty() && !pkey.is_empty() {
+        for a in pk.iter().chain(pkey.iter()) {
+            out.push((
+                a.offset,
+                None,
+                "Either one of 'primary key' and 'pk' can appear".to_string(),
+            ));
+        }
+    }
+    let nn = attrs_of("not null");
+    let nu = attrs_of("null");
+    if !nn.is_empty() && !nu.is_empty() {
+        for a in nn.iter().chain(nu.iter()) {
+            out.push((
+                a.offset,
+                None,
+                "'not null' and 'null' can not be set at the same time".to_string(),
+            ));
+        }
+    }
+    for a in occs {
+        let name = if a.key == "primary_key" {
+            "primary key"
+        } else {
+            a.key.as_str()
+        };
+        match name {
+            "pk" | "primary key" | "not null" | "null" | "unique" | "increment" => {
+                if a.has_value {
+                    out.push((a.offset, None, format!("'{name}' must not have a value")));
+                }
+            }
+            "note" => {
+                if a.has_value && !a.quoted {
+                    // their anchor = the VALUE expression node
+                    out.push((
+                        a.value_span.start,
+                        Some(a.value_span.end),
+                        "'note' must be a quoted string".to_string(),
+                    ));
+                }
+            }
+            _ => {
+                // their custom-setting check (c21/c23/c17): a key
+                // outside the known set must carry a string, color,
+                // number, or boolean value — the anchor is the key
+                // node when valueless, the value node when valued
+                const KNOWN: [&str; 14] = [
+                    "pk",
+                    "primary key",
+                    "primary_key",
+                    "increment",
+                    "autoincrement",
+                    "auto_increment",
+                    "unique",
+                    "not null",
+                    "null",
+                    "note",
+                    "default",
+                    "check",
+                    "ref",
+                    "color",
+                ];
+                if KNOWN.contains(&name) {
+                    // handled above or a known key: nothing
+                } else {
+                    let value_ok = a.has_value && {
+                        let v = a.value.as_deref().unwrap_or("");
+                        a.quoted
+                            || v.starts_with('#')
+                            || v.parse::<f64>().is_ok()
+                            || matches!(v.to_ascii_lowercase().as_str(), "true" | "false")
+                    };
+                    if !value_ok {
+                        let (s, e) = if a.has_value {
+                            (a.value_span.start, a.value_span.end)
+                        } else {
+                            (a.offset, a.end)
+                        };
+                        out.push((
+                            s,
+                            Some(e),
+                            format!(
+                                "Custom setting '{name}' must be a string, a color \
+                                 literal, a number literal, or a boolean literal"
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Validate a parsed document: duplicate definition names, refs and
 /// TableGroup members pointing at tables or columns that do not exist,
 /// index columns missing from their table, the nullable-FK constraint
@@ -386,130 +521,10 @@ pub fn validate_with_parse(
             if occs.is_empty() {
                 continue;
             }
-            let attrs_of = |name: &str| -> Vec<&super::ast::SettingOcc> {
-                occs.iter()
-                    .filter(|o| {
-                        o.key == name
-                            || (name == "primary key" && o.key == "primary_key")
-                    })
-                    .collect()
-            };
-            for name in [
-                "note",
-                "primary key",
-                "pk",
-                "not null",
-                "null",
-                "unique",
-                "increment",
-                "default",
-            ] {
-                let attrs = attrs_of(name);
-                if attrs.len() > 1 {
-                    for a in attrs {
-                        out.push(Diagnostic::plain(
-                            a.offset,
-                            format!("'{name}' can only appear once"),
-                        ));
-                    }
-                }
-            }
-            let pk = attrs_of("pk");
-            let pkey = attrs_of("primary key");
-            if !pk.is_empty() && !pkey.is_empty() {
-                for a in pk.iter().chain(pkey.iter()) {
-                    out.push(Diagnostic::plain(
-                        a.offset,
-                        "Either one of 'primary key' and 'pk' can appear".to_string(),
-                    ));
-                }
-            }
-            let nn = attrs_of("not null");
-            let nu = attrs_of("null");
-            if !nn.is_empty() && !nu.is_empty() {
-                for a in nn.iter().chain(nu.iter()) {
-                    out.push(Diagnostic::plain(
-                        a.offset,
-                        "'not null' and 'null' can not be set at the same time".to_string(),
-                    ));
-                }
-            }
-            for a in occs {
-                let name = if a.key == "primary_key" {
-                    "primary key"
-                } else {
-                    a.key.as_str()
-                };
-                match name {
-                    "pk" | "primary key" | "not null" | "null" | "unique" | "increment" => {
-                        if a.has_value {
-                            out.push(Diagnostic::plain(
-                                a.offset,
-                                format!("'{name}' must not have a value"),
-                            ));
-                        }
-                    }
-                    "note" => {
-                        if a.has_value && !a.quoted {
-                            // their anchor = the VALUE expression node
-                            out.push(Diagnostic::spanned(
-                                a.value_span.start,
-                                a.value_span.end,
-                                "'note' must be a quoted string".to_string(),
-                            ));
-                        }
-                    }
-                    _ => {
-                        // their custom-setting check (c21/c23/c17): a key
-                        // outside the known set must carry a string, color,
-                        // number, or boolean value — the anchor is the key
-                        // node when valueless, the value node when valued
-                        const KNOWN: [&str; 14] = [
-                            "pk",
-                            "primary key",
-                            "primary_key",
-                            "increment",
-                            "autoincrement",
-                            "auto_increment",
-                            "unique",
-                            "not null",
-                            "null",
-                            "note",
-                            "default",
-                            "check",
-                            "ref",
-                            "color",
-                        ];
-                        if KNOWN.contains(&name) {
-                            // handled above or a known key: nothing
-                        } else {
-                            let value_ok = a.has_value && {
-                                let v = a.value.as_deref().unwrap_or("");
-                                a.quoted
-                                    || v.starts_with('#')
-                                    || v.parse::<f64>().is_ok()
-                                    || matches!(
-                                        v.to_ascii_lowercase().as_str(),
-                                        "true" | "false"
-                                    )
-                            };
-                            if !value_ok {
-                                let (s, e) = if a.has_value {
-                                    (a.value_span.start, a.value_span.end)
-                                } else {
-                                    (a.offset, a.end)
-                                };
-                                out.push(Diagnostic::spanned(
-                                    s,
-                                    e,
-                                    format!(
-                                        "Custom setting '{name}' must be a string, a color \
-                                         literal, a number literal, or a boolean literal"
-                                    ),
-                                ));
-                            }
-                        }
-                    }
+            for (offset, end, message) in column_setting_errors(occs) {
+                match end {
+                    Some(end) => out.push(Diagnostic::spanned(offset, end, message)),
+                    None => out.push(Diagnostic::plain(offset, message)),
                 }
             }
         }

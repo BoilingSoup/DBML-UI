@@ -36,6 +36,11 @@ struct Fail {
     offset: usize,
     end: Option<usize>,
     message: String,
+    /// The settings parsed before a `}` aborted the list mid-attribute —
+    /// an empty message (the block-close sentinel) carries them back to
+    /// the block loop, whose inline checks validate the partial
+    /// attributes (their validator walks the partial nodes: c25f/c25h/c25k).
+    partial_occs: Vec<super::ast::SettingOcc>,
 }
 
 type R<T> = Result<T, Fail>;
@@ -52,6 +57,7 @@ fn fail<T>(o: usize, m: impl Into<String>) -> R<T> {
         offset: o,
         end: None,
         message: m.into(),
+        partial_occs: Vec::new(),
     })
 }
 
@@ -60,6 +66,7 @@ fn fail_with_end<T>(o: usize, end: usize, m: impl Into<String>) -> R<T> {
         offset: o,
         end: Some(end),
         message: m.into(),
+        partial_occs: Vec::new(),
     })
 }
 
@@ -204,6 +211,7 @@ fn ident(input: &mut &str, base: usize) -> R<String> {
             offset: offset(input, base),
             end: None,
             message: "unterminated backticked identifier".to_string(),
+            partial_occs: Vec::new(),
         })?;
         let name = rest[..end].to_string();
         *input = &rest[end + 1..];
@@ -379,6 +387,7 @@ fn type_str(input: &mut &str, base: usize) -> R<String> {
                 offset: offset(input, base),
                 end: None,
                 message: "unterminated quoted type".to_string(),
+                partial_occs: Vec::new(),
             })?;
             out.push('"');
             out.push_str(&rest[..end + 1]); // verbatim, both quotes
@@ -758,6 +767,7 @@ enum SwallowEnd {
     Bracket,
     Brace,
     Comma,
+    Junk,
     Eof,
 }
 
@@ -770,17 +780,18 @@ fn swallow_gather(
     input: &mut &str,
     base: usize,
     errs: &mut Vec<ParseError>,
-) -> (SwallowEnd, Option<Span>, Vec<RTok>, Option<RTok>) {
+) -> (SwallowEnd, Option<Span>, Vec<RTok>, Option<RTok>, Option<RTok>) {
     // the failed string consumed its partial text; input sits at its
     // newline (or EOF) — the value continues on the NEXT line
     if let Some(k) = input.find('\n') {
         *input = &input[k + 1..];
     } else {
-        return (SwallowEnd::Eof, None, Vec::new(), None);
+        return (SwallowEnd::Eof, None, Vec::new(), None, None);
     }
     let mut toks: Vec<RTok> = Vec::new();
     let mut ending = SwallowEnd::Eof;
     let mut brace_tok = None;
+    let mut junk_tok: Option<RTok> = None;
     // the VALUE's application stops at a clean line end (their
     // hasTrailingNewLines); the LIST itself keeps scanning for its
     // terminator — later lines are item 2+ material, not this value's
@@ -810,23 +821,35 @@ fn swallow_gather(
         let mut lex_errs: Vec<ParseError> = Vec::new();
         line_toks = gather_invalid_num(line_toks, &mut lex_errs);
         errs.append(&mut lex_errs);
-        // the terminator ends the scan; everything before it is the
-        // value's while the value is still open. A COMMA ends the VALUE
-        // only (their application stop-kind) — the list itself resumes
-        // with the next item.
+        // the VALUE's application stops at the first non-operand token —
+        // the list's own `,`/`]`/`}` terminators, or junk like `:` (their
+        // expression_bp breaks the infix loop there; probe c25f: the
+        // merged `y: z }` values `y` and comma-fails at the `:`). The
+        // GATHER itself only ends at the terminator or EOF; junk just
+        // closes the value while the scan keeps looking for the `}` the
+        // block will close at.
         let stop = line_toks
             .iter()
-            .position(|t| matches!(t.kind, RTKind::RBracket | RTKind::RBrace));
-        let comma = if value_open {
-            line_toks[..stop.unwrap_or(line_toks.len())]
-                .iter()
-                .position(|t| t.kind == RTKind::Comma)
+            .position(|t| {
+                matches!(
+                    t.kind,
+                    RTKind::RBracket
+                        | RTKind::RBrace
+                        | RTKind::Comma
+                        | RTKind::Colon
+                        | RTKind::Semicolon
+                        | RTKind::RParen
+                        | RTKind::LBracket
+                        | RTKind::LBrace
+                        | RTKind::Unknown
+                )
+            });
+        let content_len = if value_open {
+            stop.unwrap_or(line_toks.len())
         } else {
-            None
+            0
         };
-        let content_len = comma.unwrap_or(stop.unwrap_or(line_toks.len()));
         let stop_tok = stop.map(|i| line_toks[i].clone());
-        let comma_tok = comma.map(|i| line_toks[i].clone());
         if value_open {
             for t in &line_toks[..content_len] {
                 if t.kind != RTKind::Eof {
@@ -834,25 +857,53 @@ fn swallow_gather(
                 }
             }
         }
-        match stop_tok.or(comma_tok.clone()) {
+        match stop_tok.clone() {
             Some(st) if st.kind == RTKind::Comma => {
                 // the value closed at the comma; the list resumes AFTER it
-                // (the loop's own `eat(",")` never runs on this path)
+                // (the loop's own `eat(",")` never runs on this path). The
+                // comma rides brace_tok so the caller can anchor the
+                // empty-value operand error on it (d6)
                 let rel = st.start - offset(input, base) + st.value.len();
                 *input = &input[rel..];
                 ending = SwallowEnd::Comma;
-                brace_tok = None;
+                brace_tok = Some(st);
                 break;
             }
             Some(st) => {
                 let rel = st.start - offset(input, base);
-                *input = &input[rel..];
-                ending = match st.kind {
-                    RTKind::RBracket => SwallowEnd::Bracket,
-                    _ => SwallowEnd::Brace,
-                };
-                brace_tok = Some(st);
-                break;
+                match st.kind {
+                    RTKind::RBracket => {
+                        *input = &input[rel..];
+                        ending = SwallowEnd::Bracket;
+                        // the terminator token rides in brace_tok too —
+                        // the ref path's operand-position check (c20)
+                        // covers the `]` arriving at the value
+                        brace_tok = Some(st.clone());
+                        break;
+                    }
+                    RTKind::RBrace => {
+                        *input = &input[rel..];
+                        ending = SwallowEnd::Brace;
+                        brace_tok = Some(st.clone());
+                        break;
+                    }
+                    // junk: the value stopped at a non-operand token; the
+                    // scan keeps looking for the terminator the block will
+                    // close at (the caller anchors its comma-error on the
+                    // returned junk token)
+                    _ => {
+                        value_open = false;
+                        if junk_tok.is_none() {
+                            junk_tok = Some(st);
+                        }
+                        let nl = input.find('\n');
+                        match nl {
+                            Some(k) => *input = &input[k + 1..],
+                            None => *input = &input[input.len()..],
+                        }
+                        continue;
+                    }
+                }
             }
             None => {
                 if line_end < input.len() {
@@ -881,7 +932,15 @@ fn swallow_gather(
         space_after: false,
         invalid: false,
     });
-    (ending, span, toks, brace_tok)
+    // the 4th element = the token where the VALUE stopped (the junk anchor
+    // for the caller's comma-error; the terminator itself when no junk);
+    // the 5th = the `}` when the gather met one (the block-close position)
+    let stop_tok = junk_tok.or(match ending {
+        SwallowEnd::Bracket | SwallowEnd::Brace | SwallowEnd::Comma => brace_tok.clone(),
+        SwallowEnd::Eof => None,
+        SwallowEnd::Junk => None,
+    });
+    (ending, span, toks, stop_tok, brace_tok)
 }
 
 /// The swallowed value as their application tree (the sticky-note checks
@@ -932,7 +991,7 @@ fn sticky_note_value(
                 end: e.end,
                 message: e.message,
             });
-            let (ending, vspan, toks, _brace) = swallow_gather(input, base, errs);
+            let (ending, vspan, toks, _stop, _brace) = swallow_gather(input, base, errs);
             if let Some(vs) = vspan {
                 let (app, _callee_end, arg_spans) = swallow_application(toks, errs);
                 if let RNode::App { callee, args, .. } = &app {
@@ -957,10 +1016,13 @@ fn sticky_note_value(
             }
             match ending {
                 // the terminator belongs to the enclosing block: the field
-                // is done, input sits at the `}`/`]`/`,`
+                // is done, input sits at the `}`/`]`/`,`. Junk never ends a
+                // gather (the scan continues to the terminator); grouped
+                // for exhaustiveness.
                 SwallowEnd::Brace
                 | SwallowEnd::Bracket
                 | SwallowEnd::Comma
+                | SwallowEnd::Junk
                 | SwallowEnd::Eof => Ok(String::new()),
             }
         }
@@ -970,16 +1032,125 @@ fn sticky_note_value(
 
 /// `[key, key: value, ref: > t.c, ...]` — parsed generically; callers
 /// interpret the pairs.
-fn settings_list(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Vec<(String, Option<SettingVal>)>> {
-    settings_list_occs(input, base, errs).map(|(kvs, _)| kvs)
+fn settings_list(
+    input: &mut &str,
+    base: usize,
+    errs: &mut Vec<ParseError>,
+    block_ctx: bool,
+) -> R<Vec<(String, Option<SettingVal>)>> {
+    settings_list_occs(input, base, errs, block_ctx).map(|(kvs, _)| kvs)
+}
+
+/// The outcome when a `}` (or junk) arrives where the list expected an
+/// attribute: their operand-position throw picks its handler by scanning
+/// for the nearest closer (findHandlerContext) — inside a block the BLOCK
+/// handles it (the block closes at the brace: the empty-message sentinel),
+/// otherwise the list handles its own error (synchronizeList consumes to
+/// the next `,`/`]`, `}`es included; at EOF the closing-bracket error).
+enum ListBrace {
+    /// the block closes: return the empty-message sentinel, input at the `}`
+    BlockClose,
+    /// the list continues after the sync
+    Continue,
+    /// the list handled it and the scan hit EOF: the closing-bracket error
+    /// is already pushed — return Ok
+    CloseOk,
+}
+
+fn list_brace_dispatch(
+    input: &mut &str,
+    base: usize,
+    errs: &mut Vec<ParseError>,
+    block_ctx: bool,
+) -> ListBrace {
+    // their handler scan: the nearest `,`/`]`/`}` token decides — a `,`/`]`
+    // hands the error to the LIST (any context), a `}` to the BLOCK (only
+    // when one is open), no closer at all to the current context (the list)
+    let mut i = 0;
+    let bytes = input.as_bytes();
+    let mut closer: Option<(usize, u8)> = None;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\'' | b'"' => {
+                // a string's contents never decide the handler
+                let q = bytes[i];
+                i += 1;
+                while i < bytes.len() && bytes[i] != q && bytes[i] != b'\n' {
+                    i += if bytes[i] == b'\\' { 2 } else { 1 };
+                }
+                i += 1;
+            }
+            b'#' => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b',' | b']' | b'}' => {
+                closer = Some((i, bytes[i]));
+                break;
+            }
+            _ => i += 1,
+        }
+    }
+    match closer {
+        Some((pos, b'}')) if block_ctx => {
+            // the block closes at this brace: skip the offending junk
+            // (marked invalid, silent) so input sits at the `}`
+            *input = &input[pos..];
+            ListBrace::BlockClose
+        }
+        Some((_, b'}')) => {
+            // a `}` with no block open is not a handler — synchronizeList
+            // consumes it (marked invalid, silent) and keeps scanning.
+            // MUST precede the catch-all below: falling there would sync
+            // TO the brace and re-enter the loop at the same position
+            // forever.
+            *input = &input[1..];
+            let sync = input
+                .find([',', ']'])
+                .map(|k| k + 1)
+                .unwrap_or(input.len());
+            let at_eof = sync >= input.len();
+            *input = &input[sync..];
+            if at_eof {
+                errs.push(err_at(
+                    offset(input, base),
+                    "Expect a closing bracket ']'",
+                ));
+                ListBrace::CloseOk
+            } else {
+                ListBrace::Continue
+            }
+        }
+        Some((pos, _)) => {
+            // the list handles: sync to (not past) the closer — the loop's
+            // own comma-eat / bracket-check takes it from there
+            *input = &input[pos..];
+            ListBrace::Continue
+        }
+        None => {
+            // no closer anywhere: the current context (the list) handles —
+            // sync to EOF; their closing-bracket consume fails at the EOF
+            // token
+            *input = &input[input.len()..];
+            errs.push(err_at(
+                offset(input, base),
+                "Expect a closing bracket ']'",
+            ));
+            ListBrace::CloseOk
+        }
+    }
 }
 
 /// The settings list plus every key occurrence (their attribute nodes —
-/// the duplicate/conflict rules anchor each one).
+/// the duplicate/conflict rules anchor each one). `block_ctx` = whether an
+/// enclosing block (`{`) is open — it decides who handles a `}` arriving
+/// inside the list (their findHandlerContext).
 fn settings_list_occs(
     input: &mut &str,
     base: usize,
     errs: &mut Vec<ParseError>,
+    block_ctx: bool,
 ) -> R<(Vec<(String, Option<SettingVal>)>, Vec<super::ast::SettingOcc>)> {
     if !eat(input, "[") {
         return fail(offset(input, base), "expected '['");
@@ -987,6 +1158,10 @@ fn settings_list_occs(
     let whole = *input; // the remaining text from just after `[` — the
     // merged swallow value slices out of it by absolute offset
     let whole_start = offset(&whole, base);
+    // their while-loop: after a CONSUMED COMMA the next attribute parses
+    // even at the `]` — the empty name errs before the list closes (d6's
+    // second error). A `]` with no comma before it closes silently ([]).
+    let mut after_comma = false;
     let mut occs: Vec<super::ast::SettingOcc> = Vec::new();
     let mut out = Vec::new();
     'list: loop {
@@ -994,32 +1169,151 @@ fn settings_list_occs(
         // bracket list (probe: `[pk,\n not null, unique]` parses clean)
         ws(input);
         if eat(input, "]") {
+            if after_comma {
+                errs.push(ParseError {
+                    offset: offset(input, base) - 1,
+                    end: Some(offset(input, base)),
+                    message: "Expect a non-empty attribute name".to_string(),
+                });
+            }
             return Ok((out, occs));
         }
         if input.is_empty() {
             return fail(offset(input, base), "unterminated settings");
         }
+        after_comma = false;
         let key_start = offset(input, base);
         let end = input
             .find(|c: char| !(c.is_alphanumeric() || c == '_' || c == ' ' || c == '\t'))
             .unwrap_or(input.len());
         let key = input[..end].trim().to_ascii_lowercase();
         if key.is_empty() {
-            return fail(offset(input, base), "expected setting key");
+            // their attribute-position dispatch: `,`/`:` at the name
+            // position log EMPTY_ATTRIBUTE_NAME and the list continues
+            // (the loop's comma-eat takes the comma; the colon starts the
+            // empty-key value); anything else is the operand-position
+            // error (primaryExpression's throw — c25: a `}` there closes
+            // the block)
+            let b = input.as_bytes().first().copied();
+            if b == Some(b',') {
+                errs.push(ParseError {
+                    offset: key_start,
+                    end: Some(key_start + 1),
+                    message: "Expect a non-empty attribute name".to_string(),
+                });
+                *input = &input[1..];
+                after_comma = true;
+                continue 'list;
+            }
+            if b == Some(b':') {
+                // their attribute() logs the empty-name error on a colon
+                // too (non-throwing) — the colon then still introduces the
+                // empty-key attribute's value
+                errs.push(ParseError {
+                    offset: key_start,
+                    end: Some(key_start + 1),
+                    message: "Expect a non-empty attribute name".to_string(),
+                });
+            }
+            if b != Some(b':') {
+                // the error anchors the offending TOKEN (their logError on
+                // the peek token); the handler dispatch then decides
+                let mut probe = *input;
+                let tok_len = consume_one_token(&mut probe).unwrap_or(1);
+                errs.push(ParseError {
+                    offset: key_start,
+                    end: Some(key_start + tok_len),
+                    message: "Expect a variable or literal".to_string(),
+                });
+                match list_brace_dispatch(input, base, errs, block_ctx) {
+                    ListBrace::BlockClose => {
+                        // the empty-message sentinel: the error is already
+                        // pushed, the block loop closes at the `}` — the
+                        // partial attributes ride back for the block loop's
+                        // inline checks (their validator walks the partial
+                        // nodes: c25a's `pk`)
+                        return Err(Fail {
+                            offset: offset(input, base),
+                            end: None,
+                            message: String::new(),
+                            partial_occs: occs,
+                        });
+                    }
+                    // the list handled its own error: the sync stopped at a
+                    // `,`/`]` — the list loop's comma consume takes the
+                    // comma (their synchronizeList + consume(COMMA))
+                    ListBrace::Continue => {
+                        let _ = eat(input, ",");
+                        continue 'list;
+                    }
+                    ListBrace::CloseOk => return Ok((out, occs)),
+                }
+            }
+            // the colon case falls through: the eat(":") below consumes it
+            // and the empty-key attribute's value still parses (their
+            // match(COLON)); the occ push is guarded off for the empty key
         }
         let occ_key = key.clone();
         *input = &input[end..];
         sp(input);
         let occ_before_value = input.len();
         let mut val_quoted = false;
+        // their tail error: a colon item ends the attribute (the while
+        // loop's consume(COMMA) errs 'Expect a comma'); a colon-less
+        // item's identifier STREAM runs into the junk and errs 'Expect an
+        // identifier' on it (d2: `c int` + the block's `}`)
+        let mut item_had_colon = false;
         // the VALUE node's span: their settings-note checks anchor the
         // value expression, not the key
         let mut v_span = offset(input, base)..offset(input, base);
         if eat(input, ":") {
+            item_had_colon = true;
             sp(input);
             // a newline between `:` and the value is trivia too
             ws(input);
             sp(input);
+            // a `}` at the value position: their operand() logs
+            // INVALID_OPERAND (non-throwing) and returns an EmptyNode,
+            // which leftExpression_bp then throws — inside a block the
+            // cascade closes the block at the brace (c25b), outside it
+            // the list handles its own error
+            if input.starts_with('}') {
+                let b0 = offset(input, base);
+                errs.push(ParseError {
+                    offset: b0,
+                    end: Some(b0 + 1),
+                    message: "Invalid start of operand \"}\"".to_string(),
+                });
+                // the attribute exists as {name, colon} with no value —
+                // their validateSettingList's custom check anchors the KEY
+                // when the value never parsed
+                if !occ_key.is_empty() {
+                    occs.push(super::ast::SettingOcc {
+                        key: occ_key,
+                        offset: key_start,
+                        end: b0,
+                        has_value: false,
+                        quoted: val_quoted,
+                        value: None,
+                        value_span: v_span.clone(),
+                    });
+                }
+                match list_brace_dispatch(input, base, errs, block_ctx) {
+                    ListBrace::BlockClose => {
+                        return Err(Fail {
+                            offset: b0,
+                            end: None,
+                            message: String::new(),
+                            partial_occs: occs,
+                        });
+                    }
+                    ListBrace::Continue => {
+                        let _ = eat(input, ",");
+                        continue 'list;
+                    }
+                    ListBrace::CloseOk => return Ok((out, occs)),
+                }
+            }
             // quotedness must be read BEFORE the value parses — the
             // parsed value arrives unquoted (their
             // isExpressionAQuotedString)
@@ -1041,6 +1335,32 @@ fn settings_list_occs(
                         // relationship — the binder errs on it and the
                         // list resumes (c22: ref: b.id)
                         *input = op_attempt;
+                        // a `}` at the value position: their operand()
+                        // errs INVALID_OPERAND and the EmptyNode value
+                        // never reaches the ref check (c25i)
+                        if input.starts_with('}') {
+                            let b0 = offset(input, base);
+                            errs.push(ParseError {
+                                offset: b0,
+                                end: Some(b0 + 1),
+                                message: "Invalid start of operand \"}\"".to_string(),
+                            });
+                            match list_brace_dispatch(input, base, errs, block_ctx) {
+                                ListBrace::BlockClose => {
+                                    return Err(Fail {
+                                        offset: b0,
+                                        end: None,
+                                        message: String::new(),
+                                        partial_occs: occs,
+                                    });
+                                }
+                                ListBrace::Continue => {
+                                    let _ = eat(input, ",");
+                                    continue 'list;
+                                }
+                                ListBrace::CloseOk => return Ok((out, occs)),
+                            }
+                        }
                         // the value runs to the list's terminator; the
                         // offset is ABSOLUTE (the find is slice-relative)
                         let k = input
@@ -1093,35 +1413,168 @@ fn settings_list_occs(
                                                 end: e.end,
                                                 message: e.message,
                                             });
-                                            let (ending, vspan, _toks, brace) =
+                                            // the broken string token is
+                                            // DROPPED from the stream — the
+                                            // merged value is the FOLLOWING
+                                            // operand run (c25k: `y: z }`
+                                            // values `y`)
+                                            let (ending, vspan, toks, stop, brace) =
                                                 swallow_gather(input, base, errs);
-                                            let mut end_off = vspan
-                                                .as_ref()
-                                                .map(|s| s.end)
-                                                .unwrap_or(expr_start);
-                                            if let Some(bt) = &brace {
-                                                if matches!(
-                                                    ending,
-                                                    SwallowEnd::Brace | SwallowEnd::Bracket
-                                                ) {
+                                            match vspan {
+                                                Some(vs) => {
+                                                    // the merged value
+                                                    // parsed: the must-be-
+                                                    // unary error anchors the
+                                                    // VALUE node (c25k: the
+                                                    // bare word), and the
+                                                    // list's comma consume
+                                                    // fails at the token that
+                                                    // stopped the application
+                                                    // (token width)
                                                     errs.push(ParseError {
-                                                        offset: bt.start,
-                                                        end: Some(bt.end),
-                                                        message: format!(
-                                                            "Invalid start of operand \"{}\"",
-                                                            bt.value
-                                                        ),
+                                                        offset: vs.start,
+                                                        end: Some(vs.end),
+                                                        message: "'ref' must be a valid unary relationship"
+                                                            .to_string(),
                                                     });
-                                                    end_off = bt.end;
+                                                    if let Some(st) = &stop {
+                                                        errs.push(ParseError {
+                                                            offset: st.start,
+                                                            end: Some(st.end),
+                                                            message: "Expect a comma ','"
+                                                                .to_string(),
+                                                        });
+                                                    }
+                                                    match ending {
+                                                        // Junk never ends a gather (the
+                                                        // scan continues to the
+                                                        // terminator); grouped with the
+                                                        // no-terminator arm
+                                                        SwallowEnd::Eof | SwallowEnd::Junk => {
+                                                            errs.push(err_at(
+                                                                offset(input, base),
+                                                                "Expect a closing bracket ']'",
+                                                            ));
+                                                            return Ok((out, occs));
+                                                        }
+                                                        SwallowEnd::Brace
+                                                        | SwallowEnd::Bracket => {
+                                                            // a single bare
+                                                            // word = the host
+                                                            // table's column —
+                                                            // the occ rides the
+                                                            // sentinel so the
+                                                            // block loop's
+                                                            // binder check can
+                                                            // flag it (c25k)
+                                                            if toks.len() == 1
+                                                                && toks[0].kind == RTKind::Ident
+                                                            {
+                                                                occs.push(super::ast::SettingOcc {
+                                                                    key: occ_key,
+                                                                    offset: key_start,
+                                                                    end: stop
+                                                                        .as_ref()
+                                                                        .map(|s| s.start)
+                                                                        .unwrap_or(vs.end),
+                                                                    has_value: true,
+                                                                    quoted: false,
+                                                                    value: Some(
+                                                                        toks[0].value.clone(),
+                                                                    ),
+                                                                    value_span: vs,
+                                                                });
+                                                            }
+                                                            match list_brace_dispatch(
+                                                                input,
+                                                                base,
+                                                                errs,
+                                                                block_ctx,
+                                                            ) {
+                                                                ListBrace::BlockClose => {
+                                                                    return Err(Fail {
+                                                                        offset: offset(input, base),
+                                                                        end: None,
+                                                                        message: String::new(),
+                                                                        partial_occs: occs,
+                                                                    });
+                                                                }
+                                                                ListBrace::Continue => {
+                                                                    let _ = eat(input, ",");
+                                                                    continue 'list;
+                                                                }
+                                                                ListBrace::CloseOk => {
+                                                                    return Ok((out, occs));
+                                                                }
+                                                            }
+                                                        }
+                                                        SwallowEnd::Comma => continue 'list,
+                                                    }
                                                 }
-                                            }
-                                            expr_end = end_off;
-                                            if matches!(ending, SwallowEnd::Eof) {
-                                                errs.push(err_at(
-                                                    offset(input, base),
-                                                    "Expect a closing bracket ']'",
-                                                ));
-                                                return Ok((out, occs));
+                                                None => {
+                                                    // nothing parsed: the
+                                                    // terminator itself is the
+                                                    // broken operand. When the
+                                                    // LIST handles (the field
+                                                    // completes) their binder
+                                                    // still flags the attribute
+                                                    // (c20's must-be-unary on
+                                                    // [expr start..the bracket
+                                                    // end]); a block close kills
+                                                    // the field first (c25i)
+                                                    match ending {
+                                                        SwallowEnd::Brace
+                                                        | SwallowEnd::Bracket => {
+                                                            let bt = brace.unwrap();
+                                                            errs.push(ParseError {
+                                                                offset: bt.start,
+                                                                end: Some(bt.end),
+                                                                message: format!(
+                                                                    "Invalid start of operand \"{}\"",
+                                                                    bt.value
+                                                                ),
+                                                            });
+                                                            match list_brace_dispatch(
+                                                                input,
+                                                                base,
+                                                                errs,
+                                                                block_ctx,
+                                                            ) {
+                                                                ListBrace::BlockClose => {
+                                                                    return Err(Fail {
+                                                                        offset: bt.start,
+                                                                        end: None,
+                                                                        message: String::new(),
+                                                                        partial_occs: occs,
+                                                                    });
+                                                                }
+                                                                ListBrace::Continue => {
+                                                                    if matches!(ending, SwallowEnd::Bracket) {
+                                                                        errs.push(ParseError {
+                                                                            offset: expr_start,
+                                                                            end: Some(bt.end),
+                                                                            message: "'ref' must be a valid unary relationship"
+                                                                                .to_string(),
+                                                                        });
+                                                                    }
+                                                                    let _ = eat(input, ",");
+                                                                    continue 'list;
+                                                                }
+                                                                ListBrace::CloseOk => {
+                                                                    return Ok((out, occs));
+                                                                }
+                                                            }
+                                                        }
+                                                        SwallowEnd::Eof | SwallowEnd::Junk => {
+                                                            errs.push(err_at(
+                                                                offset(input, base),
+                                                                "Expect a closing bracket ']'",
+                                                            ));
+                                                            return Ok((out, occs));
+                                                        }
+                                                        SwallowEnd::Comma => continue 'list,
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -1154,12 +1607,18 @@ fn settings_list_occs(
                 // interpreted; other keys ride along unused)
                 let mut color = None;
                 if peek_is(input, "[") {
-                    if let Ok(kvs) = settings_list(input, base, errs) {
-                        for (k, v) in kvs {
-                            if let (Some(SettingVal::Str(sv)), "color") = (&v, k.as_str()) {
-                                color = Some(sv.clone());
+                    match settings_list(input, base, errs, block_ctx) {
+                        Ok(kvs) => {
+                            for (k, v) in kvs {
+                                if let (Some(SettingVal::Str(sv)), "color") = (&v, k.as_str()) {
+                                    color = Some(sv.clone());
+                                }
                             }
                         }
+                        // the block-close sentinel rides through: the outer
+                        // list's own recovery must not eat the block's `}`
+                        Err(e) if e.message.is_empty() => return Err(e),
+                        Err(_) => {}
                     }
                 }
                 v_span = key_start..offset(input, base);
@@ -1240,14 +1699,88 @@ fn settings_list_occs(
                         // consuming across lines — the value merges the
                         // following tokens until `]`, a `}` encounter, or
                         // EOF (ref/validate nodeSettings reads the merged
-                        // value's quotedness off the application)
+                        // value's quotedness off the application). The
+                        // broken string token is DROPPED from the stream
+                        // (the lexer error covers it) — the merged value is
+                        // the FOLLOWING operand run (c25f: `y: z }` values
+                        // `y`)
                         errs.push(ParseError {
                             offset: e.offset,
                             end: e.end,
                             message: e.message,
                         });
-                        let (ending, vspan, toks, brace) =
+                        let (ending, vspan, toks, stop, brace) =
                             swallow_gather(input, base, errs);
+                        // their attributeValue: IDENT IDENT-led values parse
+                        // as an identifier STREAM — the stream only stops at
+                        // :/,/] (a `}` is JUNK to it: their consume errs
+                        // 'Expect an identifier' and the handler scan
+                        // decides — the block propagates with NO occurrence
+                        // (c4: no note check), the list recovers with the
+                        // partial stream (synchronizeAttributeValue))
+                        let ident_stream = toks.len() >= 2
+                            && toks[0].kind == RTKind::Ident
+                            && toks[1].kind == RTKind::Ident;
+                        if ident_stream {
+                            match ending {
+                                SwallowEnd::Brace => {
+                                    let bt = brace.as_ref().unwrap();
+                                    errs.push(ParseError {
+                                        offset: bt.start,
+                                        end: Some(bt.end),
+                                        message: "Expect an identifier".to_string(),
+                                    });
+                                    match list_brace_dispatch(input, base, errs, block_ctx) {
+                                        ListBrace::BlockClose => {
+                                            return Err(Fail {
+                                                offset: bt.start,
+                                                end: None,
+                                                message: String::new(),
+                                                partial_occs: occs,
+                                            });
+                                        }
+                                        ListBrace::Continue => {
+                                            let _ = eat(input, ",");
+                                            continue 'list;
+                                        }
+                                        ListBrace::CloseOk => return Ok((out, occs)),
+                                    }
+                                }
+                                _ => {
+                                    // the stream ended cleanly at the comma/
+                                    // bracket/EOF: the occurrence = the stream
+                                    // span (c4c's EOF note check, c17's comma)
+                                    if let Some(vs) = &vspan {
+                                        v_span = vs.clone();
+                                        let text = whole[vs.start - whole_start..vs.end - whole_start].to_string();
+                                        occs.push(super::ast::SettingOcc {
+                                            key: occ_key,
+                                            offset: key_start,
+                                            end: vs.end,
+                                            has_value: true,
+                                            quoted: false,
+                                            value: Some(text.clone()),
+                                            value_span: vs.clone(),
+                                        });
+                                        out.push((key, Some(SettingVal::Str(text))));
+                                    }
+                                    match ending {
+                                        SwallowEnd::Comma => {
+                                            after_comma = true;
+                                            continue 'list;
+                                        }
+                                        SwallowEnd::Bracket => continue 'list,
+                                        _ => {
+                                            errs.push(err_at(
+                                                offset(input, base),
+                                                "Expect a closing bracket ']'",
+                                            ));
+                                            return Ok((out, occs));
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         match ending {
                             SwallowEnd::Bracket | SwallowEnd::Comma => {
                                 if let Some(vs) = &vspan {
@@ -1263,6 +1796,30 @@ fn settings_list_occs(
                                         value_span: vs.clone(),
                                     });
                                     out.push((key, Some(SettingVal::Str(text))));
+                                } else if matches!(ending, SwallowEnd::Comma) {
+                                    after_comma = true;
+                                    // the comma arrived at the VALUE position:
+                                    // their operand-start error on it and the
+                                    // EmptyNode value - the note check anchors
+                                    // the empty node's point (d6)
+                                    let ct = stop.as_ref().unwrap();
+                                    errs.push(ParseError {
+                                        offset: ct.start,
+                                        end: Some(ct.end),
+                                        message: format!(
+                                            "Invalid start of operand \"{}\"",
+                                            ct.value
+                                        ),
+                                    });
+                                    occs.push(super::ast::SettingOcc {
+                                        key: occ_key,
+                                        offset: key_start,
+                                        end: ct.end,
+                                        has_value: true,
+                                        quoted: false,
+                                        value: None,
+                                        value_span: ct.end..ct.end,
+                                    });
                                 }
                                 continue 'list;
                             }
@@ -1291,13 +1848,55 @@ fn settings_list_occs(
                                 ));
                                 return Ok((out, occs));
                             }
+                            // Junk never ends a gather (the scan continues
+                            // to the terminator); grouped with the
+                            // no-terminator arm for exhaustiveness
+                            SwallowEnd::Junk => {
+                                errs.push(err_at(
+                                    offset(input, base),
+                                    "Expect a closing bracket ']'",
+                                ));
+                                return Ok((out, occs));
+                            }
                             SwallowEnd::Brace => {
                                 // the `}` arrived inside the open list: an
                                 // EMPTY value = their operand-start path
-                                // (INVALID_OPERAND on the brace), a merged
-                                // value = the next item's key stream failing
+                                // (INVALID_OPERAND on the brace — c25d); a
+                                // merged value parsed = the list's comma
+                                // consume failing at the token that stopped
+                                // the application (c25f: the `:`), token
+                                // width, then the handler dispatch decides
                                 let bt = brace.unwrap();
-                                if vspan.is_none() {
+                                if let Some(vs) = &vspan {
+                                    v_span = vs.clone();
+                                    let text = whole[vs.start - whole_start..vs.end - whole_start].to_string();
+                                    occs.push(super::ast::SettingOcc {
+                                        key: occ_key,
+                                        offset: key_start,
+                                        end: bt.start,
+                                        has_value: true,
+                                        quoted: false,
+                                        value: Some(text.clone()),
+                                        value_span: vs.clone(),
+                                    });
+                                    out.push((key, Some(SettingVal::Str(text))));
+                                    if let Some(st) = &stop {
+                                        errs.push(ParseError {
+                                            offset: st.start,
+                                            end: Some(st.end),
+                                            message: "Expect a comma ','".to_string(),
+                                        });
+                                    }
+                                } else {
+                                    occs.push(super::ast::SettingOcc {
+                                        key: occ_key,
+                                        offset: key_start,
+                                        end: bt.start,
+                                        has_value: false,
+                                        quoted: false,
+                                        value: None,
+                                        value_span: key_start..bt.start,
+                                    });
                                     errs.push(ParseError {
                                         offset: bt.start,
                                         end: Some(bt.end),
@@ -1306,22 +1905,27 @@ fn settings_list_occs(
                                             bt.value
                                         ),
                                     });
-                                } else {
-                                    errs.push(ParseError {
-                                        offset: bt.start,
-                                        end: Some(bt.end),
-                                        message: "Expect an identifier".to_string(),
-                                    });
                                 }
-                                // the field breaks; the errors are pushed —
-                                // the empty-message sentinel keeps the
-                                // column's Err path from pushing again, and
-                                // input sits at the `}` for the block loop
-                                return Err(Fail {
-                                    offset: bt.start,
-                                    end: None,
-                                    message: String::new(),
-                                });
+                                // the handler scan decides: inside a block
+                                // the `}` closes it (the sentinel — the
+                                // block loop's inline checks validate the
+                                // partial attributes); otherwise the list
+                                // handles its own error
+                                match list_brace_dispatch(input, base, errs, block_ctx) {
+                                    ListBrace::BlockClose => {
+                                        return Err(Fail {
+                                            offset: bt.start,
+                                            end: None,
+                                            message: String::new(),
+                                            partial_occs: occs,
+                                        });
+                                    }
+                                    ListBrace::Continue => {
+                                        let _ = eat(input, ",");
+                                        continue 'list;
+                                    }
+                                    ListBrace::CloseOk => return Ok((out, occs)),
+                                }
                             }
                         }
                     }
@@ -1333,21 +1937,27 @@ fn settings_list_occs(
         }
         // the key's occurrence: the value text when it parsed as a plain
         // string (verbatim, quotes kept), plus whether the value was a
-        // quoted string literal
-        let last_val = match out.last() {
-            Some((_, Some(SettingVal::Str(v)))) => Some(v.clone()),
-            _ => None,
-        };
-        occs.push(super::ast::SettingOcc {
-            key: occ_key,
-            offset: key_start,
-            end: offset(input, base),
-            has_value: occ_before_value != input.len(),
-            quoted: val_quoted,
-            value: last_val,
-            value_span: v_span,
-        });
+        // quoted string literal. An EMPTY key (their empty-name
+        // attribute) pushes no occurrence — their settings validation
+        // skips the name-less partial attribute (c25a: no custom-setting
+        // error for the `}`-broken one)
+        if !occ_key.is_empty() {
+            let last_val = match out.last() {
+                Some((_, Some(SettingVal::Str(v)))) => Some(v.clone()),
+                _ => None,
+            };
+            occs.push(super::ast::SettingOcc {
+                key: occ_key,
+                offset: key_start,
+                end: offset(input, base),
+                has_value: occ_before_value != input.len(),
+                quoted: val_quoted,
+                value: last_val,
+                value_span: v_span,
+            });
+        }
         if eat(input, ",") {
+            after_comma = true;
             continue;
         }
         // the list's whitespace trivia crosses newlines (their lexer —
@@ -1366,19 +1976,39 @@ fn settings_list_occs(
             ));
             return Ok((out, occs));
         }
-        // their recovery: the parse error is recorded and the list still
-        // yields what parsed (probe: `ref: -? orders.odd col` keeps the
-        // endpoint, and the binder flags the missing column)
-        errs.push(err_at(offset(input, base), "Expect a comma ','"));
-        // sync to the bracket's close, else the line end — exhausting the
-        // whole source here would swallow every later construct
-        let nl = input.find('\n');
-        match (input.find(']'), nl) {
-            (Some(k), _) => *input = &input[k + 1..],
-            (None, Some(nl)) => *input = &input[nl + 1..],
-            (None, None) => *input = &input[input.len()..],
+        // the value parsed but no comma/bracket follows: a COLON item
+        // ended the attribute — their while-loop consume(COMMA) anchors
+        // the offending token (token width — c25e: the `}`); a colon-less
+        // item's identifier stream errs 'Expect an identifier' on it (d2)
+        let mut probe = *input;
+        let tok_len = consume_one_token(&mut probe).unwrap_or(1);
+        errs.push(ParseError {
+            offset: offset(input, base),
+            end: Some(offset(input, base) + tok_len),
+            message: if item_had_colon {
+                "Expect a comma ','".to_string()
+            } else {
+                "Expect an identifier".to_string()
+            },
+        });
+        match list_brace_dispatch(input, base, errs, block_ctx) {
+            ListBrace::BlockClose => {
+                return Err(Fail {
+                    offset: offset(input, base),
+                    end: None,
+                    message: String::new(),
+                    partial_occs: occs,
+                });
+            }
+            ListBrace::Continue => {
+                // the sync stopped at a `,`/`]`: the list loop's comma
+                // consume takes the comma and the remaining attributes
+                // still parse (their while-loop recovery)
+                let _ = eat(input, ",");
+                continue 'list;
+            }
+            ListBrace::CloseOk => return Ok((out, occs)),
         }
-        return Ok((out, occs));
     }
 }
 
@@ -1476,7 +2106,7 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
         }
         if peek_is(input, "[") {
             let settings_start = offset(input, base);
-            let (kvs, occs) = settings_list_occs(input, base, errs)?;
+            let (kvs, occs) = settings_list_occs(input, base, errs, true)?;
             if ty.is_empty() && !ty_is_list {
                 // the list became the field's arg — no valid column type
                 binder_errors.push((settings_start, "Invalid column type".to_string()));
@@ -1713,7 +2343,7 @@ fn index(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Index> 
         comma_form: false,
     };
     if peek_is(input, "[") {
-        let kvs = settings_list(input, base, errs)?;
+        let kvs = settings_list(input, base, errs, true)?;
         for (key, val) in kvs {
             match val {
                 None => match key.as_str() {
@@ -1979,6 +2609,7 @@ fn record_value(input: &mut &str, base: usize) -> R<(RecordValue, Span)> {
                 offset: offset(input, base),
                 end: None,
                 message: "unterminated record row".to_string(),
+                partial_occs: Vec::new(),
             })?
             + 1;
         let v = input[1..end].to_string();
@@ -2127,6 +2758,7 @@ fn records_block(
     rec_start: usize,
     count_errors: &mut Vec<(usize, usize, usize, usize)>,
     binder_out: &mut Vec<(usize, usize, String)>,
+    block_ctx: bool,
 ) -> R<(Option<String>, TableRecords)> {
     sp(input);
     // The target binds on the SAME line only: a bare `records` mid-typing
@@ -2201,7 +2833,7 @@ fn records_block(
     }
     let mut example = false;
     if peek_is(input, "[") {
-        for (key, val) in settings_list(input, base, errs)? {
+        for (key, val) in settings_list(input, base, errs, block_ctx)? {
             if key == "example" && val.is_none() {
                 example = true;
             }
@@ -2469,11 +3101,164 @@ fn top_item(
     } else if peek_kw(input, "Note") {
         sticky_note(input, base, errs).map(Item::Note)
     } else {
-        fail(
-            offset(input, base),
-            "expected Project, Table, Ref, Enum, Note, or TableGroup",
-        )
+        custom_element(input, base, errs, doc_binder_errors).map(|()| Item::Skip)
     }
+}
+
+/// Their elementDeclaration accepts ANY identifier as the element type —
+/// the unknown ones bind as CUSTOM elements and the binder flags the
+/// shape (d4/d5): the context (only Project/Dep parents), the name, the
+/// settings list, and the body (a block errs 'can only have an inline
+/// field', a non-string inline value errs 'value can only be a string').
+/// The parse: type, name (an operand attempt with their
+/// synchronizeElementDeclarationName on junk), the optional `[...]`, then
+/// discardUntil('{'/':') erroring once, then the body.
+fn custom_element(
+    input: &mut &str,
+    base: usize,
+    errs: &mut Vec<ParseError>,
+    doc_binder_errors: &mut Vec<(usize, usize, String)>,
+) -> R<()> {
+    let type_start = offset(input, base);
+    let _ty = ident(input, base)?;
+    ws(input);
+    // the name: their normalExpression attempt unless :/{/[ follows; junk
+    // errs the operand-start error and the name = the EmptyNode point at
+    // the junk's END, then synchronizeElementDeclarationName consumes
+    // tokens until as/colon/brace/bracket (d4: `Table t` vanishes)
+    let mut name_span: Option<Span> = None;
+    if !peek_is(input, ":") && !peek_is(input, "{") && !peek_is(input, "[") {
+        let name_start = offset(input, base);
+        match ident(input, base) {
+            Ok(_) => name_span = Some(name_start..offset(input, base)),
+            Err(_) => {
+                let mut probe = *input;
+                let tok_len = consume_one_token(&mut probe).unwrap_or(1);
+                let jstart = offset(input, base);
+                let junk = input[..tok_len.min(input.len())].to_string();
+                errs.push(ParseError {
+                    offset: jstart,
+                    end: Some(jstart + tok_len),
+                    message: format!("Invalid start of operand \"{}\"", junk),
+                });
+                name_span = Some(jstart + tok_len..jstart + tok_len);
+                loop {
+                    if input.is_empty()
+                        || peek_is(input, ":")
+                        || peek_is(input, "{")
+                        || peek_is(input, "[")
+                    {
+                        break;
+                    }
+                    if consume_one_token(input).is_none() {
+                        break;
+                    }
+                }
+            }
+        }
+        ws(input);
+    }
+    // the optional settings list — the binder flags it on a custom element
+    let mut settings_span: Option<Span> = None;
+    if peek_is(input, "[") {
+        let ls = offset(input, base);
+        let _ = settings_list_occs(input, base, errs, false);
+        settings_span = Some(ls..offset(input, base));
+        ws(input);
+    }
+    // discardUntil('{'/':'): the tokens before the body err once
+    let discard_start = offset(input, base);
+    loop {
+        if input.is_empty() || peek_is(input, "{") || peek_is(input, ":") {
+            break;
+        }
+        if consume_one_token(input).is_none() {
+            break;
+        }
+    }
+    if offset(input, base) > discard_start {
+        errs.push(ParseError {
+            offset: discard_start,
+            end: Some(discard_start + 1),
+            message: "Expect an opening brace '{' or a colon ':'".to_string(),
+        });
+    }
+    // the body: a colon introduces the inline value; a brace the block
+    let mut body_span: Option<Span> = None;
+    let mut body_is_block = false;
+    let mut body_quoted = false;
+    if peek_is(input, "{") {
+        let bs = offset(input, base);
+        let _ = eat(input, "{");
+        let mut depth = 1i32;
+        let bytes = input.as_bytes();
+        let mut end = bytes.len();
+        for (k, &bc) in bytes.iter().enumerate() {
+            if bc == b'{' {
+                depth += 1;
+            } else if bc == b'}' {
+                depth -= 1;
+                if depth == 0 {
+                    end = k;
+                    break;
+                }
+            }
+        }
+        *input = &input[end.min(input.len())..];
+        let _ = eat(input, "}");
+        body_span = Some(bs..offset(input, base));
+        body_is_block = true;
+    } else if eat(input, ":") {
+        ws(input);
+        let vs = offset(input, base);
+        body_quoted = input.starts_with('\'') || input.starts_with('"');
+        // the inline value runs to the line end (their expression)
+        match input.find(['\n', '\r']) {
+            Some(k) => *input = &input[k..],
+            None => *input = &input[input.len()..],
+        }
+        body_span = Some(vs..offset(input, base));
+    }
+    let element_end = body_span
+        .as_ref()
+        .map(|s| s.end)
+        .unwrap_or(offset(input, base));
+    // their CustomElementValidator
+    doc_binder_errors.push((
+        type_start,
+        element_end,
+        "A Custom element can only appear in a Project or a Dep".to_string(),
+    ));
+    if let Some(ns) = name_span {
+        doc_binder_errors.push((
+            ns.start,
+            ns.end,
+            "A Custom element shouldn't have a name".to_string(),
+        ));
+    }
+    if let Some(ss) = settings_span {
+        doc_binder_errors.push((
+            ss.start,
+            ss.end,
+            "A Custom element shouldn't have a setting list".to_string(),
+        ));
+    }
+    if let Some(bs) = body_span {
+        if body_is_block {
+            doc_binder_errors.push((
+                bs.start,
+                bs.end,
+                "A Custom element can only have an inline field".to_string(),
+            ));
+        } else if !body_quoted {
+            doc_binder_errors.push((
+                bs.start,
+                bs.end,
+                "A Custom element value can only be a string".to_string(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// A top-level sticky note: `Note name { '''text''' }` — dbdiagram's
@@ -2553,7 +3338,61 @@ fn table(
         ws(input);
     }
     if peek_is(input, "[") {
-        let (kvs, occs) = settings_list_occs(input, base, errs)?;
+        let (kvs, occs) = settings_list_occs(input, base, errs, false)?;
+        // their tableModule's settings validation: headercolor/note/dep
+        // have their own rules; EVERY other key is free-form custom
+        // metadata — once-only, and the value must be a string, a color,
+        // a number, or a boolean (c25j: the valueless `pk` errs on the key)
+        {
+            let mut order: Vec<String> = Vec::new();
+            let mut groups: Vec<Vec<&super::ast::SettingOcc>> = Vec::new();
+            for o in &occs {
+                if o.key == "headercolor" || o.key == "note" || o.key == "dep" {
+                    continue;
+                }
+                if let Some(i) = order.iter().position(|k| k == &o.key) {
+                    groups[i].push(o);
+                } else {
+                    order.push(o.key.clone());
+                    groups.push(vec![o]);
+                }
+            }
+            for (key, attrs) in order.into_iter().zip(groups.into_iter()) {
+                if attrs.len() > 1 {
+                    for a in &attrs {
+                        errs.push(ParseError {
+                            offset: a.offset,
+                            end: Some(a.end),
+                            message: format!("'{key}' can only appear once"),
+                        });
+                    }
+                }
+                for a in &attrs {
+                    let value_ok = a.has_value && {
+                        let v = a.value.as_deref().unwrap_or("");
+                        a.quoted
+                            || v.starts_with('#')
+                            || v.parse::<f64>().is_ok()
+                            || matches!(v.to_ascii_lowercase().as_str(), "true" | "false")
+                    };
+                    if !value_ok {
+                        let (s, e) = if a.has_value {
+                            (a.value_span.start, a.value_span.end)
+                        } else {
+                            (a.offset, a.end)
+                        };
+                        errs.push(ParseError {
+                            offset: s,
+                            end: Some(e),
+                            message: format!(
+                                "Custom setting '{key}' must be a string, a color \
+                                 literal, a number literal, or a boolean literal"
+                            ),
+                        });
+                    }
+                }
+            }
+        }
         for (key, val) in kvs {
             if let Some(SettingVal::Str(v)) = val {
                 match key.as_str() {
@@ -2572,7 +3411,30 @@ fn table(
         ws(input);
     }
     if !eat(input, "{") {
-        return fail(offset(input, base), "expected '{' after table name");
+        // their elementDeclaration: discardUntil('{', ':') — the error
+        // anchors the offending token (zero-width at EOF — c25j's header
+        // list sync ate everything to the EOF), the junk is consumed
+        // silently, and a found `{` still opens the block body
+        let off = offset(input, base);
+        let mut probe = *input;
+        let tok_len = consume_one_token(&mut probe).unwrap_or(0);
+        errs.push(ParseError {
+            offset: off,
+            end: if tok_len > 0 { Some(off + tok_len) } else { None },
+            message: "Expect an opening brace '{' or a colon ':'".to_string(),
+        });
+        let _ = eat(input, ":");
+        // discard to the block's `{` (their discardUntil) — a colon body
+        // on a Table has no port equivalent, so only `{` continues
+        if !input.starts_with('{') {
+            match input.find('{') {
+                Some(k) => *input = &input[k..],
+                None => {
+                    t.span = start..offset(input, base);
+                    return Ok(t);
+                }
+            }
+        }
     }
     loop {
         ws(input);
@@ -2607,7 +3469,7 @@ fn table(
             // shown in the record view
             let rec_start = offset(input, base);
             let _ = eat(input, "Records");
-            match records_block(input, base, errs, rec_start, count_errors, binder_out) {
+            match records_block(input, base, errs, rec_start, count_errors, binder_out, true) {
                 Ok((_, rec)) => t.records = Some(rec),
                 Err(e) => {
                     if !e.message.is_empty() {
@@ -2668,8 +3530,13 @@ fn table(
                 match index(input, base, errs) {
                     Ok(ix) => t.indexes.push(ix),
                     Err(e) => {
-                        errs.push(err_at(e.offset, &e.message));
-                        skip_line(input);
+                        // an empty message = the block-close sentinel: the
+                        // errors are already pushed and input sits at the
+                        // `}` — the loop head closes the block
+                        if !e.message.is_empty() {
+                            errs.push(err_at(e.offset, &e.message));
+                            skip_line(input);
+                        }
                     }
                 }
             }
@@ -2678,10 +3545,41 @@ fn table(
         match column(input, base, errs) {
             Ok(c) => t.columns.push(c),
             Err(e) => {
-                // an empty message = the recovery already pushed its errors
-                // and positioned input (the unterminated settings string
-                // breaking the field at a `}`)
-                if !e.message.is_empty() {
+                // an empty message = the block-close sentinel: the errors
+                // are already pushed, input sits at the `}`, and the
+                // partial settings ride in `e.partial_occs` — their
+                // validator walks the partial attributes (c25f/c25h/c25k)
+                if e.message.is_empty() {
+                    for (off, end, msg) in
+                        super::validate::column_setting_errors(&e.partial_occs)
+                    {
+                        errs.push(ParseError {
+                            offset: off,
+                            end,
+                            message: msg,
+                        });
+                    }
+                    // a ref setting's bare-word value = a column of the
+                    // HOST table — the binder flags a missing one (c25k)
+                    for occ in &e.partial_occs {
+                        if occ.key == "ref" && occ.has_value {
+                            if let Some(w) = &occ.value {
+                                if !t.columns.iter().any(|c| &c.name == w) {
+                                    let schema =
+                                        t.schema.as_deref().unwrap_or("public");
+                                    errs.push(ParseError {
+                                        offset: occ.value_span.start,
+                                        end: Some(occ.value_span.end),
+                                        message: format!(
+                                            "Column '{}' does not exist in Table '{}.{}'",
+                                            w, schema, t.name
+                                        ),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                } else {
                     errs.push(ParseError {
                         offset: e.offset,
                         end: e.end,
@@ -4457,7 +5355,7 @@ fn ref_body_pipeline_mode(
                         let mut cursor = sub.as_str();
                         let mut sub_errs: Vec<ParseError> = Vec::new();
                         if let Ok((_, occs)) =
-                            settings_list_occs(&mut cursor, *start, &mut sub_errs)
+                            settings_list_occs(&mut cursor, *start, &mut sub_errs, false)
                         {
                             validate_field_settings(&occs, out);
                         }
@@ -4487,7 +5385,7 @@ fn ref_settings(
         *input = before_ws;
         return out;
     }
-    if let Ok((kvs, occs)) = settings_list_occs(input, base, errs) {
+    if let Ok((kvs, occs)) = settings_list_occs(input, base, errs, false) {
         // their validateFieldSettings runs on every ref's settings list
         validate_field_settings(&occs, binder_out);
         for (k, v) in kvs {
@@ -4543,7 +5441,7 @@ fn enum_def(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Enum
                 let mut note_span = None;
                 let mut full_end = v_end;
                 if peek_is(input, "[") {
-                    match settings_list_occs(input, base, errs) {
+                    match settings_list_occs(input, base, errs, true) {
                         Ok((kvs, occs)) => {
                             // their enum-field token spans the settings
                             // list; the note carries its entry's token
@@ -4571,8 +5469,13 @@ fn enum_def(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Enum
                             let _ = kvs;
                         }
                         Err(err) => {
-                            errs.push(err_at(err.offset, &err.message));
-                            skip_line(input);
+                            // an empty message = the block-close sentinel:
+                            // the errors are already pushed and input sits
+                            // at the `}` — the loop head closes the block
+                            if !err.message.is_empty() {
+                                errs.push(err_at(err.offset, &err.message));
+                                skip_line(input);
+                            }
                             e.values.push(EnumValue {
                                 name: vname,
                                 name_span: v_off..v_end,
@@ -4593,8 +5496,10 @@ fn enum_def(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Enum
                 });
             }
             Err(err) => {
-                errs.push(err_at(err.offset, &err.message));
-                skip_line(input);
+                if !err.message.is_empty() {
+                    errs.push(err_at(err.offset, &err.message));
+                    skip_line(input);
+                }
             }
         }
     }
@@ -4622,7 +5527,7 @@ fn table_group(
     let mut custom: Vec<(String, String)> = Vec::new();
     let mut custom_spans: Vec<(String, Span)> = Vec::new();
     if peek_is(input, "[") {
-        if let Ok((kvs, occs)) = settings_list_occs(input, base, errs) {
+        if let Ok((kvs, occs)) = settings_list_occs(input, base, errs, false) {
             for (k, v) in kvs {
                 if let (Some(SettingVal::Str(sv)), "color") = (&v, k.as_str()) {
                     color = Some(sv.clone());
@@ -4950,7 +5855,7 @@ pub fn parse(src: &str) -> ParseOutput {
             let mut attempt = rest;
             let _ = eat(&mut attempt, "Records");
             let rec_start = offset(&mut attempt, base);
-            match records_block(&mut attempt, base, &mut out.errors, rec_start, &mut record_count_errors, &mut out.binder_errors) {
+            match records_block(&mut attempt, base, &mut out.errors, rec_start, &mut record_count_errors, &mut out.binder_errors, false) {
                 Ok((target, rec)) => {
                     rest = attempt;
                     top_records.push((target, rec));
@@ -5331,13 +6236,26 @@ Table good2 {
 }
 "#;
         let out = parse(src);
-        assert!(!out.errors.is_empty());
+        // their elementDeclaration accepts ANY identifier as the type: the
+        // typo'd `Tabl oops {` parses as a custom element whose block body
+        // swallows the rest — three binder errors, NO parse errors, and
+        // the nested table never binds (their model gates to null; probe
+        // d7: span-identical)
+        assert!(out.errors.is_empty(), "{:?}", out.errors);
         let names: Vec<&str> = tables(&out).iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"good1"), "{names:?}");
-        assert!(names.contains(&"good2"), "{names:?}");
-        let good2 = tables(&out).iter().find(|t| t.name == "good2").unwrap();
-        assert_eq!(good2.columns.len(), 2);
-        assert_eq!(good2.columns[1].name, "name");
+        assert!(!names.contains(&"good2"), "the block swallows it: {names:?}");
+        let msgs: Vec<&str> = out
+            .binder_errors
+            .iter()
+            .map(|(_, _, m)| m.as_str())
+            .collect();
+        assert!(
+            msgs.contains(&"A Custom element can only appear in a Project or a Dep"),
+            "{msgs:?}"
+        );
+        assert!(msgs.contains(&"A Custom element shouldn't have a name"));
+        assert!(msgs.contains(&"A Custom element can only have an inline field"));
     }
 
     #[test]

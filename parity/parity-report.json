@@ -1,6 +1,6 @@
 {
   "pinnedCommit": "6b0c25b5d87ef8f44236eeb1e9dc149848e1503e",
-  "pass": 75,
+  "pass": 78,
   "fail": 0,
   "cases": [
     {
@@ -32,6 +32,21 @@
       "name": "col-multiword-type",
       "status": "ok",
       "count": 3
+    },
+    {
+      "name": "desktop-errs",
+      "status": "ok",
+      "count": 4
+    },
+    {
+      "name": "desktop-errs2",
+      "status": "ok",
+      "count": 1
+    },
+    {
+      "name": "desktop-test",
+      "status": "ok",
+      "count": 1
     },
     {
       "name": "dup-enum",

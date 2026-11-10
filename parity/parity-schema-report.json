@@ -1,6 +1,6 @@
 {
   "pinnedCommit": "6b0c25b5d87ef8f44236eeb1e9dc149848e1503e",
-  "pass": 75,
+  "pass": 78,
   "fail": 0,
   "cases": [
     {
@@ -25,6 +25,18 @@
     },
     {
       "name": "col-multiword-type",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "desktop-errs",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "desktop-errs2",
+      "status": "ok-both-null"
+    },
+    {
+      "name": "desktop-test",
       "status": "ok-both-null"
     },
     {
