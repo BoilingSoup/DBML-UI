@@ -4707,6 +4707,7 @@ fn ref_stmt(
                 } else if matches!(rest.first(), Some(RNode::Array { .. })) {
                     rest.remove(0);
                 }
+                eprintln!("DBG ref-args arg_spans={:?} rest={}", rp.arg_spans, rest.len());
                 for (a, (s, e)) in rest.iter().zip(rp.arg_spans.iter()) {
                     let _ = a;
                     field_errors.push((
@@ -6321,6 +6322,7 @@ fn ref_body_pipeline_mode(
             } else if matches!(rest.first(), Some(RNode::Array { .. })) {
                 rest.remove(0);
             }
+            eprintln!("DBG arg-spans={:?} args={:?}", p.arg_spans, args.iter().map(|a| a.start()).collect::<Vec<_>>());
             let mut arg_ends: Vec<usize> = p
                 .arg_spans
                 .iter()
