@@ -1382,6 +1382,7 @@ fn settings_list_occs(
         }
         let occ_key = key.clone();
         *input = &input[end..];
+        let key_end = offset(input, base);
         sp(input);
         let occ_before_value = input.len();
         let mut val_quoted = false;
@@ -1731,12 +1732,20 @@ fn settings_list_occs(
                 // "Expect a comma ','" (their settings consume) — the
                 // endpoint still binds; the single-binary error belongs to
                 // STANDALONE ref lines only (probe mw1 vs mw2)
+                // the VALUE node ends at the endpoint (its optional
+                // settings bracket) — the trailing ws is trivia and the
+                // union rule keeps it out of the node (probe m43_0251:
+                // the ref value ends at `nope.n`, not at the swallowed
+                // next line)
+                let ep_val_end = offset(input, base);
                 ws(input);
                 // endpoint settings bracket: `ref: > t.c [color: …]` —
                 // the relationship's color lives there (only `color` is
                 // interpreted; other keys ride along unused)
                 let mut color = None;
+                let mut had_bracket = false;
                 if peek_is(input, "[") {
+                    had_bracket = true;
                     match settings_list(input, base, errs, block_ctx) {
                         Ok(kvs) => {
                             for (k, v) in kvs {
@@ -1751,7 +1760,7 @@ fn settings_list_occs(
                         Err(_) => {}
                     }
                 }
-                v_span = key_start..offset(input, base);
+                v_span = key_start..if had_bracket { offset(input, base) } else { ep_val_end };
                 out.push((key, Some(SettingVal::Ref(card, l_opt, r_opt, to, op_offset, key_start, color))));
             } else if key == "default" && !default_string_is_broken(input) {
                 let dflt_start = offset(input, base);
@@ -2077,9 +2086,13 @@ fn settings_list_occs(
                 _ => None,
             };
             occs.push(super::ast::SettingOcc {
-                key: occ_key,
+                key: occ_key.clone(),
                 offset: key_start,
-                end: offset(input, base),
+                // their attribute node = the union of its args (the name
+                // .. the value) — the trailing ws the list's trivia ws
+                // crossed stays out (probe m43_0251: the ref value ends
+                // at `nope.n`, not at the swallowed next line)
+                end: v_span.end.max(key_end),
                 has_value: occ_before_value != input.len(),
                 quoted: val_quoted,
                 value: last_val,

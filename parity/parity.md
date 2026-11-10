@@ -97,8 +97,8 @@ tools below. Never say done when the sweep still finds shapes.
   driver resolves `path` from cwd).
 - Corpus gates: 78/78 + 78/78. Focused tests 42/42 + editor 61/61.
 - The user's three desktop files: span-identical, folded into the corpus.
-- The mutation campaign (round 5, seed 43): **259/600 span-identical** —
-  rounds 2-5 landed (the mechanisms below).
+- The mutation campaign (round 6, seed 43): **260/600 span-identical** —
+  rounds 2-6 landed (the mechanisms below).
 
 ## Round-2 mechanisms (ported; do not re-derive)
 
@@ -192,6 +192,12 @@ tools below. Never say done when the sweep still finds shapes.
      BOTH validateColumn errors at the junk's END point, riding the
      parse-error channel (the Err would drop the binder vec — probe
      m43_0096 PASS)
+   - their attribute node = the union of its args: the SettingOcc's
+     end = max(value_span.end, key_end) — the trivia ws the list
+     crossed stays out (probe m43_0251 PASS: the ref value ends at
+     `nope.n`, not at the swallowed next line); the ref arm's value
+     span ends at the endpoint (its optional settings bracket), not
+     after the trailing ws
    - the indexes-block tail (m43_0216/0402/0484 PASS): the unclosed
      indexes block errs the indexes' OWN close error at the EOF point +
      the table's (two total) — our invented 'unterminated indexes
@@ -224,6 +230,14 @@ tools below. Never say done when the sweep still finds shapes.
        cases (the endpoint-fragment column span m43_0193, the
        custom-setting value end m43_0230/0255, the swallow-tail
        element end m43_0251)
+     * m43_0193 (PASS via the union rule below): the missing-column
+       emission anchors a POINT (18,44) where theirs anchors the bare
+       word (18,44-49) — the c25k walk's occ.value_span is EMPTY for
+       the bare-word ref endpoint; trace the ref occ's value_span in
+       the sentinel path
+     * m43_0230/0255 (the custom-setting value end: ours ONE past
+       theirs — the value node end; probe their attribute parse on
+       `uniEnum e {que]` with elemprobe before porting)
      * the remaining ~340 spread across small clusters — keep
        clustering from the round dump (the compare tool:
        /tmp/cluster2.py pattern — ours in 6 batch files, theirs in
