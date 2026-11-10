@@ -414,7 +414,14 @@ tools below. Never say done when the sweep still finds shapes.
        INDEPENDENTLY of what the child loop consumed, so both the
        nested good2's close (from the nested parse) and the enclosing
        Tabl-oops' close (from the depth rule, depth = 2 after the
-       nested `{`) fire. The port (round 33): the
+       nested `{`) fire. ROUND-37 ATTEMPT: the resurrected loop + the
+       snapshot brace-scan + the union end landed the SPANS (nl1
+       2,3..4,19 / 3,5..4,19; e43 5,1..7,14) but the same five battery
+       shapes diverged (d4/d5/d7/e43/e44: the nested parse's
+       diagnostic interplay — nl1's newline error lost, e43's extra
+       close) and the committed loop PANICKED on the battery shapes
+       (the snapshot's end applied to the post-child-loop input — the
+       delta-advance fix + the revert = 47fae5c). The port (round 33): the
        custom-element body's child parse — their element = {type: c,
        name: id, body: the BlockExpression (3,5)-(4,19)} (the block =
        the `{` at 3,5 through the last real token), the inline-field
