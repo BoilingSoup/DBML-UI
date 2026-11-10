@@ -371,7 +371,15 @@ tools below. Never say done when the sweep still finds shapes.
        errs the newline error — the structure: the body = the child
        loop (the ref block = a nested element parsed inside), the
        element span = the union ending at the last real token (4,19),
-       the battery probe = nl1
+       the battery probe = nl1. IMPLEMENTATION SKETCH: the
+       custom_element's body block-scan keeps the brace balance; the
+       child loop parses the block's LINES as elements/applications
+       (the `Ref {` line = a nested element via the existing
+       dispatch), the unterminated string in the ref block's field
+       errs via the existing note_value/sq_string path (the
+       'Invalid newline' message + the partial-token anchor); the
+       element span ends at the last real token before the swallow
+       tail (the body's union end)
      * the custom-setting check anchors the value node ?? the name (the
        round-17 finding: probe x1 PASS: `uniEnum e` spans 42..51, the
        `{` junk point excluded); m43_0230/0255 PASS. The custom-setting check anchors
