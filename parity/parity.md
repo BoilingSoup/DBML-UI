@@ -97,12 +97,10 @@ tools below. Never say done when the sweep still finds shapes.
   driver resolves `path` from cwd).
 - Corpus gates: 78/78 + 78/78. Focused tests 42/42 + editor 61/61.
 - The user's three desktop files: span-identical, folded into the corpus.
-- The mutation campaign (round 16, seed 43): **284/600 span-identical** —
-  rounds 2-16 landed (the mechanisms below). OPEN: the enum-reference
-  default BINDS in their binder and resolves (`[default:
-  schema.enum.val]` errs 'Schema schema does not exist' at the value —
-  probe a6) — our check passes validity but the enum-ref resolution is
-  a binder surface still to port.
+- The mutation campaign (round 18, seed 43): **284/600 span-identical** —
+  rounds 2-18 landed (the mechanisms below); the enum-reference default
+  RESOLUTION landed (their binder resolves schema → enum → field —
+  probes d1-d5 PASS; the battery grew to e38-e40).
 
 ## Round-2 mechanisms (ported; do not re-derive)
 

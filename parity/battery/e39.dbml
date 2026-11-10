@@ -1,0 +1,4 @@
+Enum e_statu { open }
+Table t {
+  x int [default: e_statu.closed]
+}

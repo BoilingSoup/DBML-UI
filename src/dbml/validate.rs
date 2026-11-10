@@ -609,6 +609,69 @@ pub fn validate_with_parse(
                     None => out.push(Diagnostic::plain(offset, message)),
                 }
             }
+            // their enum-reference default BINDS: the fragments resolve
+            // schema → enum → field (probes d1-d5: the missing schema
+            // errs at the FIRST fragment, the missing enum at the first,
+            // the missing field at the second; the valid reference is
+            // silent)
+            for a in occs {
+                if a.key != "default" || a.broken {
+                    continue;
+                }
+                let v = a.value.as_deref().unwrap_or("").trim();
+                let frags: Vec<&str> = v.split('.').collect();
+                if a.quoted
+                    || v.starts_with('`')
+                    || !(frags.len() == 2 || frags.len() == 3)
+                    || frags.iter().any(|f| f.is_empty())
+                {
+                    continue;
+                }
+                if v.parse::<f64>().is_ok()
+                    || v == "true"
+                    || v == "false"
+                    || v == "null"
+                {
+                    continue;
+                }
+                let fspans: Vec<(usize, usize)> = {
+                    let mut acc = a.value_span.start;
+                    let mut v2 = vec![];
+                    for f in &frags {
+                        v2.push((acc, acc + f.len()));
+                        acc += f.len() + 1;
+                    }
+                    v2
+                };
+                let default_schema = "public";
+                if frags.len() == 3 {
+                    let schema_exists = frags[0] == default_schema
+                        || doc.enums.iter().any(|e| e.schema.as_deref() == Some(frags[0]))
+                        || doc.tables.iter().any(|t| t.schema.as_deref() == Some(frags[0]));
+                    if !schema_exists {
+                        let (fs, fe) = fspans[0];
+                        out.push(Diagnostic::spanned(fs, fe, format!("Schema '{}' does not exist in Schema '{}'", frags[0], default_schema)));
+                    }
+                } else {
+                    let enm = doc.enums.iter().find(|e| {
+                        e.name == frags[0]
+                            && (e.schema.is_none() || e.schema.as_deref() == Some("public"))
+                    });
+                    match enm {
+                        None => {
+                            let (fs, fe) = fspans[0];
+                            out.push(Diagnostic::spanned(fs, fe, format!("Enum '{}' does not exist in Schema '{}'", frags[0], default_schema)));
+                        }
+                        Some(e) => {
+                            if !e.values.iter().any(|v| v.name == frags[1]) {
+                                let (fs, fe) = fspans[1];
+                                let schema = e.schema.as_deref().unwrap_or("public");
+                                out.push(Diagnostic::spanned(fs, fe, format!("Enum field '{}' does not exist in Enum '{}.{}'", frags[1], schema, e.name)));
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
