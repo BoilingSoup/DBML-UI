@@ -55,6 +55,14 @@ fn fail<T>(o: usize, m: impl Into<String>) -> R<T> {
     })
 }
 
+fn fail_with_end<T>(o: usize, end: usize, m: impl Into<String>) -> R<T> {
+    Err(Fail {
+        offset: o,
+        end: Some(end),
+        message: m.into(),
+    })
+}
+
 fn err_at(o: usize, m: &str) -> ParseError {
     ParseError {
         offset: o,
@@ -268,16 +276,22 @@ fn escaped_string(input: &mut &str, base: usize) -> R<String> {
 /// there is no `''` doubling, and a newline or EOF inside is their parse
 /// error.
 fn sq_string(input: &mut &str, base: usize) -> R<String> {
+    // their consumeUntil: UNEXPECTED_NEWLINE / UNEXPECTED_EOF anchors the
+    // PARTIAL TOKEN [quote..scan-stop) and the token is invalid —
+    // gatherInvalid removes it, taking the line's trailing newline with
+    // it (the enclosing block's application continues onto the next line)
+    let quote = offset(input, base);
     if !eat(input, "'") {
         return fail(offset(input, base), "expected 'string'");
     }
     let mut out = String::new();
     loop {
         if input.is_empty() {
-            return fail(offset(input, base), "EOF reached while parsing");
+            return fail_with_end(quote, offset(input, base), "EOF reached while parsing");
         }
         if input.starts_with('\n') {
-            return fail(
+            return fail_with_end(
+                quote,
                 offset(input, base),
                 "Invalid newline encountered while parsing",
             );
@@ -324,11 +338,13 @@ fn note_value(input: &mut &str, base: usize) -> R<String> {
     }
     if eat(input, "'''") {
         // their consumeUntil("'''", allowNewline, raw: false): escapes
-        // decode inline and cannot end the string
+        // decode inline and cannot end the string; the EOF error anchors
+        // the partial token like the single-quoted scan above
+        let tri = offset(input, base) - 3;
         let mut raw = String::new();
         loop {
             if input.is_empty() {
-                return fail(offset(input, base), "EOF reached while parsing");
+                return fail_with_end(tri, offset(input, base), "EOF reached while parsing");
             }
             if input.starts_with("'''") {
                 *input = &input[3..];
@@ -475,31 +491,138 @@ fn value(input: &mut &str, base: usize) -> R<String> {
 /// set (`?>`, `>?`, `?<>`, `-?`, …): the `?` on a side drops that side's
 /// min cardinality to zero (the reference is optional).
 fn cardinality_full(input: &mut &str, base: usize) -> R<(Cardinality, bool, bool)> {
-    let table: &[(&str, Cardinality, bool, bool)] = &[
-        // longest first, so `?<` cannot shadow `?<>` / `?<>?`
-        ("?<>?", Cardinality::ManyToMany, true, true),
-        ("?>?", Cardinality::ManyToOne, true, true),
-        ("?<?", Cardinality::OneToMany, true, true),
-        ("?-?", Cardinality::OneToOne, true, true),
-        ("?<>", Cardinality::ManyToMany, true, false),
-        ("<>?", Cardinality::ManyToMany, false, true),
-        ("?>", Cardinality::ManyToOne, true, false),
-        (">?", Cardinality::ManyToOne, false, true),
-        ("?<", Cardinality::OneToMany, true, false),
-        ("<?", Cardinality::OneToMany, false, true),
-        ("?-", Cardinality::OneToOne, true, false),
-        ("-?", Cardinality::OneToOne, false, true),
-        ("<>", Cardinality::ManyToMany, false, false),
-        (">", Cardinality::ManyToOne, false, false),
-        ("<", Cardinality::OneToMany, false, false),
-        ("-", Cardinality::OneToOne, false, false),
-    ];
-    for (tok, kind, l, r) in table {
+    for (tok, kind, l, r) in CARD_TABLE {
         if eat(input, tok) {
             return Ok((*kind, *l, *r));
         }
     }
     fail(offset(input, base), "expected relationship (<, >, -, <>, with optional ? marks)")
+}
+
+/// cardinality_full's munch table, shared with the block-form model build
+/// (the op token string maps straight to the cardinality)
+const CARD_TABLE: &[(&str, Cardinality, bool, bool)] = &[
+    // longest first, so `?<` cannot shadow `?<>` / `?<>?`
+    ("?<>?", Cardinality::ManyToMany, true, true),
+    ("?>?", Cardinality::ManyToOne, true, true),
+    ("?<?", Cardinality::OneToMany, true, true),
+    ("?-?", Cardinality::OneToOne, true, true),
+    ("?<>", Cardinality::ManyToMany, true, false),
+    ("<>?", Cardinality::ManyToMany, false, true),
+    ("?>", Cardinality::ManyToOne, true, false),
+    (">?", Cardinality::ManyToOne, false, true),
+    ("?<", Cardinality::OneToMany, true, false),
+    ("<?", Cardinality::OneToMany, false, true),
+    ("?-", Cardinality::OneToOne, true, false),
+    ("-?", Cardinality::OneToOne, false, true),
+    ("<>", Cardinality::ManyToMany, false, false),
+    (">", Cardinality::ManyToOne, false, false),
+    ("<", Cardinality::OneToMany, false, false),
+    ("-", Cardinality::OneToOne, false, false),
+];
+
+fn var_name(n: &RNode) -> Option<String> {
+    match n {
+        RNode::Var { name, .. } => Some(name.clone()),
+        _ => None,
+    }
+}
+
+/// The END of a block field's side expression: their CompileError anchors
+/// carry node spans, and RNode tracks starts only — the side ends at the
+/// last token before the top-level op (the left side) / at the callee's
+/// last token (the right side). Pratt parses left-associatively, so the
+/// leftmost relationship op IS the top-level infix.
+fn ref_block_side_end(rp: &RParser, side_start: usize) -> usize {
+    if let Some(i) = rp
+        .toks
+        .iter()
+        .position(|t| t.kind == RTKind::Op && is_relationship_op(&t.value))
+    {
+        if rp.toks[i].start > side_start {
+            // the LEFT side: the last token before the op
+            return rp.toks[..i]
+                .iter()
+                .rev()
+                .find(|t| t.start >= side_start)
+                .map(|t| t.end)
+                .unwrap_or(side_start);
+        }
+    }
+    // the RIGHT side (or a side with no relationship op after it): the
+    // last non-Eof token at/after the side's start
+    rp.toks
+        .iter()
+        .rev()
+        .find(|t| t.kind != RTKind::Eof && t.start >= side_start)
+        .map(|t| t.end)
+        .unwrap_or(side_start)
+}
+
+/// The model endpoint from a block field's side: the member chain gives
+/// the fragments — 2 names = table.column, 3 = schema.table.column, a
+/// tuple tail = the columns; anything else leaves the model relationship
+/// unbound (their bind skips the bindee)
+fn ref_block_endpoint(rp: &RParser, n: &RNode) -> Option<super::ast::Endpoint> {
+    let frag = destructure_cvt(n)?;
+    let span = n.start()..ref_block_side_end(rp, n.start());
+    if !frag.tuple.is_empty() {
+        let mut vars = frag.variables.clone();
+        let table = var_name(&vars.pop()?)?;
+        return Some(super::ast::Endpoint {
+            schema: None,
+            table,
+            columns: frag
+                .tuple
+                .iter()
+                .map(var_name)
+                .collect::<Option<Vec<String>>>()?,
+            span,
+        });
+    }
+    let names: Vec<String> = frag.variables.iter().map(var_name).collect::<Option<_>>()?;
+    match names.len() {
+        2 => Some(super::ast::Endpoint {
+            schema: None,
+            table: names[0].clone(),
+            columns: vec![names[1].clone()],
+            span,
+        }),
+        3 => Some(super::ast::Endpoint {
+            schema: Some(names[0].clone()),
+            table: names[1].clone(),
+            columns: vec![names[2].clone()],
+            span,
+        }),
+        _ => None,
+    }
+}
+
+/// The model relationship from a clean binary block field: the op token
+/// maps through cardinality_full's table, the sides through the member
+/// chains (their bind binds the first field's relationship)
+fn ref_block_model(
+    rp: &RParser,
+    op: &str,
+    left: &RNode,
+    right: &RNode,
+) -> Option<(
+    super::ast::Endpoint,
+    super::ast::Endpoint,
+    Cardinality,
+    bool,
+    bool,
+    usize,
+)> {
+    let (_, card, l_opt, r_opt) = CARD_TABLE.iter().find(|(tok, ..)| *tok == op)?;
+    let op_offset = rp
+        .toks
+        .iter()
+        .find(|t| t.kind == RTKind::Op && t.value == op)
+        .map(|t| t.start)?;
+    let from = ref_block_endpoint(rp, left)?;
+    let to = ref_block_endpoint(rp, right)?;
+    Some((from, to, *card, *l_opt, *r_opt, op_offset))
 }
 
 
@@ -624,6 +747,205 @@ enum SettingVal {
     Ref(Cardinality, bool, bool, Endpoint, usize, usize, Option<String>),
 }
 
+
+/// Their unterminated-string recovery inside a block element: the failed
+/// partial is invalid and gatherInvalid takes the line's trailing newline
+/// with it, so the enclosing application keeps gathering across lines
+/// until `]`, a `}` encounter, or EOF (a clean line end stops the
+/// application — hasTrailingNewLines). The gathered tokens are the ITEM's
+/// value application (their MISSING_SPACES ride along).
+enum SwallowEnd {
+    Bracket,
+    Brace,
+    Eof,
+}
+
+fn is_unterminated_string(e: &Fail) -> bool {
+    e.message == "Invalid newline encountered while parsing"
+        || e.message == "EOF reached while parsing"
+}
+
+fn swallow_gather(
+    input: &mut &str,
+    base: usize,
+    errs: &mut Vec<ParseError>,
+) -> (SwallowEnd, Option<Span>, Vec<RTok>, Option<RTok>) {
+    // the failed string consumed its partial text; input sits at its
+    // newline (or EOF) — the value continues on the NEXT line
+    if let Some(k) = input.find('\n') {
+        *input = &input[k + 1..];
+    } else {
+        return (SwallowEnd::Eof, None, Vec::new(), None);
+    }
+    let mut toks: Vec<RTok> = Vec::new();
+    let mut ending = SwallowEnd::Eof;
+    let mut brace_tok = None;
+    // the VALUE's application stops at a clean line end (their
+    // hasTrailingNewLines); the LIST itself keeps scanning for its
+    // terminator — later lines are item 2+ material, not this value's
+    let mut value_open = true;
+    loop {
+        if input.is_empty() {
+            ending = SwallowEnd::Eof;
+            break;
+        }
+        let line_end = input.find('\n').unwrap_or(input.len());
+        let line = &input[..line_end];
+        let line_base = offset(input, base);
+        let sentinel = if line_end < input.len() {
+            Some(b'\n')
+        } else {
+            None
+        };
+        let (mut line_toks, mut dropped) = ref_tokens(line, line_base, sentinel, errs);
+        if !dropped {
+            dropped = line_toks
+                .iter()
+                .rev()
+                .find(|t| t.kind != RTKind::Eof)
+                .map(|t| t.invalid)
+                .unwrap_or(false);
+        }
+        let mut lex_errs: Vec<ParseError> = Vec::new();
+        line_toks = gather_invalid_num(line_toks, &mut lex_errs);
+        errs.append(&mut lex_errs);
+        // the terminator ends the scan; everything before it is the
+        // value's while the value is still open
+        let stop = line_toks
+            .iter()
+            .position(|t| matches!(t.kind, RTKind::RBracket | RTKind::RBrace));
+        let content_len = stop.unwrap_or(line_toks.len());
+        let stop_tok = stop.map(|i| line_toks[i].clone());
+        if value_open {
+            for t in &line_toks[..content_len] {
+                if t.kind != RTKind::Eof {
+                    toks.push(t.clone());
+                }
+            }
+        }
+        match stop_tok {
+            Some(st) => {
+                let rel = st.start - offset(input, base);
+                *input = &input[rel..];
+                ending = match st.kind {
+                    RTKind::RBracket => SwallowEnd::Bracket,
+                    _ => SwallowEnd::Brace,
+                };
+                brace_tok = Some(st);
+                break;
+            }
+            None => {
+                if line_end < input.len() {
+                    *input = &input[line_end + 1..];
+                } else {
+                    *input = &input[input.len()..];
+                }
+                if !dropped || input.is_empty() {
+                    value_open = false;
+                }
+            }
+        }
+    }
+    // the value's span comes off the REAL tokens only — the Eof appended
+    // below is the stream terminator (advance() clamps at the last index,
+    // so a stream without one spins the application loop forever)
+    let span = match (toks.first(), toks.last()) {
+        (Some(f), Some(l)) if f.kind != RTKind::Eof => Some(f.start..l.end),
+        _ => None,
+    };
+    toks.push(RTok {
+        kind: RTKind::Eof,
+        value: String::new(),
+        start: offset(input, base),
+        end: offset(input, base),
+        space_after: false,
+        invalid: false,
+    });
+    (ending, span, toks, brace_tok)
+}
+
+/// The swallowed value as their application tree (the sticky-note checks
+/// anchor the callee and each arg) with the node-end bookkeeping
+/// application() records
+fn swallow_application(
+    toks: Vec<RTok>,
+    errs: &mut Vec<ParseError>,
+) -> (RNode, usize, Vec<(usize, usize)>) {
+    let mut rp = RParser {
+        toks,
+        pos: 0,
+        errs,
+        poisoned: None,
+        callee_end: 0,
+        arg_spans: Vec::new(),
+    };
+    let tree = rp.application();
+    (tree, rp.callee_end, rp.arg_spans)
+}
+
+/// The sticky `Note:` value with their unterminated-string recovery: the
+/// merged application errs "A Note content must be a quoted string"
+/// [callee span] plus "A Note can only contain one quoted string" per arg
+/// [arg span]; the well-formed non-quoted value errs once [value span].
+fn sticky_note_value(
+    input: &mut &str,
+    base: usize,
+    errs: &mut Vec<ParseError>,
+) -> R<String> {
+    let v_start = offset(input, base);
+    let quoted = input.starts_with('\'') || input.starts_with('"');
+    match note_value(input, base) {
+        Ok(n) => {
+            if !quoted {
+                let v_end = offset(input, base);
+                errs.push(ParseError {
+                    offset: v_start,
+                    end: Some(v_end),
+                    message: "A Note content must be a quoted string".to_string(),
+                });
+            }
+            Ok(n)
+        }
+        Err(e) if is_unterminated_string(&e) => {
+            errs.push(ParseError {
+                offset: e.offset,
+                end: e.end,
+                message: e.message,
+            });
+            let (ending, vspan, toks, _brace) = swallow_gather(input, base, errs);
+            if let Some(vs) = vspan {
+                let (app, _callee_end, arg_spans) = swallow_application(toks, errs);
+                if let RNode::App { callee, args, .. } = &app {
+                    // their note-element check anchors the FIELD node
+                    // ([first token .. last token] — c14: b varchar)
+                    errs.push(ParseError {
+                        offset: vs.start,
+                        end: Some(vs.end),
+                        message: "A Note content must be a quoted string".to_string(),
+                    });
+                    let _ = callee;
+                    for (s, e2) in arg_spans.iter().zip(args.iter()) {
+                        let _ = e2;
+                        errs.push(ParseError {
+                            offset: s.0,
+                            end: Some(s.1),
+                            message: "A Note can only contain one quoted string".to_string(),
+                        });
+                    }
+                }
+                let _ = vs;
+            }
+            match ending {
+                // the terminator belongs to the enclosing block: the field
+                // is done, input sits at the `}`/`]`
+                SwallowEnd::Brace | SwallowEnd::Bracket => Ok(String::new()),
+                SwallowEnd::Eof => Ok(String::new()),
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// `[key, key: value, ref: > t.c, ...]` — parsed generically; callers
 /// interpret the pairs.
 fn settings_list(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Vec<(String, Option<SettingVal>)>> {
@@ -640,9 +962,12 @@ fn settings_list_occs(
     if !eat(input, "[") {
         return fail(offset(input, base), "expected '['");
     }
+    let whole = *input; // the remaining text from just after `[` — the
+    // merged swallow value slices out of it by absolute offset
+    let whole_start = offset(&whole, base);
     let mut occs: Vec<super::ast::SettingOcc> = Vec::new();
     let mut out = Vec::new();
-    loop {
+    'list: loop {
         // their lexer treats newlines/comments as trivia inside the
         // bracket list (probe: `[pk,\n not null, unique]` parses clean)
         ws(input);
@@ -665,6 +990,9 @@ fn settings_list_occs(
         sp(input);
         let occ_before_value = input.len();
         let mut val_quoted = false;
+        // the VALUE node's span: their settings-note checks anchor the
+        // value expression, not the key
+        let mut v_span = offset(input, base)..offset(input, base);
         if eat(input, ":") {
             sp(input);
             // a newline between `:` and the value is trivia too
@@ -724,8 +1052,10 @@ fn settings_list_occs(
                         }
                     }
                 }
+                v_span = key_start..offset(input, base);
                 out.push((key, Some(SettingVal::Ref(card, l_opt, r_opt, to, op_offset, key_start, color))));
             } else if key == "default" {
+                let dflt_start = offset(input, base);
                 // verbatim: quoted strings keep their quotes so exporters
                 // can distinguish literals from bare tokens
                 let raw = if input.starts_with('\'') {
@@ -785,10 +1115,108 @@ fn settings_list_occs(
                     *input = &input[end..];
                     v
                 };
+                v_span = dflt_start..offset(input, base);
                 out.push((key, Some(SettingVal::Str(raw))));
             } else {
-                let v = value(input, base)?;
-                out.push((key, Some(SettingVal::Str(v))));
+                let v_start = offset(input, base);
+                match value(input, base) {
+                    Ok(v) => {
+                        v_span = v_start..offset(input, base);
+                        out.push((key, Some(SettingVal::Str(v))));
+                    }
+                    Err(e) if is_unterminated_string(&e) => {
+                        // their unterminated settings string: the token-
+                        // anchored lexer error, then the list keeps
+                        // consuming across lines — the value merges the
+                        // following tokens until `]`, a `}` encounter, or
+                        // EOF (ref/validate nodeSettings reads the merged
+                        // value's quotedness off the application)
+                        errs.push(ParseError {
+                            offset: e.offset,
+                            end: e.end,
+                            message: e.message,
+                        });
+                        let (ending, vspan, toks, brace) =
+                            swallow_gather(input, base, errs);
+                        match ending {
+                            SwallowEnd::Bracket => {
+                                if let Some(vs) = &vspan {
+                                    v_span = vs.clone();
+                                    let text = whole[vs.start - whole_start..vs.end - whole_start].to_string();
+                                    occs.push(super::ast::SettingOcc {
+                                        key: occ_key,
+                                        offset: key_start,
+                                        end: vs.end,
+                                        has_value: true,
+                                        quoted: false,
+                                        value: Some(text.clone()),
+                                        value_span: vs.clone(),
+                                    });
+                                    out.push((key, Some(SettingVal::Str(text))));
+                                }
+                                continue 'list;
+                            }
+                            SwallowEnd::Eof => {
+                                if let Some(vs) = &vspan {
+                                    v_span = vs.clone();
+                                    let text = whole[vs.start - whole_start..vs.end - whole_start].to_string();
+                                    occs.push(super::ast::SettingOcc {
+                                        key: occ_key,
+                                        offset: key_start,
+                                        end: vs.end,
+                                        has_value: true,
+                                        quoted: false,
+                                        value: Some(text.clone()),
+                                        value_span: vs.clone(),
+                                    });
+                                    out.push((key, Some(SettingVal::Str(text))));
+                                }
+                                // their listExpression at EOF: the closing
+                                // bracket consume fails at the EOF point;
+                                // the element's closing brace errors ride
+                                // the block loop's EOF path
+                                errs.push(err_at(
+                                    offset(input, base),
+                                    "Expect a closing bracket ']'",
+                                ));
+                                return Ok((out, occs));
+                            }
+                            SwallowEnd::Brace => {
+                                // the `}` arrived inside the open list: an
+                                // EMPTY value = their operand-start path
+                                // (INVALID_OPERAND on the brace), a merged
+                                // value = the next item's key stream failing
+                                let bt = brace.unwrap();
+                                if vspan.is_none() {
+                                    errs.push(ParseError {
+                                        offset: bt.start,
+                                        end: Some(bt.end),
+                                        message: format!(
+                                            "Invalid start of operand \"{}\"",
+                                            bt.value
+                                        ),
+                                    });
+                                } else {
+                                    errs.push(ParseError {
+                                        offset: bt.start,
+                                        end: Some(bt.end),
+                                        message: "Expect an identifier".to_string(),
+                                    });
+                                }
+                                // the field breaks; the errors are pushed —
+                                // the empty-message sentinel keeps the
+                                // column's Err path from pushing again, and
+                                // input sits at the `}` for the block loop
+                                return Err(Fail {
+                                    offset: bt.start,
+                                    end: None,
+                                    message: String::new(),
+                                });
+                            }
+                        }
+                    }
+                    Err(e) => return Err(e),
+                }
             }
         } else {
             out.push((key, None));
@@ -807,6 +1235,7 @@ fn settings_list_occs(
             has_value: occ_before_value != input.len(),
             quoted: val_quoted,
             value: last_val,
+            value_span: v_span,
         });
         if eat(input, ",") {
             continue;
@@ -902,6 +1331,8 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
     } else {
         ty = type_str(input, base)?;
     }
+    // their column-node lint anchor reads [name start .. type end]
+    let ty_end = offset(input, base);
     sp(input);
     // their column grammar's inline-settings fields: bare `pk`/`unique`
     // words (case-insensitive) set the flag; any other bare word errs
@@ -975,6 +1406,7 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
         name,
         name_span: name_off..name_end,
         ty,
+        ty_end,
         span: start..offset(input, base),
         binder_errors,
         settings: out_settings,
@@ -1762,6 +2194,8 @@ fn records_block(
             pos: 0,
             errs,
             poisoned: None,
+            callee_end: 0,
+            arg_spans: Vec::new(),
         };
         let tree = rp.application();
         // their leftExpression_bp THROWS on an invalid operand: the
@@ -2034,7 +2468,7 @@ fn table(
             ws(input);
             let _ = eat(input, ":");
             ws(input);
-            match note_value(input, base) {
+            match sticky_note_value(input, base, errs) {
                 Ok(n) => {
                     t.note = Some(n);
                     t.note_span = Some(note_start..offset(input, base));
@@ -2120,8 +2554,17 @@ fn table(
         match column(input, base, errs) {
             Ok(c) => t.columns.push(c),
             Err(e) => {
-                errs.push(err_at(e.offset, &e.message));
-                skip_line(input);
+                // an empty message = the recovery already pushed its errors
+                // and positioned input (the unterminated settings string
+                // breaking the field at a `}`)
+                if !e.message.is_empty() {
+                    errs.push(ParseError {
+                        offset: e.offset,
+                        end: e.end,
+                        message: e.message,
+                    });
+                    skip_line(input);
+                }
             }
         }
     }
@@ -2142,27 +2585,241 @@ fn ref_stmt(
     }
     ws(input);
     let mut name = None;
-    if !peek_is(input, ":") {
+    if !peek_is(input, ":") && !peek_is(input, "{") {
+        // `Ref: ...` has no name; `Ref {` is the ANONYMOUS block form —
+        // their elementDeclaration consumes the type then peeks, so both
+        // reach the block without a name
         name = Some(ident(input, base)?);
         ws(input);
     }
     if peek_is(input, "{") {
-        // `Ref name { a.b > c.d }` block form
+        // `Ref [name] { a.b > c.d }` — their Ref element's
+        // blockExpression: each body line is a FIELD (an application);
+        // ref/validate.ts validateFields runs per field, the first clean
+        // binary binds the relationship, fields past the first err
+        // REF_REDEFINED, and a line ending in a dropped partial swallows
+        // the next line (the newline-less token stream)
         let _ = eat(input, "{");
         ws(input);
-        let from = endpoint(input, base)?;
-        ws(input);
-        let op_offset = offset(input, base);
-        let (card, l_opt, r_opt) = cardinality_full(input, base)?;
-        ws(input);
-        let to = endpoint(input, base)?;
-        ws(input);
-        if !eat(input, "}") {
-            return fail(offset(input, base), "expected '}' after ref body");
+        let mut field_errors: Vec<(usize, usize, String)> = Vec::new();
+        let mut field_chains: Vec<super::ast::BinderChain> = Vec::new();
+        // the model relationship: field 1 when it is a clean binary with
+        // destructureable sides (their bind binds the first field)
+        let mut model: Option<(
+            super::ast::Endpoint,
+            super::ast::Endpoint,
+            Cardinality,
+            bool,
+            bool,
+            usize,
+        )> = None;
+        let mut field_index = 0usize;
+        'ref_fields: loop {
+            ws(input);
+            if input.is_empty() {
+                // their blockExpression consume at EOF
+                errs.push(err_at(offset(input, base), "Expect a closing brace '}'"));
+                break;
+            }
+            if eat(input, "}") {
+                break;
+            }
+            // ---- the per-line application with the swallow chain (the
+            // records/group mechanism) ----
+            let mut toks: Vec<RTok> = Vec::new();
+            let mut chained = 0usize;
+            let mut chain_brace = false;
+            loop {
+                let line_end = input.find('\n').unwrap_or(input.len());
+                let brace = input[..line_end].find('}');
+                let slice_end = brace.unwrap_or(line_end);
+                let line = &input[..slice_end];
+                let line_base = offset(input, base);
+                let sentinel = match brace {
+                    Some(_) => Some(b'}'),
+                    None if slice_end < input.len() => Some(b'\n'),
+                    None => None,
+                };
+                let (mut line_toks, mut dropped) = ref_tokens(line, line_base, sentinel, errs);
+                if !dropped {
+                    dropped = line_toks
+                        .iter()
+                        .rev()
+                        .find(|t| t.kind != RTKind::Eof)
+                        .map(|t| t.invalid)
+                        .unwrap_or(false);
+                }
+                let mut lex_errs: Vec<ParseError> = Vec::new();
+                line_toks = gather_invalid_num(line_toks, &mut lex_errs);
+                errs.append(&mut lex_errs);
+                if chained == 0
+                    && !line_toks
+                        .iter()
+                        .any(|t| t.kind != RTKind::Eof && t.kind != RTKind::RBrace)
+                {
+                    match input.find(['\n', '}']) {
+                        Some(k) if input.as_bytes()[k] == b'}' => *input = &input[k..],
+                        Some(k) => *input = &input[k + 1..],
+                        None => *input = &input[input.len()..],
+                    }
+                    continue 'ref_fields;
+                }
+                line_toks.pop();
+                toks.extend(line_toks);
+                chained += 1;
+                match input.find(['\n', '}']) {
+                    Some(k) if input.as_bytes()[k] == b'}' => {
+                        *input = &input[k..];
+                        chain_brace = true;
+                        break;
+                    }
+                    Some(k) => *input = &input[k + 1..],
+                    None => *input = &input[input.len()..],
+                }
+                if !dropped || input.is_empty() {
+                    break;
+                }
+            }
+            toks.push(RTok {
+                kind: RTKind::Eof,
+                value: String::new(),
+                start: offset(input, base),
+                end: offset(input, base),
+                space_after: false,
+                invalid: false,
+            });
+            let chained_end: &str = *input;
+            let mut rp = RParser {
+                toks,
+                pos: 0,
+                errs,
+                poisoned: None,
+                callee_end: 0,
+                arg_spans: Vec::new(),
+            };
+            let tree = rp.application();
+            // their leftExpression_bp throw (an invalid operand) unwinds
+            // the element — skip to the closing brace, abort the block
+            if let Some((pos, end, msg)) = rp.poisoned.clone() {
+                loop {
+                    let line_end = input.find('\n').unwrap_or(input.len());
+                    if input[..line_end].trim_start().starts_with('}') {
+                        break;
+                    }
+                    if line_end >= input.len() {
+                        *input = &input[input.len()..];
+                        break;
+                    }
+                    *input = &input[line_end + 1..];
+                }
+                return Err(Fail { offset: pos, end, message: msg });
+            }
+            let field_end = rp.prev().end;
+            field_index += 1;
+            if let RNode::App { callee, args, .. } = &tree {
+                // validateFields-ref (ref/validate.ts): REF_REDEFINED on
+                // fields past the first [field node span]; the callee
+                // checks on field.callee [callee node span]; the endpoint
+                // column checks on each side [side node span]
+                if field_index > 1 {
+                    field_errors.push((
+                        callee.start(),
+                        field_end,
+                        "A Ref can only contain one binary relationship".to_string(),
+                    ));
+                }
+                if !is_binary_relationship(callee) {
+                    field_errors.push((
+                        callee.start(),
+                        rp.callee_end,
+                        "A Ref field must be a binary relationship".to_string(),
+                    ));
+                } else if let RNode::Infix { left, right, .. } = &**callee {
+                    for side in [left.as_ref(), right.as_ref()] {
+                        let frag = destructure_cvt(side).unwrap_or_default();
+                        if frag.variables.len() + frag.tuple.len().min(1) < 2 {
+                            field_errors.push((
+                                side.start(),
+                                ref_block_side_end(&rp, side.start()),
+                                "Invalid column reference".to_string(),
+                            ));
+                        }
+                    }
+                }
+                if !is_equal_tuple_operands(callee) {
+                    field_errors.push((
+                        callee.start(),
+                        rp.callee_end,
+                        "Unequal fields in ref endpoints".to_string(),
+                    ));
+                }
+                // the nodeSettings args walk: the Array arg is the
+                // settings list, every other arg errs once [arg span]
+                let mut rest: Vec<&RNode> = args.iter().collect();
+                if matches!(rest.last(), Some(RNode::Array { .. })) {
+                    rest.pop();
+                } else if matches!(rest.first(), Some(RNode::Array { .. })) {
+                    rest.remove(0);
+                }
+                for (a, (s, e)) in rest.iter().zip(rp.arg_spans.iter()) {
+                    let _ = a;
+                    field_errors.push((
+                        *s,
+                        *e,
+                        "A Ref field should only have a single binary relationship".to_string(),
+                    ));
+                }
+                // field 1 of a clean binary binds the model relationship
+                if field_index == 1 && model.is_none() {
+                    if let RNode::Infix { op, left, right, .. } = &**callee {
+                        if is_binary_relationship(callee) {
+                            if let Some(parts) =
+                                ref_block_model(&rp, op, left, right)
+                            {
+                                model = Some(parts);
+                            }
+                        }
+                    }
+                }
+                // the binder chains (their bindFields) — the same scan the
+                // `Ref:` line path runs, for validate.rs's endpoint checks
+                let mut bindees = Vec::new();
+                scan_binding(callee, &mut bindees);
+                for a in args {
+                    scan_binding(a, &mut bindees);
+                }
+                for b in bindees {
+                    if b.variables.is_empty() || b.tuple.is_empty() {
+                        continue;
+                    }
+                    field_chains.push(super::ast::BinderChain {
+                        vars: b.variables.iter().map(var_pair).collect(),
+                        tuple: b.tuple.iter().map(var_pair).collect(),
+                        group: false,
+                    });
+                }
+            }
+            if chain_brace {
+                let _ = eat(input, "}");
+                break;
+            }
+            if chained_end.is_empty() {
+                break;
+            }
         }
+        // their validateFields: an empty body errs on the declarationNode
+        if field_index == 0 {
+            field_errors.push((
+                start,
+                offset(input, base),
+                "A Ref must have at least one field".to_string(),
+            ));
+        }
+        doc_binder_errors.extend(field_errors);
+        binder_chains.extend(field_chains);
         let (on_delete, on_update, color) =
             ref_settings(input, base, errs, doc_binder_errors);
-        return Ok(Some(Ref {
+        return Ok(model.map(|(from, to, card, l_opt, r_opt, op_offset)| Ref {
             name,
             clean_binary: true,
             binder_errors: Vec::new(),
@@ -2399,14 +3056,41 @@ fn ref_tokens(
                 continue;
             }
             b'\n' => break,
-            b',' => kind = RTKind::Comma,
-            b'(' => kind = RTKind::LParen,
-            b')' => kind = RTKind::RParen,
-            b'[' => kind = RTKind::LBracket,
-            b']' => kind = RTKind::RBracket,
-            b'{' => kind = RTKind::LBrace,
-            b'}' => kind = RTKind::RBrace,
-            b':' => kind = RTKind::Colon,
+            // their token values carry the literal text — the
+            // INVALID_OPERAND message quotes it (Invalid start of operand
+            // "}" / ";" / ...)
+            b',' => {
+                kind = RTKind::Comma;
+                value = ",".to_string();
+            }
+            b'(' => {
+                kind = RTKind::LParen;
+                value = "(".to_string();
+            }
+            b')' => {
+                kind = RTKind::RParen;
+                value = ")".to_string();
+            }
+            b'[' => {
+                kind = RTKind::LBracket;
+                value = "[".to_string();
+            }
+            b']' => {
+                kind = RTKind::RBracket;
+                value = "]".to_string();
+            }
+            b'{' => {
+                kind = RTKind::LBrace;
+                value = "{".to_string();
+            }
+            b'}' => {
+                kind = RTKind::RBrace;
+                value = "}".to_string();
+            }
+            b':' => {
+                kind = RTKind::Colon;
+                value = ":".to_string();
+            }
             b';' => {
                 kind = RTKind::Semicolon;
                 value = ";".to_string();
@@ -2525,7 +3209,10 @@ fn ref_tokens(
                 value = body[start..k].to_string();
                 end = k;
             }
-            b'*' => kind = RTKind::Wildcard,
+            b'*' => {
+                kind = RTKind::Wildcard;
+                value = "*".to_string();
+            }
             b'/' if body[i..].starts_with("//") => {
                 // a comment: trivia through the line end
                 i = body.len();
@@ -2723,6 +3410,12 @@ struct RParser<'a> {
     /// here, aborting the enclosing element — the flag defers the abort
     /// to the caller (the whole records block drops).
     poisoned: Option<(usize, Option<usize>, String)>,
+    /// The last application()'s callee end and per-arg spans: their
+    /// CompileError anchors carry NODE spans (field.callee / the field
+    /// node / each arg) — RNode tracks starts only, so the ends come
+    /// off the token stream during the parse.
+    callee_end: usize,
+    arg_spans: Vec<(usize, usize)>,
 }
 
 /// Their gatherInvalid (lexer.ts:247): invalid tokens never reach the
@@ -2795,6 +3488,8 @@ impl RParser<'_> {
     fn application(&mut self) -> RNode {
         let start = self.peek().start;
         let callee = self.comma_expression();
+        self.callee_end = self.prev().end;
+        self.arg_spans.clear();
         let mut args = Vec::new();
         let mut prev_start = callee.start();
         let mut prev_end = self.prev().end;
@@ -2814,6 +3509,7 @@ impl RParser<'_> {
             let arg = self.comma_expression();
             prev_start = arg.start();
             prev_end = self.prev().end;
+            self.arg_spans.push((prev_start, prev_end));
             args.push(arg);
         }
         RNode::App {
@@ -3590,6 +4286,8 @@ fn ref_body_pipeline_mode(
         pos: 0,
         errs,
         poisoned: None,
+        callee_end: 0,
+        arg_spans: Vec::new(),
     };
     let tree = p.application();
     if let RNode::App { callee, args, .. } = &tree {
@@ -3731,6 +4429,18 @@ fn enum_def(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Enum
                                     }
                                     note_span = Some(occ.offset..occ.end);
                                 }
+                                // their enum settingList binder: a
+                                // non-string note errs on the attribute
+                                // ('note' must be a string — the column's
+                                // settings check says "quoted string", the
+                                // enum's own says "string")
+                                if occ.key == "note" && occ.has_value && !occ.quoted {
+                                    errs.push(ParseError {
+                                        offset: occ.offset,
+                                        end: Some(occ.end),
+                                        message: "'note' must be a string".to_string(),
+                                    });
+                                }
                             }
                             let _ = kvs;
                         }
@@ -3814,7 +4524,7 @@ fn table_group(
         note_span: None,
     };
     let mut out_group_errors: Vec<(usize, usize, String)> = Vec::new();
-    loop {
+    'members: loop {
         ws(input);
         if input.is_empty() {
             errs.push(err_at(offset(input, base), "unterminated table group"));
@@ -3830,7 +4540,7 @@ fn table_group(
             let _ = eat(input, ":");
             ws(input);
             let note_start = offset(input, base);
-            match note_value(input, base) {
+            match sticky_note_value(input, base, errs) {
                 Ok(n) => {
                     g.note = Some(n);
                     g.note_span = Some(note_start..offset(input, base));
@@ -3846,62 +4556,113 @@ fn table_group(
         // Pratt tree as ref bodies): callee = the comma expression of
         // comma-separated members, args = the juxtaposed words after the
         // last comma element. validateFields-group + the group binder
-        // run on the line (probe4/p12 verified against their engine).
-        let line_start = offset(input, base);
-        let line_end = input.find('\n').unwrap_or(input.len());
-        // a `}` on this line ends the block: the body slice stops there
-        let brace = input[..line_end].find('}');
-        let slice_end = brace.unwrap_or(line_end);
-        let line = &input[..slice_end];
-        let sentinel = match brace {
-            Some(_) => Some(b'}'),
-            None if slice_end < input.len() => Some(b'\n'),
-            None => None,
-        };
-        let (mut line_toks, _tail_dropped) = ref_tokens(line, line_start, sentinel, errs);
-        let mut lex_errs: Vec<ParseError> = Vec::new();
-        line_toks = gather_invalid_num(line_toks, &mut lex_errs);
-        errs.append(&mut lex_errs);
-        // their blockExpression: only trivia + the closing brace → not a field
-        if !line_toks
-            .iter()
-            .any(|t| t.kind != RTKind::Eof && t.kind != RTKind::RBrace)
-        {
-            // advance past the consumed slice (the parser worked on a copy)
-            *input = &input[slice_end..];
-            if brace.is_some() {
-                let _ = eat(input, "}");
+        // run on the line (probe4/p12 verified against their engine). A
+        // line ending in a dropped partial loses its trailing newline
+        // with the removed token, so their application continues onto
+        // the next line — chain the slices like the records rows do.
+        let mut toks: Vec<RTok> = Vec::new();
+        let mut chained = 0usize;
+        let chain_brace;
+        loop {
+            let line_end = input.find('\n').unwrap_or(input.len());
+            // a `}` on this line ends the block: the body slice stops there
+            let brace = input[..line_end].find('}');
+            let slice_end = brace.unwrap_or(line_end);
+            let line = &input[..slice_end];
+            let line_base = offset(input, base);
+            let sentinel = match brace {
+                Some(_) => Some(b'}'),
+                None if slice_end < input.len() => Some(b'\n'),
+                None => None,
+            };
+            let (mut line_toks, mut dropped) = ref_tokens(line, line_base, sentinel, errs);
+            if !dropped {
+                // an invalid number gathered out at the tail takes the
+                // newline with it the same way
+                dropped = line_toks
+                    .iter()
+                    .rev()
+                    .find(|t| t.kind != RTKind::Eof)
+                    .map(|t| t.invalid)
+                    .unwrap_or(false);
+            }
+            let mut lex_errs: Vec<ParseError> = Vec::new();
+            line_toks = gather_invalid_num(line_toks, &mut lex_errs);
+            errs.append(&mut lex_errs);
+            // their blockExpression: only trivia + the closing brace →
+            // not a field (first line only: a chained brace line APPENDS,
+            // the application's stop-kind sees it)
+            if chained == 0
+                && !line_toks
+                    .iter()
+                    .any(|t| t.kind != RTKind::Eof && t.kind != RTKind::RBrace)
+            {
+                // advance past the consumed slice (the parser worked on a copy)
+                *input = &input[slice_end..];
+                if brace.is_some() {
+                    let _ = eat(input, "}");
+                    chain_brace = true;
+                    break;
+                }
+                if input.is_empty() {
+                    chain_brace = true;
+                    break;
+                }
+                continue 'members;
+            }
+            line_toks.pop(); // this line's Eof — one stream, one Eof
+            toks.extend(line_toks);
+            chained += 1;
+            match input.find(['\n', '}']) {
+                Some(k) if input.as_bytes()[k] == b'}' => {
+                    *input = &input[k..];
+                    chain_brace = true;
+                    break;
+                }
+                Some(k) => *input = &input[k + 1..],
+                None => *input = &input[input.len()..],
+            }
+            if !dropped || input.is_empty() {
+                chain_brace = false;
                 break;
             }
-            if input.is_empty() {
-                break;
-            }
-            continue;
         }
+        toks.push(RTok {
+            kind: RTKind::Eof,
+            value: String::new(),
+            start: offset(input, base),
+            end: offset(input, base),
+            space_after: false,
+            invalid: false,
+        });
         let mut lp = RParser {
-            toks: line_toks,
+            toks,
             pos: 0,
             errs,
             poisoned: None,
+            callee_end: 0,
+            arg_spans: Vec::new(),
         };
         let tree = lp.application();
         if let RNode::App { callee, args, .. } = &tree {
-            // validateFields-group: the callee must destructure to plain
-            // variables; every arg errs once
+            // validateFields-group (tableGroup/validate.ts): the CALLEE
+            // must destructure to plain variables [callee node span];
+            // every arg errs once [arg node span]
             if destructure_complex_variable(callee).is_none() {
                 out_group_errors.push((
                     callee.start(),
-                    callee.start(),
+                    lp.callee_end,
                     "A TableGroup field must be of the form <table> or <schema>.<table>"
                         .to_string(),
                 ));
             }
-            for a in args {
+            for (a, (s, e)) in args.iter().zip(lp.arg_spans.iter()) {
                 out_group_errors.push((
-                    a.start(),
-                    a.start(),
+                    *s,
+                    *e,
                     "A TableGroup field should only have a single Table name".to_string(),
                 ));
+                let _ = a;
             }
             // the group binder: tableBindee = variables.pop() — ONE pop,
             // so lone words bind too; chains resolve in validate.rs
@@ -3934,9 +4695,9 @@ fn table_group(
                 _ => {}
             }
         }
-        // advance past the consumed slice (the parser worked on a copy)
-        *input = &input[slice_end..];
-        if brace.is_some() {
+        // the chain already advanced input; a same-line `}` (or the empty
+        // first line ending the block) is positioned for the loop's eat
+        if chain_brace {
             let _ = eat(input, "}");
             break;
         }
@@ -4812,6 +5573,121 @@ Table users {
         let users = out.doc.tables.iter().find(|t| t.name == "users").unwrap();
         let rec = users.records.as_ref().unwrap();
         assert_eq!(rec.rows.len(), 1, "only 'Candice' survives: {:?}", rec.rows);
+    }
+
+    /// The ref block form: anonymous `Ref {`, per-line fields with
+    /// validateFields-ref (one-binary + column references), verified
+    /// span-identical against their engine (c5clean/c6/c8/c9)
+    #[test]
+    fn ref_block_fields_validate_like_their_engine() {
+        let src = r#"
+Ref {
+  a > b
+  c > d
+}
+Table a { id int }
+Table b { id int }
+Table c { id int }
+Table d { id int }
+"#;
+        let out = parse(src);
+        let d = crate::dbml::validate::validate_with_parse(
+            &out.doc,
+            src,
+            &out.binder_errors,
+            &out.binder_chains,
+            &out.record_count_errors,
+            &out.errors,
+        );
+        // bare names bind NOTHING (their Invalid column reference x4)
+        assert!(out.doc.refs.is_empty(), "no model ref: {:?}", out.doc.refs);
+        let msgs: Vec<&str> = d
+            .iter()
+            .map(|x| x.message.as_str())
+            .collect();
+        assert!(msgs.contains(&"A Ref can only contain one binary relationship"));
+        assert_eq!(
+            msgs.iter().filter(|m| **m == "Invalid column reference").count(),
+            4
+        );
+        // the extra-field error anchors field 2's node span
+        assert!(d.iter().any(|x| {
+            x.message == "A Ref can only contain one binary relationship"
+                && x.offset == src.find("c > d").unwrap()
+        }));
+        // full columns bind field 1's relationship (their c7 FK infos)
+        let src2 = r#"
+Ref {
+  a.id > b.id
+}
+Table a { id int }
+Table b { id int }
+"#;
+        let out2 = parse(src2);
+        assert_eq!(out2.doc.refs.len(), 1, "{:?}", out2.doc.refs);
+        assert_eq!(
+            out2.doc.refs[0].from.table, "a",
+            "{:?}",
+            out2.doc.refs[0].from
+        );
+        assert_eq!(out2.doc.refs[0].to.table, "b");
+        assert_eq!(out2.doc.refs[0].to.columns, vec!["id"]);
+    }
+
+    /// The unterminated settings string: the field breaks at the block's
+    /// `}` with their "Expect an identifier" on the brace (c4) — the
+    /// recovery must NOT leave a phantom note check or closing error
+    #[test]
+    fn note_settings_swallow_recovers_at_the_brace() {
+        let src = r#"
+Table t {
+  a int [note: 'unclosed
+  b varchar
+}
+"#;
+        let out = parse(src);
+        assert_eq!(out.errors.len(), 2, "{:?}", out.errors);
+        let quote = src.find("'unclosed").unwrap();
+        assert!(
+            out.errors.iter().any(|e| {
+                e.message == "Invalid newline encountered while parsing"
+                    && e.offset == quote
+                    && e.end == Some(quote + "'unclosed".len())
+            }),
+            "the lexer error anchors the partial token"
+        );
+        let brace = src.rfind('}').unwrap();
+        assert!(
+            out.errors.iter().any(|e| {
+                e.message == "Expect an identifier" && e.offset == brace
+            }),
+            "the key stream fails on the brace: {:?}",
+            out.errors
+        );
+    }
+
+    /// The sticky `Note:` swallow terminates (the swallowed stream carries
+    /// an Eof token — without it the application loop spins forever) and
+    /// produces their three errors (c14)
+    #[test]
+    fn sticky_note_swallow_terminates() {
+        let src = r#"
+Table t {
+  Note: 'x
+  b varchar
+}
+"#;
+        let out = parse(src);
+        assert_eq!(out.errors.len(), 3, "{:?}", out.errors);
+        let line3 = src.find("b varchar").unwrap();
+        assert!(out.errors.iter().any(|e| {
+            e.message == "A Note content must be a quoted string"
+                && e.offset == line3
+        }));
+        assert!(out
+            .errors
+            .iter()
+            .any(|e| e.message == "A Note can only contain one quoted string"));
     }
 
     /// c1 battery: a partial string in an otherwise-clean row merges the

@@ -451,8 +451,10 @@ pub fn validate_with_parse(
                     }
                     "note" => {
                         if a.has_value && !a.quoted {
-                            out.push(Diagnostic::plain(
-                                a.offset,
+                            // their anchor = the VALUE expression node
+                            out.push(Diagnostic::spanned(
+                                a.value_span.start,
+                                a.value_span.end,
                                 "'note' must be a quoted string".to_string(),
                             ));
                         }
@@ -817,6 +819,8 @@ pub fn validate_with_parse(
         table: &'a str,
         cols: &'a [String],
         token: usize,
+        /// their lint anchors carry the endpoint/column NODE span
+        token_end: usize,
     }
     struct RefSides<'a> {
         left: Side<'a>,
@@ -852,8 +856,9 @@ pub fn validate_with_parse(
                 explanation: Vec<String>,
                 fixes: Vec<QuickFix>,
                 out: &mut Vec<Diagnostic>| {
-        let mk = |offset: usize| Diagnostic {
-            end: None,
+        let mk = |offset: usize, end: usize| Diagnostic {
+            // exact: their node spans are non-degenerate on these paths
+            end: Some(end),
             offset,
             message: message.to_string(),
             severity: Severity::Info,
@@ -861,11 +866,11 @@ pub fn validate_with_parse(
             explanation: explanation.clone(),
             quick_fixes: fixes.clone(),
         };
-        out.push(mk(node));
+        out.push(mk(node, s.token_end));
         for c in s.cols {
             if let Some(col) = column_of(s.table, c) {
                 if col.name_span.start != node {
-                    out.push(mk(col.name_span.start));
+                    out.push(mk(col.name_span.start, col.ty_end));
                 }
             }
         }
@@ -1093,11 +1098,13 @@ pub fn validate_with_parse(
                 table: &r.from.table,
                 cols: &r.from.columns,
                 token: r.from.span.start,
+                token_end: r.from.span.end,
             },
             right: Side {
                 table: &r.to.table,
                 cols: &r.to.columns,
                 token: r.to.span.start,
+                token_end: r.to.span.end,
             },
             op,
             op_offset: r.op_offset,
@@ -1122,11 +1129,13 @@ pub fn validate_with_parse(
                     table: &t.name,
                     cols: std::slice::from_ref(&c.name),
                     token: c.name_span.start,
+                    token_end: c.ty_end,
                 },
                 right: Side {
                     table: if host_of_bare { &t.name } else { &ir.to.table },
                     cols: &ir.to.columns,
                     token: ir.attr_start,
+                    token_end: ir.to.span.end,
                 },
                 op,
                 op_offset: ir.op_offset,

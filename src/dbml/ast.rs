@@ -118,6 +118,9 @@ pub struct Column {
     pub name: String,
     pub name_span: Span,
     pub ty: String,
+    /// The type's end offset (before any settings) — their column-node
+    /// lint anchors read [name start .. type end].
+    pub ty_end: usize,
     pub span: Span,
     pub settings: ColumnSettings,
     /// Their validateNode-class findings raised while parsing this
@@ -167,6 +170,9 @@ pub struct SettingOcc {
     /// The verbatim value text (quotes kept) when the value parsed as a
     /// plain string.
     pub value: Option<String>,
+    /// The VALUE node's span — their settings-note checks anchor the
+    /// value expression (the merged application after a swallow).
+    pub value_span: Span,
     /// The value was a quoted string (their isExpressionAQuotedString).
     pub quoted: bool,
 }
