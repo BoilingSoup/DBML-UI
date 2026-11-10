@@ -104,7 +104,13 @@ tools below. Never say done when the sweep still finds shapes.
   driver resolves `path` from cwd).
 - Corpus gates: 78/78 + 78/78. Focused tests 42/42 + editor 61/61.
 - The user's three desktop files: span-identical, folded into the corpus.
-- The mutation campaign (round 31, seed 43): **295/600 span-identical** —
+- The mutation campaign (round 37, seed 43): the body child loop with
+  the snapshot brace-scan LANDED (the spans match: nl1 2,3..4,19 /
+  3,5..4,19; e43 5,1..7,14) — the remaining deltas: nl1's newline
+  error lost, e43's extra close, e44's spans; the next round traces
+  the nested parse's field-walk diagnostics and the close-count
+  interplay. The historical counters below (the pre-child-loop
+  rounds).
   rounds 2-19 landed (the mechanisms below); the identifier-stream
   attribute-name flow PORTED (the key scan crosses the trivia newlines,
   the real_end uses the occ's own end — the battery grew to e41-e42;
