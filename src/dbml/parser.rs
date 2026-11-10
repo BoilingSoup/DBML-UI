@@ -2226,10 +2226,18 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
             let tok_len = consume_one_token(&mut probe).unwrap_or(1);
             let jstart = offset(input, base);
             let junk = input[..tok_len.min(input.len())].to_string();
+            // their leftExpression_bp checks isOpToken FIRST: a
+            // prefix-invalid op (the member dot) errs UNKNOWN_PREFIX_OP
+            // quoting the value (probe m43_0059)
+            let msg = if junk == "." {
+                "Unexpected '.' in an expression".to_string()
+            } else {
+                format!("Invalid start of operand \"{}\"", junk)
+            };
             errs.push(ParseError {
                 offset: jstart,
                 end: Some(jstart + tok_len),
-                message: format!("Invalid start of operand \"{}\"", junk),
+                message: msg,
             });
             let empty = jstart + tok_len;
             // their blockExpression keeps the failed expression's partial
@@ -2693,7 +2701,22 @@ fn index(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Index> 
     } else {
         let is_expr = input.starts_with('`');
         let col_start = offset(input, base);
-        columns.push(index_ident(input, base)?);
+        let w = match index_ident(input, base) {
+            Ok(w) => w,
+            Err(_) => {
+                // their IndexesValidator's field check anchors the
+                // offending TOKEN (probe w3: the `#` junk field anchors
+                // the token span, not a point)
+                let mut probe = *input;
+                let tok_len = consume_one_token(&mut probe).unwrap_or(1);
+                return fail_with_end(
+                    col_start,
+                    col_start + tok_len,
+                    "An index field must be an identifier, a quoted identifier, a functional expression or a tuple of such",
+                );
+            }
+        };
+        columns.push(w);
         column_spans.push(col_start..offset(input, base));
         expressions.push(is_expr);
     }
@@ -3500,8 +3523,12 @@ fn custom_element(
     // their elementDeclaration's type consume at the PROGRAM level: junk
     // errs 'Expect an identifier' on the junk token; at EOF both it and
     // the sync's 'Unexpected EOF' log; the program sync advances ONE token
+    let ty_word: String;
     let _ty = match ident(input, base) {
-        Ok(t) => t,
+        Ok(t) => {
+            ty_word = t.clone();
+            t
+        }
         Err(_) => {
             let eof = offset(input, base);
             if input.is_empty() {
@@ -3558,10 +3585,18 @@ fn custom_element(
                     let tok_len = consume_one_token(&mut probe).unwrap_or(1);
                     let jstart = offset(input, base);
                     let junk = input[..tok_len.min(input.len())].to_string();
+                    // the same leftExpression_bp op-first rule as the
+                    // column name junk (probe m43_0059: the dot at the
+                    // element-name position)
+                    let msg = if junk == "." {
+                        "Unexpected '.' in an expression".to_string()
+                    } else {
+                        format!("Invalid start of operand \"{}\"", junk)
+                    };
                     errs.push(ParseError {
                         offset: jstart,
                         end: Some(jstart + tok_len),
-                        message: format!("Invalid start of operand \"{}\"", junk),
+                        message: msg,
                     });
                     name_span = Some(jstart + tok_len..jstart + tok_len);
                 }
@@ -3714,11 +3749,23 @@ fn custom_element(
         .or(settings_span.as_ref().map(|s| s.end))
         .or(name_span.as_ref().map(|s| s.end))
         .unwrap_or(offset(input, base));
-    // their CustomElementValidator
+    // their CustomElementValidator — a KNOWN keyword type routes to its
+    // own validator instead (probe v3: a top-level `indexes {` errs the
+    // Indexes context message on the element node, no inline-field check)
+    let known_ctx: Option<&str> = match ty_word.to_ascii_lowercase().as_str() {
+        "indexes" => Some("An Indexes can only appear inside a Table or a TablePartial"),
+        "tablepartial" => Some("A TablePartial must appear top-level"),
+        "diagramview" => Some("A DiagramView must appear top-level"),
+        "dep" => Some("A Dep must appear top-level"),
+        _ => None,
+    };
+    let indexes_kind = known_ctx == Some("An Indexes can only appear inside a Table or a TablePartial");
     doc_binder_errors.push((
         type_start,
         element_end,
-        "A Custom element can only appear in a Project or a Dep".to_string(),
+        known_ctx
+            .unwrap_or("A Custom element can only appear in a Project or a Dep")
+            .to_string(),
     ));
     if let Some(ns) = name_span {
         doc_binder_errors.push((
@@ -3736,11 +3783,13 @@ fn custom_element(
     }
     if let Some(bs) = body_span {
         if body_is_block {
-            doc_binder_errors.push((
-                bs.start,
-                bs.end,
-                "A Custom element can only have an inline field".to_string(),
-            ));
+            if !indexes_kind {
+                doc_binder_errors.push((
+                    bs.start,
+                    bs.end,
+                    "A Custom element can only have an inline field".to_string(),
+                ));
+            }
         } else if !body_quoted {
             doc_binder_errors.push((
                 bs.start,
@@ -4153,7 +4202,11 @@ fn table(
             loop {
                 ws(input);
                 if input.is_empty() {
-                    errs.push(err_at(offset(input, base), "unterminated indexes block"));
+                    // their indexes blockExpression's close consume errs at
+                    // the EOF token — the TABLE's own close adds the second
+                    // one at the same point (probe m43_0216: two close
+                    // errors at the EOF point, nothing else)
+                    errs.push(err_at(offset(input, base), "Expect a closing brace '}'"));
                     break;
                 }
                 if eat(input, "}") {
@@ -4164,9 +4217,15 @@ fn table(
                     Err(e) => {
                         // an empty message = the block-close sentinel: the
                         // errors are already pushed and input sits at the
-                        // `}` — the loop head closes the block
+                        // `}` — the loop head closes the block. The end
+                        // rides along (their anchors carry token spans —
+                        // probe w3: the junk field anchors `#`'s width)
                         if !e.message.is_empty() {
-                            errs.push(err_at(e.offset, &e.message));
+                            errs.push(ParseError {
+                                offset: e.offset,
+                                end: e.end,
+                                message: e.message,
+                            });
                             skip_line(input);
                         }
                     }
@@ -5358,14 +5417,19 @@ impl RParser<'_> {
                 if self.at_end() {
                     self.errs.push(err_at(t.start, "Unexpected EOF"));
                 } else {
-                    // their INVALID_OPERAND: logError + EmptyNode, then
-                    // leftExpression_bp THROWS — the error defers to the
-                    // element-level abort via the poisoned flag
-                    self.poisoned = Some((
-                        t.start,
-                        Some(t.end),
-                        format!("Invalid start of operand \"{}\"", t.value),
-                    ));
+                    // their leftExpression_bp checks isOpToken FIRST: an
+                    // op with no prefix form (the member dot) errs
+                    // UNKNOWN_PREFIX_OP quoting the value (probe m43_0059:
+                    // "Unexpected '.' in an expression"); anything else is
+                    // INVALID_OPERAND: logError + EmptyNode, then the throw
+                    // defers to the element-level abort via the poisoned
+                    // flag
+                    let msg = if t.value == "." {
+                        "Unexpected '.' in an expression".to_string()
+                    } else {
+                        format!("Invalid start of operand \"{}\"", t.value)
+                    };
+                    self.poisoned = Some((t.start, Some(t.end), msg));
                     self.advance();
                 }
                 RNode::Empty { start: t.start }

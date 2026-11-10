@@ -97,8 +97,8 @@ tools below. Never say done when the sweep still finds shapes.
   driver resolves `path` from cwd).
 - Corpus gates: 78/78 + 78/78. Focused tests 42/42 + editor 61/61.
 - The user's three desktop files: span-identical, folded into the corpus.
-- The mutation campaign (round 4, seed 43): **252/600 span-identical** —
-  rounds 2-4 landed (the mechanisms below).
+- The mutation campaign (round 5, seed 43): **259/600 span-identical** —
+  rounds 2-5 landed (the mechanisms below).
 
 ## Round-2 mechanisms (ported; do not re-derive)
 
@@ -192,22 +192,43 @@ tools below. Never say done when the sweep still finds shapes.
      BOTH validateColumn errors at the junk's END point, riding the
      parse-error channel (the Err would drop the binder vec — probe
      m43_0096 PASS)
+   - the indexes-block tail (m43_0216/0402/0484 PASS): the unclosed
+     indexes block errs the indexes' OWN close error at the EOF point +
+     the table's (two total) — our invented 'unterminated indexes
+     block' replaced; the junk FIELD inside indexes errs their
+     IndexesValidator field message on the TOKEN span (probe w3), and
+     the arm's Err push now preserves e.end
+   - a top-level KNOWN keyword type (indexes/tablepartial/diagramview/
+     dep) routes to its own validator: the per-kind context message on
+     the element node, no inline-field check (probe v3)
+   - the dot at a name/operand position errs UNKNOWN_PREFIX_OP
+     ("Unexpected '.' in an expression") — their leftExpression_bp
+     checks isOpToken FIRST (probes m43_0059/0091/0522/0580 PASS; the
+     RParser dispatcher + the column/custom-element name-junk sites)
    - OPEN (probed, port next):
-     * t_indexes: the indexes-block tail (m43_0216/0402/0484: ours
-       'unterminated indexes block' vs their close error) — probe the
-       mutation shape, not the minimal (the minimal showed theirs
-       SILENT at EOF — re-probe m43_0216 directly)
-     * m43_0242: 'Expect a comma' anchors the token AFTER the line end
-       (8,1-4) where ours anchors the last token + trailing trivia
-       (7,13-8,1) — their consume anchors the CURRENT token, ours
-       spans across the newline
-     * the dot-expression cascade (m43_0059/0091/0522/0580: ours emits
-       'Invalid start of operand "."' + their "Unexpected '.' in an
-       expression") — probe the minimal shape
+     * m43_0242 (+0206/0378/0521): 'Expect a comma' anchors the token
+       AFTER the line end (8,1-4) where ours anchors the last token +
+       trailing trivia (7,13-8,1) — their consume anchors the CURRENT
+       token; ours is in the records-row tuple machinery
+     * m43_0110/0122/0177 ('Expect a closing brace }' gap),
+       m43_0111/0479/0517 ('Unexpected EOF' gap),
+       m43_0240/0254/0526 (the 'default' must-be + 'EOF reached while
+       parsing' cascade), m43_0108/0357/0406 ('A Ref must appear
+       top-level' vs our 'Table must appear top-level' — the nested
+       keyword dispatch's kind detection), m43_0179/0364/0511 ('Invalid
+       newline encountered while parsing' gaps), m43_0223/0379/0534
+       (the top-level Note body: 'A Note must have a content' + their
+       close error vs our "expected '}' after note body"),
+       m43_0267/0480/0553 (our EXTRA 'A column must have a type'),
+       m43_0015/0201 ('Expect an identifier' gap), and 12 pure-span
+       cases (the endpoint-fragment column span m43_0193, the
+       custom-setting value end m43_0230/0255, the swallow-tail
+       element end m43_0251)
      * the remaining ~340 spread across small clusters — keep
        clustering from the round dump (the compare tool:
        /tmp/cluster2.py pattern — ours in 6 batch files, theirs in
-       theirs_mut.json, the signature = the per-message count delta)
+       theirs_mut.json, the signature = the per-message count delta;
+       use Counter diffs — plain membership misses count mismatches)
 2. **Quick-fix EDIT-range parity**: their quickFixes carry edits
    [{start, end, newText}] in UTF-16 offsets; our QuickFix has no ranges
    and the dump emits only the joined text. Add the edit ranges to our
