@@ -295,12 +295,16 @@ tools below. Never say done when the sweep still finds shapes.
        our value() leaves empty (no tuple arm at the settings-value
        position); m43_0240/0254/0526 (the default cascade: the string
        token's 'EOF reached while parsing' does not surface);
-       m43_0308 (the 'Expect an identifier' anchor: line 2's settings
-       `[che` swallows line 3; their ident-stream junk error anchors the
-       QUOTED token on line 3 (`"odd col"` = 3,3-3,12) while ours
-       anchors the line-2 column name (2,3-2,7) — the post-attr tail's
-       offset sits before the ws crossing; the tail must anchor the
-       CURRENT token AFTER the trivia ws)
+       m43_0308 (REFINED by the round-17 probes c1/c2: their attribute
+       NAME is an identifier STREAM crossing the trivia newlines —
+       `[che\ncode text\n}` names the attribute 'che code text' with
+       the node spanning 2,27..3,12 (the union of the idents), then the
+       `}` errs 'Expect an identifier' at 4,1-4,2; ours names 'che' and
+       errs at 3,3 — the port needs the key scan extended across the
+       trivia newlines AND the downstream occ/custom-check flow to
+       follow (the naive scan extension shifted the swallow-tail
+       element spans and dropped the custom check — battery e3/c2
+       regressions), so it waits for the flow work)
      * the remaining ~340 spread across small clusters — keep
        clustering from the round dump (the compare tool:
        /tmp/cluster2.py pattern — ours in 6 batch files, theirs in
