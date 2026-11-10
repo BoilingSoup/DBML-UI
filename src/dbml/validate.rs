@@ -266,6 +266,15 @@ pub(crate) fn column_setting_errors(
             a.key.as_str()
         };
         match name {
+            // OPEN: their checkDefault (isValidDefaultValue: a quoted
+            // string, a signed number, true/false/null, a backtick
+            // function, a 2-3 fragment enum reference — the anchor = the
+            // value node ?? the name) needs the partial-attribute
+            // semantics first: a dispatched-broken default (probe e21:
+            // `[default: 'x\n}`) never reaches their check because the
+            // consume-thrown attribute's partialNode stays out of the
+            // list — our occ from the broken-gather route would fire
+            // spuriously
             "pk" | "primary key" | "not null" | "null" | "unique" | "increment" => {
                 if a.has_value {
                     // their anchor = the VALUE expression node (probe
