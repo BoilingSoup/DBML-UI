@@ -1,0 +1,1 @@
+Table parent { id integer indexes { (id) [pk] } }

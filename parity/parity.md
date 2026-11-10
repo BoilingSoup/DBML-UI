@@ -88,28 +88,77 @@ tools below. Never say done when the sweep still finds shapes.
 - The program-level junk: 'Expect an identifier' on the junk token
   (+ 'Unexpected EOF' at EOF), the sync advances ONE token.
 
-## State (as of the a5fb039 commits)
+## State (as of the campaign round 2)
 
 - Grammar-shaped fuzz corpus (parity/fuzz, 300 cases): **300/300
   span-identical**.
-- The span battery (39 probes): **all span-identical**.
+- The span battery (56 probes — c*/d*/e* families): **all
+  span-identical** (compare with ABSOLUTE paths in the cases.json — the
+  driver resolves `path` from cwd).
 - Corpus gates: 78/78 + 78/78. Focused tests 42/42 + editor 61/61.
 - The user's three desktop files: span-identical, folded into the corpus.
+- The mutation campaign (round 2, seed 43): **242/600 span-identical** —
+  the round-2 ports landed (see the mechanisms below).
+
+## Round-2 mechanisms (ported; do not re-derive)
+
+- Their operand() at EOF logs 'Unexpected EOF' on the EOF token (a
+  zero-width point at the SOURCE end) and returns an EmptyNode WITHOUT
+  throwing — the junk case errs 'Invalid start of operand "value"' on
+  the junk token's full span. leftExpression_bp then throws.
+- Their discardUntil errs on the CURRENT token's FULL span (the EOF
+  token at EOF) and fires even when nothing follows; returning false
+  means no body parses.
+- canHandle(e) = handlerContext === undefined || handlerContext ===
+  top — an undefined handler is handled by the CURRENT context (a
+  top-level list swallows to EOF itself: 'Expect a closing bracket ']''
+  at the EOF point, the list RETURNS NORMALLY — closed=false — and the
+  enclosing element still runs discardUntil).
+- Their node spans = the UNION OF THE ARG SPANS (nodeFactory): swallowed
+  junk (markInvalid'ed) rides in NO arg — the settings list/element/
+  block spans end at the last REAL token (custom_element real_end; the
+  unclosed block body = the open brace + the last real token; their
+  blockExpression close consume errs 'Expect a closing brace '}' at the
+  EOF point when unclosed).
+- convertFuncAppToElem: a table-body field line converts to a nested
+  ELEMENT when the LAST arg is a block and the remaining args (the type
+  included) count 0 or 1 (3 needs `as`) — the element = {type: the
+  CALLEE (= the column name), name: the next arg, attributeList: a
+  trailing list, body: the block} and the CustomElementValidator runs
+  where it stands. Otherwise the field path: remains = args[1..];
+  remains[:-1] all identifiers + last identifier-or-list, else 'These
+  fields must be...' PER PART (each part's own span); a trailing list
+  pops as the setting list; the words set pk/unique or err 'Inline
+  column settings...' per word.
+- Their FK-lint infos anchor the RESOLVED COLUMN NODE (name .. the
+  settings end — Column.full_end), not name..type-end.
+- Their project fields: `key: value` lines are fine (the custom-element
+  context check ALLOWS a Project parent — `note: 'x'` binds silently);
+  an application field errs 'A Project can not have inline fields' on
+  the application node (the union of its tokens); `word { … }` /
+  `word word { … }` converts to a nested element (only the name/
+  inline-field checks fire); nested keyword elements validate where
+  they stand ('An Enum can only appear top-level' + EMPTY_ENUM, 'Table
+  must appear top-level', ...) with the element span = the keyword ..
+  the last real token (last_real_token_end). Their enum's unclosed
+  block errs 'Expect a closing brace '}' at the EOF point.
 
 ## Remaining work, in order
 
 1. **The mutation campaign convergence** (the standing tool:
-   `parity/mutate.py N SEED` writes mutated cases to /tmp/mut; run ours
-   in 100-file batches under caps, their engine in one tsx pass, diff at
-   span fidelity, cluster by message). State: 210/600 — the remaining
-   390 diverge on the structural-recovery cascade: mutations that sever
-   braces make element boundaries resolve differently (their general
-   element parse: settings lists containing glued braces, elements
-   continuing across lines via discardUntil's colon/brace stop, the
-   element-vs-column disambiguation inside bodies). Port their
-   general-element recovery mechanism by mechanism; after each fix
-   promote the reproducer into parity/battery/ and re-run. Iterate until
-   a full campaign round adds zero new mechanisms.
+   `parity/mutate.py N SEED`; compare at span fidelity, cluster by the
+   message-delta signature). State: 242/600 (seed 43) — the remaining
+   358 spread over a long tail: the column-name/type junk cascade
+   ('A column must have a type' + the name error, our 'expected column
+   type' extra), the dot-expression cascade, 'Expect a closing brace '}'
+   / 'Unexpected EOF' gaps, the 'default' value cascade ('EOF reached
+   while parsing'), our invented messages on secondary subsystems
+   (indexes block, note body, enum header), 'A Ref must appear
+   top-level' vs 'Table must appear top-level' dispatch, and 15 pure
+   span-only cases. Iterate: cluster -> probe their engine on the
+   minimal shape -> port -> promote the reproducer into
+   parity/battery/ -> gates. Iterate until a full round adds zero new
+   mechanisms.
 2. **Quick-fix EDIT-range parity**: their quickFixes carry edits
    [{start, end, newText}] in UTF-16 offsets; our QuickFix has no ranges
    and the dump emits only the joined text. Add the edit ranges to our

@@ -1,0 +1,3 @@
+Project p {
+  database_type 'postgres'
+}

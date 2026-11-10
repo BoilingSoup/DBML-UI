@@ -1,0 +1,5 @@
+Project p {
+  Enum e_status {
+    a
+  }
+}

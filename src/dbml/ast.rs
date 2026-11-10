@@ -22,6 +22,9 @@ pub struct Project {
     pub span: Span,
     pub database_type: Option<String>,
     pub note: Option<String>,
+    /// Their ProjectValidator findings raised while parsing the block
+    /// (the inline-field/element-context errors) — emitted by validate().
+    pub binder_errors: Vec<(usize, usize, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -121,6 +124,10 @@ pub struct Column {
     /// The type's end offset (before any settings) — their column-node
     /// lint anchors read [name start .. type end].
     pub ty_end: usize,
+    /// The column NODE's end (their union of the arg spans): the last real
+    /// arg's end — the settings `]` when a list binds, else the type end.
+    /// Trailing junk (a following `}`) never extends a node span.
+    pub full_end: usize,
     pub span: Span,
     pub settings: ColumnSettings,
     /// Their validateNode-class findings raised while parsing this

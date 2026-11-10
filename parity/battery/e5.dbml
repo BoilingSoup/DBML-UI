@@ -1,0 +1,4 @@
+Project p {
+  closed [note: 'done']
+  open
+Enum e_status {

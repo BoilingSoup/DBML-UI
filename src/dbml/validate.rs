@@ -975,7 +975,9 @@ pub fn validate_with_parse(
         for c in s.cols {
             if let Some(col) = column_of(s.table, c) {
                 if col.name_span.start != node {
-                    out.push(mk(col.name_span.start, col.ty_end));
+                    // their anchor = the resolved COLUMN node — the union of
+                    // its args (name .. settings end), not name..type-end
+                    out.push(mk(col.name_span.start, col.full_end));
                 }
             }
         }
@@ -1621,6 +1623,13 @@ pub fn validate_with_parse(
             for (offset, end, msg) in &c.binder_errors {
                 out.push(Diagnostic::spanned(*offset, *end, msg.clone()));
             }
+        }
+    }
+    // the project-parse validator findings (their ProjectValidator: the
+    // inline-field/element-context errors)
+    if let Some(p) = &doc.project {
+        for (offset, end, msg) in &p.binder_errors {
+            out.push(Diagnostic::spanned(*offset, *end, msg.clone()));
         }
     }
     // bound refs' application-arg findings (their INVALID_REF_FIELD)

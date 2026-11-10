@@ -1126,7 +1126,7 @@ fn settings_list(
     errs: &mut Vec<ParseError>,
     block_ctx: bool,
 ) -> R<Vec<(String, Option<SettingVal>)>> {
-    settings_list_occs(input, base, errs, block_ctx).map(|(kvs, _)| kvs)
+    settings_list_occs(input, base, errs, block_ctx).map(|(kvs, _, _)| kvs)
 }
 
 /// The outcome when a `}` (or junk) arrives where the list expected an
@@ -1201,11 +1201,10 @@ fn list_brace_dispatch(
             let at_eof = sync >= input.len();
             *input = &input[sync..];
             if at_eof {
-                errs.push(err_at(
-                    offset(input, base),
-                    "Expect a closing bracket ']'",
-                ));
-                ListBrace::CloseOk
+                // ran out with no `]`: the loop-top EOF branch logs the
+                // close error and the list closes as NOT closed (the
+                // partial list still returns — their buildList)
+                ListBrace::Continue
             } else {
                 ListBrace::Continue
             }
@@ -1218,14 +1217,9 @@ fn list_brace_dispatch(
         }
         None => {
             // no closer anywhere: the current context (the list) handles —
-            // sync to EOF; their closing-bracket consume fails at the EOF
-            // token
+            // sync to EOF; the loop-top EOF branch logs the close error
             *input = &input[input.len()..];
-            errs.push(err_at(
-                offset(input, base),
-                "Expect a closing bracket ']'",
-            ));
-            ListBrace::CloseOk
+            ListBrace::Continue
         }
     }
 }
@@ -1239,7 +1233,7 @@ fn settings_list_occs(
     base: usize,
     errs: &mut Vec<ParseError>,
     block_ctx: bool,
-) -> R<(Vec<(String, Option<SettingVal>)>, Vec<super::ast::SettingOcc>)> {
+) -> R<(Vec<(String, Option<SettingVal>)>, Vec<super::ast::SettingOcc>, bool)> {
     if !eat(input, "[") {
         return fail(offset(input, base), "expected '['");
     }
@@ -1264,10 +1258,20 @@ fn settings_list_occs(
                     message: "Expect a non-empty attribute name".to_string(),
                 });
             }
-            return Ok((out, occs));
+            return Ok((out, occs, true));
         }
         if input.is_empty() {
-            return fail(offset(input, base), "unterminated settings");
+            // their listExpression at EOF: the close-bracket consume errs
+            // 'Expect a closing bracket ']'' on the EOF token (a zero-width
+            // point at the source end) and the list RETURNS NORMALLY — the
+            // enclosing construct then runs its own discard/close checks
+            let eof = offset(input, base);
+            errs.push(ParseError {
+                offset: eof,
+                end: Some(eof),
+                message: "Expect a closing bracket ']'".to_string(),
+            });
+            return Ok((out, occs, false));
         }
         after_comma = false;
         let key_start = offset(input, base);
@@ -1334,7 +1338,7 @@ fn settings_list_occs(
                         let _ = eat(input, ",");
                         continue 'list;
                     }
-                    ListBrace::CloseOk => return Ok((out, occs)),
+                    ListBrace::CloseOk => return Ok((out, occs, true)),
                 }
             }
             // the colon case falls through: the eat(":") below consumes it
@@ -1399,7 +1403,7 @@ fn settings_list_occs(
                         let _ = eat(input, ",");
                         continue 'list;
                     }
-                    ListBrace::CloseOk => return Ok((out, occs)),
+                    ListBrace::CloseOk => return Ok((out, occs, true)),
                 }
             }
             // quotedness must be read BEFORE the value parses — the
@@ -1446,7 +1450,7 @@ fn settings_list_occs(
                                     let _ = eat(input, ",");
                                     continue 'list;
                                 }
-                                ListBrace::CloseOk => return Ok((out, occs)),
+                                ListBrace::CloseOk => return Ok((out, occs, true)),
                             }
                         }
                         // the value runs to the list's terminator; the
@@ -1543,7 +1547,7 @@ fn settings_list_occs(
                                                                 offset(input, base),
                                                                 "Expect a closing bracket ']'",
                                                             ));
-                                                            return Ok((out, occs));
+                                                            return Ok((out, occs, true));
                                                         }
                                                         SwallowEnd::Brace
                                                         | SwallowEnd::Bracket => {
@@ -1592,7 +1596,7 @@ fn settings_list_occs(
                                                                     continue 'list;
                                                                 }
                                                                 ListBrace::CloseOk => {
-                                                                    return Ok((out, occs));
+                                                                    return Ok((out, occs, true));
                                                                 }
                                                             }
                                                         }
@@ -1649,7 +1653,7 @@ fn settings_list_occs(
                                                                     continue 'list;
                                                                 }
                                                                 ListBrace::CloseOk => {
-                                                                    return Ok((out, occs));
+                                                                    return Ok((out, occs, true));
                                                                 }
                                                             }
                                                         }
@@ -1658,7 +1662,7 @@ fn settings_list_occs(
                                                                 offset(input, base),
                                                                 "Expect a closing bracket ']'",
                                                             ));
-                                                            return Ok((out, occs));
+                                                            return Ok((out, occs, true));
                                                         }
                                                         SwallowEnd::Comma => continue 'list,
                                                     }
@@ -1834,7 +1838,7 @@ fn settings_list_occs(
                                             let _ = eat(input, ",");
                                             continue 'list;
                                         }
-                                        ListBrace::CloseOk => return Ok((out, occs)),
+                                        ListBrace::CloseOk => return Ok((out, occs, true)),
                                     }
                                 }
                                 _ => {
@@ -1866,7 +1870,7 @@ fn settings_list_occs(
                                                 offset(input, base),
                                                 "Expect a closing bracket ']'",
                                             ));
-                                            return Ok((out, occs));
+                                            return Ok((out, occs, true));
                                         }
                                     }
                                 }
@@ -1937,7 +1941,7 @@ fn settings_list_occs(
                                     offset(input, base),
                                     "Expect a closing bracket ']'",
                                 ));
-                                return Ok((out, occs));
+                                return Ok((out, occs, true));
                             }
                             // Junk never ends a gather (the scan continues
                             // to the terminator); grouped with the
@@ -1947,7 +1951,7 @@ fn settings_list_occs(
                                     offset(input, base),
                                     "Expect a closing bracket ']'",
                                 ));
-                                return Ok((out, occs));
+                                return Ok((out, occs, true));
                             }
                             SwallowEnd::Brace => {
                                 // the `}` arrived inside the open list: an
@@ -2015,7 +2019,7 @@ fn settings_list_occs(
                                         let _ = eat(input, ",");
                                         continue 'list;
                                     }
-                                    ListBrace::CloseOk => return Ok((out, occs)),
+                                    ListBrace::CloseOk => return Ok((out, occs, true)),
                                 }
                             }
                         }
@@ -2055,7 +2059,7 @@ fn settings_list_occs(
         // the loop-top ws already does); a `]` on the next line closes
         ws(input);
         if eat(input, "]") {
-            return Ok((out, occs));
+            return Ok((out, occs, true));
         }
         if input.is_empty() {
             // their listExpression at EOF: the closing bracket consume
@@ -2065,7 +2069,7 @@ fn settings_list_occs(
                 offset(input, base),
                 "Expect a closing bracket ']'",
             ));
-            return Ok((out, occs));
+            return Ok((out, occs, true));
         }
         // the value parsed but no comma/bracket follows: a COLON item
         // ended the attribute — their while-loop consume(COMMA) anchors
@@ -2098,7 +2102,7 @@ fn settings_list_occs(
                 let _ = eat(input, ",");
                 continue 'list;
             }
-            ListBrace::CloseOk => return Ok((out, occs)),
+            ListBrace::CloseOk => return Ok((out, occs, true)),
         }
     }
 }
@@ -2174,6 +2178,8 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
     };
     let name_end = offset(input, base);
     sp(input);
+    // the type word's start — the conversion's `name` arg anchors here
+    let ty_start = offset(input, base);
     // their validateFields (table/validate.ts:112): a column field with
     // args=[] errs 'A column must have a type' anchored at the callee
     // (the name). The type is missing when the line/scope ends — or when
@@ -2210,19 +2216,30 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
     // their column-node lint anchor reads [name start .. type end]
     let ty_end = offset(input, base);
     sp(input);
-    // their column grammar's inline-settings fields: bare `pk`/`unique`
-    // words (case-insensitive) set the flag; any other bare word errs
-    // ("Inline column settings can only be `pk` or `unique`") — unless it
-    // drags a `{ … }` block behind it (`indexes {`, `notes {`), which
-    // errs twice ("These fields must be some inline settings optionally
-    // ended with a setting list", at the word and the brace) and swallows
-    // the balanced block before the column ends. Words may follow a
-    // setting list too (probe c6: `id [pk] integer` errs at `integer`).
+    // their table-body field = a function application: callee = the name,
+    // args = [type, ...inline items]. convertFuncAppToElem turns it into a
+    // nested ELEMENT when the LAST arg is a block and the remaining args
+    // fit an element shape (counts 0/1 — 3 needs `as`); otherwise it stays
+    // a field and validateFieldSetting(remains = args[1..]) runs:
+    //   - remains[:-1] all identifiers AND the last an identifier-or-list,
+    //     else 'These fields must be some inline settings optionally ended
+    //     with a setting list' PER PART (each part's own node span);
+    //   - a trailing list pops as the setting list;
+    //   - each remaining word: pk/unique set the flag, anything else errs
+    //     'Inline column settings can only be `pk` or `unique`' on it.
     let mut inline_pk = false;
     let mut inline_unique = false;
     let mut settings: Option<super::ast::ColumnSettings> = None;
     // the FIRST list stands in as the (invalid) type when neither
     let mut ty_is_list = false;
+    enum Item {
+        Word(String),
+        List(Vec<(String, Option<SettingVal>)>, Vec<super::ast::SettingOcc>),
+        Block,
+    }
+    let mut items: Vec<(Item, Span)> = Vec::new();
+    // the last REAL arg's end — the column node's union end
+    let mut full_end = ty_end;
     loop {
         sp(input);
         if input.is_empty() || input.starts_with(['\n', '\r', '}', '#']) {
@@ -2230,31 +2247,27 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
         }
         if peek_is(input, "[") {
             let settings_start = offset(input, base);
-            let (kvs, occs) = settings_list_occs(input, base, errs, true)?;
+            let (kvs, occs, _) = settings_list_occs(input, base, errs, true)?;
+            let lend = offset(input, base);
             if ty.is_empty() && !ty_is_list {
                 // the list became the field's arg — no valid column type;
                 // their anchor = the list node
-                binder_errors.push((
-                    settings_start,
-                    offset(input, base),
-                    "Invalid column type".to_string(),
-                ));
+                binder_errors.push((settings_start, lend, "Invalid column type".to_string()));
                 ty_is_list = true;
             }
-            // a SECOND bracket list on the same line is their fields error,
-            // anchored at both lists (probe: `int [] [pk]` errs at `[` and `[`)
-            sp(input);
-            if peek_is(input, "[") {
-                let msg = "These fields must be some inline settings optionally ended with a setting list";
-                binder_errors.push((settings_start, offset(input, base), msg.to_string()));
-                let second = offset(input, base);
-                binder_errors.push((second, second, msg.to_string()));
-                swallow_balanced_braces(input);
-            }
-            let mut s = column_settings_from(kvs);
-            s.occurrences = occs;
-            settings = Some(s);
+            items.push((Item::List(kvs, occs), settings_start..lend));
+            full_end = lend;
             continue;
+        }
+        if peek_is(input, "{") {
+            // a block AT the arg position (no word in front: `id { x }`) —
+            // their extractOperand takes the blockExpression as the arg
+            let bs = offset(input, base);
+            swallow_balanced_braces(input);
+            let be = offset(input, base);
+            items.push((Item::Block, bs..be));
+            full_end = be;
+            break;
         }
         let off = offset(input, base);
         let save = *input;
@@ -2262,25 +2275,123 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
             *input = save;
             break;
         };
+        let wend = offset(input, base);
         sp(input);
+        // the word is an arg in its own right BEFORE the block check —
+        // `indexes { … }` gathers [indexes, block] (their application)
+        items.push((Item::Word(word), off..wend));
+        full_end = wend;
         if peek_is(input, "{") {
-            // their validateNode class — these gate the interpretation
-            // layer, so they ride the column for validate() to emit
-            let msg = "These fields must be some inline settings optionally ended with a setting list";
-            binder_errors.push((off, offset(input, base), msg.to_string()));
-            let second = offset(input, base);
-            binder_errors.push((second, second, msg.to_string()));
+            let bs = offset(input, base);
             swallow_balanced_braces(input);
+            let be = offset(input, base);
+            items.push((Item::Block, bs..be));
+            full_end = be;
             break;
         }
-        match word.to_ascii_lowercase().as_str() {
-            "pk" => inline_pk = true,
-            "unique" => inline_unique = true,
-            _ => binder_errors.push((
-                off,
-                offset(input, base),
-                "Inline column settings can only be `pk` or `unique`".to_string(),
-            )),
+    }
+    // the conversion attempt (their convertFuncAppToElem): pop a trailing
+    // block, then a trailing list; the remaining arg count (the type
+    // included) must be 0 or 1
+    let mut converted = false;
+    if matches!(items.last(), Some((Item::Block, _))) {
+        let block_span = items.last().unwrap().1.clone();
+        let mut rest = &items[..items.len() - 1];
+        let mut attr_span: Option<Span> = None;
+        if matches!(rest.last(), Some((Item::List(..), _))) {
+            attr_span = Some(rest.last().unwrap().1.clone());
+            rest = &rest[..rest.len() - 1];
+        }
+        let cp_count = usize::from(!ty.is_empty() || ty_is_list) + rest.len();
+        if cp_count <= 1 && rest.is_empty() {
+            converted = true;
+            let elem_start = name_off;
+            // the element node = the union of the arg spans
+            binder_errors.push((
+                elem_start,
+                block_span.end,
+                "A Custom element can only appear in a Project or a Dep".to_string(),
+            ));
+            if cp_count == 1 {
+                // the single remaining arg (our type) becomes the element's
+                // name — the name error anchors ITS span
+                let (ns, ne) = if ty_is_list {
+                    (items[0].1.start, items[0].1.end)
+                } else {
+                    (ty_start, ty_end)
+                };
+                binder_errors.push((
+                    ns,
+                    ne,
+                    "A Custom element shouldn't have a name".to_string(),
+                ));
+            }
+            if let Some(a) = attr_span {
+                binder_errors.push((
+                    a.start,
+                    a.end,
+                    "A Custom element shouldn't have a setting list".to_string(),
+                ));
+            }
+            binder_errors.push((
+                block_span.start,
+                block_span.end,
+                "A Custom element can only have an inline field".to_string(),
+            ));
+        }
+    }
+    if !converted {
+        // remains = args[1..] — everything after the type (a type-position
+        // list IS args[0])
+        let remains: &[(Item, Span)] = if ty_is_list { &items[1..] } else { &items[..] };
+        if !remains.is_empty() {
+            let head_ok = remains[..remains.len() - 1]
+                .iter()
+                .all(|(it, _)| matches!(it, Item::Word(_)));
+            let last_ok = matches!(remains.last().unwrap().0, Item::Word(_) | Item::List(..));
+            if !head_ok || !last_ok {
+                let msg = "These fields must be some inline settings optionally ended with a setting list";
+                for (_, sp) in remains {
+                    binder_errors.push((sp.start, sp.end, msg.to_string()));
+                }
+            } else {
+                // a trailing list pops as the setting list — the LAST list
+                // binds (their aggregateSettingList); the words set flags.
+                // The checks ran on the borrow; the binding consumes the
+                // items by value (SettingVal is not Clone)
+                let mut list_bound = false;
+                for (it, sp) in items.drain(..) {
+                    let in_remains = if ty_is_list {
+                        // items[0] was the type-position list
+                        true
+                    } else {
+                        true
+                    };
+                    if !in_remains {
+                        continue;
+                    }
+                    match it {
+                        Item::Word(w) => match w.to_ascii_lowercase().as_str() {
+                            "pk" => inline_pk = true,
+                            "unique" => inline_unique = true,
+                            _ => binder_errors.push((
+                                sp.start,
+                                sp.end,
+                                "Inline column settings can only be `pk` or `unique`".to_string(),
+                            )),
+                        },
+                        Item::List(kvs, occs) => {
+                            if !list_bound {
+                                let mut s = column_settings_from(kvs);
+                                s.occurrences = occs;
+                                settings = Some(s);
+                                list_bound = true;
+                            }
+                        }
+                        Item::Block => {}
+                    }
+                }
+            }
         }
     }
     let mut out_settings = settings.unwrap_or_default();
@@ -2291,6 +2402,7 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
         name_span: name_off..name_end,
         ty,
         ty_end,
+        full_end,
         span: start..offset(input, base),
         binder_errors,
         settings: out_settings,
@@ -3312,16 +3424,31 @@ fn custom_element(
         match ident(input, base) {
             Ok(_) => name_span = Some(name_start..offset(input, base)),
             Err(_) => {
-                let mut probe = *input;
-                let tok_len = consume_one_token(&mut probe).unwrap_or(1);
-                let jstart = offset(input, base);
-                let junk = input[..tok_len.min(input.len())].to_string();
-                errs.push(ParseError {
-                    offset: jstart,
-                    end: Some(jstart + tok_len),
-                    message: format!("Invalid start of operand \"{}\"", junk),
-                });
-                name_span = Some(jstart + tok_len..jstart + tok_len);
+                // their operand() at EOF logs 'Unexpected EOF' on the EOF
+                // token (a zero-width point at the source end) and returns
+                // an EmptyNode WITHOUT throwing; the junk case errs
+                // INVALID_OPERAND on the junk token's full span and the
+                // EmptyNode's span is the junk token's END point
+                if input.is_empty() {
+                    let eof = offset(input, base);
+                    errs.push(ParseError {
+                        offset: eof,
+                        end: Some(eof),
+                        message: "Unexpected EOF".to_string(),
+                    });
+                    name_span = Some(eof..eof);
+                } else {
+                    let mut probe = *input;
+                    let tok_len = consume_one_token(&mut probe).unwrap_or(1);
+                    let jstart = offset(input, base);
+                    let junk = input[..tok_len.min(input.len())].to_string();
+                    errs.push(ParseError {
+                        offset: jstart,
+                        end: Some(jstart + tok_len),
+                        message: format!("Invalid start of operand \"{}\"", junk),
+                    });
+                    name_span = Some(jstart + tok_len..jstart + tok_len);
+                }
                 loop {
                     if input.is_empty()
                         || peek_is(input, ":")
@@ -3342,26 +3469,64 @@ fn custom_element(
     let mut settings_span: Option<Span> = None;
     if peek_is(input, "[") {
         let ls = offset(input, base);
-        let _ = settings_list_occs(input, base, errs, false);
-        settings_span = Some(ls..offset(input, base));
+        // their node spans are the UNION of the args' spans — the swallow's
+        // junk tokens are markInvalid'ed and ride in NO arg, so the
+        // setting-list node (and with it the element node) ends at the
+        // last REAL attribute's end, not at the swallow tail
+        let list_res = settings_list_occs(input, base, errs, false);
+        let real_end = match &list_res {
+            // a normally-closed list: the `]` is real, the consumption end
+            // IS the real end; a list that died at EOF returns Ok too — its
+            // real end is the last REAL attribute's end (the swallow's junk
+            // rides in no node)
+            Ok((_, occs, closed)) => {
+                if *closed {
+                    offset(input, base)
+                } else {
+                    occs.iter()
+                        .map(|o| o.end.max(o.value_span.end))
+                        .max()
+                        .unwrap_or(offset(input, base))
+                }
+            }
+            Err(f) => f
+                .partial_occs
+                .iter()
+                .map(|o| o.end.max(o.value_span.end))
+                .max()
+                .unwrap_or(f.offset),
+        };
+        settings_span = Some(ls..real_end.max(ls));
         ws(input);
     }
-    // discardUntil('{'/':'): the tokens before the body err once
-    let discard_start = offset(input, base);
-    loop {
-        if input.is_empty() || peek_is(input, "{") || peek_is(input, ":") {
-            break;
-        }
-        if consume_one_token(input).is_none() {
-            break;
-        }
-    }
-    if offset(input, base) > discard_start {
+    // their discardUntil: whenever the current token isn't `{`/`:` — AT EOF
+    // TOO — it logs on the CURRENT token's full span (the EOF token is a
+    // zero-width point at the source end), drops it, and keeps discarding
+    // until `{`/`:`/EOF; returning false at EOF means NO body parses
+    if input.is_empty() {
+        let eof = offset(input, base);
         errs.push(ParseError {
-            offset: discard_start,
-            end: Some(discard_start + 1),
+            offset: eof,
+            end: Some(eof),
             message: "Expect an opening brace '{' or a colon ':'".to_string(),
         });
+    } else if !peek_is(input, "{") && !peek_is(input, ":") {
+        let mut probe = *input;
+        let tok_len = consume_one_token(&mut probe).unwrap_or(1);
+        let jstart = offset(input, base);
+        errs.push(ParseError {
+            offset: jstart,
+            end: Some(jstart + tok_len),
+            message: "Expect an opening brace '{' or a colon ':'".to_string(),
+        });
+        loop {
+            if input.is_empty() || peek_is(input, "{") || peek_is(input, ":") {
+                break;
+            }
+            if consume_one_token(input).is_none() {
+                break;
+            }
+        }
     }
     // the body: a colon introduces the inline value; a brace the block
     let mut body_span: Option<Span> = None;
@@ -3373,6 +3538,7 @@ fn custom_element(
         let mut depth = 1i32;
         let bytes = input.as_bytes();
         let mut end = bytes.len();
+        let mut unclosed = true;
         for (k, &bc) in bytes.iter().enumerate() {
             if bc == b'{' {
                 depth += 1;
@@ -3380,13 +3546,37 @@ fn custom_element(
                 depth -= 1;
                 if depth == 0 {
                     end = k;
+                    unclosed = false;
                     break;
                 }
             }
         }
-        *input = &input[end.min(input.len())..];
-        let _ = eat(input, "}");
-        body_span = Some(bs..offset(input, base));
+        if unclosed {
+            // their block node = the open brace + the parsed children — an
+            // unclosed block's union ends at the last REAL token before
+            // EOF (the swallowed junk rides in no node); a bare `{` spans
+            // just the brace. Their blockExpression's close consume fails
+            // at the EOF token (a zero-width point at the source end)
+            let mut probe = *input;
+            let mut last = bs;
+            loop {
+                ws(&mut probe);
+                if probe.is_empty() {
+                    break;
+                }
+                if consume_one_token(&mut probe).is_none() {
+                    break;
+                }
+                last = offset(&probe, base);
+            }
+            *input = &input[input.len()..];
+            errs.push(err_at(offset(input, base), "Expect a closing brace '}'"));
+            body_span = Some(bs..last.max(bs + 1));
+        } else {
+            *input = &input[end..];
+            let _ = eat(input, "}");
+            body_span = Some(bs..offset(input, base));
+        }
         body_is_block = true;
     } else if eat(input, ":") {
         ws(input);
@@ -3399,9 +3589,14 @@ fn custom_element(
         }
         body_span = Some(vs..offset(input, base));
     }
+    // their element node = the UNION of the arg spans (type, name, setting
+    // list, body) — with no body it ends at the last REAL arg's end, never
+    // at a swallow tail
     let element_end = body_span
         .as_ref()
         .map(|s| s.end)
+        .or(settings_span.as_ref().map(|s| s.end))
+        .or(name_span.as_ref().map(|s| s.end))
         .unwrap_or(offset(input, base));
     // their CustomElementValidator
     doc_binder_errors.push((
@@ -3518,7 +3713,7 @@ fn table(
         ws(input);
     }
     if peek_is(input, "[") {
-        let (kvs, occs) = settings_list_occs(input, base, errs, false)?;
+        let (kvs, occs, list_closed) = settings_list_occs(input, base, errs, false)?;
         // their tableModule's settings validation: headercolor/note/dep
         // have their own rules; EVERY other key is free-form custom
         // metadata — once-only, and the value must be a string, a color,
@@ -5659,7 +5854,7 @@ fn ref_body_pipeline_mode(
                         let sub = body[slice_start..slice_end].to_string();
                         let mut cursor = sub.as_str();
                         let mut sub_errs: Vec<ParseError> = Vec::new();
-                        if let Ok((_, occs)) =
+                        if let Ok((_, occs, _)) =
                             settings_list_occs(&mut cursor, *start, &mut sub_errs, false)
                         {
                             validate_field_settings(&occs, out);
@@ -5690,7 +5885,7 @@ fn ref_settings(
         *input = before_ws;
         return out;
     }
-    if let Ok((kvs, occs)) = settings_list_occs(input, base, errs, false) {
+    if let Ok((kvs, occs, _)) = settings_list_occs(input, base, errs, false) {
         // their validateFieldSettings runs on every ref's settings list
         validate_field_settings(&occs, binder_out);
         for (k, v) in kvs {
@@ -5731,7 +5926,7 @@ fn enum_def(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Enum
     loop {
         ws(input);
         if input.is_empty() {
-            errs.push(err_at(offset(input, base), "unterminated enum block"));
+            errs.push(err_at(offset(input, base), "Expect a closing brace '}'"));
             break;
         }
         if eat(input, "}") {
@@ -5747,7 +5942,7 @@ fn enum_def(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Enum
                 let mut full_end = v_end;
                 if peek_is(input, "[") {
                     match settings_list_occs(input, base, errs, true) {
-                        Ok((kvs, occs)) => {
+                        Ok((kvs, occs, _)) => {
                             // their enum-field token spans the settings
                             // list; the note carries its entry's token
                             full_end = offset(input, base);
@@ -5832,7 +6027,7 @@ fn table_group(
     let mut custom: Vec<(String, String)> = Vec::new();
     let mut custom_spans: Vec<(String, Span)> = Vec::new();
     if peek_is(input, "[") {
-        if let Ok((kvs, occs)) = settings_list_occs(input, base, errs, false) {
+        if let Ok((kvs, occs, _)) = settings_list_occs(input, base, errs, false) {
             for (k, v) in kvs {
                 if let (Some(SettingVal::Str(sv)), "color") = (&v, k.as_str()) {
                     color = Some(sv.clone());
@@ -6080,16 +6275,89 @@ fn project(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Proje
         span: start..0,
         database_type: None,
         note: None,
+        binder_errors: Vec::new(),
     };
     loop {
         ws(input);
         if input.is_empty() {
-            errs.push(err_at(offset(input, base), "unterminated project block"));
+            // their blockExpression's close consume fails at the EOF token
+            errs.push(err_at(offset(input, base), "Expect a closing brace '}'"));
             break;
         }
         if eat(input, "}") {
             break;
         }
+        // a nested element declaration is a SUB of the project block: its
+        // own validator runs where it stands (probe s_open: the context
+        // error anchors the element node, EMPTY_ENUM joins on an
+        // element-less Enum, and the block's own diagnostics ride along)
+        if peek_kw(input, "Table")
+            || peek_kw(input, "Ref")
+            || peek_kw(input, "Enum")
+            || peek_kw(input, "TableGroup")
+            || peek_kw(input, "Project")
+        {
+            let nested_start = offset(input, base);
+            let orig = *input;
+            let mut nested_errs: Vec<ParseError> = Vec::new();
+            let mut nested_binder: Vec<(usize, usize, String)> = Vec::new();
+            let mut nested_chains: Vec<super::ast::BinderChain> = Vec::new();
+            let mut nested_counts: Vec<(usize, usize, usize, usize)> = Vec::new();
+            let mut nested_attempt = *input;
+            let item = top_item(
+                &mut nested_attempt,
+                base,
+                &mut nested_errs,
+                &mut nested_binder,
+                &mut nested_chains,
+                &mut nested_counts,
+            );
+            let consumed_end = offset(&nested_attempt, base);
+            errs.append(&mut nested_errs);
+            match item {
+                Ok(it) => {
+                    // the element node span = the keyword .. the last REAL
+                    // token (an unclosed block's swallow junk rides in no
+                    // node; a closed one ends at its `}`)
+                    let region = &orig[..(consumed_end - nested_start).min(orig.len())];
+                    let elem_end = last_real_token_end(region, nested_start);
+                    let msg = match it {
+                        Item::Tbl(_) => "Table must appear top-level",
+                        Item::Ref(_) => "A Ref must appear top-level",
+                        Item::Enm(_) => "An Enum can only appear top-level",
+                        Item::Grp(_) => "TableGroup must appear top-level",
+                        Item::Prj(_) => "A Project can only appear top-level",
+                        _ => "Table must appear top-level",
+                    };
+                    p.binder_errors.push((nested_start, elem_end, msg.to_string()));
+                    // the nested Enum adds EMPTY_ENUM on an element-less block
+                    if let Item::Enm(e) = &it {
+                        if e.values.is_empty() {
+                            p.binder_errors.push((
+                                nested_start,
+                                elem_end,
+                                "An Enum must have at least one element".to_string(),
+                            ));
+                        }
+                    }
+                    let _ = nested_counts;
+                    let _ = nested_chains;
+                    *input = nested_attempt;
+                }
+                Err(e) => {
+                    if !e.message.is_empty() {
+                        errs.push(ParseError {
+                            offset: e.offset,
+                            end: e.end,
+                            message: e.message,
+                        });
+                    }
+                    *input = nested_attempt;
+                }
+            }
+            continue;
+        }
+        let key_start = offset(input, base);
         let key = match ident(input, base) {
             Ok(k) => k,
             Err(e) => {
@@ -6098,10 +6366,75 @@ fn project(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Proje
                 continue;
             }
         };
+        let key_end = offset(input, base);
         sp(input);
         if !eat(input, ":") {
-            errs.push(err_at(offset(input, base), "expected ':' in project field"));
-            skip_line(input);
+            // their project field = an application: callee + args to the
+            // line end. `word { … }` (one word or word + block) converts to
+            // a nested custom element — a Project parent is a VALID
+            // custom-element context, so only the name/inline-field checks
+            // fire; everything else errs 'A Project can not have inline
+            // fields' on the application node (the union of its tokens)
+            let nl = input.find(['\n', '\r']).unwrap_or(input.len());
+            let line = &input[..nl];
+            let line_base = offset(input, base);
+            let mut toks: Vec<(usize, usize, bool)> = Vec::new();
+            let mut lp = line;
+            loop {
+                let t = lp.trim_start();
+                if t.is_empty() || t.starts_with('#') {
+                    break;
+                }
+                let start_in_line = lp.len() - t.len();
+                // one token per unit (a balanced bracket group or block
+                // rides whole)
+                let tok_end = match token_end_in_line(t) {
+                    Some(k) => start_in_line + k,
+                    None => break,
+                };
+                toks.push((
+                    line_base + start_in_line,
+                    line_base + tok_end,
+                    t.starts_with('{'),
+                ));
+                lp = &lp[tok_end..];
+            }
+            let consumed = if nl < input.len() { nl + 1 } else { nl };
+            *input = &input[consumed..];
+            // the conversion shape: [] or [word] before a trailing block
+            let pre = &toks[..toks.len().saturating_sub(1)];
+            let convertible = toks.last().map(|(_, _, b)| *b).unwrap_or(false)
+                && pre.len() <= 1;
+            if convertible {
+                // the element node = the union of the args
+                let elem_end = toks.last().unwrap().1;
+                if let Some((ns, ne, _)) = pre.last() {
+                    p.binder_errors.push((
+                        *ns,
+                        *ne,
+                        "A Custom element shouldn't have a name".to_string(),
+                    ));
+                }
+                let bs = toks.last().unwrap().0;
+                p.binder_errors.push((
+                    bs,
+                    elem_end,
+                    "A Custom element can only have an inline field".to_string(),
+                ));
+            } else if !toks.is_empty() {
+                let last = toks.last().unwrap().1;
+                p.binder_errors.push((
+                    key_start,
+                    last,
+                    "A Project can not have inline fields".to_string(),
+                ));
+            } else {
+                p.binder_errors.push((
+                    key_start,
+                    key_end,
+                    "A Project can not have inline fields".to_string(),
+                ));
+            }
             continue;
         }
         sp(input);
@@ -6119,6 +6452,92 @@ fn project(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Proje
     }
     p.span = start..offset(input, base);
     Ok(p)
+}
+
+/// The end offset of the last REAL token in `region` (which starts at
+/// `region_start`) — the element node's union end: a closed block ends at
+/// its `}`; an unclosed one at the last token before EOF; a bare keyword at
+/// the keyword's own end.
+fn last_real_token_end(region: &str, region_start: usize) -> usize {
+    let mut probe = region;
+    let mut last = region_start;
+    loop {
+        let trimmed = probe.trim_start();
+        if trimmed.starts_with('#') {
+            match trimmed.find('\n') {
+                Some(k) => {
+                    probe = &trimmed[k..];
+                    continue;
+                }
+                None => break,
+            }
+        }
+        if trimmed.is_empty() {
+            break;
+        }
+        let t = trimmed;
+        let k = match token_end_in_line(t) {
+            Some(k) => k,
+            None => break,
+        };
+        last = region_start + (region.len() - t.len()) + k;
+        probe = &t[k..];
+    }
+    last.max(region_start)
+}
+
+/// The byte length of one token starting at t: a balanced bracket group, a
+/// quoted run, or a bare token run (their application gather's unit).
+fn token_end_in_line(t: &str) -> Option<usize> {
+    let b = t.as_bytes();
+    if b.is_empty() {
+        return None;
+    }
+    match b[0] {
+        b'{' | b'[' | b'(' => {
+            let open = b[0];
+            let close = match open {
+                b'{' => b'}',
+                b'[' => b']',
+                _ => b')',
+            };
+            let mut depth = 0i32;
+            for (k, &c) in b.iter().enumerate() {
+                if c == open {
+                    depth += 1;
+                } else if c == close {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(k + 1);
+                    }
+                }
+            }
+            // an unterminated bracket group: the open bracket is still a
+            // real one-char token (their openBrace arg rides the union)
+            Some(1)
+        }
+        b'\'' | b'"' => {
+            let q = b[0];
+            let mut k = 1;
+            while k < b.len() {
+                if b[k] == b'\\' {
+                    k += 2;
+                    continue;
+                }
+                if b[k] == q {
+                    return Some(k + 1);
+                }
+                k += 1;
+            }
+            None
+        }
+        _ => {
+            let k = b.iter()
+                .position(|&c| c.is_ascii_whitespace())
+                .unwrap_or(b.len());
+            Some(k.max(1))
+        }
+    }
 }
 
 /// After a failed top-level item, skip broken constructs line-wise, stopping
@@ -6527,6 +6946,9 @@ Ref: a.id > a.id // trailing ref comment
 
     #[test]
     fn error_recovery_keeps_good_tables() {
+        // (the trailing `}` closes the custom element's block — the probed
+        // d7 shape; without it their unclosed block also errs 'Expect a
+        // closing brace '}' at the EOF point)
         let src = r#"
 Table good1 {
   id integer [pk]
@@ -6538,6 +6960,7 @@ Table good2 {
   id integer [pk]
   !!!broken
   name varchar
+}
 }
 "#;
         let out = parse(src);

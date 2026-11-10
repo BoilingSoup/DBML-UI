@@ -1,0 +1,5 @@
+
+  a int [pk, not null
+}
+EOF
+Table t {

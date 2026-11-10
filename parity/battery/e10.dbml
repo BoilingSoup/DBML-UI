@@ -1,0 +1,5 @@
+Table t {
+  c int [pk, not null
+}
+EOF
+Table t2 {
