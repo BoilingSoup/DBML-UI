@@ -298,7 +298,15 @@ tools below. Never say done when the sweep still finds shapes.
      the quoted operand's span (2,38-2,46). REMAINING: the ref's
      application tokens must span to the file end for the unclosed
      block args (the line-clamped stream is the blocker), then the
-     field node carries the block's end
+     field node carries the block's end. ROUND-24 TRACE: the ref-fields
+     loop already chains the lines into one stream — the chain breaks at
+     `if !dropped || input.is_empty()` (the clean line end stops the
+     chain); the unclosed-`{` line must chain the following lines the
+     same way the dropped case does (the depth > 0 check after the
+     line-token build: keep chaining while the braces stay open, the
+     stream ends at the block's balance or the EOF), then the
+     application's block_expression sees the whole file and the
+     round-23 close lands at the true EOF
    - the unclosed-block close errors = ONE PER UNCLOSED DEPTH: their
      blockExpression nesting errs every unclosed block's close consume
      at the EOF token (probe m43_0110/0122: a swallowed custom element
