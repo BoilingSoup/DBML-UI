@@ -97,9 +97,8 @@ tools below. Never say done when the sweep still finds shapes.
   driver resolves `path` from cwd).
 - Corpus gates: 78/78 + 78/78. Focused tests 42/42 + editor 61/61.
 - The user's three desktop files: span-identical, folded into the corpus.
-- The mutation campaign (round 3, seed 43): **245/600 span-identical** —
-  the round-2 ports + the must-not-have-a-value value-node anchor and
-  the table-loop's nested-element last-real-token span.
+- The mutation campaign (round 4, seed 43): **252/600 span-identical** —
+  rounds 2-4 landed (the mechanisms below).
 
 ## Round-2 mechanisms (ported; do not re-derive)
 
@@ -173,26 +172,42 @@ tools below. Never say done when the sweep still finds shapes.
    - `Enum` at EOF: the name = the operand at EOF — 'Unexpected EOF' +
      the brace error + 'An Enum name must be of the form <enum> or
      <schema>.<enum>' ALL at the EOF point, no body (probe t_enumhdr)
-   - OPEN (probed shapes in /tmp/probe6, port these next):
-     * t_default: an unterminated string in a `default:` value errs
-       'Invalid newline encountered while parsing' on the partial
-       string token, the token DROPS, the gather continues, and the
-       `}` at the value position errs 'Invalid start of operand "}"'
-       and dispatches to the block (the default arm needs the note
-       arm's broken-string machinery)
-     * t_note: `Note {` in a table body converts to a nested Note
-       element — 'A Note must have a content' on the element node +
-       the string's newline error (ours routes it to the column parse
-       and errs 'expected column type')
+   - the broken-string default: a `'`-led default whose token dies at a
+     newline routes to the plain-value arm's broken-string machinery
+     (default_string_is_broken gates it so backtick/bare defaults keep
+     their verbatim arm — probe t_default PASS)
+   - `Note {` in a table body = the nested Note element: 'A Note must
+     have a content' on the element node + the string's newline error
+     (probe t_note PASS)
+   - their validateColumn (probes u1/u2/u3 PASS): args=[] errs 'A
+     column must have a type' at the CALLEE; a non-variable callee errs
+     'A column name must be...' at the CALLEE — a `(` at the type
+     position binds to the callee (the call expression `decimal(10,2)`
+     alone = the broken callee, both errors at name..paren-end); a `(`
+     at the NAME position = the tuple-as-callee (no operand error, the
+     pair at the tuple node); the duplicate-column anchor = the column
+     NODE (name_span..full_end — a type-less column's node = the name)
+   - the failed-expression body child: the operand error's EmptyNode
+     (prevToken = the junk token) rides the body as a broken column —
+     BOTH validateColumn errors at the junk's END point, riding the
+     parse-error channel (the Err would drop the binder vec — probe
+     m43_0096 PASS)
+   - OPEN (probed, port next):
      * t_indexes: the indexes-block tail (m43_0216/0402/0484: ours
        'unterminated indexes block' vs their close error) — probe the
        mutation shape, not the minimal (the minimal showed theirs
        SILENT at EOF — re-probe m43_0216 directly)
-     * the column junk cascade at EOF (m43_0096/0082 — recorded above)
      * m43_0242: 'Expect a comma' anchors the token AFTER the line end
        (8,1-4) where ours anchors the last token + trailing trivia
        (7,13-8,1) — their consume anchors the CURRENT token, ours
        spans across the newline
+     * the dot-expression cascade (m43_0059/0091/0522/0580: ours emits
+       'Invalid start of operand "."' + their "Unexpected '.' in an
+       expression") — probe the minimal shape
+     * the remaining ~340 spread across small clusters — keep
+       clustering from the round dump (the compare tool:
+       /tmp/cluster2.py pattern — ours in 6 batch files, theirs in
+       theirs_mut.json, the signature = the per-message count delta)
 2. **Quick-fix EDIT-range parity**: their quickFixes carry edits
    [{start, end, newText}] in UTF-16 offsets; our QuickFix has no ranges
    and the dump emits only the joined text. Add the edit ranges to our

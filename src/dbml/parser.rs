@@ -866,6 +866,34 @@ enum SwallowEnd {
     Eof,
 }
 
+/// A `'`-led `default` whose string token dies without a closing quote
+/// before a newline (or runs to EOF): their lexer errs on the partial
+/// token and DROPS it — the diagnostics then ride the plain-value arm's
+/// broken-string flow, so route there instead of scanning verbatim.
+fn default_string_is_broken(input: &str) -> bool {
+    if !input.starts_with('\'') {
+        // only a `'`-led value is a string token; backtick expressions and
+        // bare tokens keep their verbatim arm
+        return false;
+    }
+    let b = input.as_bytes();
+    let mut k = 1;
+    while k < b.len() {
+        if b[k] == b'\'' {
+            if k + 1 < b.len() && b[k + 1] == b'\'' {
+                k += 2;
+                continue;
+            }
+            return false;
+        }
+        if b[k] == b'\n' || b[k] == b'\r' {
+            return true;
+        }
+        k += 1;
+    }
+    true
+}
+
 fn is_unterminated_string(e: &Fail) -> bool {
     e.message == "Invalid newline encountered while parsing"
         || e.message == "EOF reached while parsing"
@@ -1725,7 +1753,7 @@ fn settings_list_occs(
                 }
                 v_span = key_start..offset(input, base);
                 out.push((key, Some(SettingVal::Ref(card, l_opt, r_opt, to, op_offset, key_start, color))));
-            } else if key == "default" {
+            } else if key == "default" && !default_string_is_broken(input) {
                 let dflt_start = offset(input, base);
                 // verbatim: quoted strings keep their quotes so exporters
                 // can distinguish literals from bare tokens
@@ -2151,6 +2179,44 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
     let mut binder_errors: Vec<(usize, usize, String)> = Vec::new();
     let name = match ident(input, base) {
         Ok(n) => n,
+        Err(_) if input.starts_with('(') => {
+            // a `(` at the name position = their tuple-as-callee: a VALID
+            // expression, just not a variable — no operand error, the
+            // validateColumn pair anchors the TUPLE node (probe u2)
+            let g_start = offset(input, base);
+            let mut depth = 0i32;
+            let mut end = input.len();
+            for (k, &c) in input.as_bytes().iter().enumerate() {
+                if c == b'(' {
+                    depth += 1;
+                } else if c == b')' {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = k + 1;
+                        break;
+                    }
+                }
+            }
+            *input = &input[end..];
+            let g_end = offset(input, base);
+            errs.push(ParseError {
+                offset: g_start,
+                end: Some(g_end),
+                message: "A column must have a type".to_string(),
+            });
+            errs.push(ParseError {
+                offset: g_start,
+                end: Some(g_end),
+                message: "A column name must be an identifier or a quoted identifier"
+                    .to_string(),
+            });
+            return Err(Fail {
+                offset: g_end,
+                end: None,
+                message: String::new(),
+                partial_occs: Vec::new(),
+            });
+        }
         Err(_) => {
             // their fieldDeclaration: the name operand attempt - junk errs
             // the operand-start error and the name = the EmptyNode at the
@@ -2166,14 +2232,24 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
                 message: format!("Invalid start of operand \"{}\"", junk),
             });
             let empty = jstart + tok_len;
-            binder_errors = vec![
-                (empty, empty, "A column must have a type".to_string()),
-                (
-                    empty,
-                    empty,
-                    "A column name must be an identifier or a quoted identifier".to_string(),
-                ),
-            ];
+            // their blockExpression keeps the failed expression's partial
+            // node (the EmptyNode at the junk's END) as a body child and
+            // the column extraction flags it: BOTH binder errors anchor
+            // that point. The field dies here (the Err below), so the
+            // pair rides the parse-error channel — the binder vec would
+            // die with the dropped Column.
+            let _ = &mut binder_errors;
+            errs.push(ParseError {
+                offset: empty,
+                end: Some(empty),
+                message: "A column must have a type".to_string(),
+            });
+            errs.push(ParseError {
+                offset: empty,
+                end: Some(empty),
+                message: "A column name must be an identifier or a quoted identifier"
+                    .to_string(),
+            });
             *input = &input[tok_len.min(input.len())..];
             return Err(Fail {
                 offset: empty,
@@ -2199,6 +2275,34 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
         binder_errors.push((name_off, name_end, "A column must have a type".to_string()));
         ty = String::new();
     } else if input.starts_with('[') {
+        ty = String::new();
+    } else if input.starts_with('(') {
+        // the paren binds to the CALLEE as its argument list (their call
+        // expression — the same-line rule): the field = {callee: name(…),
+        // args: []} — the callee isn't a variable, so BOTH validateColumn
+        // errors anchor the callee node (name .. the paren group's end)
+        let p_start = offset(input, base);
+        let mut depth = 0i32;
+        let mut end = input.len();
+        for (k, &c) in input.as_bytes().iter().enumerate() {
+            if c == b'(' {
+                depth += 1;
+            } else if c == b')' {
+                depth -= 1;
+                if depth == 0 {
+                    end = k + 1;
+                    break;
+                }
+            }
+        }
+        *input = &input[end..];
+        let p_end = offset(input, base);
+        binder_errors.push((name_off, p_end, "A column must have a type".to_string()));
+        binder_errors.push((
+            name_off,
+            p_end,
+            "A column name must be an identifier or a quoted identifier".to_string(),
+        ));
         ty = String::new();
     } else if input.starts_with(|c: char| c.is_ascii_digit())
         && matches!(
@@ -2245,8 +2349,13 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
         Block,
     }
     let mut items: Vec<(Item, Span)> = Vec::new();
-    // the last REAL arg's end — the column node's union end
-    let mut full_end = ty_end;
+    // the last REAL arg's end — the column node's union end (a field with
+    // NO args is just the callee: the name token)
+    let mut full_end = if ty.is_empty() && items.is_empty() {
+        name_end
+    } else {
+        ty_end
+    };
     loop {
         sp(input);
         if input.is_empty() || input.starts_with(['\n', '\r', '}', '#']) {
@@ -3932,6 +4041,81 @@ fn table(
                     }
                     *input = nested_attempt;
                 }
+            }
+            continue;
+        }
+        // their Note-in-table: the field application converts to a nested
+        // Note element — the NoteValidator checks the content (probe
+        // t_note: 'A Note must have a content' on the element node + the
+        // broken string's newline error; the element = type .. block end)
+        if peek_kw_then(input, "Note", '{') {
+            let note_start = offset(input, base);
+            let _ = eat(input, "Note");
+            ws(input);
+            let _ = eat(input, "{");
+            ws(input);
+            let content = match sticky_note_value(input, base, errs) {
+                Ok(t) => t,
+                Err(e) => {
+                    errs.push(ParseError {
+                        offset: e.offset,
+                        end: e.end,
+                        message: e.message,
+                    });
+                    String::new()
+                }
+            };
+            ws(input);
+            let be;
+            if eat(input, "}") {
+                be = offset(input, base);
+            } else {
+                // the block scan: closed ends after `}`; unclosed ends at
+                // the last REAL token with the close error at the EOF point
+                let mut depth = 1i32;
+                let bytes = input.as_bytes();
+                let mut end = bytes.len();
+                let mut unclosed = true;
+                for (k, &bc) in bytes.iter().enumerate() {
+                    if bc == b'{' {
+                        depth += 1;
+                    } else if bc == b'}' {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = k;
+                            unclosed = false;
+                            break;
+                        }
+                    }
+                }
+                if unclosed {
+                    let mut probe = *input;
+                    let mut last = offset(input, base);
+                    loop {
+                        ws(&mut probe);
+                        if probe.is_empty() {
+                            break;
+                        }
+                        if consume_one_token(&mut probe).is_none() {
+                            break;
+                        }
+                        last = offset(&probe, base);
+                    }
+                    *input = &input[input.len()..];
+                    errs.push(err_at(offset(input, base), "Expect a closing brace '}'"));
+                    be = last.max(offset(input, base) - 1);
+                } else {
+                    *input = &input[end..];
+                    let _ = eat(input, "}");
+                    be = offset(input, base);
+                }
+            }
+            if content.is_empty() {
+                binder_out.push((
+                    note_start,
+                    be,
+                    "A Note must have a content".to_string(),
+                ));
             }
             continue;
         }

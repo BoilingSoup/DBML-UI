@@ -407,12 +407,14 @@ pub fn validate_with_parse(
                 let msg = format!("Duplicate column '{}'", c.name);
                 // their anchor = the column's full node (name through the
                 // settings list — fuzz-span parity)
+                // their anchor = the column NODE (the callee .. the last
+                // arg) — a type-less column's node is just the name token
                 out.push(Diagnostic::spanned(
-                    t.columns[first].span.start,
-                    t.columns[first].span.end,
+                    t.columns[first].name_span.start,
+                    t.columns[first].full_end,
                     msg.clone(),
                 ));
-                out.push(Diagnostic::spanned(c.span.start, c.span.end, msg));
+                out.push(Diagnostic::spanned(c.name_span.start, c.full_end, msg));
             } else {
                 seen.insert(c.name.as_str(), i);
             }

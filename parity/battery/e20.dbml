@@ -1,3 +1,4 @@
 Table t {
-  id user. x
+  id
+  decimal(10, 2)
 }

@@ -1,1 +1,3 @@
-Enum
+Table t {
+  id int [default: 'x
+}
