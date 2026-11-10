@@ -38,14 +38,21 @@ struct Case {
 /// The 1-based line of a byte offset in the source — their provider
 /// serves Monaco, whose rows are 1-based; the contract follows.
 fn row_of(src: &str, offset: usize) -> usize {
-    src[..offset.min(src.len())].bytes().filter(|&b| b == b'\n').count() + 1
+    let mut off = offset.min(src.len());
+    while off > 0 && !src.is_char_boundary(off) {
+        off -= 1;
+    }
+    src[..off].bytes().filter(|&b| b == b'\n').count() + 1
 }
 
 /// The UTF-16 column within the line for a byte offset: their Monaco
 /// positions count UTF-16 code units, not bytes (a `ñ` is one unit, two
 /// bytes - fuzz-span parity on non-ASCII lines).
 fn col_of(src: &str, offset: usize) -> usize {
-    let off = offset.min(src.len());
+    let mut off = offset.min(src.len());
+    while off > 0 && !src.is_char_boundary(off) {
+        off -= 1;
+    }
     let line_start = match src[..off].rfind('\n') {
         Some(nl) => nl + 1,
         None => 0,

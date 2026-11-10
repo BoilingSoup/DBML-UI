@@ -13,7 +13,7 @@ Table ñT {
     user_id
   }
 }
-Ref: ñT.x <>? missing.x
+Ref: ñT.x <>? "missing".x
 Enum e_status {
   open
   closed [note: 'done']

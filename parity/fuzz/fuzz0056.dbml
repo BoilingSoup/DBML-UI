@@ -8,5 +8,5 @@ Table a {
     odd col [pk]
   }
 }
-Ref r0: a.id ?< missing.name
+Ref r0: a.id ?< "missing".name
 Ref: a.id <>? a.id

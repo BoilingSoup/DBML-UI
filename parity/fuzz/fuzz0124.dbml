@@ -16,5 +16,5 @@ Table posts {
     id [pk]
   }
 }
-Ref: posts.code - quoted name.code
-Ref: posts.odd col ?< quoted name.x
+Ref: posts.code - "quoted name".code
+Ref: posts.odd col ?< "quoted name".x

@@ -5,7 +5,7 @@ Table t1 {
     (user_id) [unique, name: 'ix']
   }
 }
-Ref: t1.odd col <? missing.code
+Ref: t1.odd col <? "missing".code
 Note sticky {
   '''
   text

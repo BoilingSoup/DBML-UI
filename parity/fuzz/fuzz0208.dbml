@@ -35,4 +35,4 @@ Table posts {
   code text [pk]
   "odd col" e_status [pk]
 }
-Ref: _x.user_id >? missing.odd col
+Ref: _x.user_id >? "missing".odd col

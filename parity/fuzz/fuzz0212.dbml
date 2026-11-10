@@ -15,7 +15,7 @@ Table t1 {
   Note: 'table note'
 }
 Ref r0: t1.name <? _x.x
-Ref r1: t1.id - missing.id
+Ref r1: t1.id - "missing".id
 Enum e_status {
   open
   closed [note: 'done']

@@ -23,8 +23,8 @@ Table "quoted name" {
     true
   }
 }
-Ref r0: _x.name ?- quoted name.id
-Ref: quoted name.user_id < quoted name.name
+Ref r0: _x.name ?- "quoted name".id
+Ref: "quoted name".user_id < "quoted name".name
 TableGroup g { _x, quoted name }
 Note sticky {
   '''

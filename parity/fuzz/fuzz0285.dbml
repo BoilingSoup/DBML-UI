@@ -5,7 +5,7 @@ Table B {
   user_id decimal(10, 2) [color: #1E69FD]
   Note: 'table note'
 }
-Ref r0: B.x ?< missing.user_id
+Ref r0: B.x ?< "missing".user_id
 Enum e_status {
   open
   closed [note: 'done']

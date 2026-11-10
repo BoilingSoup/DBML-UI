@@ -10,5 +10,5 @@ Table a {
   }
   Note: 'table note'
 }
-Ref: a.user_id ?- missing.x
+Ref: a.user_id ?- "missing".x
 Ref: a.x <>? a.odd col

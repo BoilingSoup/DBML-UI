@@ -2,8 +2,8 @@ Table posts {
   user_id integer [note: 'n', default: `now()`, ref: < nope.user_id]
   user_id decimal(10, 2) [default: `now()`, ref: <>? posts.user_id]
 }
-Ref r0: posts.id < missing.x
-Ref: posts.user_id ?> missing.user_id
+Ref r0: posts.id < "missing".x
+Ref: posts.user_id ?> "missing".user_id
 Note sticky {
   '''
   text

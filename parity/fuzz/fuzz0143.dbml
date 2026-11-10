@@ -4,8 +4,8 @@ Table "quoted name" {
   code decimal(10, 2) [default: 1, ref: ?<> nope.x]
   x bool [check: `x > 0`, null]
 }
-Ref r0: quoted name.x ?< missing.odd col
-Ref: quoted name.x <? quoted name.user_id
+Ref r0: "quoted name".x ?< "missing".odd col
+Ref: "quoted name".x <? "quoted name".user_id
 Enum e_status {
   open
   closed [note: 'done']

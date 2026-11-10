@@ -40,7 +40,7 @@ Table a {
     1
   }
 }
-Ref r0: posts.odd col - missing.odd col
+Ref r0: posts.odd col - "missing".odd col
 TableGroup g { B, posts, posts, a }
 Note sticky {
   '''

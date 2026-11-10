@@ -13,7 +13,7 @@ Table B {
   name timestamp [default: 'x', increment]
   x varchar(255)
 }
-Ref: B.name > missing.x
+Ref: B.name > "missing".x
 Enum e_status {
   open
   closed [note: 'done']

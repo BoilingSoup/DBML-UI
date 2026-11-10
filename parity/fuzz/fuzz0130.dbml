@@ -7,4 +7,4 @@ Table ñT {
     ''
   }
 }
-Ref r0: ñT.id -? missing.name
+Ref r0: ñT.id -? "missing".name

@@ -4,5 +4,5 @@ Table a {
   code integer [default: 1, ref: ?> nope.code]
   "odd col" text [increment, unique, ref: ?- nope.odd col]
 }
-Ref: a.odd col >? missing.odd col
-Ref: a.id <>? missing.id
+Ref: a.odd col >? "missing".odd col
+Ref: a.id <>? "missing".id

@@ -1,5 +1,5 @@
 Table "quoted name" {
-  name decimal(10, 2) [not null, color: #1E69FD, ref: <> quoted name.name]
+  name decimal(10, 2) [not null, color: #1E69FD, ref: <> "quoted name".name]
   indexes {
     (name) [pk]
   }

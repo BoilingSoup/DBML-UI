@@ -10,7 +10,7 @@ Table my_table {
     (id) [unique]
   }
 }
-Ref: posts.code ?< missing.code
+Ref: posts.code ?< "missing".code
 Ref: posts.user_id ?> my_table.name
 Note sticky {
   '''

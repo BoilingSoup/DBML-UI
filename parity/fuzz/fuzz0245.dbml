@@ -32,5 +32,5 @@ Table ñT {
     true
   }
 }
-Ref: orders.code <> missing.odd col
+Ref: orders.code <> "missing".odd col
 TableGroup g { orders, my_table, users, ñT }

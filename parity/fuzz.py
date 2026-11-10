@@ -42,7 +42,7 @@ def gen_case(rng):
                 picked = rng.sample(SETTINGS, rng.randint(1, 2))
                 if rng.random() < 0.3:
                     target = rng.choice(tables + ["nope"])
-                    picked.append(f"ref: {rng.choice(OPS)} {target.strip(chr(34))}.{rng.choice(cols).strip(chr(34))}")
+                    picked.append(f"ref: {rng.choice(OPS)} {target}.{rng.choice(cols).strip(chr(34))}")
                 st = f" [{', '.join(picked)}]"
             elif rng.random() < 0.2:
                 st = f" {rng.choice(['unique', 'pk', 'foo'])}"
@@ -65,8 +65,8 @@ def gen_case(rng):
             lines.append("  }")
         lines.append("}")
     for r in range(rng.randint(0, 2)):
-        a = rng.choice(tables).strip('"')
-        b = rng.choice(tables + ['"missing"']).strip('"')
+        a = rng.choice(tables)
+        b = rng.choice(tables + ['"missing"'])
         name = f" r{r}" if rng.random() < 0.3 else ""
         lines.append(f"Ref{name}: {a}.{rng.choice(COLS).strip(chr(34))} "
                      f"{rng.choice(OPS)} {b}.{rng.choice(COLS).strip(chr(34))}")

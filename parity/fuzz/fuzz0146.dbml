@@ -14,4 +14,4 @@ Table a {
     x
   }
 }
-Ref r0: a.odd col ?> missing.id
+Ref r0: a.odd col ?> "missing".id

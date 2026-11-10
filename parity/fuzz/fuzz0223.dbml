@@ -38,5 +38,5 @@ Table t1 {
   }
   Note: 'table note'
 }
-Ref: _x.odd col < missing.user_id
+Ref: _x.odd col < "missing".user_id
 TableGroup g { t1, my_table, _x, t1 }

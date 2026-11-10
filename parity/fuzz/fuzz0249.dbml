@@ -31,5 +31,5 @@ Table users {
     x
   }
 }
-Ref r0: ñT.user_id ?- missing.code
+Ref r0: ñT.user_id ?- "missing".code
 TableGroup g { ñT, t1, _x, users }

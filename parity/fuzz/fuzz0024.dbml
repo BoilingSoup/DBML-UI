@@ -14,8 +14,8 @@ Table posts {
     2.5
   }
 }
-Ref: posts.x -? missing.name
-Ref: posts.name ?<> missing.user_id
+Ref: posts.x -? "missing".name
+Ref: posts.name ?<> "missing".user_id
 TableGroup g { ñT, posts }
 Note sticky {
   '''

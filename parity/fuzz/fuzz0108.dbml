@@ -7,4 +7,4 @@ Table orders {
     x [unique, name: 'ix']
   }
 }
-Ref: orders.code >? missing.user_id
+Ref: orders.code >? "missing".user_id

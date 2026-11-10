@@ -20,5 +20,5 @@ Table B {
     true
   }
 }
-Ref: posts.code ?< missing.name
+Ref: posts.code ?< "missing".name
 Ref: posts.odd col > B.id

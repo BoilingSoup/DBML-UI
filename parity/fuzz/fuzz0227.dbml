@@ -15,7 +15,7 @@ Table B {
   code "character varying" [default: `now()`, ref: ?- orders.code]
   id varchar(255) [null, not null]
 }
-Ref: ñT.code ?- missing.user_id
+Ref: ñT.code ?- "missing".user_id
 TableGroup g { ñT, _x, orders, B }
 Note sticky {
   '''

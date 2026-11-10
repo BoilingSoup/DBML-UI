@@ -20,4 +20,4 @@ Table users {
   x bool foo
 }
 Ref: ñT.name <? ñT.x
-Ref r1: ñT.odd col <> quoted name.id
+Ref r1: ñT.odd col <> "quoted name".id

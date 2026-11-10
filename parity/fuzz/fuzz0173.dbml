@@ -1,6 +1,6 @@
 Table "quoted name" {
   "odd col" e_status [check: `x > 0`]
-  code decimal(10, 2) [default: `now()`, ref: < quoted name.odd col]
+  code decimal(10, 2) [default: `now()`, ref: < "quoted name".odd col]
   user_id e_status [unique]
   code timestamp [null]
 }

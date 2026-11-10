@@ -5,7 +5,7 @@ Table my_table {
 Table "quoted name" {
   id "character varying" [unique, default: 1, ref: ?- nope.id]
   id decimal(10, 2) [unique]
-  name varchar(255) [not null, pk, ref: <>? quoted name.name]
+  name varchar(255) [not null, pk, ref: <>? "quoted name".name]
   "odd col" bool [default: 1, not null]
 }
 Table orders {
@@ -19,7 +19,7 @@ Table _x {
     2.5
   }
 }
-Ref r0: quoted name.odd col -? orders.odd col
+Ref r0: "quoted name".odd col -? orders.odd col
 Enum e_status {
   open
   closed [note: 'done']

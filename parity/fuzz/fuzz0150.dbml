@@ -30,7 +30,7 @@ Table "quoted name" {
   "odd col" bool [null, ref: <? nope.odd col]
   "odd col" decimal(10, 2) [unique, default: 'x']
 }
-Ref r0: quoted name.x -? quoted name.user_id
+Ref r0: "quoted name".x -? "quoted name".user_id
 Enum e_status {
   open
   closed [note: 'done']

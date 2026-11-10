@@ -30,8 +30,8 @@ Table "quoted name" {
     (name) [unique, name: 'ix']
   }
 }
-Ref: a.user_id ?< quoted name.x
-Ref r1: a.odd col > quoted name.user_id
+Ref: a.user_id ?< "quoted name".x
+Ref r1: a.odd col > "quoted name".user_id
 TableGroup g { quoted name, a, quoted name }
 Note sticky {
   '''

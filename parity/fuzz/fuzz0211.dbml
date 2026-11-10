@@ -4,7 +4,7 @@ Table "quoted name" {
 }
 Table t1 {
   "odd col" e_status [note: 'n', unique, ref: ?- nope.odd col]
-  "odd col" varchar(255) [color: #1E69FD, note: 'n', ref: -? quoted name.odd col]
+  "odd col" varchar(255) [color: #1E69FD, note: 'n', ref: -? "quoted name".odd col]
   id int[]
   id "character varying" [check: `x > 0`, ref: ?<> t1.odd col]
   indexes {

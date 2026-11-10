@@ -20,7 +20,7 @@ Table a {
   x bool [note: 'n', unique]
   "odd col" text [not null]
 }
-Ref: quoted name.id -? a.name
+Ref: "quoted name".id -? a.name
 Ref r1: a.odd col <> t1.odd col
 Enum e_status {
   open

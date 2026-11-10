@@ -383,11 +383,27 @@ fn type_str(input: &mut &str, base: usize) -> R<String> {
     let mut out = String::new();
     loop {
         if let Some(rest) = input.strip_prefix('"') {
-            let end = rest.find('"').ok_or(Fail {
-                offset: offset(input, base),
-                end: None,
-                message: "unterminated quoted type".to_string(),
-                partial_occs: Vec::new(),
+            // their quoted identifier: consumeUntil('"') - the EOF/newline
+            // failures anchor the PARTIAL TOKEN like the string scans
+            let q = offset(input, base);
+            let end = rest.find('"').ok_or_else(|| {
+                let stop = q + 1 + rest.len();
+                if rest.contains('\n') {
+                    let nl = rest.find('\n').unwrap();
+                    Fail {
+                        offset: q,
+                        end: Some(q + 1 + nl),
+                        message: "Invalid newline encountered while parsing".to_string(),
+                        partial_occs: Vec::new(),
+                    }
+                } else {
+                    Fail {
+                        offset: q,
+                        end: Some(stop),
+                        message: "EOF reached while parsing".to_string(),
+                        partial_occs: Vec::new(),
+                    }
+                }
             })?;
             out.push('"');
             out.push_str(&rest[..end + 1]); // verbatim, both quotes
@@ -542,6 +558,17 @@ fn var_name(n: &RNode) -> Option<String> {
 /// last token before the top-level op (the left side) / at the callee's
 /// last token (the right side). Pratt parses left-associatively, so the
 /// leftmost relationship op IS the top-level infix.
+/// The END of a side expression from the TREE: the Var's own end, a
+/// member chain's last fragment — their side anchors end at the last
+/// fragment's token (the stream fallback over-shoots past junk args)
+fn tree_side_end(n: &RNode) -> Option<usize> {
+    match n {
+        RNode::Var { end, .. } => Some(*end),
+        RNode::Infix { right, .. } => tree_side_end(right),
+        _ => None,
+    }
+}
+
 fn ref_block_side_end(rp: &RParser, side_start: usize) -> usize {
     if let Some(i) = rp
         .toks
@@ -728,7 +755,13 @@ fn endpoint(input: &mut &str, base: usize) -> R<Endpoint> {
                 break;
             }
             if !eat(input, ",") {
-                return fail(offset(input, base), "Expect a comma ','");
+                let mut probe = *input;
+                let tok_len = consume_one_token(&mut probe).unwrap_or(1);
+                return fail_with_end(
+                    offset(input, base),
+                    offset(input, base) + tok_len,
+                    "Expect a comma ','",
+                );
             }
         }
         if !eat(input, ")") {
@@ -2104,10 +2137,43 @@ fn column_settings_from(kvs: Vec<(String, Option<SettingVal>)>) -> ColumnSetting
 fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column> {
     let start = offset(input, base);
     let name_off = offset(input, base);
-    let name = ident(input, base)?;
+    let mut binder_errors: Vec<(usize, usize, String)> = Vec::new();
+    let name = match ident(input, base) {
+        Ok(n) => n,
+        Err(_) => {
+            // their fieldDeclaration: the name operand attempt - junk errs
+            // the operand-start error and the name = the EmptyNode at the
+            // junk's END; both binder errors anchor that point (probe
+            // m42_0014), the field dies, input resumes after the junk
+            let mut probe = *input;
+            let tok_len = consume_one_token(&mut probe).unwrap_or(1);
+            let jstart = offset(input, base);
+            let junk = input[..tok_len.min(input.len())].to_string();
+            errs.push(ParseError {
+                offset: jstart,
+                end: Some(jstart + tok_len),
+                message: format!("Invalid start of operand \"{}\"", junk),
+            });
+            let empty = jstart + tok_len;
+            binder_errors = vec![
+                (empty, empty, "A column must have a type".to_string()),
+                (
+                    empty,
+                    empty,
+                    "A column name must be an identifier or a quoted identifier".to_string(),
+                ),
+            ];
+            *input = &input[tok_len.min(input.len())..];
+            return Err(Fail {
+                offset: empty,
+                end: None,
+                message: String::new(),
+                partial_occs: Vec::new(),
+            });
+        }
+    };
     let name_end = offset(input, base);
     sp(input);
-    let mut binder_errors: Vec<(usize, usize, String)> = Vec::new();
     // their validateFields (table/validate.ts:112): a column field with
     // args=[] errs 'A column must have a type' anchored at the callee
     // (the name). The type is missing when the line/scope ends — or when
@@ -2372,16 +2438,24 @@ fn index(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Index> 
             // tuple continues (probe: `(odd col)` flags odd AND errs at
             // col, keeping the index)
             if !eat(input, ",") {
-                errs.push(err_at(offset(input, base), "Expect a comma ','"));
+                // their consume anchors the offending TOKEN (token width)
+                let mut probe = *input;
+                let tok_len = consume_one_token(&mut probe).unwrap_or(1);
+                let s0 = offset(input, base);
+                errs.push(ParseError {
+                    offset: s0,
+                    end: Some(s0 + tok_len),
+                    message: "Expect a comma ','".to_string(),
+                });
                 if ident(input, base).is_err() {
-                    return fail(offset(input, base), "Expect a comma ','");
+                    return fail_with_end(s0, s0 + tok_len, "Expect a comma ','");
                 }
                 ws(input);
                 if peek_is(input, ")") {
                     break;
                 }
                 if !eat(input, ",") {
-                    return fail(offset(input, base), "Expect a comma ','");
+                    return fail_with_end(s0, s0 + tok_len, "Expect a comma ','");
                 }
             }
         }
@@ -2805,7 +2879,9 @@ fn consume_one_token(input: &mut &str) -> Option<usize> {
             .iter()
             .take_while(|&&x| x.is_ascii_alphanumeric() || x == b'_' || x >= 0x80)
             .count(),
-        _ => 1,
+        // a multi-byte punctuation char advances its WHOLE UTF-8 sequence:
+        // one byte would leave the next offset mid-character
+        _ => input.chars().next().map(|c| c.len_utf8()).unwrap_or(1),
     };
     *input = &input[n..];
     Some(n)
@@ -2863,7 +2939,14 @@ fn records_block(
             if input.is_empty() || eat(input, ")") {
                 break;
             }
-            errs.push(err_at(offset(input, base), "Expect a comma ','"));
+            // their consume anchors the offending TOKEN (token width)
+            let mut probe = *input;
+            let tok_len = consume_one_token(&mut probe).unwrap_or(1);
+            errs.push(ParseError {
+                offset: offset(input, base),
+                end: Some(offset(input, base) + tok_len),
+                message: "Expect a comma ','".to_string(),
+            });
             // their canHandle (parser.ts): the tuple recovers locally only
             // when its own handler context is the current one — findHandler
             // Context scans forward for a `,`/`)` (group context) BEFORE
@@ -3186,7 +3269,38 @@ fn custom_element(
     doc_binder_errors: &mut Vec<(usize, usize, String)>,
 ) -> R<()> {
     let type_start = offset(input, base);
-    let _ty = ident(input, base)?;
+    // their elementDeclaration's type consume at the PROGRAM level: junk
+    // errs 'Expect an identifier' on the junk token; at EOF both it and
+    // the sync's 'Unexpected EOF' log; the program sync advances ONE token
+    let _ty = match ident(input, base) {
+        Ok(t) => t,
+        Err(_) => {
+            let eof = offset(input, base);
+            if input.is_empty() {
+                errs.push(ParseError {
+                    offset: eof,
+                    end: Some(eof),
+                    message: "Expect an identifier".to_string(),
+                });
+                errs.push(ParseError {
+                    offset: eof,
+                    end: Some(eof),
+                    message: "Unexpected EOF".to_string(),
+                });
+                return Ok(());
+            }
+            let mut probe = *input;
+            let tok_len = consume_one_token(&mut probe).unwrap_or(1);
+            let junk = input[..tok_len.min(input.len())].to_string();
+            errs.push(ParseError {
+                offset: eof,
+                end: Some(eof + tok_len),
+                message: "Expect an identifier".to_string(),
+            });
+            *input = &input[tok_len.min(input.len())..];
+            return Ok(());
+        }
+    };
     ws(input);
     // the name: their normalExpression attempt unless :/{/[ follows; junk
     // errs the operand-start error and the name = the EmptyNode point at
@@ -3553,6 +3667,62 @@ fn table(
             }
             continue;
         }
+        // their blockExpression parses the nested element declarations;
+        // the binder flags the context per type (probe m42_0006)
+        if peek_kw(input, "Table")
+            || peek_kw(input, "Ref")
+            || peek_kw(input, "Enum")
+            || peek_kw(input, "TableGroup")
+            || peek_kw(input, "Project")
+        {
+            let nested_start = offset(input, base);
+            let mut nested_errs: Vec<ParseError> = Vec::new();
+            let mut nested_binder: Vec<(usize, usize, String)> = Vec::new();
+            let mut nested_chains: Vec<super::ast::BinderChain> = Vec::new();
+            let mut nested_counts: Vec<(usize, usize, usize, usize)> = Vec::new();
+            let mut nested_attempt = *input;
+            let item = top_item(
+                &mut nested_attempt,
+                base,
+                &mut nested_errs,
+                &mut nested_binder,
+                &mut nested_chains,
+                &mut nested_counts,
+            );
+            match item {
+                Ok(it) => {
+                    let msg = match it {
+                        Item::Tbl(_) => "Table must appear top-level",
+                        Item::Ref(_) => "A Ref must appear top-level",
+                        Item::Enm(_) => "An Enum can only appear top-level",
+                        Item::Grp(_) => "TableGroup must appear top-level",
+                        Item::Prj(_) => "A Project can only appear top-level",
+                        _ => "Table must appear top-level",
+                    };
+                    binder_out.push((nested_start, offset(&nested_attempt, base), msg.to_string()));
+                    // the nested element binds NOWHERE (their bind walks the
+                    // program's top level - the nested chains die); its
+                    // own diagnostics ride along
+                    errs.append(&mut nested_errs);
+                    binder_out.extend(nested_binder);
+                    let _ = nested_counts;
+                    let _ = nested_chains;
+                    *input = nested_attempt;
+                }
+                Err(e) => {
+                    errs.append(&mut nested_errs);
+                    if !e.message.is_empty() {
+                        errs.push(ParseError {
+                            offset: e.offset,
+                            end: e.end,
+                            message: e.message,
+                        });
+                    }
+                    *input = nested_attempt;
+                }
+            }
+            continue;
+        }
         if peek_kw_then(input, "Checks", '{') {
             let _ = eat(input, "Checks");
             ws(input);
@@ -3828,9 +3998,11 @@ fn ref_stmt(
                     for side in [left.as_ref(), right.as_ref()] {
                         let frag = destructure_cvt(side).unwrap_or_default();
                         if frag.variables.len() + frag.tuple.len().min(1) < 2 {
+                            let end = tree_side_end(side)
+                                .unwrap_or_else(|| ref_block_side_end(&rp, side.start()));
                             field_errors.push((
                                 side.start(),
-                                ref_block_side_end(&rp, side.start()),
+                                end,
                                 "Invalid column reference".to_string(),
                             ));
                         }
@@ -5403,11 +5575,9 @@ fn ref_body_pipeline_mode(
                 for side in [left.as_ref(), right.as_ref()] {
                     let frag = destructure_cvt(side).unwrap_or_default();
                     if frag.variables.len() + frag.tuple.len().min(1) < 2 {
-                        v.push((
-                            side.start(),
-                            ref_block_side_end(&p, side.start()),
-                            "Invalid column reference".to_string(),
-                        ));
+                        let end = tree_side_end(side)
+                            .unwrap_or_else(|| ref_block_side_end(&p, side.start()));
+                        v.push((side.start(), end, "Invalid column reference".to_string()));
                     }
                 }
             }

@@ -15,5 +15,5 @@ Table posts {
   id int[] [unique]
   x e_status [default: 'x', unique, ref: <>? posts.x]
 }
-Ref: orders.x -? missing.odd col
+Ref: orders.x -? "missing".odd col
 TableGroup g { orders, t1, posts }

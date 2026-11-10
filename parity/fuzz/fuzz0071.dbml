@@ -22,5 +22,5 @@ Table a {
   user_id "character varying"
   Note: 'table note'
 }
-Ref: a.code ?- missing.name
+Ref: a.code ?- "missing".name
 TableGroup g { posts, orders, posts, a }

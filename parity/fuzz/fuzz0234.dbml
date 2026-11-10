@@ -11,7 +11,7 @@ Table t1 {
 Table "quoted name" {
   code text [not null, default: 1]
   name timestamp [default: 1, pk]
-  id e_status [color: #1E69FD, ref: ?<> quoted name.id]
+  id e_status [color: #1E69FD, ref: ?<> "quoted name".id]
   x text [color: #1E69FD, unique, ref: - nope.name]
 }
 Table posts {

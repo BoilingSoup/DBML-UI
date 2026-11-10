@@ -8,5 +8,5 @@ Table posts {
   }
 }
 Ref r0: posts.name ?< posts.code
-Ref: posts.odd col <> missing.code
+Ref: posts.odd col <> "missing".code
 TableGroup g { posts }

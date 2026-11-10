@@ -8,9 +8,9 @@ Table _x {
 }
 Table "quoted name" {
   name int[]
-  id decimal(10, 2) [color: #1E69FD, pk, ref: ?> quoted name.name]
+  id decimal(10, 2) [color: #1E69FD, pk, ref: ?> "quoted name".name]
 }
-Ref: _x.name > quoted name.name
+Ref: _x.name > "quoted name".name
 Note sticky {
   '''
   text

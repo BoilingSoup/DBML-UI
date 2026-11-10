@@ -8,6 +8,6 @@ Table "quoted name" {
   x bool [check: `x > 0`, ref: - nope.x]
   user_id e_status [increment, default: `now()`]
 }
-Ref: quoted name.x <> quoted name.odd col
-Ref: quoted name.user_id ?<> quoted name.x
+Ref: "quoted name".x <> "quoted name".odd col
+Ref: "quoted name".user_id ?<> "quoted name".x
 TableGroup g { _x, quoted name }

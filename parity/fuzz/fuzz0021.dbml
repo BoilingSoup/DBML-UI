@@ -7,7 +7,7 @@ Table orders {
   code e_status
   id e_status [not null, default: `now()`]
 }
-Ref: orders.user_id > missing.odd col
+Ref: orders.user_id > "missing".odd col
 Ref r1: orders.user_id > B.id
 Note sticky {
   '''

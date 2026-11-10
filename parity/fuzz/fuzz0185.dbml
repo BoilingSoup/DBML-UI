@@ -8,12 +8,12 @@ Table "quoted name" {
 }
 Table users {
   id "character varying"
-  "odd col" int[] [unique, ref: - quoted name.id]
+  "odd col" int[] [unique, ref: - "quoted name".id]
   user_id text [color: #1E69FD]
   "odd col" "character varying" [null]
 }
-Ref: users.id < missing.user_id
-Ref r1: users.id ?< quoted name.x
+Ref: users.id < "missing".user_id
+Ref r1: users.id ?< "quoted name".x
 Enum e_status {
   open
   closed [note: 'done']

@@ -4,8 +4,8 @@ Table _x {
   name "character varying" [increment, default: 'x']
   Note: 'table note'
 }
-Ref: _x.name < missing.id
-Ref r1: _x.user_id ?> missing.id
+Ref: _x.name < "missing".id
+Ref r1: _x.user_id ?> "missing".id
 Enum e_status {
   open
   closed [note: 'done']

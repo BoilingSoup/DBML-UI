@@ -18,5 +18,5 @@ Table my_table {
 Table users {
   x varchar(255)
 }
-Ref: users.x < missing.code
+Ref: users.x < "missing".code
 Ref: B.user_id -? B.id

@@ -13,6 +13,6 @@ Table users {
     'a'
   }
 }
-Ref: ñT.id ?- missing.id
-Ref: ñT.code ?- missing.name
+Ref: ñT.id ?- "missing".id
+Ref: ñT.code ?- "missing".name
 TableGroup g { ñT, users }

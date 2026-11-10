@@ -10,6 +10,6 @@ Table _x {
 Table orders {
   id text [check: `x > 0`, color: #1E69FD, ref: - nope.id]
 }
-Ref: orders.id <> missing.code
-Ref: orders.odd col -? missing.x
+Ref: orders.id <> "missing".code
+Ref: orders.odd col -? "missing".x
 TableGroup g { quoted name, _x, orders }

@@ -13,7 +13,7 @@ Table "quoted name" {
   }
 }
 Table B {
-  code "character varying" [not null, increment, ref: ?< quoted name.code]
+  code "character varying" [not null, increment, ref: ?< "quoted name".code]
   "odd col" e_status [default: 1, color: #1E69FD, ref: - nope.odd col]
   "odd col" text pk
   x "character varying" [default: `now()`, check: `x > 0`]

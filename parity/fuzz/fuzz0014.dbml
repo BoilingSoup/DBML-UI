@@ -6,7 +6,7 @@ Table t1 {
 Table a {
   "odd col" int[]
 }
-Ref r0: a.user_id >? missing.x
+Ref r0: a.user_id >? "missing".x
 Ref: a.id > t1.x
 Enum e_status {
   open

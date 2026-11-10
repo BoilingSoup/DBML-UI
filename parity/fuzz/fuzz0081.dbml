@@ -12,4 +12,4 @@ Table _x {
   Note: 'table note'
 }
 Ref r0: _x.x > _x.id
-Ref: my_table.code <>? missing.user_id
+Ref: my_table.code <>? "missing".user_id

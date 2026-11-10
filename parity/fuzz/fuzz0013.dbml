@@ -7,7 +7,7 @@ Table ñT {
 Table "quoted name" {
   "odd col" integer [unique, color: #1E69FD, ref: ?<> ñT.odd col]
   id varchar(255)
-  id varchar(255) [increment, ref: <>? quoted name.id]
+  id varchar(255) [increment, ref: <>? "quoted name".id]
 }
 Table orders {
   x decimal(10, 2) [default: 1]

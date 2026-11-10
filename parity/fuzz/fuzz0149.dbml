@@ -8,4 +8,4 @@ Table a {
   name varchar(255)
 }
 Ref r0: a.code ?<> a.code
-Ref: B.x ?- missing.name
+Ref: B.x ?- "missing".name

@@ -21,7 +21,7 @@ Table "quoted name" {
     1
   }
 }
-Ref: quoted name.code -? quoted name.id
+Ref: "quoted name".code -? "quoted name".id
 TableGroup g { posts, quoted name, ñT, quoted name }
 Note sticky {
   '''

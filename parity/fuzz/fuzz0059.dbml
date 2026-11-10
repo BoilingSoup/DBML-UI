@@ -9,7 +9,7 @@ Table a {
     ''
   }
 }
-Ref r0: a.name < missing.user_id
+Ref r0: a.name < "missing".user_id
 Enum e_status {
   open
   closed [note: 'done']

@@ -3,7 +3,7 @@ Table a {
   id bool [unique, pk, ref: ?- nope.id]
 }
 Table "quoted name" {
-  name integer [unique, color: #1E69FD, ref: <> quoted name.name]
+  name integer [unique, color: #1E69FD, ref: <> "quoted name".name]
 }
 Table ñT {
   id integer [color: #1E69FD, null, ref: < nope.id]
@@ -25,7 +25,7 @@ Table orders {
   Note: 'table note'
 }
 Ref: orders.name ?- orders.id
-Ref r1: quoted name.x ?< a.odd col
+Ref r1: "quoted name".x ?< a.odd col
 TableGroup g { a, quoted name, ñT, orders }
 Note sticky {
   '''

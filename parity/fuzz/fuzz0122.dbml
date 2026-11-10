@@ -18,8 +18,8 @@ Table B {
 }
 Table ñT {
   name integer unique
-  user_id integer [not null, default: 1, ref: <> quoted name.name]
-  x int[] [null, unique, ref: <>? quoted name.x]
+  user_id integer [not null, default: 1, ref: <> "quoted name".name]
+  x int[] [null, unique, ref: <>? "quoted name".x]
   user_id varchar(255)
   records (name) {
     1
@@ -28,7 +28,7 @@ Table ñT {
   }
 }
 Ref r0: ñT.user_id > ñT.code
-Ref: ñT.odd col ?> quoted name.x
+Ref: ñT.odd col ?> "quoted name".x
 Enum e_status {
   open
   closed [note: 'done']

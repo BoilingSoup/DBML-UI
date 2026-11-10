@@ -11,7 +11,7 @@ Table users {
     true
   }
 }
-Ref: t1.name - missing.x
+Ref: t1.name - "missing".x
 Ref: t1.code -? t1.id
 Enum e_status {
   open

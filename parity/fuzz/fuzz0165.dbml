@@ -6,5 +6,5 @@ Table _x {
     odd col [unique]
   }
 }
-Ref: _x.name ?> missing.x
-Ref r1: _x.name <> missing.code
+Ref: _x.name ?> "missing".x
+Ref r1: _x.name <> "missing".code

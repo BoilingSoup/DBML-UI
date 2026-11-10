@@ -21,6 +21,6 @@ Table posts {
     user_id [pk]
   }
 }
-Ref r0: posts.odd col <? quoted name.odd col
+Ref r0: posts.odd col <? "quoted name".odd col
 Ref: t1.name - t1.x
 TableGroup g { quoted name, t1, posts }

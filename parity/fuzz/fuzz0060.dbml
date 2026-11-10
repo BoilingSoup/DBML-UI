@@ -18,8 +18,8 @@ Table "quoted name" {
   code bool [color: #1E69FD, default: `now()`]
   code varchar(255) [default: 'x', note: 'n']
 }
-Ref: quoted name.id > missing.code
-Ref: a.odd col > missing.name
+Ref: "quoted name".id > "missing".code
+Ref: a.odd col > "missing".name
 Enum e_status {
   open
   closed [note: 'done']

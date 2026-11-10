@@ -22,4 +22,4 @@ Table orders {
   Note: 'table note'
 }
 Ref: orders.name <>? _x.code
-Ref: users.x < missing.odd col
+Ref: users.x < "missing".odd col

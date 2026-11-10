@@ -8,4 +8,4 @@ Table B {
     true
   }
 }
-Ref r0: B.id ?- missing.id
+Ref r0: B.id ?- "missing".id

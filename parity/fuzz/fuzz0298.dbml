@@ -12,5 +12,5 @@ Table posts {
 Table t1 {
   code timestamp [pk, ref: - posts.code]
 }
-Ref: posts.code ?< missing.odd col
+Ref: posts.code ?< "missing".odd col
 TableGroup g { t1, posts, t1 }

@@ -24,7 +24,7 @@ Table ñT {
   user_id varchar(255) pk
 }
 Ref: B.code ?<> posts.code
-Ref: posts.odd col ?> missing.id
+Ref: posts.odd col ?> "missing".id
 Enum e_status {
   open
   closed [note: 'done']

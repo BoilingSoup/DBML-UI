@@ -10,7 +10,7 @@ Table orders {
   user_id e_status unique
   user_id text [default: 'x', not null]
 }
-Ref r0: users.x - missing.code
+Ref r0: users.x - "missing".code
 Ref r1: users.id < orders.user_id
 Enum e_status {
   open

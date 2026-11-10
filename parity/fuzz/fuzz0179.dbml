@@ -16,6 +16,6 @@ Table orders {
   name text
   Note: 'table note'
 }
-Ref: orders.odd col < missing.id
-Ref r1: orders.user_id ?> missing.x
+Ref: orders.odd col < "missing".id
+Ref r1: orders.user_id ?> "missing".x
 TableGroup g { t1, orders, orders }

@@ -21,7 +21,7 @@ Table users {
   }
   Note: 'table note'
 }
-Ref: quoted name.x -? quoted name.id
+Ref: "quoted name".x -? "quoted name".id
 Ref: users.x <? _x.code
 Enum e_status {
   open

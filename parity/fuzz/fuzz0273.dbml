@@ -34,7 +34,7 @@ Table B {
     null
   }
 }
-Ref: _x.odd col <> missing.code
+Ref: _x.odd col <> "missing".code
 Enum e_status {
   open
   closed [note: 'done']

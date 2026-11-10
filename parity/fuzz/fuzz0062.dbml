@@ -25,5 +25,5 @@ Table my_table {
 Table ñT {
   "odd col" varchar(255) [note: 'n', pk]
 }
-Ref r0: B.id -? missing.user_id
+Ref r0: B.id -? "missing".user_id
 Ref r1: B.x -? B.name

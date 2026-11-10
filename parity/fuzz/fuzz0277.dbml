@@ -15,6 +15,6 @@ Table B {
 Table users {
   id int[] [check: `x > 0`, not null]
 }
-Ref r0: my_table.odd col <> missing.name
+Ref r0: my_table.odd col <> "missing".name
 Ref: B.name <> users.x
 TableGroup g { my_table, B, users }

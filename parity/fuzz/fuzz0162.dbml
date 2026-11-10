@@ -15,5 +15,5 @@ Table orders {
   x integer [null, pk, ref: <>? users.code]
   Note: 'table note'
 }
-Ref: users.id - missing.id
-Ref r1: users.code - missing.id
+Ref: users.id - "missing".id
+Ref r1: users.code - "missing".id

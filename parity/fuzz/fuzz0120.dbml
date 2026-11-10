@@ -1,6 +1,6 @@
 Table "quoted name" {
   "odd col" int[] [check: `x > 0`, pk]
-  "odd col" decimal(10, 2) [increment, ref: -? quoted name.odd col]
+  "odd col" decimal(10, 2) [increment, ref: -? "quoted name".odd col]
 }
-Ref: quoted name.odd col > quoted name.id
-Ref: quoted name.odd col ?< quoted name.user_id
+Ref: "quoted name".odd col > "quoted name".id
+Ref: "quoted name".odd col ?< "quoted name".user_id

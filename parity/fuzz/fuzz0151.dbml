@@ -5,7 +5,7 @@ Table ñT {
 }
 Table "quoted name" {
   name varchar(255)
-  id int[] [pk, ref: -? quoted name.name]
+  id int[] [pk, ref: -? "quoted name".name]
   indexes {
     (name) [unique, name: 'ix']
     (name) [pk]

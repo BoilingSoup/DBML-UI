@@ -5,8 +5,8 @@ Table B {
   x bool [note: 'n', ref: >? nope.name]
   Note: 'table note'
 }
-Ref: B.name <>? missing.odd col
-Ref: B.user_id <> missing.name
+Ref: B.name <>? "missing".odd col
+Ref: B.user_id <> "missing".name
 Enum e_status {
   open
   closed [note: 'done']

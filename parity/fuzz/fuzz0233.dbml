@@ -11,7 +11,7 @@ Table my_table {
     id [unique]
   }
 }
-Ref: B.x ?- missing.code
+Ref: B.x ?- "missing".code
 Enum e_status {
   open
   closed [note: 'done']

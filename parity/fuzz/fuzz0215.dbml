@@ -26,7 +26,7 @@ Table t1 {
   "odd col" "character varying" [default: `now()`, check: `x > 0`, ref: > _x.odd col]
   Note: 'table note'
 }
-Ref: _x.odd col < missing.id
+Ref: _x.odd col < "missing".id
 Ref r1: _x.name ?- my_table.x
 Enum e_status {
   open

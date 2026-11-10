@@ -11,8 +11,8 @@ Table ñT {
 Table "quoted name" {
   code bool [default: `now()`, ref: > nope.code]
 }
-Ref: B.x <> quoted name.odd col
-Ref: quoted name.user_id ?< quoted name.x
+Ref: B.x <> "quoted name".odd col
+Ref: "quoted name".user_id ?< "quoted name".x
 Enum e_status {
   open
   closed [note: 'done']

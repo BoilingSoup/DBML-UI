@@ -14,7 +14,7 @@ Table a {
   }
 }
 Table t1 {
-  x "character varying" [pk, ref: > quoted name.x]
+  x "character varying" [pk, ref: > "quoted name".x]
   user_id varchar(255) [color: #1E69FD, ref: ?<> nope.x]
   code int[]
 }

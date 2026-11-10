@@ -25,7 +25,7 @@ Table a {
   }
 }
 Ref: orders.name - orders.id
-Ref: t1.odd col <? quoted name.user_id
+Ref: t1.odd col <? "quoted name".user_id
 Enum e_status {
   open
   closed [note: 'done']

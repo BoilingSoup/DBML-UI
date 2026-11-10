@@ -5,6 +5,6 @@ Table my_table {
     name [unique]
   }
 }
-Ref: my_table.id >? missing.id
+Ref: my_table.id >? "missing".id
 Ref: my_table.x <> my_table.code
 TableGroup g { my_table }

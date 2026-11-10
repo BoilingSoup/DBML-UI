@@ -29,5 +29,5 @@ Table t1 {
   user_id text [default: 1, color: #1E69FD]
   Note: 'table note'
 }
-Ref: quoted name.code >? t1.id
-Ref: quoted name.name < users.x
+Ref: "quoted name".code >? t1.id
+Ref: "quoted name".name < users.x

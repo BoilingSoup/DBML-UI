@@ -7,7 +7,7 @@ Table _x {
   }
 }
 Ref r0: _x.code ?< _x.id
-Ref: _x.user_id < missing.x
+Ref: _x.user_id < "missing".x
 Note sticky {
   '''
   text

@@ -31,7 +31,7 @@ Table "quoted name" {
 Table "quoted name" {
   x bool
   code integer
-  id text [default: `now()`, note: 'n', ref: ?< quoted name.code]
+  id text [default: `now()`, note: 'n', ref: ?< "quoted name".code]
   id int[] [unique]
   indexes {
     id [pk]

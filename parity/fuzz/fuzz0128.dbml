@@ -19,7 +19,7 @@ Table orders {
   }
 }
 Ref: orders.odd col ?- users.x
-Ref: my_table.x ?< missing.user_id
+Ref: my_table.x ?< "missing".user_id
 Enum e_status {
   open
   closed [note: 'done']

@@ -1,7 +1,7 @@
 Table "quoted name" {
   id "character varying" pk
   name "character varying" [null, check: `x > 0`]
-  id timestamp [null, ref: <>? quoted name.id]
+  id timestamp [null, ref: <>? "quoted name".id]
 }
 Table my_table {
   "odd col" timestamp [unique, check: `x > 0`]
