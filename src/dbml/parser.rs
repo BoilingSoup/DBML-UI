@@ -5740,6 +5740,18 @@ impl RParser<'_> {
                 }
             }
         }
+        if depth > 0 {
+            // their blockExpression nesting: EVERY unclosed block's close
+            // consume errs at the EOF token (the round-21 depth rule)
+            let eof = self.peek().end;
+            for _ in 0..depth {
+                self.errs.push(ParseError {
+                    offset: eof,
+                    end: Some(eof),
+                    message: "Expect a closing brace '}'".to_string(),
+                });
+            }
+        }
         RNode::Block { start }
     }
 }
