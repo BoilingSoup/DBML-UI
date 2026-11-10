@@ -121,6 +121,16 @@ tools below. Never say done when the sweep still finds shapes.
 
 ## Workflow rules
 
+- Builds are the user's hardware. Use `cargo check` (or
+  `cargo check --release`) as the compile gate after every edit — it
+  skips codegen and is many times faster than any build. Only BUILD what
+  the current step actually runs:
+    - `cargo test --lib ...` builds the test profile (required for the
+      focused tests; ~10s).
+    - `cargo build --release --example parity_dump` (and parity_schema)
+      only when dumping/comparing — ~20s each, cached.
+    - `cargo build --release` (the app binary) ONLY when the user will
+      run the app — never as a routine verification step.
 - NEVER declare the port complete beyond what the sweeps prove; state
   the probe surface covered and what the tools will find next.
 - Every run parsing adversarial input: memory caps + timeouts.
