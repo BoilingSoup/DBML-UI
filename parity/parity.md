@@ -432,7 +432,20 @@ tools below. Never say done when the sweep still finds shapes.
        nested parse's field walk (the ref_stmt's block-form loop)
        needs the unterminated-string handling the same way the body
        child loop's junk-line path does (the note_value/sq_string
-       route). The port (round 33): the
+       route). ROUND-40 PLAN (the combined port as ONE unit — the
+       round-39 finding: the three pieces must land together): the
+       base = the round-37 attempt's code (the resurrected loop + the
+       snapshot brace-scan + the union end — the spans LANDED there:
+       nl1 2,3..4,19 / 3,5..4,19; e43 5,1..7,14; recoverable from
+       c9c8230), PLUS (a) the depth scoping (the child_spans skip —
+       the round-39 code compiled) fixing e43's extra close, PLUS (b)
+       the nested parse's field-walk string handling fixing nl1's
+       newline error (the nested ref block's field walk must emit the
+       newline error for the unterminated string — the trace: which
+       ref_stmt path parses the `'b.id` field and where the newline
+       error fires), PLUS the e44 span delta. The acceptance: nl1 +
+       e42/e43/e44 + the battery ALL green before the commit. The
+       port (round 33): the
        custom-element body's child parse — their element = {type: c,
        name: id, body: the BlockExpression (3,5)-(4,19)} (the block =
        the `{` at 3,5 through the last real token), the inline-field
