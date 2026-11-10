@@ -306,11 +306,14 @@ tools below. Never say done when the sweep still finds shapes.
        /tmp/cluster2.py pattern — ours in 6 batch files, theirs in
        theirs_mut.json, the signature = the per-message count delta;
        use Counter diffs — plain membership misses count mismatches)
-2. **Quick-fix EDIT-range parity**: their quickFixes carry edits
-   [{start, end, newText}] in UTF-16 offsets; our QuickFix has no ranges
-   and the dump emits only the joined text. Add the edit ranges to our
-   QuickFix (byte offsets internally), emit them converted to UTF-16,
-   extend the comparison, port the divergences.
+2. **Quick-fix EDIT-range parity — DONE** (enforced by the corpus
+   gate): our dump emits edits [{start, end, newText}] converted to
+   UTF-16 offsets (their Monaco model offsets); their driver emits the
+   raw edits; run.mjs's fixKey includes the ranges. Ported divergence:
+   their addSettingEdit's fallback anchors declaration.end — the node's
+   union end (our Column.full_end), not the consumption end; the
+   bracket path inserts at the `]` (their settingsList.end - 1). The
+   battery quick-fixes ride the corpus gate.
 3. **Keep the batteries honest**: any new divergence class found anywhere
    (user reports included) becomes a battery case + a corpus case when
    user-shaped, permanently.

@@ -24,6 +24,7 @@ const dump = (ds: any[]) => ds.map((d: any) => ({
     shortTitle: q.shortTitle ?? null,
     isPreferred: q.isPreferred ?? null,
     newText: (q.edits ?? []).map((e: any) => e.newText).join(' | '),
+    edits: (q.edits ?? []).map((e: any) => ({ start: e.start, end: e.end, newText: e.newText })),
   })),
 }));
 const layout = new MemoryProjectLayout();

@@ -59,7 +59,10 @@ const sortDiags = (list) =>
   [...list].sort(
     (a, b) => a.row - b.row || a.type.localeCompare(b.type) || a.text.localeCompare(b.text),
   );
-const fixKey = (q) => `${q.shortTitle}::${q.newText}::${q.title ?? ''}::${q.isPreferred ?? ''}`;
+const editsKey = (q) =>
+  (q.edits ?? []).map((e) => `${e.start}-${e.end}:${e.newText}`).join(',');
+const fixKey = (q) =>
+  `${q.shortTitle}::${q.newText}::${q.title ?? ''}::${q.isPreferred ?? ''}::${editsKey(q)}`;
 const fixMultiset = (list) => {
   list = list ?? [];
   const m = new Map();

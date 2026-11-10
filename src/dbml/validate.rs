@@ -934,9 +934,12 @@ pub fn validate_with_parse(
         if c.settings.pk || c.settings.increment || c.settings.not_null == Some(true) {
             return None;
         }
+        // their addSettingEdit's fallback anchors declaration.end — the
+        // node's union end (full_end), not the consumption end
+        let node_span = c.span.start..c.full_end;
         let (span, new_text) = match remove_setting_edit(&c.span, "null") {
             Some(edit) => edit,
-            None => add_setting_edit(&c.span, "not null"),
+            None => add_setting_edit(&node_span, "not null"),
         };
         Some(quick(
             format!("Mark '{table}.{col}' as NOT NULL"),
@@ -960,7 +963,8 @@ pub fn validate_with_parse(
         if c.settings.unique || c.settings.pk {
             return None;
         }
-        let (span, new_text) = add_setting_edit(&c.span, "unique");
+        let node_span = c.span.start..c.full_end;
+        let (span, new_text) = add_setting_edit(&node_span, "unique");
         Some(quick(
             format!("Mark '{table}.{col}' as UNIQUE"),
             "Add unique",

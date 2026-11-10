@@ -7,11 +7,20 @@ use serde::Serialize;
 // by design — their dump shapes) — silence the style lint for them
 #[allow(non_snake_case)]
 #[derive(Serialize)]
+struct QuickFixEdit {
+    start: usize,
+    end: usize,
+    newText: String,
+}
+
+#[allow(non_snake_case)]
+#[derive(Serialize)]
 struct QuickFix {
     title: String,
     shortTitle: String,
     isPreferred: Option<bool>,
     newText: String,
+    edits: Vec<QuickFixEdit>,
 }
 
 #[allow(non_snake_case)]
@@ -63,6 +72,17 @@ fn col_of(src: &str, offset: usize) -> usize {
 /// (row, column) for a byte offset.
 fn line_col(src: &str, offset: usize) -> (usize, usize) {
     (row_of(src, offset), col_of(src, offset))
+}
+
+/// The absolute UTF-16 offset for a byte offset — their quick-fix edits
+/// are Monaco-model offsets (model.getPositionAt = UTF-16 code units from
+/// the source start).
+fn utf16_off(src: &str, offset: usize) -> usize {
+    let mut off = offset.min(src.len());
+    while off > 0 && !src.is_char_boundary(off) {
+        off -= 1;
+    }
+    src[..off].chars().map(|c| c.len_utf16()).sum()
 }
 
 fn dump_path(path: &str) -> Case {
@@ -137,6 +157,13 @@ fn dump_path(path: &str) -> Case {
                     // all — only the operator change sets it
                     isPreferred: if q.is_preferred { Some(true) } else { None },
                     newText: q.new_text.clone(),
+                    // their edits are offset-based (Monaco getPositionAt =
+                    // UTF-16); ours are byte offsets — convert
+                    edits: vec![QuickFixEdit {
+                        start: utf16_off(&src, q.span.start),
+                        end: utf16_off(&src, q.span.end),
+                        newText: q.new_text.clone(),
+                    }],
                 })
                 .collect(),
         });
