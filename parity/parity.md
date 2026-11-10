@@ -305,14 +305,17 @@ tools below. Never say done when the sweep still finds shapes.
      swallowed block's close now errs at the TRUE EOF, probe q1 PASS
      on the close). REMAINING: the field-node span — their field error
      anchors the application node (2,38..5,2, the block's `}` end)
-     where ours anchors the arg span (2,38-2,46). ROUND-28 TRACE: the
-     collapse attempt showed their arg errors = TWO — (2,36..2,37) (the
-     `p` operand) and (2,38..5,2) (the quoted-member application
-     through the block's `}` end) — ours emits ONE (2,38..2,46): the
-     Pratt split differs (their args = [p, the-quoted-member-through-
-     block]; ours = [the quoted-member, the block]); the application's
-     arg split must match theirs before the span extension lands. The
-     Block.end field LANDED (the RParser Block carries the end).
+     where ours anchors the arg span (2,38-2,46). ROUND-29 RESULT: the
+     tree DUMP proved the round-28 split-difference trace WRONG — our
+     args = [p, the-Block] exactly like theirs (the elemprobe confirmed
+     their AST: {callee: the infix a.name < "missing".Project, args:
+     [p, the Block]}); our arg errors now = TWO: (2,36..2,37) MATCHES
+     and (2,38..2,46) vs theirs (2,38..5,2) — the REMAINING delta = the
+     block arg's error end: ours = the LINE-clamped block end (46),
+     theirs = the TRUE EOF (5,2) — the fix: the block_expression's end
+     must reach the balanced `}` or the true EOF within the extended
+     stream (the round-26 extension built the tokens; the arg span
+     still clamps — trace the arg_spans' end at the block's exit).
      ROUND-24 TRACE: the ref-fields
      loop already chains the lines into one stream — the chain breaks at
      `if !dropped || input.is_empty()` (the clean line end stops the
