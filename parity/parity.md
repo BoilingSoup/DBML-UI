@@ -370,7 +370,17 @@ tools below. Never say done when the sweep still finds shapes.
        spans ended at (3,6) — the span tracking (the nested element's
        consumed end + the last real token) isn't ready; the child loop
        is REVERTED and the port waits for the span-tracking design.
-       The port (round 33): the
+       ROUND-34 DESIGN (the span-tracking requirements): (1) the child
+       loop's nested parse must NOT suppress the nested element's own
+       close-at-EOF — the e43/e44 shapes need TWO closes (the
+       Tabl-oops' + the nested good2's) at the same point, and the
+       naive loop's nested top_item parse consumed the nested block so
+       the depth rule counted one; (2) the enclosing element's span =
+       the union ending at the last real token (the nested element's
+       end when it parsed, else the last junk-free token); (3) the
+       body child loop must run ONLY for the shapes their parser
+       treats as block children — the clean single-application bodies
+       (e42, the corpus) keep the existing path. The port (round 33): the
        custom-element body's child parse — their element = {type: c,
        name: id, body: the BlockExpression (3,5)-(4,19)} (the block =
        the `{` at 3,5 through the last real token), the inline-field
