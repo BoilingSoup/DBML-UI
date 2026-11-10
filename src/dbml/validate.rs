@@ -459,7 +459,57 @@ pub fn validate_with_parse(
                             ));
                         }
                     }
-                    _ => {}
+                    _ => {
+                        // their custom-setting check (c21/c23/c17): a key
+                        // outside the known set must carry a string, color,
+                        // number, or boolean value — the anchor is the key
+                        // node when valueless, the value node when valued
+                        const KNOWN: [&str; 14] = [
+                            "pk",
+                            "primary key",
+                            "primary_key",
+                            "increment",
+                            "autoincrement",
+                            "auto_increment",
+                            "unique",
+                            "not null",
+                            "null",
+                            "note",
+                            "default",
+                            "check",
+                            "ref",
+                            "color",
+                        ];
+                        if KNOWN.contains(&name) {
+                            // handled above or a known key: nothing
+                        } else {
+                            let value_ok = a.has_value && {
+                                let v = a.value.as_deref().unwrap_or("");
+                                a.quoted
+                                    || v.starts_with('#')
+                                    || v.parse::<f64>().is_ok()
+                                    || matches!(
+                                        v.to_ascii_lowercase().as_str(),
+                                        "true" | "false"
+                                    )
+                            };
+                            if !value_ok {
+                                let (s, e) = if a.has_value {
+                                    (a.value_span.start, a.value_span.end)
+                                } else {
+                                    (a.offset, a.end)
+                                };
+                                out.push(Diagnostic::spanned(
+                                    s,
+                                    e,
+                                    format!(
+                                        "Custom setting '{name}' must be a string, a color \
+                                         literal, a number literal, or a boolean literal"
+                                    ),
+                                ));
+                            }
+                        }
+                    }
                 }
             }
         }

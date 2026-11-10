@@ -757,6 +757,7 @@ enum SettingVal {
 enum SwallowEnd {
     Bracket,
     Brace,
+    Comma,
     Eof,
 }
 
@@ -810,12 +811,22 @@ fn swallow_gather(
         line_toks = gather_invalid_num(line_toks, &mut lex_errs);
         errs.append(&mut lex_errs);
         // the terminator ends the scan; everything before it is the
-        // value's while the value is still open
+        // value's while the value is still open. A COMMA ends the VALUE
+        // only (their application stop-kind) — the list itself resumes
+        // with the next item.
         let stop = line_toks
             .iter()
             .position(|t| matches!(t.kind, RTKind::RBracket | RTKind::RBrace));
-        let content_len = stop.unwrap_or(line_toks.len());
+        let comma = if value_open {
+            line_toks[..stop.unwrap_or(line_toks.len())]
+                .iter()
+                .position(|t| t.kind == RTKind::Comma)
+        } else {
+            None
+        };
+        let content_len = comma.unwrap_or(stop.unwrap_or(line_toks.len()));
         let stop_tok = stop.map(|i| line_toks[i].clone());
+        let comma_tok = comma.map(|i| line_toks[i].clone());
         if value_open {
             for t in &line_toks[..content_len] {
                 if t.kind != RTKind::Eof {
@@ -823,7 +834,16 @@ fn swallow_gather(
                 }
             }
         }
-        match stop_tok {
+        match stop_tok.or(comma_tok.clone()) {
+            Some(st) if st.kind == RTKind::Comma => {
+                // the value closed at the comma; the list resumes AFTER it
+                // (the loop's own `eat(",")` never runs on this path)
+                let rel = st.start - offset(input, base) + st.value.len();
+                *input = &input[rel..];
+                ending = SwallowEnd::Comma;
+                brace_tok = None;
+                break;
+            }
             Some(st) => {
                 let rel = st.start - offset(input, base);
                 *input = &input[rel..];
@@ -937,9 +957,11 @@ fn sticky_note_value(
             }
             match ending {
                 // the terminator belongs to the enclosing block: the field
-                // is done, input sits at the `}`/`]`
-                SwallowEnd::Brace | SwallowEnd::Bracket => Ok(String::new()),
-                SwallowEnd::Eof => Ok(String::new()),
+                // is done, input sits at the `}`/`]`/`,`
+                SwallowEnd::Brace
+                | SwallowEnd::Bracket
+                | SwallowEnd::Comma
+                | SwallowEnd::Eof => Ok(String::new()),
             }
         }
         Err(e) => Err(e),
@@ -1004,7 +1026,36 @@ fn settings_list_occs(
             val_quoted = input.starts_with('\'') || input.starts_with('"');
             if key == "ref" {
                 let op_offset = offset(input, base);
-                let (card, l_opt, r_opt) = cardinality_full(input, base)?;
+                // the ref EXPRESSION's start: the op when one parses, else
+                // the value — their attribute binder anchors the
+                // must-be-unary error on the value node (c20 [op..terminator
+                // end], c22 [b.id])
+                let expr_start = offset(input, base);
+                let op_attempt = *input;
+                let parsed_op = cardinality_full(input, base);
+                let (card, l_opt, r_opt) = match parsed_op {
+                    Ok(x) => x,
+                    Err(_) => {
+                        // their ref value = one expression: a failed op
+                        // means the value itself is the (broken)
+                        // relationship — the binder errs on it and the
+                        // list resumes (c22: ref: b.id)
+                        *input = op_attempt;
+                        // the value runs to the list's terminator; the
+                        // offset is ABSOLUTE (the find is slice-relative)
+                        let k = input
+                            .find([',', ']', '\n', '\r'])
+                            .unwrap_or(input.len());
+                        let end = offset(input, base) + k;
+                        errs.push(ParseError {
+                            offset: expr_start,
+                            end: Some(end),
+                            message: "'ref' must be a valid unary relationship".to_string(),
+                        });
+                        *input = &input[k..];
+                        continue 'list;
+                    }
+                };
                 ws(input);
                 // their endpoint grammar: a bare word is a column of the
                 // HOST table, and words after a parsed endpoint are
@@ -1022,7 +1073,66 @@ fn settings_list_occs(
                         let w = match ident(input, base) {
                             Ok(w) => w,
                             Err(_) => {
+                                // their value = one expression: a STRING
+                                // operand lexes (the token-anchored
+                                // newline/EOF error), the gather continues,
+                                // and a bracket/brace terminator arriving
+                                // here is the operand-start error (c20)
                                 *input = ep_start;
+                                if input.starts_with('\'') || input.starts_with('"') {
+                                    let expr_end;
+                                    match sq_string(input, base) {
+                                        Ok(_) => {
+                                            // a closed string is not a
+                                            // relationship
+                                            expr_end = offset(input, base);
+                                        }
+                                        Err(e) => {
+                                            errs.push(ParseError {
+                                                offset: e.offset,
+                                                end: e.end,
+                                                message: e.message,
+                                            });
+                                            let (ending, vspan, _toks, brace) =
+                                                swallow_gather(input, base, errs);
+                                            let mut end_off = vspan
+                                                .as_ref()
+                                                .map(|s| s.end)
+                                                .unwrap_or(expr_start);
+                                            if let Some(bt) = &brace {
+                                                if matches!(
+                                                    ending,
+                                                    SwallowEnd::Brace | SwallowEnd::Bracket
+                                                ) {
+                                                    errs.push(ParseError {
+                                                        offset: bt.start,
+                                                        end: Some(bt.end),
+                                                        message: format!(
+                                                            "Invalid start of operand \"{}\"",
+                                                            bt.value
+                                                        ),
+                                                    });
+                                                    end_off = bt.end;
+                                                }
+                                            }
+                                            expr_end = end_off;
+                                            if matches!(ending, SwallowEnd::Eof) {
+                                                errs.push(err_at(
+                                                    offset(input, base),
+                                                    "Expect a closing bracket ']'",
+                                                ));
+                                                return Ok((out, occs));
+                                            }
+                                        }
+                                    }
+                                    errs.push(ParseError {
+                                        offset: expr_start,
+                                        end: Some(expr_end),
+                                        message: "'ref' must be a valid unary relationship"
+                                            .to_string(),
+                                    });
+                                    continue 'list;
+                                }
                                 return fail(ep_start_off, "expected a reference endpoint");
                             }
                         };
@@ -1139,7 +1249,7 @@ fn settings_list_occs(
                         let (ending, vspan, toks, brace) =
                             swallow_gather(input, base, errs);
                         match ending {
-                            SwallowEnd::Bracket => {
+                            SwallowEnd::Bracket | SwallowEnd::Comma => {
                                 if let Some(vs) = &vspan {
                                     v_span = vs.clone();
                                     let text = whole[vs.start - whole_start..vs.end - whole_start].to_string();
@@ -1240,8 +1350,20 @@ fn settings_list_occs(
         if eat(input, ",") {
             continue;
         }
-        sp(input);
+        // the list's whitespace trivia crosses newlines (their lexer —
+        // the loop-top ws already does); a `]` on the next line closes
+        ws(input);
         if eat(input, "]") {
+            return Ok((out, occs));
+        }
+        if input.is_empty() {
+            // their listExpression at EOF: the closing bracket consume
+            // fails at the EOF point; the element's closing brace errors
+            // ride the block loop's EOF path (c26)
+            errs.push(err_at(
+                offset(input, base),
+                "Expect a closing bracket ']'",
+            ));
             return Ok((out, occs));
         }
         // their recovery: the parse error is recorded and the list still
@@ -2198,24 +2320,20 @@ fn records_block(
             arg_spans: Vec::new(),
         };
         let tree = rp.application();
-        // their leftExpression_bp THROWS on an invalid operand: the
-        // PartialParsingError propagates to the records ELEMENT, which
-        // drops entirely (rows after the damage included). Check BEFORE
-        // any binder pushes; skip this block's remaining lines to its
-        // closing brace — left for the block loop — and abort the block.
+        // their leftExpression_bp THROWS on an invalid operand — and the
+        // records block's BlockExpression context HANDLES it
+        // (findHandlerContext finds the closing brace): the partial node
+        // joins the body and synchronizeBlock consumes the damaged line's
+        // remainder, so the block CONTINUES with the next rows (probe
+        // c18: the operand error + the following rows' own errors)
         if let Some((pos, end, msg)) = rp.poisoned.clone() {
-            loop {
-                let line_end = input.find('\n').unwrap_or(input.len());
-                if input[..line_end].trim_start().starts_with('}') {
-                    break;
-                }
-                if line_end >= input.len() {
-                    *input = &input[input.len()..];
-                    break;
-                }
-                *input = &input[line_end + 1..];
-            }
-            return Err(Fail { offset: pos, end: end, message: msg });
+            errs.push(ParseError {
+                offset: pos,
+                end,
+                message: msg,
+            });
+            // input already sits past the damaged row's consumed lines
+            continue 'rows;
         }
         // their error node = the ROW: SyntaxNode.end = the last child's
         // endPos (types/nodes.ts) — the row's last token's end, no
@@ -2370,10 +2488,14 @@ fn sticky_note(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<S
         return fail(offset(input, base), "expected '{' after note name");
     }
     ws(input);
-    let text = match note_value(input, base) {
+    let text = match sticky_note_value(input, base, errs) {
         Ok(t) => t,
         Err(e) => {
-            errs.push(err_at(e.offset, &e.message));
+            errs.push(ParseError {
+                offset: e.offset,
+                end: e.end,
+                message: e.message,
+            });
             skip_line(input);
             String::new()
         }
@@ -2488,10 +2610,12 @@ fn table(
             match records_block(input, base, errs, rec_start, count_errors, binder_out) {
                 Ok((_, rec)) => t.records = Some(rec),
                 Err(e) => {
-                    // an empty message = the error already pushed (the
-                    // poisoned abort's marker)
                     if !e.message.is_empty() {
-                        errs.push(err_at(e.offset, &e.message));
+                        errs.push(ParseError {
+                            offset: e.offset,
+                            end: e.end,
+                            message: e.message,
+                        });
                     }
                     // a bare `records` fails right at the table's closing
                     // brace — leave it for the block loop instead of
@@ -2698,21 +2822,23 @@ fn ref_stmt(
                 arg_spans: Vec::new(),
             };
             let tree = rp.application();
-            // their leftExpression_bp throw (an invalid operand) unwinds
-            // the element — skip to the closing brace, abort the block
+            // their synchronizeBlock handles the operand throw inside the
+            // ref block's context: the damaged line skips, the block
+            // continues with the next fields
             if let Some((pos, end, msg)) = rp.poisoned.clone() {
-                loop {
-                    let line_end = input.find('\n').unwrap_or(input.len());
-                    if input[..line_end].trim_start().starts_with('}') {
-                        break;
-                    }
-                    if line_end >= input.len() {
-                        *input = &input[input.len()..];
-                        break;
-                    }
-                    *input = &input[line_end + 1..];
+                errs.push(ParseError {
+                    offset: pos,
+                    end,
+                    message: msg,
+                });
+                if chain_brace {
+                    let _ = eat(input, "}");
+                    break;
                 }
-                return Err(Fail { offset: pos, end, message: msg });
+                if chained_end.is_empty() {
+                    break;
+                }
+                continue 'ref_fields;
             }
             let field_end = rp.prev().end;
             field_index += 1;
@@ -4644,6 +4770,24 @@ fn table_group(
             arg_spans: Vec::new(),
         };
         let tree = lp.application();
+        // their synchronizeBlock handles the operand throw inside the
+        // group's block context: the damaged line skips, the block
+        // continues with the next member lines
+        if let Some((pos, end, msg)) = lp.poisoned.clone() {
+            errs.push(ParseError {
+                offset: pos,
+                end,
+                message: msg,
+            });
+            if chain_brace {
+                let _ = eat(input, "}");
+                break;
+            }
+            if input.is_empty() {
+                break;
+            }
+            continue 'members;
+        }
         if let RNode::App { callee, args, .. } = &tree {
             // validateFields-group (tableGroup/validate.ts): the CALLEE
             // must destructure to plain variables [callee node span];
@@ -5485,26 +5629,20 @@ mod errs2_tests {
     use super::*;
 
     #[test]
-    fn errs2_invalid_operand_drops_the_block() {
+    fn errs2_invalid_operand_syncs_the_block() {
         let src = std::fs::read_to_string("/home/boilingsoup/Desktop/errs2.dbml")
             .expect("errs2 on the desktop");
         let out = parse(&src);
-        for e in &out.errors {
-            println!("ERR {}..{:?}: {}", e.offset, e.end, e.message);
-        }
+        // their synchronizeBlock handles the throw inside the block
+        // context: the operand error fires, the damaged ROW skips, and
+        // the undamaged rows survive (probe c18: the following rows' own
+        // errors still surface)
+        assert_eq!(out.errors.len(), 1, "{:?}", out.errors);
+        let e = &out.errors[0];
+        assert!(e.message.contains("Invalid start of operand"));
         let users = out.doc.tables.iter().find(|t| t.name == "users").unwrap();
-        println!(
-            "users records: {:?}",
-            users.records.as_ref().map(|r| r.rows.len())
-        );
-        assert!(
-            out.errors.iter().any(|e| e.message.contains("Invalid start of operand")),
-            "the invalid operand error fires"
-        );
-        assert!(
-            users.records.is_none(),
-            "the damaged records block drops entirely"
-        );
+        let rec = users.records.as_ref().expect("the block survives");
+        assert_eq!(rec.rows.len(), 3, "rows 33/35/36: {:?}", rec.rows);
     }
 
     /// Their gatherInvalid removes the failed string partial, taking the
@@ -5688,6 +5826,45 @@ Table t {
             .errors
             .iter()
             .any(|e| e.message == "A Note can only contain one quoted string"));
+    }
+
+    /// c18: their synchronizeBlock handles the operand throw INSIDE the
+    /// block context — the damaged row skips and the following rows still
+    /// parse (their own errors surface); the old port aborted the block
+    #[test]
+    fn operand_damage_syncs_and_later_rows_still_surface() {
+        let src = r#"
+Table t {
+  id int
+  records (id) {
+    1, ;junk
+    2, 'ok
+    3, 'fine'
+  }
+}
+"#;
+        let out = parse(src);
+        assert_eq!(out.errors.len(), 2, "{:?}", out.errors);
+        let semi = src.find(';').unwrap();
+        assert!(
+            out.errors.iter().any(|e| {
+                e.message == "Invalid start of operand \";\"" && e.offset == semi
+            }),
+            "the operand error anchors the semicolon token"
+        );
+        let quote = src.find("'ok").unwrap();
+        assert!(
+            out.errors.iter().any(|e| {
+                e.message == "Invalid newline encountered while parsing"
+                    && e.offset == quote
+            }),
+            "the next row's lexer error still surfaces"
+        );
+        // the block survives; the 'ok row merges 'fine's line into a
+        // count-mismatch row that the gated interpret drops
+        let t = out.doc.tables.iter().find(|t| t.name == "t").unwrap();
+        let rec = t.records.as_ref().expect("the block survives");
+        assert_eq!(rec.rows.len(), 0, "{:?}", rec.rows);
     }
 
     /// c1 battery: a partial string in an otherwise-clean row merges the

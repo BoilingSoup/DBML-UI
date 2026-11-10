@@ -727,7 +727,35 @@ impl Tab {
         self.source = src.to_string();
         self.highlights = dbml_ui::dbml::highlight::highlight(src);
         let out = dbml::parser::parse(src);
-        let schema = model::build(&out.doc);
+        self.parse_errors = out.errors.clone();
+        // dbdiagram-style diagnostics: their provideErrors is
+        // interpretFile().getErrors() — parse + binder + interpret errors
+        // ALL flow, always; infos exist only where interpretation
+        // succeeded (broken constructs never produce them)
+        let diagnostics = dbml::validate::validate_with_parse(
+            &out.doc,
+            src,
+            &out.binder_errors,
+            &out.binder_chains,
+            &out.record_count_errors,
+            &out.errors,
+        );
+        // their interpret gate (shouldInterpretNode): the records sample
+        // rows exist only for an otherwise-clean file — database: null
+        // under any parse/binder error (schema probe on errs.dbml), so
+        // the record icons and the record panel stay empty while the
+        // diagram itself still renders from the parse model
+        let blocking = !out.errors.is_empty()
+            || diagnostics
+                .iter()
+                .any(|d| d.severity == dbml::validate::Severity::Error);
+        let mut doc = out.doc;
+        if blocking {
+            for t in &mut doc.tables {
+                t.records = None;
+            }
+        }
+        let schema = model::build(&doc);
         self.diagram =
             layout::layout_with_all_overrides(&schema, &self.table_pos, &self.note_pos);
         // keep highlight state aligned with the new edge list (indices are
@@ -736,19 +764,7 @@ impl Tab {
         if self.edge_anim.len() < self.diagram.edges.len() {
             self.edge_anim.resize(self.diagram.edges.len(), 0.0);
         }
-        self.parse_errors = out.errors.clone();
-        // dbdiagram-style diagnostics: their provideErrors is
-        // interpretFile().getErrors() — parse + binder + interpret errors
-        // ALL flow, always; infos exist only where interpretation
-        // succeeded (broken constructs never produce them)
-        self.diagnostics = dbml::validate::validate_with_parse(
-            &out.doc,
-            src,
-            &out.binder_errors,
-            &out.binder_chains,
-            &out.record_count_errors,
-            &out.errors,
-        );
+        self.diagnostics = diagnostics;
     }
 
     /// Unsaved changes: the buffer differs from the last save/open.
