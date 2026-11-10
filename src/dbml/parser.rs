@@ -3892,6 +3892,78 @@ fn custom_element(
     if peek_is(input, "{") {
         let bs = offset(input, base);
         let _ = eat(input, "{");
+        // the body's CHILD LOOP: the block's lines parse as the nested
+        // elements/applications (their blockExpression — probe nl1: the
+        // `Ref {` line = a nested element, the ref block's field string
+        // errs 'Invalid newline encountered while parsing' at the
+        // partial token). The nested elements' diagnostics ride the
+        // binder channel; the body span's union end = the last real
+        // token (the child loop tracks it via last_real_token_end at
+        // the exit). The keyword-element dispatch covers the nested
+        // `Ref`/`Table`/`Enum` lines; the junk lines skip per-line.
+        let mut child_body_end: Option<usize> = None;
+        loop {
+            ws(input);
+            if input.is_empty() || peek_is(input, "}") {
+                break;
+            }
+            let child_start = offset(input, base);
+            if peek_kw(input, "Ref") || peek_kw(input, "Table")
+                || peek_kw(input, "Enum") || peek_kw(input, "TableGroup")
+                || peek_kw(input, "Note") || peek_kw(input, "Records")
+                || peek_kw(input, "Project")
+            {
+                let orig = *input;
+                let mut n_errs: Vec<ParseError> = Vec::new();
+                let mut n_binder: Vec<(usize, usize, String)> = Vec::new();
+                let mut n_chains: Vec<super::ast::BinderChain> = Vec::new();
+                let mut n_counts: Vec<(usize, usize, usize, usize)> = Vec::new();
+                let mut n_attempt = *input;
+                let item = top_item(
+                    &mut n_attempt,
+                    base,
+                    &mut n_errs,
+                    &mut n_binder,
+                    &mut n_chains,
+                    &mut n_counts,
+                );
+                let consumed_end = offset(&n_attempt, base);
+                let region = &orig[..(consumed_end - child_start).min(orig.len())];
+                let elem_end = last_real_token_end(region, child_start);
+                let _ = item;
+                errs.append(&mut n_errs);
+                doc_binder_errors.extend(n_binder);
+                let _ = n_chains;
+                let _ = n_counts;
+                *input = n_attempt;
+                child_body_end = Some(elem_end);
+                continue;
+            }
+            // a non-keyword line: the unterminated string errs the
+            // newline error via the existing path; the line skips
+            let line_nl = input.find('\n').unwrap_or(input.len());
+            let line = &input[..line_nl];
+            let line_base = offset(input, base);
+            let mut probe = line;
+            ws(&mut probe);
+            if probe.starts_with('\'') {
+                let mut t = probe;
+                if let Err(e) = note_value(&mut t, base) {
+                    errs.push(ParseError { offset: e.offset, end: e.end, message: e.message });
+                }
+            }
+            *input = &input[line_nl..];
+            let _ = child_start;
+            let _ = line_base;
+            if input.is_empty() {
+                break;
+            }
+            let _ = eat(input, "\n");
+            if input.is_empty() {
+                break;
+            }
+            let _ = child_body_end;
+        }
         let mut depth = 1i32;
         let bytes = input.as_bytes();
         let mut end = bytes.len();
