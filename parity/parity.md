@@ -306,6 +306,17 @@ tools below. Never say done when the sweep still finds shapes.
        our value() leaves empty (no tuple arm at the settings-value
        position); m43_0240/0254/0526 (the default cascade: the string
        token's 'EOF reached while parsing' does not surface);
+     * the records comma anchor (m43_0242, probes r1/r2: their consume
+       anchors the CURRENT token after the trivia — the next line's
+       `ode` at 5,1-5,4, not the newline token) stays OPEN with the
+       finding: the naive trivia skip regresses the mid-typing recovery
+       (the records_partial_input test: `records (a, b\n}` — the later
+       table must survive; the skip needs the mid-typing `}` and the
+       `ode) {` continuation distinguished first). The second delta =
+       their 'Records at top-level must have a name in the form of
+       table(col1, col2, ...)' for the malformed header (the tuple
+       broke: the anchor = the header node 4,9-5,5) — our records port
+       binds the nameless header silently),
        m43_0308 (REFINED by the round-17 probes c1/c2: their attribute
        NAME is an identifier STREAM crossing the trivia newlines —
        `[che\ncode text\n}` names the attribute 'che code text' with

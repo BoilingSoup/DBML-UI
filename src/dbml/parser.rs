@@ -3394,7 +3394,14 @@ fn records_block(
             if input.is_empty() || eat(input, ")") {
                 break;
             }
-            // their consume anchors the offending TOKEN (token width)
+            // their consume anchors the offending TOKEN (token width) —
+            // the CURRENT token after the trivia (the newline is trivia:
+            // probe m43_0242/records (c + newline + ode): the anchor =
+            // the next line's `ode` at 5,1-5,4). OPEN: the naive trivia
+            // skip regresses the mid-typing recovery (the records_
+            // partial_input test: `records (a, b\n}` — the later table
+            // must survive); the skip needs the mid-typing `}` and the
+            // `ode) {` continuation distinguished first
             let mut probe = *input;
             let tok_len = consume_one_token(&mut probe).unwrap_or(1);
             errs.push(ParseError {
