@@ -394,8 +394,21 @@ tools below. Never say done when the sweep still finds shapes.
        and the span lost the body) and the corpus_lib tests broke —
        the depth rule's interaction with the nested parse needs the
        close-count design worked through the table parse before the
-       loop lands. REVERTED; the state stays at 1c78dba. The port
-       (round 33): the
+       loop lands. REVERTED; the state stays at 1c78dba. ROUND-36
+       TRACE (the depth rule x the nested parse, the e43 close-count):
+       the naive loop's nested parse consumed the nested `Table good2 {`
+       and the ENCLOSING scan then ran on the post-nested content —
+       the e43's enclosing body saw NOTHING after the nested block, so
+       its own depth rule counted ONE close where theirs counts TWO
+       (the nested good2's close + the Tabl-oops' close, both at the
+       EOF point). THE FIX SHAPE: the child loop's nested parse must
+       run on a SCRATCH (the diagnostics ride) AND the enclosing body's
+       brace-scan must still see the nested block's `{` in its own
+       balance count — i.e. the enclosing scan counts the braces
+       INDEPENDENTLY of what the child loop consumed, so both the
+       nested good2's close (from the nested parse) and the enclosing
+       Tabl-oops' close (from the depth rule, depth = 2 after the
+       nested `{`) fire. The port (round 33): the
        custom-element body's child parse — their element = {type: c,
        name: id, body: the BlockExpression (3,5)-(4,19)} (the block =
        the `{` at 3,5 through the last real token), the inline-field
