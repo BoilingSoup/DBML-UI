@@ -355,6 +355,23 @@ tools below. Never say done when the sweep still finds shapes.
      at the current token (probes c1/c2 PASS; the battery grew to
      e41/e42; seed-43 284→292, seed-77 re-measured below)
    - OPEN (probed, port next):
+     * the newline cluster (m43_0179/0364/0511, probe nl1 = `Table a {
+       id int }` + `  c.id > d.id }` + `Ref { a.id > 'b.id` + `Table b
+       { id int }`): their parse = the top-level custom element `c.id
+       > d.id` swallowing the REF BLOCK, the element node = (2,3)-(4,19)
+       (the last REAL token — the union rule) with the inline-field
+       error (3,5)-(4,19), and the ref block's field string `'b.id`
+       errs 'Invalid newline encountered while parsing' at the partial
+       token (3,14)-(3,19); ours = the element spans to the swallow
+       tail (5,1), no newline error — the port (round 33): the
+       custom-element body's child parse — their element = {type: c,
+       name: id, body: the BlockExpression (3,5)-(4,19)} (the block =
+       the `{` at 3,5 through the last real token), the inline-field
+       error anchors the BODY block, and the ref block's field string
+       errs the newline error — the structure: the body = the child
+       loop (the ref block = a nested element parsed inside), the
+       element span = the union ending at the last real token (4,19),
+       the battery probe = nl1
      * the custom-setting check anchors the value node ?? the name (the
        round-17 finding: probe x1 PASS: `uniEnum e` spans 42..51, the
        `{` junk point excluded); m43_0230/0255 PASS. The custom-setting check anchors
