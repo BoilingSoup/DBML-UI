@@ -289,6 +289,15 @@ tools below. Never say done when the sweep still finds shapes.
      true/false/null, a backtick function, or a 2-3 fragment enum
      reference; the anchor = the value node ?? the name — probes a1-a8
      PASS)
+   - OPEN (round 22, probed q1): the REF field with a swallowed BLOCK
+     arg (`Ref r0: a.name < "missing".Project p {user_id` — the quoted
+     member expr + the `p {user_id` block): their field node spans to
+     the swallowed block's close (2,38..5,2 — the app end = the block's
+     `}` end) and the swallowed block's own close errs at the EOF point
+     (6,1); ours anchors the quoted operand's span only (2,38-2,46) and
+     misses the close — the RParser's application/block-arg spans need
+     the swallow semantics (the block arg extends to its `}` wherever
+     it lands, and the unclosed-block depth rule applies inside)
    - the unclosed-block close errors = ONE PER UNCLOSED DEPTH: their
      blockExpression nesting errs every unclosed block's close consume
      at the EOF token (probe m43_0110/0122: a swallowed custom element
