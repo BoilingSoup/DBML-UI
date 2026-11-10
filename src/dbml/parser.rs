@@ -4909,7 +4909,7 @@ enum RNode {
     App { callee: Box<RNode>, args: Vec<RNode>, start: usize },
     /// `[...]` consumed as an expression — ListExpressionNode
     Array { start: usize, end: usize },
-    Block { start: usize },
+    Block { start: usize, end: usize },
     /// CommaExpressionNode (CSV-like, empty fields = Empty)
     Comma { elems: Vec<RNode>, start: usize },
     /// EmptyNode — invalid operand / leading comma field
@@ -4930,7 +4930,7 @@ impl RNode {
             | RNode::Call { start, .. }
             | RNode::App { start, .. }
             | RNode::Array { start, .. }
-            | RNode::Block { start }
+            | RNode::Block { start, .. }
             | RNode::Comma { start, .. }
             | RNode::Empty { start } => *start,
         }
@@ -5639,8 +5639,8 @@ impl RParser<'_> {
                 RNode::Array { start: t.start, end }
             }
             RTKind::LBrace => {
-                let _ = self.block_expression();
-                RNode::Block { start: t.start }
+                let blk = self.block_expression();
+                blk
             }
             RTKind::LParen => self.tuple_expression(),
             _ => {
@@ -5749,6 +5749,7 @@ impl RParser<'_> {
                 }
             }
         }
+        let end = self.prev().end;
         if depth > 0 {
             // their blockExpression nesting: EVERY unclosed block's close
             // consume errs at the EOF token (the round-21 depth rule)
@@ -5761,7 +5762,7 @@ impl RParser<'_> {
                 });
             }
         }
-        RNode::Block { start }
+        RNode::Block { start, end }
     }
 }
 
