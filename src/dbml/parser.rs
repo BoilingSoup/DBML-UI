@@ -1325,10 +1325,26 @@ fn settings_list_occs(
         }
         after_comma = false;
         let key_start = offset(input, base);
+        // their attribute NAME = an identifier STREAM: the idents with ANY
+        // trivia between them (the spaces AND the newlines — the list's
+        // lexer treats newlines as trivia), stopping at the junk (probe
+        // c1: `[che\ncode text\n}` names the attribute 'che code text'
+        // spanning 2,27..3,12, then the `}` errs 'Expect an identifier')
         let end = input
-            .find(|c: char| !(c.is_alphanumeric() || c == '_' || c == ' ' || c == '\t'))
+            .find(|c: char| {
+                !(c.is_alphanumeric()
+                    || c == '_'
+                    || c == ' '
+                    || c == '\t'
+                    || c == '\n'
+                    || c == '\r')
+            })
             .unwrap_or(input.len());
-        let key = input[..end].trim().to_ascii_lowercase();
+        let key = input[..end]
+            .split_whitespace()
+            .collect::<Vec<&str>>()
+            .join(" ")
+            .to_ascii_lowercase();
         // their attribute-name node = the identifier STREAM (the union of
         // the ident tokens) — the trivia spaces between/after the idents
         // stay out of the span (probe x1: `uniEnum e` spans 42..51, the
@@ -3819,21 +3835,16 @@ fn custom_element(
             // real end is the last REAL attribute's end (the swallow's junk
             // rides in no node)
             Ok((_, occs, closed)) => {
+                // the occ's own end covers the parsed value (the union
+                // rule); the value_span's INIT point (the value position
+                // after the trivia) is not a node
                 if *closed {
                     offset(input, base)
                 } else {
-                    occs.iter()
-                        .map(|o| o.end.max(o.value_span.end))
-                        .max()
-                        .unwrap_or(offset(input, base))
+                    occs.iter().map(|o| o.end).max().unwrap_or(offset(input, base))
                 }
             }
-            Err(f) => f
-                .partial_occs
-                .iter()
-                .map(|o| o.end.max(o.value_span.end))
-                .max()
-                .unwrap_or(f.offset),
+            Err(f) => f.partial_occs.iter().map(|o| o.end).max().unwrap_or(f.offset),
         };
         settings_span = Some(ls..real_end.max(ls));
         ws(input);

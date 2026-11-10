@@ -1,0 +1,4 @@
+Table t {
+  id int [che
+  code text
+}

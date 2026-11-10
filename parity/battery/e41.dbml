@@ -1,0 +1,4 @@
+Table t {
+  id "character varying" [che
+  code text
+}

@@ -104,10 +104,11 @@ tools below. Never say done when the sweep still finds shapes.
   driver resolves `path` from cwd).
 - Corpus gates: 78/78 + 78/78. Focused tests 42/42 + editor 61/61.
 - The user's three desktop files: span-identical, folded into the corpus.
-- The mutation campaign (round 18, seed 43): **284/600 span-identical** —
-  rounds 2-18 landed (the mechanisms below); the enum-reference default
-  RESOLUTION landed (their binder resolves schema → enum → field —
-  probes d1-d5 PASS; the battery grew to e38-e40).
+- The mutation campaign (round 19, seed 43): **292/600 span-identical** —
+  rounds 2-19 landed (the mechanisms below); the identifier-stream
+  attribute-name flow PORTED (the key scan crosses the trivia newlines,
+  the real_end uses the occ's own end — the battery grew to e41-e42;
+  seed 77 re-measures 120/300).
 
 ## Round-2 mechanisms (ported; do not re-derive)
 
@@ -288,12 +289,17 @@ tools below. Never say done when the sweep still finds shapes.
      true/false/null, a backtick function, or a 2-3 fragment enum
      reference; the anchor = the value node ?? the name — probes a1-a8
      PASS)
+   - the identifier-stream attribute-name flow PORTED (round 19): the
+     settings-list key scan crosses the trivia newlines (the idents
+     with any trivia between, the whitespace normalized in the key
+     text), the real_end uses the occ's own end (the value_span's INIT
+     point is not a node), and the `}` junk errs 'Expect an identifier'
+     at the current token (probes c1/c2 PASS; the battery grew to
+     e41/e42; seed-43 284→292, seed-77 re-measured below)
    - OPEN (probed, port next):
-     * the attr-name node = the identifier STREAM: the key span trims
-       the trailing trivia spaces, and a value-less attribute's node is
-       the NAME stream alone (the value never parses when junk follows
-       — probe x1 PASS: `uniEnum e` spans 42..51, the `{` junk point
-       excluded); m43_0230/0255 PASS. The custom-setting check anchors
+     * the custom-setting check anchors the value node ?? the name (the
+       round-17 finding: probe x1 PASS: `uniEnum e` spans 42..51, the
+       `{` junk point excluded); m43_0230/0255 PASS. The custom-setting check anchors
        attr.value ?? attr.name: the VALUE node when it parsed, the name
        stream when it didn't (x1 still PASS). OPEN: m43_0316 — the
        value = a tuple-plus-block application (`defaultrecords (a) {: …`)
