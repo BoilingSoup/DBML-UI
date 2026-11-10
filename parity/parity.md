@@ -421,7 +421,18 @@ tools below. Never say done when the sweep still finds shapes.
        diagnostic interplay — nl1's newline error lost, e43's extra
        close) and the committed loop PANICKED on the battery shapes
        (the snapshot's end applied to the post-child-loop input — the
-       delta-advance fix + the revert = 47fae5c). The port (round 33): the
+       delta-advance fix + the revert = 47fae5c). ROUND-38 PLAN (the
+       fifth attempt's two deltas, from the round-37 traces): (a)
+       e43's extra close — the depth rule counted the snapshot's
+       braces AND the nested parse emitted its own close: the
+       ENCLOSING depth rule must count ONLY the braces OUTSIDE the
+       nested element's consumed span (the nested parse emits the
+       nested close itself); (b) nl1's newline error — the nested ref
+       parse consumed the field string without the newline error: the
+       nested parse's field walk (the ref_stmt's block-form loop)
+       needs the unterminated-string handling the same way the body
+       child loop's junk-line path does (the note_value/sq_string
+       route). The port (round 33): the
        custom-element body's child parse — their element = {type: c,
        name: id, body: the BlockExpression (3,5)-(4,19)} (the block =
        the `{` at 3,5 through the last real token), the inline-field
