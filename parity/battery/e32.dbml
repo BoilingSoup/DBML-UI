@@ -1,0 +1,2 @@
+Table t {
+  x int [default: 'x

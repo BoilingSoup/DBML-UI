@@ -1997,6 +1997,28 @@ fn settings_list_occs(
                                         value_span: vs.clone(),
                                     });
                                     out.push((key, Some(SettingVal::Str(text))));
+                                } else {
+                                    // the operand at EOF (no tokens were
+                                    // gathered — the string token was
+                                    // dropped right at the EOF): their
+                                    // operand() errs 'Unexpected EOF' on
+                                    // the EOF token, and the EmptyNode
+                                    // value reaches the check — the
+                                    // 'default' check fires at that point
+                                    // (probe w1: `[default: 'x` at EOF)
+                                    let eof = offset(input, base);
+                                    errs.push(ParseError {
+                                        offset: eof,
+                                        end: Some(eof),
+                                        message: "Unexpected EOF".to_string(),
+                                    });
+                                    if key == "default" {
+                                        errs.push(ParseError {
+                                            offset: eof,
+                                            end: Some(eof),
+                                            message: "'default' must be an enum value, a string literal, number literal, function expression, true, false or null".to_string(),
+                                        });
+                                    }
                                 }
                                 // their listExpression at EOF: the closing
                                 // bracket consume fails at the EOF point;
