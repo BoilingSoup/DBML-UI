@@ -97,8 +97,8 @@ tools below. Never say done when the sweep still finds shapes.
   driver resolves `path` from cwd).
 - Corpus gates: 78/78 + 78/78. Focused tests 42/42 + editor 61/61.
 - The user's three desktop files: span-identical, folded into the corpus.
-- The mutation campaign (round 8, seed 43): **266/600 span-identical** —
-  rounds 2-8 landed (the mechanisms below).
+- The mutation campaign (round 9, seed 43): **277/600 span-identical** —
+  rounds 2-9 landed (the mechanisms below).
 
 ## Round-2 mechanisms (ported; do not re-derive)
 
@@ -216,6 +216,23 @@ tools below. Never say done when the sweep still finds shapes.
        AFTER the line end (8,1-4) where ours anchors the last token +
        trailing trivia (7,13-8,1) — their consume anchors the CURRENT
        token; ours is in the records-row tuple machinery
+   - their validateColumn: the call-callee's TYPE error fires only when
+     args stay EMPTY (a settings list at args[0] takes the 'Invalid
+     column type' check instead — probe m43_0267 PASS); the enum's
+     post-name check = their discardUntil (the current token's span,
+     the body still parses after the scan — m43_0034/0113 PASS); the
+     nested-dispatch kind = the LEADING KEYWORD, not the recovered item
+     (m43_0108/0357/0406 PASS, both loops)
+   - the table-body `name:` lines = their fieldDeclaration (canBeField:
+     IDENT + COLON): the element {type, bodyColon, body} validated where
+     it stands — the CustomElementValidator context error on the element
+     node; validateBody: the callee must be a quoted string (`'…'` AND
+     `"…"` both count) else the error on the WHOLE body node, and each
+     arg errs PER ARG — the args start after the first operand's INFIX
+     chain (the op tokens bind into the first expression — probe
+     m43_0384: `parent.id >? child.parent_id` = one infix body, no
+     args); both PASS
+   - OPEN (probed, port next):
      * m43_0110/0122/0177 ('Expect a closing brace }' gap),
        m43_0111/0479/0517 ('Unexpected EOF' gap),
        m43_0240/0254/0526 (the 'default' must-be + 'EOF reached while

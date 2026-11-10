@@ -2305,11 +2305,94 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
     // attribute LIST at the type position is the field's arg —
     // 'Invalid column type' at that list (probe c5/c6).
     let ty: String;
+    let mut call_callee = false;
+    let mut call_callee_end = 0usize;
     if input.is_empty() || input.starts_with(['\n', '\r', '}']) {
         binder_errors.push((name_off, name_end, "A column must have a type".to_string()));
         ty = String::new();
     } else if input.starts_with('[') {
         ty = String::new();
+    } else if input.starts_with(':') {
+        // their canBeField: `name:` at the field position = the
+        // fieldDeclaration — the element {type: name, bodyColon, body}
+        // validated where it stands: the CustomElementValidator's context
+        // error on the element node and the value-string check on the
+        // body (a `"…"` quoted ident is NOT a string literal — probe
+        // m43_0021: `id: "character varying" [defaults]` errs the context
+        // + the value error, the column never binds)
+        let _ = eat(input, ":");
+        sp(input);
+        // their isExpressionAQuotedString: both `'…'` and `"…"` count
+        // (probe y1: the `"…"` callee passes, the ARGS err per arg)
+        let sq_value = input.starts_with('\'') || input.starts_with('"');
+        let vs = offset(input, base);
+        let nl = input.find(['\n', '\r']).unwrap_or(input.len());
+        let line = &input[..nl];
+        let line_base = offset(input, base);
+        let mut last = vs;
+        // the token offsets are relative to the CURRENT slice — the
+        // absolute positions accumulate across iterations
+        let mut acc = 0usize;
+        let mut toks: Vec<(usize, usize, String)> = Vec::new();
+        let mut lp = line;
+        loop {
+            let t = lp.trim_start();
+            if t.is_empty() || t.starts_with('#') {
+                break;
+            }
+            let start_in_line = lp.len() - t.len();
+            let tok_end = match token_end_in_line(t) {
+                Some(k) => start_in_line + k,
+                None => break,
+            };
+            acc += tok_end;
+            let tstart = line_base + acc - (tok_end - start_in_line);
+            toks.push((tstart, line_base + acc, t[..tok_end - start_in_line].to_string()));
+            last = line_base + acc;
+            lp = &lp[tok_end..];
+        }
+        let consumed = if nl < input.len() { nl + 1 } else { nl };
+        *input = &input[consumed..];
+        binder_errors.push((
+            name_off,
+            last,
+            "A Custom element can only appear in a Project or a Dep".to_string(),
+        ));
+        // their validateBody: the callee must be a quoted string, else the
+        // error on the WHOLE body node; each arg errs PER ARG. The args
+        // start after the first operand's INFIX chain — the op tokens bind
+        // into the first expression (probe m43_0384: `parent.id >?
+        // child.parent_id` = ONE infix body, no args)
+        let is_op_tok = |t: &str| !t.is_empty() && t.chars().all(|c| is_op_char(c as u8));
+        let mut args_start = 1usize;
+        while args_start < toks.len() && is_op_tok(&toks[args_start].2) {
+            args_start += 2;
+        }
+        if !sq_value {
+            if let Some(&(cs, ce, _)) = toks.first() {
+                binder_errors.push((cs, ce.max(last), "A Custom element value can only be a string".to_string()));
+            }
+        }
+        if toks.len() > args_start {
+            for &(as_, ae, _) in &toks[args_start..] {
+                binder_errors.push((
+                    as_,
+                    ae,
+                    "A Custom element value can only be a string".to_string(),
+                ));
+            }
+        }
+        ty = String::new();
+        return Ok(Column {
+            name,
+            name_span: name_off..name_end,
+            ty,
+            ty_end: vs,
+            full_end: last,
+            span: start..offset(input, base),
+            binder_errors,
+            settings: Default::default(),
+        });
     } else if input.starts_with('(') {
         // the paren binds to the CALLEE as its argument list (their call
         // expression — the same-line rule): the field = {callee: name(…),
@@ -2331,7 +2414,14 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
         }
         *input = &input[end..];
         let p_end = offset(input, base);
-        binder_errors.push((name_off, p_end, "A column must have a type".to_string()));
+        call_callee_end = p_end;
+        // the NAME error always fires (the callee isn't a variable); the
+        // TYPE error fires only when args stay EMPTY (their
+        // validateColumn: args.length === 0) — a settings list after the
+        // call is args[0] and takes the 'Invalid column type' check
+        // instead (probe m43_0267: `decimal(10, 2) [note: 'n']` errs the
+        // name + the invalid-type, no type error)
+        call_callee = true;
         binder_errors.push((
             name_off,
             p_end,
@@ -2494,6 +2584,17 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
         // remains = args[1..] — everything after the type (a type-position
         // list IS args[0])
         let remains: &[(Item, Span)] = if ty_is_list { &items[1..] } else { &items[..] };
+        if call_callee && remains.is_empty() && !ty_is_list {
+            // (ty_is_list means a settings list sits at args[0]: the args
+            // are non-empty and the type error does not fire)
+            // the args-empty branch of their validateColumn: the type
+            // error anchors the CALLEE node (the call expression)
+            binder_errors.push((
+                name_off,
+                call_callee_end,
+                "A column must have a type".to_string(),
+            ));
+        }
         if !remains.is_empty() {
             let head_ok = remains[..remains.len() - 1]
                 .iter()
@@ -4078,13 +4179,20 @@ fn table(
             );
             match item {
                 Ok(it) => {
-                    let msg = match it {
-                        Item::Tbl(_) => "Table must appear top-level",
-                        Item::Ref(_) => "A Ref must appear top-level",
-                        Item::Enm(_) => "An Enum can only appear top-level",
-                        Item::Grp(_) => "TableGroup must appear top-level",
-                        Item::Prj(_) => "A Project can only appear top-level",
-                        _ => "Table must appear top-level",
+                    // their element kind = the TYPE keyword that triggered
+                    // the parse, not the recovered item (a trailing-dot
+                    // `Ref: a.b - c.` still recovers as a REF — probe
+                    // m43_0108)
+                    let msg = if peek_kw(&orig, "Ref") {
+                        "A Ref must appear top-level"
+                    } else if peek_kw(&orig, "Enum") {
+                        "An Enum can only appear top-level"
+                    } else if peek_kw(&orig, "TableGroup") {
+                        "TableGroup must appear top-level"
+                    } else if peek_kw(&orig, "Project") {
+                        "A Project can only appear top-level"
+                    } else {
+                        "Table must appear top-level"
                     };
                     // the element node = the keyword .. the last REAL token
                     // (the union rule — an unclosed block's swallow tail
@@ -6229,9 +6337,44 @@ fn enum_def(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Enum
     };
     let name_end = offset(input, base);
     ws(input);
-    if !eat(input, "{") {
-        return fail(offset(input, base), "expected '{' after enum name");
+    // their discardUntil('{'/':') after the name: the CURRENT token's
+    // full span errs and is dropped, then the scan continues to `{` (the
+    // body still parses — probe m43_0034: `Enum e_statu\ns {` errs at
+    // the `s` token, the body follows)
+    if !input.is_empty() && !peek_is(input, "{") {
+        let mut probe = *input;
+        let tok_len = consume_one_token(&mut probe).unwrap_or(1);
+        let jstart = offset(input, base);
+        errs.push(ParseError {
+            offset: jstart,
+            end: Some(jstart + tok_len),
+            message: "Expect an opening brace '{' or a colon ':'".to_string(),
+        });
+        loop {
+            if input.is_empty() || peek_is(input, "{") {
+                break;
+            }
+            if consume_one_token(input).is_none() {
+                break;
+            }
+        }
     }
+    if input.is_empty() {
+        let eof = offset(input, base);
+        errs.push(ParseError {
+            offset: eof,
+            end: Some(eof),
+            message: "Expect an opening brace '{' or a colon ':'".to_string(),
+        });
+        return Ok(Enum {
+            name: String::new(),
+            schema: None,
+            span: start..eof,
+            name_span: name_off..name_end,
+            values: Vec::new(),
+        });
+    }
+    let _ = eat(input, "{");
     let mut e = Enum {
         name,
         schema,
@@ -6637,13 +6780,17 @@ fn project(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Proje
                     // node; a closed one ends at its `}`)
                     let region = &orig[..(consumed_end - nested_start).min(orig.len())];
                     let elem_end = last_real_token_end(region, nested_start);
-                    let msg = match it {
-                        Item::Tbl(_) => "Table must appear top-level",
-                        Item::Ref(_) => "A Ref must appear top-level",
-                        Item::Enm(_) => "An Enum can only appear top-level",
-                        Item::Grp(_) => "TableGroup must appear top-level",
-                        Item::Prj(_) => "A Project can only appear top-level",
-                        _ => "Table must appear top-level",
+                    // the same keyword-kind rule as the table dispatch
+                    let msg = if peek_kw(&orig, "Ref") {
+                        "A Ref must appear top-level"
+                    } else if peek_kw(&orig, "Enum") {
+                        "An Enum can only appear top-level"
+                    } else if peek_kw(&orig, "TableGroup") {
+                        "TableGroup must appear top-level"
+                    } else if peek_kw(&orig, "Project") {
+                        "A Project can only appear top-level"
+                    } else {
+                        "Table must appear top-level"
                     };
                     p.binder_errors.push((nested_start, elem_end, msg.to_string()));
                     // the nested Enum adds EMPTY_ENUM on an element-less block
