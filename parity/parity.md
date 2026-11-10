@@ -311,11 +311,13 @@ tools below. Never say done when the sweep still finds shapes.
      their AST: {callee: the infix a.name < "missing".Project, args:
      [p, the Block]}); our arg errors now = TWO: (2,36..2,37) MATCHES
      and (2,38..2,46) vs theirs (2,38..5,2) — the REMAINING delta = the
-     block arg's error end: ours = the LINE-clamped block end (46),
-     theirs = the TRUE EOF (5,2) — the fix: the block_expression's end
-     must reach the balanced `}` or the true EOF within the extended
-     stream (the round-26 extension built the tokens; the arg span
-     still clamps — trace the arg_spans' end at the block's exit).
+     block arg's error end. ROUND-30: the ref_tokens multi-line mode
+     LANDED (ref_tokens_ml: the newlines are trivia when the stream
+     spans the file — the round-26 extension now actually crosses the
+     lines) and the swallowed block's close now errs at the TRUE EOF
+     (6,1) MATCHING theirs; the last delta = the block arg's error end
+     still reads 46 — the remaining trace: the arg span's end at the
+     block's exit (the prev().end vs the toks' last token).
      ROUND-24 TRACE: the ref-fields
      loop already chains the lines into one stream — the chain breaks at
      `if !dropped || input.is_empty()` (the clean line end stops the

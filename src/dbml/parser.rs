@@ -4991,6 +4991,20 @@ fn ref_tokens(
     sentinel: Option<u8>,
     errs: &mut Vec<ParseError>,
 ) -> (Vec<RTok>, bool) {
+    ref_tokens_ml(body, base, sentinel, errs, false)
+}
+
+/// The multi-line variant: the newlines are TRIVIA (their lexer — the
+/// tokens cross the lines; probe q1's swallowed block arg). `multi_line`
+/// = false keeps the historical line-clamped behavior.
+#[allow(clippy::too_many_arguments)]
+fn ref_tokens_ml(
+    body: &str,
+    base: usize,
+    sentinel: Option<u8>,
+    errs: &mut Vec<ParseError>,
+    multi_line: bool,
+) -> (Vec<RTok>, bool) {
     let b = body.as_bytes();
     let mut toks = Vec::new();
     let mut i = 0usize;
@@ -5008,7 +5022,13 @@ fn ref_tokens(
                 i += 1;
                 continue;
             }
-            b'\n' => break,
+            b'\n' => {
+                if multi_line {
+                    i += 1;
+                    continue;
+                }
+                break;
+            }
             // their token values carry the literal text — the
             // INVALID_OPERAND message quotes it (Invalid start of operand
             // "}" / ";" / ...)
@@ -5750,6 +5770,7 @@ impl RParser<'_> {
             }
         }
         let end = self.prev().end;
+        eprintln!("DBG blk depth={} end={} peek={:?} at_end={} toks={}", depth, end, self.peek().kind, self.at_end(), self.toks.len());
         if depth > 0 {
             // their blockExpression nesting: EVERY unclosed block's close
             // consume errs at the EOF token (the round-21 depth rule)
