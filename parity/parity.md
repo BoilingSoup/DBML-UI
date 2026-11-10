@@ -88,7 +88,14 @@ tools below. Never say done when the sweep still finds shapes.
 - The program-level junk: 'Expect an identifier' on the junk token
   (+ 'Unexpected EOF' at EOF), the sync advances ONE token.
 
-## State (as of the campaign round 2)
+## State (as of the campaign round 18)
+
+- The fresh-seed rounds: seed 77 (300 cases) measures 114/300 — the
+  fresh seeds keep finding new shapes; the convergence = the standing
+  iteration with the tools below (mutate.py N SEED writes to /tmp/mut,
+  the driver cases.json = the {name, path} array).
+
+## Historical state (round 2)
 
 - Grammar-shaped fuzz corpus (parity/fuzz, 300 cases): **300/300
   span-identical**.
