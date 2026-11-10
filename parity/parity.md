@@ -380,7 +380,12 @@ tools below. Never say done when the sweep still finds shapes.
        end when it parsed, else the last junk-free token); (3) the
        body child loop must run ONLY for the shapes their parser
        treats as block children — the clean single-application bodies
-       (e42, the corpus) keep the existing path. The port (round 33): the
+       (e42, the corpus) keep the existing path. IMPLEMENTATION NOTES
+       (the gate): the child loop fires when the body's first content
+       line after the `{` starts a KEYWORD element (the Ref/Table/
+       Enum/... dispatch — probe nl1's `Ref {` line) — the gate keeps
+       the clean single-application bodies on the existing path. The
+       port (round 33): the
        custom-element body's child parse — their element = {type: c,
        name: id, body: the BlockExpression (3,5)-(4,19)} (the block =
        the `{` at 3,5 through the last real token), the inline-field
