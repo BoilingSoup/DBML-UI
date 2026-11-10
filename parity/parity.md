@@ -97,8 +97,8 @@ tools below. Never say done when the sweep still finds shapes.
   driver resolves `path` from cwd).
 - Corpus gates: 78/78 + 78/78. Focused tests 42/42 + editor 61/61.
 - The user's three desktop files: span-identical, folded into the corpus.
-- The mutation campaign (round 15, seed 43): **280/600 span-identical** —
-  rounds 2-15 landed (the mechanisms below). OPEN: the enum-reference
+- The mutation campaign (round 16, seed 43): **284/600 span-identical** —
+  rounds 2-16 landed (the mechanisms below). OPEN: the enum-reference
   default BINDS in their binder and resolves (`[default:
   schema.enum.val]` errs 'Schema schema does not exist' at the value —
   probe a6) — our check passes validity but the enum-ref resolution is
@@ -246,13 +246,13 @@ tools below. Never say done when the sweep still finds shapes.
        'default' check at the EOF point — probe w1 PASS; the remaining
        delta needs the full default-validity check — their list:
        enum/string/number/function/true/false/null); m43_0254/0526
-       (the TRUNCATED BACKTICK variant stays OPEN with the finding: the
-       route reaches the plain arm and the backtick fail fires ('EOF
-       reached while parsing' on [backtick..EOF)), but the downstream
-       swallow-gather treats the backtick run as junk ('Invalid start
-       of operand "`now("') and the cascade lands at the wrong offsets —
-       the gather's Func-token operand semantics need porting first;
-       b2 (the closed backtick) passes via the verbatim arm),
+       (the TRUNCATED BACKTICK PORTED: the backtick fail consumes the
+       partial token and errs 'EOF reached while parsing' on
+       [backtick..the input end) — their lexer DROPS the token — then
+       the round-13 operand-EOF + checkDefault cascade fires at the true
+       EOF (probes b1/b3 PASS: five errors each, span-identical; b3's
+       scan crosses newlines); b2 (the closed backtick) passes via the
+       verbatim arm),
        (the TRUNCATED BACKTICK default at EOF: their FUNCTION token
        scan errs 'EOF reached while parsing' on the partial token +
        the operand EOF + the default check — our default arm's
@@ -295,8 +295,12 @@ tools below. Never say done when the sweep still finds shapes.
        our value() leaves empty (no tuple arm at the settings-value
        position); m43_0240/0254/0526 (the default cascade: the string
        token's 'EOF reached while parsing' does not surface);
-       m43_0308 ('Expect an identifier' anchored at a LATER token — the
-       sync advanced differently)
+       m43_0308 (the 'Expect an identifier' anchor: line 2's settings
+       `[che` swallows line 3; their ident-stream junk error anchors the
+       QUOTED token on line 3 (`"odd col"` = 3,3-3,12) while ours
+       anchors the line-2 column name (2,3-2,7) — the post-attr tail's
+       offset sits before the ws crossing; the tail must anchor the
+       CURRENT token AFTER the trivia ws)
      * the remaining ~340 spread across small clusters — keep
        clustering from the round dump (the compare tool:
        /tmp/cluster2.py pattern — ours in 6 batch files, theirs in

@@ -503,7 +503,15 @@ fn value(input: &mut &str, base: usize) -> R<String> {
             end += 1;
         }
         if !closed {
-            return fail(offset(input, base), "unterminated backtick expression");
+            // their FUNCTION token scan at EOF: 'EOF reached while
+            // parsing' on the partial token [backtick..the input end) and
+            // the token is DROPPED (the gather continues at the EOF —
+            // probe b1: `[default: `now(` anchors 19..24 then the operand
+            // EOF at 24; probe b3: the scan crosses newlines)
+            let bt_start = offset(input, base);
+            let bt_end = bt_start + input.len();
+            *input = &input[input.len()..];
+            return fail_with_end(bt_start, bt_end, "EOF reached while parsing");
         }
         let v = input[1..end].to_string();
         *input = &input[end + 1..];
@@ -871,6 +879,13 @@ enum SwallowEnd {
 /// token and DROPS it — the diagnostics then ride the plain-value arm's
 /// broken-string flow, so route there instead of scanning verbatim.
 fn default_string_is_broken(input: &str) -> bool {
+    if input.starts_with('`') {
+        // their FUNCTION token scan looks for the closing backtick across
+        // newlines; at EOF without one the token drops with 'EOF reached
+        // while parsing' and the operand-EOF cascade follows — route to
+        // the broken-value flow (probes b1/b3)
+        return !input[1..].contains('`');
+    }
     if !input.starts_with('\'') {
         // only a `'`-led value is a string token; other bare tokens keep
         // their verbatim arm
