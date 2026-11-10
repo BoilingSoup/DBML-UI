@@ -5770,7 +5770,6 @@ impl RParser<'_> {
             }
         }
         let end = self.prev().end;
-        eprintln!("DBG blk depth={} end={} peek={:?} at_end={} toks={}", depth, end, self.peek().kind, self.at_end(), self.toks.len());
         if depth > 0 {
             // their blockExpression nesting: EVERY unclosed block's close
             // consume errs at the EOF token (the round-21 depth rule)
@@ -6280,7 +6279,7 @@ fn ref_body_pipeline_mode(
     let open_braces = toks.iter().filter(|t| t.kind == RTKind::LBrace).count()
         - toks.iter().filter(|t| t.kind == RTKind::RBrace).count();
     if open_braces > 0 {
-        let (t2, _) = ref_tokens(input, base, None, errs);
+        let (t2, _) = ref_tokens_ml(input, base, None, errs, true);
         toks = t2;
     }
     let mut lex_errs: Vec<ParseError> = Vec::new();

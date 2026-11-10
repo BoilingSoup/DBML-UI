@@ -1,0 +1,5 @@
+Table a { name int }
+Ref r0: a.name < "missing".Project p {user_id
+Enum e_status {
+  open
+}

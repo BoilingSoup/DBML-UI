@@ -104,7 +104,7 @@ tools below. Never say done when the sweep still finds shapes.
   driver resolves `path` from cwd).
 - Corpus gates: 78/78 + 78/78. Focused tests 42/42 + editor 61/61.
 - The user's three desktop files: span-identical, folded into the corpus.
-- The mutation campaign (round 21, seed 43): **294/600 span-identical** —
+- The mutation campaign (round 31, seed 43): **295/600 span-identical** —
   rounds 2-19 landed (the mechanisms below); the identifier-stream
   attribute-name flow PORTED (the key scan crosses the trivia newlines,
   the real_end uses the occ's own end — the battery grew to e41-e42;
@@ -316,8 +316,13 @@ tools below. Never say done when the sweep still finds shapes.
      spans the file — the round-26 extension now actually crosses the
      lines) and the swallowed block's close now errs at the TRUE EOF
      (6,1) MATCHING theirs; the last delta = the block arg's error end
-     still reads 46 — the remaining trace: the arg span's end at the
-     block's exit (the prev().end vs the toks' last token).
+     still reads 46 — ROUND-31 RESOLVED: the round-30 ref_tokens_ml
+     wiring landed at the ACTUAL extension site (the round-30 edit
+     patched the wrapper but the extension still called the
+     line-clamped ref_tokens), and the block arg's error end now
+     reaches the block's `}` end — probe q1 PASSES FULLY (the field
+     error 2,38..5,2 + the close 6,1; q2 PASS); the battery grew to
+     e45 (83 probes).
      ROUND-24 TRACE: the ref-fields
      loop already chains the lines into one stream — the chain breaks at
      `if !dropped || input.is_empty()` (the clean line end stops the
