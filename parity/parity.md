@@ -97,8 +97,8 @@ tools below. Never say done when the sweep still finds shapes.
   driver resolves `path` from cwd).
 - Corpus gates: 78/78 + 78/78. Focused tests 42/42 + editor 61/61.
 - The user's three desktop files: span-identical, folded into the corpus.
-- The mutation campaign (round 10, seed 43): **278/600 span-identical** —
-  rounds 2-9 landed (the mechanisms below).
+- The mutation campaign (round 11, seed 43): **279/600 span-identical** —
+  rounds 2-10 landed (the mechanisms below).
 
 ## Round-2 mechanisms (ported; do not re-derive)
 
@@ -234,10 +234,12 @@ tools below. Never say done when the sweep still finds shapes.
      args); both PASS
    - OPEN (probed, port next):
      * m43_0110/0122/0177 ('Expect a closing brace }' gap),
-       m43_0111/0479/0517 ('Unexpected EOF' gap),
+       m43_0111/0479/0517 (the 'Unexpected EOF' gap PORTED: EOF at a
+       colon-led value errs their operand 'Unexpected EOF' at the EOF
+       point, attr.value undefined — probes z1/z2 PASS),
        m43_0240/0254/0526 (the 'default' must-be + 'EOF reached while
-       parsing' cascade), m43_0108/0357/0406 ('A Ref must appear
-       top-level' vs our 'Table must appear top-level' — the nested
+       parsing' cascade), m43_0108/0357/0406 (PORTED — the nested dispatch
+       maps the kind by the leading keyword),
        keyword dispatch's kind detection), m43_0179/0364/0511 ('Invalid
        newline encountered while parsing' gaps), m43_0223/0379/0534
        (the top-level sticky note: the close error PORTED — the invented

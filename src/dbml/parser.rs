@@ -1406,6 +1406,21 @@ fn settings_list_occs(
             // a newline between `:` and the value is trivia too
             ws(input);
             sp(input);
+            // EOF at the value position: their operand() errs
+            // 'Unexpected EOF' on the EOF token (a zero-width point at
+            // the source end) and the EmptyNode value never reaches the
+            // check — attr.value stays undefined, the node = the name
+            // stream alone (probe z1/z2: `[ref:` at EOF)
+            if input.is_empty() {
+                let eof = offset(input, base);
+                errs.push(ParseError {
+                    offset: eof,
+                    end: Some(eof),
+                    message: "Unexpected EOF".to_string(),
+                });
+                value_attempted = false;
+                out.push((key.clone(), None));
+            } else
             // a `}` at the value position: their operand() logs
             // INVALID_OPERAND (non-throwing) and returns an EmptyNode,
             // which leftExpression_bp then throws — inside a block the
