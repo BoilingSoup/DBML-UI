@@ -297,8 +297,15 @@ tools below. Never say done when the sweep still finds shapes.
      (2,38..5,2 — the app end = the block's `}` end) where ours anchors
      the quoted operand's span (2,38-2,46). REMAINING: the ref's
      application tokens must span to the file end for the unclosed
-     block args (the line-clamped stream is the blocker), then the
-     field node carries the block's end. ROUND-24 TRACE: the ref-fields
+     block args (the line-clamped stream is the blocker — RESOLVED in
+     rounds 24-26: the chain condition landed in the ref-fields loop
+     and the standalone ref's line chain, and the inline form's
+     file-end span landed in ref_body_pipeline_mode (the unclosed-`{`
+     value extends the stream past the line to the file end) — the
+     swallowed block's close now errs at the TRUE EOF, probe q1 PASS
+     on the close). REMAINING: the field-node span — their field error
+     anchors the application node (2,38..5,2, the block's `}` end)
+     where ours anchors the arg span (2,38-2,46). ROUND-24 TRACE: the ref-fields
      loop already chains the lines into one stream — the chain breaks at
      `if !dropped || input.is_empty()` (the clean line end stops the
      chain); the unclosed-`{` line must chain the following lines the

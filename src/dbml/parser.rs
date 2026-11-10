@@ -6250,6 +6250,16 @@ fn ref_body_pipeline_mode(
         None
     };
     let (mut toks, _tail_dropped) = ref_tokens(body, base, sentinel, errs);
+    // their blockExpression sees the WHOLE file for the unclosed block
+    // args: an unclosed-`{` value extends the stream past the line to
+    // the file end (probe q1: `Ref r0: ... p {user_id` + the following
+    // Enum lines — the swallowed block's close errs at the TRUE EOF)
+    let open_braces = toks.iter().filter(|t| t.kind == RTKind::LBrace).count()
+        - toks.iter().filter(|t| t.kind == RTKind::RBrace).count();
+    if open_braces > 0 {
+        let (t2, _) = ref_tokens(input, base, None, errs);
+        toks = t2;
+    }
     let mut lex_errs: Vec<ParseError> = Vec::new();
     toks = gather_invalid_num(toks, &mut lex_errs);
     errs.append(&mut lex_errs);
