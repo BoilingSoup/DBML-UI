@@ -388,7 +388,14 @@ tools below. Never say done when the sweep still finds shapes.
        round-33 child-loop code is RECOVERABLE from the history
        (1215953; the patch extracted to /tmp/round33_child_loop.patch)
        — the round-35 implementation = the resurrected loop + the
-       three-part design on top. The port (round 33): the
+       three-part design on top. ROUND-35 ATTEMPT: the resurrect +
+       the gate verified e42/e44 but the e43 span shifted the OTHER
+       way ((5,1)-(5,12) — the nested parse consumed the nested block
+       and the span lost the body) and the corpus_lib tests broke —
+       the depth rule's interaction with the nested parse needs the
+       close-count design worked through the table parse before the
+       loop lands. REVERTED; the state stays at 1c78dba. The port
+       (round 33): the
        custom-element body's child parse — their element = {type: c,
        name: id, body: the BlockExpression (3,5)-(4,19)} (the block =
        the `{` at 3,5 through the last real token), the inline-field
