@@ -3954,8 +3954,10 @@ fn sticky_note(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<S
     };
     ws(input);
     if !eat(input, "}") {
-        // recover to the line end so the top loop can resync
-        errs.push(err_at(offset(input, base), "expected '}' after note body"));
+        // their blockExpression's close consume errs at the EOF token /
+        // the current token — the same message as every block close
+        // (probe m43_0223)
+        errs.push(err_at(offset(input, base), "Expect a closing brace '}'"));
         skip_line(input);
     }
     Ok(StickyNote {

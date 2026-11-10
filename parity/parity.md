@@ -97,7 +97,7 @@ tools below. Never say done when the sweep still finds shapes.
   driver resolves `path` from cwd).
 - Corpus gates: 78/78 + 78/78. Focused tests 42/42 + editor 61/61.
 - The user's three desktop files: span-identical, folded into the corpus.
-- The mutation campaign (round 9, seed 43): **277/600 span-identical** —
+- The mutation campaign (round 10, seed 43): **278/600 span-identical** —
   rounds 2-9 landed (the mechanisms below).
 
 ## Round-2 mechanisms (ported; do not re-derive)
@@ -240,8 +240,11 @@ tools below. Never say done when the sweep still finds shapes.
        top-level' vs our 'Table must appear top-level' — the nested
        keyword dispatch's kind detection), m43_0179/0364/0511 ('Invalid
        newline encountered while parsing' gaps), m43_0223/0379/0534
-       (the top-level Note body: 'A Note must have a content' + their
-       close error vs our "expected '}' after note body"),
+       (the top-level sticky note: the close error PORTED — the invented
+       "expected '}' after note body" replaced by their 'Expect a
+       closing brace '}'; the remaining gap = 'A Note must have a
+       content' on the element node (type .. the `{`, the last-real-token
+       rule) when the triple-quoted content is broken),
        m43_0267/0480/0553 (our EXTRA 'A column must have a type'),
        m43_0015/0201 ('Expect an identifier' gap), and 12 pure-span
        cases (the endpoint-fragment column span m43_0193, the
