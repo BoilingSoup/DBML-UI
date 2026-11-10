@@ -166,14 +166,33 @@ tools below. Never say done when the sweep still finds shapes.
    - the table-loop's nested-element context error anchors the element
      node = the keyword .. the last REAL token (last_real_token_end on
      the captured region — the same rule as the project loop).
-   - OPEN: the column junk cascade — a swallowed settings list at EOF
-     is followed by TWO binder errors at the EOF point ('A column must
-     have a type' + 'A column name must be an identifier or a quoted
-     identifier') — their field parse runs a NEXT field at EOF whose
-     name = the EmptyNode point (probe m43_0096/0082: line 9's
-     `"odd col" e_status [` swallows to EOF; both errors at (9,27) =
-     the EOF point; ours emits the invented 'expected column type'
-     instead and misses both).
+   - the member-expression dot binds ACROSS spaces in the type
+     (`user . x` = one member node — probe t_dot: ZERO diagnostics);
+     type_str's dot chain sp-binds but restores the un-spaced input on
+     a failed dot so the glued `int[2]` array rule still holds
+   - `Enum` at EOF: the name = the operand at EOF — 'Unexpected EOF' +
+     the brace error + 'An Enum name must be of the form <enum> or
+     <schema>.<enum>' ALL at the EOF point, no body (probe t_enumhdr)
+   - OPEN (probed shapes in /tmp/probe6, port these next):
+     * t_default: an unterminated string in a `default:` value errs
+       'Invalid newline encountered while parsing' on the partial
+       string token, the token DROPS, the gather continues, and the
+       `}` at the value position errs 'Invalid start of operand "}"'
+       and dispatches to the block (the default arm needs the note
+       arm's broken-string machinery)
+     * t_note: `Note {` in a table body converts to a nested Note
+       element — 'A Note must have a content' on the element node +
+       the string's newline error (ours routes it to the column parse
+       and errs 'expected column type')
+     * t_indexes: the indexes-block tail (m43_0216/0402/0484: ours
+       'unterminated indexes block' vs their close error) — probe the
+       mutation shape, not the minimal (the minimal showed theirs
+       SILENT at EOF — re-probe m43_0216 directly)
+     * the column junk cascade at EOF (m43_0096/0082 — recorded above)
+     * m43_0242: 'Expect a comma' anchors the token AFTER the line end
+       (8,1-4) where ours anchors the last token + trailing trivia
+       (7,13-8,1) — their consume anchors the CURRENT token, ours
+       spans across the newline
 2. **Quick-fix EDIT-range parity**: their quickFixes carry edits
    [{start, end, newText}] in UTF-16 offsets; our QuickFix has no ranges
    and the dump emits only the joined text. Add the edit ranges to our

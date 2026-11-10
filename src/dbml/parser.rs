@@ -418,11 +418,18 @@ fn type_str(input: &mut &str, base: usize) -> R<String> {
         if out.is_empty() {
             return fail(offset(input, base), "expected column type");
         }
-        if eat(input, ".") {
-            out.push('.');
-        } else {
+        // their member-expression dot binds ACROSS spaces (`user . x` is
+        // one member node — probe t_dot: zero diagnostics) — but a failed
+        // dot must restore the un-spaced input so the glued `int[2]`
+        // array-suffix rule (probe-verified) still sees the bracket
+        let save = *input;
+        sp(input);
+        if !eat(input, ".") {
+            *input = save;
             break;
         }
+        out.push('.');
+        sp(input);
     }
     // parenthesized args ride the word, spaces inside them intact —
     // `decimal (10, 2)` keeps the gap, `varchar(255)` does not grow one
@@ -5920,7 +5927,32 @@ fn enum_def(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Enum
     }
     ws(input);
     let name_off = offset(input, base);
-    let (schema, name) = qualified_name(input, base)?;
+    let (schema, name) = match qualified_name(input, base) {
+        Ok(x) => x,
+        // `Enum` at EOF: their name = the normalExpression at EOF —
+        // 'Unexpected EOF' on the EOF token, the EmptyNode name rides the
+        // EOF point, discardUntil's brace error fires at the same point,
+        // and the EnumValidator's name-form error anchors the EmptyNode
+        // (probe t_enumhdr: three errors at the EOF point, no body)
+        Err(_) if input.is_empty() => {
+            let eof = offset(input, base);
+            errs.push(err_at(eof, "Unexpected EOF"));
+            errs.push(err_at(eof, "Expect an opening brace '{' or a colon ':'"));
+            errs.push(ParseError {
+                offset: eof,
+                end: Some(eof),
+                message: "An Enum name must be of the form <enum> or <schema>.<enum>".to_string(),
+            });
+            return Ok(Enum {
+                name: String::new(),
+                schema: None,
+                span: start..eof,
+                name_span: eof..eof,
+                values: Vec::new(),
+            });
+        }
+        Err(e) => return Err(e),
+    };
     let name_end = offset(input, base);
     ws(input);
     if !eat(input, "{") {
