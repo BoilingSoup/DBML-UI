@@ -1,0 +1,2 @@
+Table t {
+  a int [pk, not null

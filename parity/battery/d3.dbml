@@ -1,0 +1,4 @@
+Table t {
+  a int [note: 'x
+  y: z
+}

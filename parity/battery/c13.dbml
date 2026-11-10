@@ -1,0 +1,3 @@
+Table a { id int }
+Table b { id varchar [pk] }
+Ref: a.id > b.id

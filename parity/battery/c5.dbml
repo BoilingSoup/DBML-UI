@@ -1,0 +1,7 @@
+Ref {
+  a > 'b
+  c > d
+}
+Table a { id int }
+Table c { id int }
+Table d { id int }

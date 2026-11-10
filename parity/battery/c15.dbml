@@ -1,0 +1,5 @@
+TableGroup g {
+  Note: 'x
+  a
+}
+Table a { id int }

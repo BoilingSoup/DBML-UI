@@ -1,0 +1,5 @@
+Table t {
+  a int [note: 'x
+  b varchar, c int
+]
+}

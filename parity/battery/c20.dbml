@@ -1,0 +1,6 @@
+Table t {
+  a int [ref: > 'b.c
+]
+  b int
+}
+Table b { id int }

@@ -1,0 +1,3 @@
+Ref { a.id > b.id }
+Table a { id int }
+Table b { id int }

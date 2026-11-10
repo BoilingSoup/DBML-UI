@@ -1,0 +1,5 @@
+Note mynote {
+  'unclosed
+  more text
+}
+Table t { a int }

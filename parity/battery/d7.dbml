@@ -1,0 +1,12 @@
+Table good1 {
+  id integer [pk]
+}
+
+Tabl oops {
+
+Table good2 {
+  id integer [pk]
+  !!!broken
+  name varchar
+}
+}

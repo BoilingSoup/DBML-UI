@@ -1,0 +1,9 @@
+Table t {
+  a int
+  b varchar
+  records (a, b) {
+    1, 2
+    3, 'ok
+    4, 'fine'
+  }
+}

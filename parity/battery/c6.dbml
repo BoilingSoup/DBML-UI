@@ -1,0 +1,8 @@
+Ref myref {
+  a > b
+  c > d
+}
+Table a { id int }
+Table b { id int }
+Table c { id int }
+Table d { id int }

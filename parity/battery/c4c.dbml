@@ -1,0 +1,3 @@
+Table t {
+  a int [note: 'unclosed
+  b varchar

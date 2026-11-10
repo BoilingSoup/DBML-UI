@@ -1,0 +1,6 @@
+Enum e {
+  v [note: 'x
+  w]
+  z
+}
+Table t { a int }

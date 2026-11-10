@@ -1,0 +1,8 @@
+Table t {
+  id int
+  records (id) {
+    1, ;junk
+    2, 'ok
+    3, 'fine'
+  }
+}
