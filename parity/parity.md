@@ -1544,8 +1544,72 @@ THE SEEDS: **seed-77 = 150/300 (+3), seed-43 = 321/600 (+5)** (the
 dumps /tmp/mut-ours-r97.json + /tmp/m43-ours-r97.json, the lists
 /tmp/mut-div-r97.json + /tmp/m43-div-r97.json).
 
-## Round 98 queue
+## Round 98 addendum — THE BODY-BRACKET RECOVERY (probed, the design)
 
+THE CLUSTER: 'Invalid newline encountered while parsing' = the top
+missing-piece signature (16 seed-77 + 21 seed-43). THE CLEAN PROBE =
+m77_0005 (5 lines: `Table` / `a int [note: 'x` / `, , ]` / `b varchar`
+/ `}`) — ours = ONE diagnostic (the brace error @ `int` 2,5-8, shared);
+theirs = SEVEN (ours' one + the six). THE DBML_TRACE ORDER (the byte
+offsets): the lexer's newline CE first ([21,23) = the partial `'x`
+string token), then the parse CEs in the parse order (the brace @
+[10,13) = `int` — the SAME anchor ours already emits), then the
+list's 'Expect an identifier' @ [30,31) = the `]`, then the `}`-line's
+brace error @ [44,45), THEN the VALIDATOR trio (code 3008/3063/3001):
+"A Table's body must be a block" @ [20,29) node=FunctionApplicationNode
+(the bracket span), the custom-element placement @ [34,43), the
+'shouldn't have a name' @ [36,43) — plus an 8th CE the wire dump
+DROPS: "A custom field shouldn't have a name" @ [36,43) (dedupe).
+
+THE RECOVERY MODEL (the nb probe series):
+- The header parse: `Table` + the NAME crosses the newline (the name =
+  `a`) + the discardUntil drops `int` ('Expect an opening brace' @
+  `int` — ours already ✓) + the BODY = the next EXPRESSION = the
+  BRACKET `[note: 'x , , ]` parsed as the application node.
+- nb7 `Table / a int [x, y] / }` (the CLEAN bracket): theirs = ONE
+  error (the brace @ int) — the bracket silently consumed as the
+  header-ish settings, NO body-block error.
+- nb5 (the clean bracket + the `b varchar` line after): ONE error —
+  same; the following line = no custom-element error?! (vs m77_0005's
+  line 4 = the custom element — the broken-string damage CHANGES the
+  downstream walk).
+- nb6 `Table / a int [note: 'x] / }` (the broken note, the `]` inside
+  the broken string): FOUR — the newline CE @ the newline token, the
+  brace @ int, 'Invalid start of operand "}"' @ the `}` line, "A
+  Table's body must be a block" @ a POINT [3,2)-(3,2) (the damaged
+  unclosed body) — the validator span = the bracket span when the
+  bracket CLOSES (m77_0005 [2,15..3,6)), the damage-point when it
+  does NOT (nb6).
+- nb3 `Table / [a, b] / }` (the bracket RIGHT after the keyword, no
+  name): 'A Table must have a name' @ the element span + the bracket =
+  the HEADER settings (the custom-setting validator errors) — NOT the
+  body.
+- nb2 `Table / [, , ] / }`: the three 'Expect a non-empty attribute
+  name' @ the commas (the header-settings list context) — the
+  m77_0005 body-context list errs DIFFERENTLY ('Expect an identifier'
+  @ the `]` only, the commas clean).
+- nb1 (the bracket as a FIELD's settings inside a real block): ours =
+  theirs 5/5 ALREADY (the settings_list machinery ✓).
+
+THE IMPLEMENTATION DESIGN (the round-99 first action): after ours'
+discardUntil loop in the header parse (the ~4327 site), when the next
+token = `[`: scan the BODY-BRACKET as the application (the operands +
+the commas crossing newlines; the broken strings inside = the lexer
+CEs via the string-scan; the operand-start errors from the
+application walk; the `]`-close or the damage-point), emit "A Table's
+body must be a block" @ the bracket span (or the damage-point), then
+RESUME the top-level walk AFTER the bracket (m77_0005's line 4 = the
+custom element + line 5 = the `}` brace error = the existing
+top-level behaviors). The m77_0005 target = the exact 7-error set;
+the 'Expect an identifier' @ the `]` = the body-context list's
+close-position error — port that as part of the body-bracket scan
+(the list-context vs the body-context error texts DIFFER — the nb2
+vs m77_0005 evidence).
+
+## Round 99 queue
+
+- LAND the body-bracket recovery (the design above; the m77_0005
+  target = the 7-error set; nb6/nb7/nb5 = the secondary probes);
 - The composite queue per the convergence criterion: the
   m77_0099-family cascade, s5's span puzzle, the index-field
   paren-name, m43_0242 records-comma;
