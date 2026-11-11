@@ -1297,3 +1297,24 @@ identity.
 - The composite queue (the m77_0099-family cascade, s5's span puzzle,
   the colon-op cluster, the index-field paren-name, m43_0242
   records-comma).
+
+## Round 90 addendum — the ref_tokens eliminated, the emitter CONFIRMED
+
+The ref_tokens' EOF-arm instrumented (the DBGE8, the verified insert):
+**did NOT fire** — that site eliminated. CROSS-REFERENCING the ledger:
+the round-84's DBGD5 (which DID fire at abs 29) = the swallow_gather's
+backtick-EOF site — the emitter is CONFIRMED as that site. The fix =
+the swallow_gather's backtick handling (the value-parse's backtick
+consume = the round-84's type_str fix's sibling at the swallow_gather
+level) = the round-91's port.
+
+## Round 91 queue
+
+- The swallow_gather's backtick-EOF = the emitter (the confirmed):
+  port the backtick consume at the swallow_gather level (the value =
+  the backtick-string = the verbatim consume; the tail = the
+  settings-resume);
+- THEN the comma-check (the verified insert);
+- The composite queue (the m77_0099-family cascade, s5's span puzzle,
+  the colon-op cluster, the index-field paren-name, m43_0242
+  records-comma).
