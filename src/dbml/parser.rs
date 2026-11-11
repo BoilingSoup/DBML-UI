@@ -166,6 +166,46 @@ fn peek_kw_then(input: &str, kw: &str, next: char) -> bool {
         .starts_with(next)
 }
 
+/// The keyword + NAME + `:` header (the inline named ref, m43_0001's
+/// `Ref r0:`): their body parse routes it to the FIELD walk, not the
+/// element dispatch — the rd1/rd8/rd9 probes err the three colon/type
+/// errors (the `:` = the operand-start at the colon, then the type
+/// errors). The bare `Ref:`/`Note:` forms (rd2/rd7) and every `{`
+/// header (rd3/rd4/rd6) stay on the element path.
+fn peek_named_colon_header(input: &str) -> bool {
+    for kw in ["Ref", "Table", "Enum", "TableGroup", "Note", "Records", "Project"] {
+        if !peek_kw(input, kw) {
+            continue;
+        }
+        let after = input[kw.len()..].trim_start_matches([' ', '\t']);
+        if after.starts_with(':') || after.starts_with('{') || after.is_empty() {
+            continue; // the bare-colon / block headers: the element path
+        }
+        // the name token: a bare ident run or a quoted string, same line
+        let rest = if let Some(r) = after.strip_prefix('"') {
+            match r.find('"') {
+                Some(i) => &r[i + 1..],
+                None => continue, // the unterminated quote: the element path
+            }
+        } else if let Some(r) = after.strip_prefix('`') {
+            match r.find('`') {
+                Some(i) => &r[i + 1..],
+                None => continue,
+            }
+        } else {
+            let n = after.chars().take_while(|c| is_bare_ident(*c)).count();
+            if n == 0 {
+                continue; // not a name (e.g. `records (`): the element path
+            }
+            &after[n..]
+        };
+        if rest.trim_start_matches([' ', '\t']).starts_with(':') {
+            return true; // the keyword + name + `:` = the field walk
+        }
+    }
+    false
+}
+
 fn skip_line(input: &mut &str) {
     match input.find('\n') {
         Some(i) => *input = &input[i + 1..],
@@ -4340,10 +4380,11 @@ fn custom_element(
                 break;
             }
             let child_start = offset(input, base);
-            if peek_kw(input, "Ref") || peek_kw(input, "Table")
-                || peek_kw(input, "Enum") || peek_kw(input, "TableGroup")
-                || peek_kw(input, "Note") || peek_kw(input, "Records")
-                || peek_kw(input, "Project")
+            if !peek_named_colon_header(input)
+                && (peek_kw(input, "Ref") || peek_kw(input, "Table")
+                    || peek_kw(input, "Enum") || peek_kw(input, "TableGroup")
+                    || peek_kw(input, "Note") || peek_kw(input, "Records")
+                    || peek_kw(input, "Project"))
             {
                 let orig = *input;
                 let mut n_errs: Vec<ParseError> = Vec::new();
@@ -5271,12 +5312,17 @@ fn table(
             continue;
         }
         // their blockExpression parses the nested element declarations;
-        // the binder flags the context per type (probe m42_0006)
-        if peek_kw(input, "Table")
-            || peek_kw(input, "Ref")
-            || peek_kw(input, "Enum")
-            || peek_kw(input, "TableGroup")
-            || peek_kw(input, "Project")
+        // the binder flags the context per type (probe m42_0006). The
+        // keyword + NAME + `:` header (the inline named ref) is NOT an
+        // element here — their field walk handles it (the rd1/rd8/rd9
+        // probes); inside a Project block the named ref IS legal (the
+        // project site stays ungated)
+        if !peek_named_colon_header(input)
+            && (peek_kw(input, "Table")
+                || peek_kw(input, "Ref")
+                || peek_kw(input, "Enum")
+                || peek_kw(input, "TableGroup")
+                || peek_kw(input, "Project"))
         {
             let nested_start = offset(input, base);
             let orig = *input;

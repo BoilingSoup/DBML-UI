@@ -1,0 +1,4 @@
+Table t {
+  id int
+  Ref r0: a.b > c.d
+}
