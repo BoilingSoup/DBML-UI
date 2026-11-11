@@ -1251,7 +1251,7 @@ mod fixtures {
     // - pg/mysql many_to_many: content matches; upstream inserts an extra
     //   blank line after irregular junction blocks (a concatenation
     //   artifact we chose not to replicate byte-for-byte)
-    // all importer golden cases pass (63/64 across pg/mysql/mssql/
+    // all importer golden cases pass (64/64 across pg/mysql/mssql/
     // oracle); SKIPPED_IMPORTER is kept as an escape hatch for future
     // upstream fixture additions
     const SKIPPED_IMPORTER: &[(&str, &str)] = &[
@@ -1261,20 +1261,18 @@ mod fixtures {
         // (probe-verified). The parser is the spec; the upstream
         // artifact is skipped.
         //
-        // mysql ddl_create: their own golden carries the nested-backtick
-        // check (`json_valid(`Privilege`)`) that their own parser flags
-        // ("Expect a comma" @ the golden 493 — the FIRST-close FUNCTION
-        // scan has no escapes), so the golden (and our import output,
-        // byte-equal to it) does not re-parse and the harness's
-        // formatter canonicalization is unavailable. The raw-text
-        // contract (their importer.spec: `expect(res).toBe(output)`)
-        // then exposes our importer's RAW-emission deltas from their
-        // exporter (the bool-setting order pk,increment,notnull vs
-        // pk,notnull,increment; check/default order; the ref-setting
-        // rendering; the index paren/grouping style; inline vs block
-        // Indexes) — the importer-emission parity is queued in
-        // parity/parity.md; the parser stays the spec.
-        ("mysql_importer", "ddl_create"),
+        // (mysql ddl_create retired from this list: the importer's raw
+        // emission now matches their DbmlExporter — field settings
+        // unique,pk,notnull,increment then check/default/note
+        // (getFieldLines), Checks-before-Indexes blocks + `Note:` inside
+        // the table (exportTables), bare single-column / verbatim-
+        // backticked-expression index lines with pk,type,unique,name
+        // settings (getIndexLines), and update-then-delete lowercased
+        // ref actions (exportRefs). Both sides of the compare fall back
+        // to the raw-text contract (their importer.spec
+        // `expect(res).toBe(output)`) because their golden carries the
+        // nested-backtick check (`json_valid(`Privilege`)`) that their
+        // own parser flags — ours renders the same check byte-equal.)
 
         ("oracle_importer", "quoted_names"),
     ];
