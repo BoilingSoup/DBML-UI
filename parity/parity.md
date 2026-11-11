@@ -769,10 +769,21 @@ tools below. Never say done when the sweep still finds shapes.
   m77_0039 composite = improved by the round-57 fix but remains the
   multi-damage tail (the broken-ref-occ's union-end exclusion, the
   line-18 recovery).
-- ROUND-59 QUEUE (trace-first):
-  * the composite spans: m77_0039's remaining stack (the union-end =
-    the last VALID arg, the broken occs excluded; the line-18
-    recovery);
+- ROUND 59 — the h1 MAP (traced, the port = queued): the minimal
+  `Tabl[e orders {` element isolates the remaining deltas — the
+  element node [0,107) = ..4,28 (ours 4,54), the value-node = the
+  FIRST entry's comma-expression (`#1E69FD, default` = 4,12-4,28), the
+  invalid tokens (`:`/`1`/`,`/`]`) = the consume-logs in NO node, and
+  the `ref: ?<> orders.code` = the ref-SETTING entry INSIDE the
+  inline-body (the ref-binder ran: the binary/unequal/missing-table).
+  THE MODEL: their colon-body's non-quoted value = the
+  ATTRIBUTE-ENTRY parse = settings_list_occs's entry-loop refactored
+  for the unbracketed bodies — the token-walk attempt over-fired (16
+  vs 12) and was reverted the same session; the port = the
+  entry-loop refactor (round 60).
+- ROUND-60 QUEUE:
+  * the settings_list_occs entry-loop refactor for the unbracketed
+    colon-bodies (the h1 map above = the spec);
   * the 'Expect an identifier' stack (the missing remainder);
   * s5's span puzzle, the colon-op cluster (17), the index-field
     paren-name (17), m43_0242 records-comma.

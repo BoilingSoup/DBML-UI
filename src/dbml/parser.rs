@@ -4468,7 +4468,16 @@ fn custom_element(
             }
             body_span = Some(vs..vend.max(vs + 1));
         } else {
-            // the inline value runs to the line end (their expression)
+            // the inline value runs to the line end (their expression).
+            // h1 MAP (the round-59 trace, unported): their NON-QUOTED
+            // body value = the ATTRIBUTE-ENTRY parse — the value-node =
+            // the FIRST entry's comma-expression (`#1E69FD, default` =
+            // 4,12-4,28, the `:`/`1`/`,`/`]` = the consume-logs riding in
+            // NO node), the `ref: ?<> orders.code` = the ref-SETTING
+            // entry (the ref-binder ran: the binary/unequal/missing-table
+            // diags) — the port = the settings_list_occs entry-loop
+            // refactored for the unbracketed bodies, not a token walk
+            // (the walk attempt over-fired 16 vs 12 and was reverted)
             match input.find(['\n', '\r']) {
                 Some(k) => *input = &input[k..],
                 None => *input = &input[input.len()..],
