@@ -4023,7 +4023,43 @@ fn custom_element(
     if !peek_is(input, ":") && !peek_is(input, "{") && !peek_is(input, "[") {
         let name_start = offset(input, base);
         match ident(input, base) {
-            Ok(_) => name_span = Some(name_start..offset(input, base)),
+            Ok(_) => {
+                let mut name_end = offset(input, base);
+                // their name extends ONLY through a LATER-LINE BROKEN
+                // bracket (probe z1: `a int\n [pk, not null` — the name
+                // node = 1,5-2,15, the bracket errs 'Expect a closing
+                // bracket' at the EOF point, the contents' idents ride
+                // the node; NO setting-list error). The SAME-LINE `[` =
+                // the settings branch (probe e3/e10/e27); the later-line
+                // PLAIN idents do NOT join the name (probe v3/v4: the
+                // name stays `int`, the body check errs at them)
+                let save0 = *input;
+                let send0 = name_end;
+                ws(input);
+                let crossed_nl = save0.len() > input.len()
+                    && save0[..save0.len() - input.len()].contains('\n');
+                if crossed_nl && input.starts_with('[') && !input.contains(']') {
+                    errs.push(err_at(
+                        offset(input, base) + input.len(),
+                        "Expect a closing bracket ']'",
+                    ));
+                    let _ = eat(input, "[");
+                    loop {
+                        ws(input);
+                        if input.starts_with(',') {
+                            let _ = eat(input, ",");
+                            continue;
+                        }
+                        match ident(input, base) {
+                            Ok(_) => name_end = offset(input, base),
+                            Err(_) => break,
+                        }
+                    }
+                } else {
+                    *input = save0;
+                }
+                name_span = Some(name_start..name_end);
+            }
             Err(e) => {
                 // their operand() at EOF logs 'Unexpected EOF' on the EOF
                 // token (a zero-width point at the source end) and returns
