@@ -2000,7 +2000,13 @@ mod error_tests {
 
     #[test]
     fn hovering_elsewhere_misses() {
-        let app = broken_app();
+        // trailing gibberish: the errors ride the last rows, the clean
+        // table above stays unmarked. broken_app cannot serve — its
+        // damaged-header element's column errors span every row (the
+        // campaign's node-span anchoring), leaving no hoverable
+        // non-error row.
+        let app = App::with_source("Table users {\n  id integer [pk]\n}\ngibberish\n".into());
+        assert!(!app.cur().parse_errors.is_empty(), "fixture is broken");
         let marks = error_marks(&app);
         // hover a different line than any mark
         let other = (0..app.editor().buf.line_count())

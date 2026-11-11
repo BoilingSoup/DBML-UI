@@ -2093,3 +2093,72 @@ revert). The gates = the r105 state.
 - The long-tail grind continues (the D-owned = skip).
 - OWNED ELSEWHERE: the paren-name + the records-comma + the
   EMPTY_TABLE/notes design (Agent D).
+
+## THE PARALLEL CAMPAIGN — merged (the four-worktree split)
+
+The user-run agents, one worktree each: agent-a = the parser
+settings/body/ref diagnostics + parity.md ownership; agent-b = the
+importer-emission parity + the editor fixtures; agent-c = validate.rs;
+agent-d = the records/index/column parser regions (the region
+contract; it merged agent-a into its own branch mid-campaign, so
+agent-d ⊇ agent-a). THE MERGE = clean, zero conflicts
+(e6a458c/73b3fad/d277f9b) — the region contract held.
+
+- agent-a (the rounds 100-106 above): 10 mechanisms, the convergence
+  criterion met at r106, seeds 153/300 + 331/600 on its tree, battery
+  132→173. ROUTING CORRECTION: the r107 queue says the EMPTY_TABLE
+  handoff went to agent D — WRONG (the note confused D with the
+  emission agent): the port = the validate layer = agent-c's file;
+  C landed it (e54bb1d).
+- agent-b (2 commits, sqldump.rs + sql.rs + editor.rs only): the four
+  DbmlExporter emission rules ported (the field-setting order, the
+  sub-block order + casing, the index line rendering, the ref-setting
+  rendering); ("mysql_importer","ddl_create") RETIRED from
+  SKIPPED_IMPORTER — the raw import output = their exporter's under
+  the harness compare; the editor error fixtures updated
+  (theirs-verified). B's recorded parser-side divergences for A (the
+  `Table users junk {` extras, the `@@@` message delta, the gibberish
+  interpret-stage duplicate) = largely absorbed by the campaign;
+  re-verify at the next clustering.
+- agent-c (5 commits, validate.rs + an ast field + the parse-side
+  note-span collection): the corpus FULL-SPAN 73/78 → 78/78; the
+  duplicate/existence anchors; the records value-type + FK rendering;
+  the group/note dup machinery; the EMPTY_TABLE + duplicate-notes
+  port (the A-r106 design: the file-level gate = the validate-layer
+  push, the parse emits no gating); the zc1/zc2/zc3 probes promoted.
+  lib 124/124. C's open queue: the A-dependent validation ports, the
+  records PK/unique constraint families (probe-first, no pressure).
+- agent-d (D1-D8 + the ka2 fix, the records/index/column regions):
+  the index-settings validator, the bad-name column flows, the
+  bracket/block callee arm, the tuple-comma grammar (the
+  records-comma item), the MISSING_SPACES check, the index-field
+  application args (the paren-name item), the torn-records-header
+  column pair, the newline-glued indexer suffix, the ka2 interaction
+  fix. D's recorded remaining queue (as of its last notes update —
+  possibly stale; the post-merge clustering = the truth): the
+  paren-name/records-comma/column-type residuals.
+- THE MERGED TREE: corpus run.mjs 78/78, run_schema 78/78, battery
+  **209/209** (the union of the promotions: 132 → 209), lib 124/124,
+  editor::tests 61/61, error_tests 8/8 (the hover-miss test = its own
+  trailing-gibberish fixture now — broken_app's damaged-header
+  element spans every row under the node-span anchoring), fmt/fuzz/
+  oracle green.
+- **THE COMBINED SEEDS: seed-77 = 171/300, seed-43 = 357/600** (the
+  full-span multiset; the dumps /tmp/merged-ours-{77,43}.json vs the
+  r96 theirs pins). The four campaigns compound (+20/+34 over the
+  r99 base). The remaining tail = the deep-tail composites (the
+  mutation-count histogram: 74 single-mutation, 157 two-, 194 three-
+  divergent at r100 — the plausibility-ranked grind = the recorded
+  option; the mid-edit argument = the single-mutation slice = the
+  product surface).
+
+## Round 108 queue
+
+- The post-merge re-cluster on the combined base (the fresh dumps
+  /tmp/merged-ours-*.json) — the true remaining ledger after the
+  four campaigns;
+- The plausibility-ranked grind (the user's call): the 74
+  single-mutation cases first, then the 157 two-mutation;
+- C's open queue: the records PK/unique constraint families;
+- The user's manual test of the sensible states (the divergence
+  check on real mid-edit shapes).
