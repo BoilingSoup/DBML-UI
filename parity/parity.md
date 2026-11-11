@@ -1361,3 +1361,29 @@ the generic-value's backtick consume = the round-93's first action.
 - The composite queue (the m77_0099-family cascade, s5's span puzzle,
   the colon-op cluster, the index-field paren-name, m43_0242
   records-comma).
+
+## Round 93 addendum — the generic-value tail read (the partial)
+
+The generic-value tail (the 2200-region) = the entry-tail machinery
+mapped: the occ-push (the union-span anchoring), the comma-eat, the
+`]`-eat, the tail-error dispatch. The w1's EOF-reached @2,20 = the
+backtick = SEVEN instrument rounds eliminated every direct emitter
+(the sq_string ×2, the note-triple ×2, the backtick-EOF, the dq-scan,
+the type_str's dq-lead, the type_str's dq-Fail, the ref_tokens' arm).
+The emitter = STILL unidentified — the ours-side = the value-parse =
+the deeper-than-the-instrumented-sites. THE HONEST STATE: the w1's
+EOF-reached = the un-located (the instrument rounds = the
+negative-results = the recorded); the next session = the
+fresh-context audit (the ours' w1 flow = the step-debug from the
+`check:`-entry's `:`-branch — the value = the backtick = the
+step-wise = the un-instrumented site = the located).
+
+## Round 94 queue
+
+- The ours' w1 flow = the step-debug (the instrument the
+  `:`-branch's value-parse = the per-step: the value's = the
+  backtick = the path) = the emitter's location;
+- The fix at that site; THEN the comma-check (the verified insert);
+- The composite queue (the m77_0099-family cascade, s5's span puzzle,
+  the colon-op cluster, the index-field paren-name, m43_0242
+  records-comma).
