@@ -805,10 +805,23 @@ tools below. Never say done when the sweep still finds shapes.
   missing 3 = the ref-binder trio (the ref-SETTING entries inside the
   inline body = the round-62 queue). hh1 = still not promoted (the
   open-shapes rule). Both seeds hold.
-- ROUND-62 QUEUE:
-  * the ref-SETTING entries inside the inline bodies (the ref-binder:
-    the ref-field parse on the `ref: ?<> orders.code` shape = hh1's
-    remaining 3);
+- ROUND 62 LANDED — the ref-SETTING entries in the inline-body
+  entry-walk: the ref-value = the ref-FIELD parse (the
+  cardinality-op tokens + the endpoint streams `a.b` with the TABLE =
+  the FIRST segment — the first-cut captured the column and the
+  missing-table anchored 'code' instead of 'orders'); the endpoints
+  != 2 errs the binary + the unequal pair over the value-run (h1's
+  4,38-4,53 x2). THE MISSING-TABLE = the DOC-dependent check — the
+  direct push fired on the VALID tables (m77_0039's extras exploded)
+  and was reverted: it belongs to the binder-chains path (the
+  validate-layer renders it with the doc access). h1 = 11/12 (the
+  missing-table = the last 1); hh1 = not promoted (the open-shapes
+  rule). m77_0039 = 45 vs 25 — the composite = the queue.
+- ROUND-63 QUEUE:
+  * the missing-table via the binder-chains (the custom_element
+    signature gains the chains param; the ref-entry pushes the chain,
+    the validate renders with the doc access);
+  * m77_0039's remaining composite stack;
   * the 'Expect an identifier' stack (the missing remainder);
   * s5's span puzzle, the colon-op cluster (17), the index-field
     paren-name (17), m43_0242 records-comma.
