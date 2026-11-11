@@ -3970,7 +3970,8 @@ fn top_item(
     } else if peek_kw(input, "Note") {
         sticky_note(input, base, errs).map(Item::Note)
     } else {
-        custom_element(input, base, errs, doc_binder_errors).map(|()| Item::Skip)
+        custom_element(input, base, errs, doc_binder_errors, binder_chains)
+            .map(|()| Item::Skip)
     }
 }
 
@@ -3987,6 +3988,7 @@ fn custom_element(
     base: usize,
     errs: &mut Vec<ParseError>,
     doc_binder_errors: &mut Vec<(usize, usize, String)>,
+    binder_chains: &mut Vec<super::ast::BinderChain>,
 ) -> R<()> {
     let mut type_start;
     // their elementDeclaration's type consume at the PROGRAM level: junk
@@ -4629,11 +4631,28 @@ fn custom_element(
                                             .to_string(),
                                     });
                                 }
-                                // the missing-table check = the
-                                // DOC-dependent (the validate-layer's) —
-                                // the direct push fires on the VALID
-                                // tables too (m77_0039) and stays queued
-                                // for the binder-chains path
+                                // the missing-table = the DOC-dependent:
+                                // the endpoint's table pushes the
+                                // binder-chain (the table fragment = the
+                                // single var) — the validate's
+                                // resolve_prefix renders it with the doc
+                                // access: the missing table errs at the
+                                // fragment, the existing resolves silently
+                                for (es, _, tbl) in &endpoints {
+                                    if let Some(t) = tbl {
+                                        binder_chains.push(
+                                            super::ast::BinderChain {
+                                                vars: vec![(
+                                                    t.clone(),
+                                                    *es,
+                                                    es + t.len(),
+                                                )],
+                                                tuple: Vec::new(),
+                                                group: false,
+                                            },
+                                        );
+                                    }
+                                }
                             } else {
                                 // the value = the operand run: the `]`/`}` =
                                 // the consume-log + stop, the rest = silent

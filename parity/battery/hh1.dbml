@@ -1,0 +1,4 @@
+Tabl[e orders {
+  code e_status [color: #1E69FD, not null]
+  user_id varchar(25
+5) [color: #1E69FD, default: 1, ref: ?<> orders.code]
