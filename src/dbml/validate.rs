@@ -463,10 +463,15 @@ pub fn validate_with_parse(
     }
     // duplicate column names (their table binder, table/index.ts: the
     // seen-map flags EVERY repeat and re-flags the first sighting — 3
-    // twins yield 4 errors; anchors are the column name nodes)
+    // twins yield 4 errors; anchors are the column name nodes). Their
+    // guard: a column whose NAME symbol is undefined (our parser's
+    // empty-name recovery for junk fields) skips the machinery entirely
     for t in &doc.tables {
         let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
         for (i, c) in t.columns.iter().enumerate() {
+            if c.name.is_empty() {
+                continue;
+            }
             if let Some(&first) = seen.get(c.name.as_str()) {
                 let msg = format!("Duplicate column '{}'", c.name);
                 // their anchor = the column's full node (name through the
@@ -493,6 +498,9 @@ pub fn validate_with_parse(
     for e in &doc.enums {
         let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
         for (i, v) in e.values.iter().enumerate() {
+            if v.name.is_empty() {
+                continue;
+            }
             if let Some(&first) = seen.get(v.name.as_str()) {
                 let msg = format!("Duplicate enum field '{}'", v.name);
                 out.push(Diagnostic::spanned(
