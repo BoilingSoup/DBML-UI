@@ -5134,6 +5134,11 @@ fn table(
             match input.find('{') {
                 Some(k) => *input = &input[k..],
                 None => {
+                    // s2: their discardUntil CONSUMES the junk (the
+                    // unconsumed tail re-dispatches as a phantom
+                    // custom element — `Table pare integer` errs the
+                    // body-check once and the tail is gone)
+                    *input = &input[input.len()..];
                     t.span = start..offset(input, base);
                     return Ok(t);
                 }
