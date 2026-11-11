@@ -3520,6 +3520,140 @@ fn index_ident(input: &mut &str, base: usize) -> R<String> {
     ident(input, base)
 }
 
+/// Their IndexesModule validator (local_modules/indexes/index.ts): the
+/// per-field settings checks after aggregateSettingList — the known keys
+/// (note/name = quoted strings, unique/pk = no value, type = a variable
+/// node) plus the unknown-key default arm. Anchors = the attribute nodes
+/// (the occ spans). Runs on the completed attrs of a closed list AND on
+/// the partial attrs riding the block-close sentinel (m43_0112: the `}`
+/// at the next-attr position — their validator walks the partial list the
+/// same way; probe ixe5/ixe6: the checks fire on erroring values too, no
+/// broken-value suppression here). `src`/`src_start` = the source text
+/// from the field's start: the quote char of a quoted value rides only
+/// in the source (the occ value text is the STRIPPED content — probe
+/// ixe4: `type: "btree"` passes their VariableNode check, `'btree'`
+/// fails it).
+fn validate_index_settings(
+    occs: &[super::ast::SettingOcc],
+    src: &str,
+    src_start: usize,
+    errs: &mut Vec<ParseError>,
+) {
+    // aggregateSettingList: group the attributes per lowercased name, in
+    // first-appearance order
+    let mut order: Vec<&str> = Vec::new();
+    let mut groups: Vec<Vec<&super::ast::SettingOcc>> = Vec::new();
+    for o in occs {
+        if let Some(i) = order.iter().position(|k| *k == o.key.as_str()) {
+            groups[i].push(o);
+        } else {
+            order.push(o.key.as_str());
+            groups.push(vec![o]);
+        }
+    }
+    for (key, attrs) in order.into_iter().zip(groups.into_iter()) {
+        match key {
+            "note" | "name" => {
+                if attrs.len() > 1 {
+                    for a in &attrs {
+                        errs.push(ParseError {
+                            offset: a.offset,
+                            end: Some(a.end),
+                            message: format!("'{}' can only appear once", key),
+                        });
+                    }
+                }
+                for a in &attrs {
+                    // isExpressionAQuotedString: a single- or double-quoted
+                    // string; the undefined value fails it too (ixe1: `[name]`)
+                    if !a.quoted {
+                        errs.push(ParseError {
+                            offset: a.offset,
+                            end: Some(a.end),
+                            message: format!("'{}' must be a string", key),
+                        });
+                    }
+                }
+            }
+            "unique" | "pk" => {
+                if attrs.len() > 1 {
+                    for a in &attrs {
+                        errs.push(ParseError {
+                            offset: a.offset,
+                            end: Some(a.end),
+                            message: format!("'{}' can only appear once", key),
+                        });
+                    }
+                }
+                for a in &attrs {
+                    // their check = attr.value !== undefined — any consumed
+                    // value text fires, an erroring gather included (ixe5)
+                    if a.has_value {
+                        errs.push(ParseError {
+                            offset: a.offset,
+                            end: Some(a.end),
+                            message: format!("'{}' must not have a value", key),
+                        });
+                    }
+                }
+            }
+            "type" => {
+                if attrs.len() > 1 {
+                    for a in &attrs {
+                        errs.push(ParseError {
+                            offset: a.offset,
+                            end: Some(a.end),
+                            message: "'type' can only appear once".to_string(),
+                        });
+                    }
+                }
+                for a in &attrs {
+                    // isExpressionAVariableNode: one identifier token or one
+                    // double-quoted string — a number, a single-quoted string
+                    // or a multi-token application fails it (ixe2/3/4/6)
+                    let ok = a.has_value
+                        && match &a.value {
+                            Some(v) => {
+                                if a.quoted {
+                                    let q = src
+                                        [a.value_span.start.saturating_sub(src_start)..]
+                                        .as_bytes()
+                                        .first()
+                                        .copied();
+                                    q == Some(b'"')
+                                } else {
+                                    let v = v.trim();
+                                    !v.is_empty()
+                                        && v.starts_with(|c: char| c.is_alphabetic() || c == '_')
+                                        && v.chars().all(|c| c.is_alphanumeric() || c == '_')
+                                }
+                            }
+                            None => false,
+                        };
+                    if !ok {
+                        errs.push(ParseError {
+                            offset: a.offset,
+                            end: Some(a.end),
+                            message: "'type' must be \"btree\" or \"hash\"".to_string(),
+                        });
+                    }
+                }
+            }
+            _ => {
+                // the default arm — `ref` included (their IndexesValidator
+                // has no ref case: m43_0243)
+                for a in &attrs {
+                    errs.push(ParseError {
+                        offset: a.offset,
+                        end: Some(a.end),
+                        message: format!("Unknown index setting '{}'", key),
+                    });
+                }
+            }
+        }
+    }
+}
+
 fn index(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Index> {
     let start = offset(input, base);
     let mut columns = Vec::new();
@@ -3606,7 +3740,23 @@ fn index(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Index> 
         comma_form: false,
     };
     if peek_is(input, "[") {
-        let kvs = settings_list(input, base, errs, true)?;
+        // their IndexesModule validator sees the field's settings list —
+        // on the Ok attrs AND on the partial attrs riding the block-close
+        // sentinel (m43_0112: the completed `pk note` attr still validates
+        // after the `}` hands to the enclosing block)
+        let src = *input;
+        let src_start = offset(input, base);
+        let list_res = settings_list_occs(input, base, errs, true);
+        match &list_res {
+            Ok((_, occs, _)) => validate_index_settings(occs, &src, src_start, errs),
+            Err(Fail {
+                message, partial_occs, ..
+            }) if message.is_empty() => {
+                validate_index_settings(partial_occs, &src, src_start, errs)
+            }
+            _ => {}
+        }
+        let (kvs, _, _) = list_res?;
         for (key, val) in kvs {
             match val {
                 None => match key.as_str() {

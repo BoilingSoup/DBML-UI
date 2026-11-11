@@ -1,0 +1,6 @@
+Table t {
+  a int
+  indexes {
+    (a) [type: hash, type: btree]
+  }
+}
