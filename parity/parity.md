@@ -963,9 +963,19 @@ tools below. Never say done when the sweep still finds shapes.
   h1 = 12/12; battery 122/122, corpus 78/78, lib 84/84. Both seeds
   hold (146/300, 315/600). The over-fire ledger = the instrument that
   found a one-line root cause in one session.
-- ROUND-77 QUEUE:
-  * the walk's remaining deltas (the m77_0039's missing=4/extra=5 =
-    the line-5 records-block shapes);
+- ROUND 77 — the m77_0039 remaining deltas = the LINE-18
+  SETTINGS-SWALLOW (the fresh ledger): the field `code int[] [check:
+  \`x > 0\` indexes {` — the settings-list's `[` with the unclosed
+  `indexes {` inside = ours EOF-swallows (the trio at the EOF); theirs
+  recovers with 'Expect a comma' at the `indexes` (18,30-37) + the
+  parse continues (the L19-L26 = parsed). Plus the two single-diag
+  spans (the L21's `}`-ident-log, the L26's TableGroup-field span).
+  The fix = the settings-list's recovery on the nested-`{` junk =
+  the round-78 queue (the settings_list_occs's `]`-terminator vs the
+  nested-brace handling).
+- ROUND-78 QUEUE:
+  * the settings-list's nested-`{` recovery (the m77_0039's L18 shape:
+    the 'Expect a comma' at the junk-name + the parse continues);
   * the composite queue (the m77_0099-family cascade, s5's span
     puzzle, the colon-op cluster, the index-field paren-name,
     m43_0242 records-comma).
