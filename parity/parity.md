@@ -1212,3 +1212,22 @@ the w1, identify the emitter, fix at that caller.
 - The composite queue (the m77_0099-family cascade, s5's span puzzle,
   the colon-op cluster, the index-field paren-name, m43_0242
   records-comma).
+
+## Round 86 addendum — the double elimination
+
+The dq-scan (the ident's quoted-partial EOF-return) and the
+type_str's dq-lead instrumented — **NEITHER fired** on the w1. Both
+candidates eliminated. The remaining un-instrumented emitters of
+'EOF reached while parsing': the type_str's `"`-quoted Fail block
+(the 420-region — the ok_or_else closure), and the two RParser/
+ref_tokens-region sites (the 6202/6241). The round-87 = instrument
+THOSE (the verified insert), run the w1 = the emitter's identity.
+
+## Round 87 queue
+
+- The type_str's `"`-quoted Fail-block + the RParser-region sites
+  instrumented (the verified insert), the w1 run = the emitter;
+- The fix at that caller; THEN the comma-check (the verified insert);
+- The composite queue (the m77_0099-family cascade, s5's span puzzle,
+  the colon-op cluster, the index-field paren-name, m43_0242
+  records-comma).
