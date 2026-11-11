@@ -1234,8 +1234,19 @@ fn list_brace_dispatch(
                 i += 1;
             }
             b'#' => {
-                while i < bytes.len() && bytes[i] != b'\n' {
+                // the `#` = the COLOR literal when immediately hex
+                // (`#1E69FD` — d1's nested `[color: #1]` inside the list
+                // contents: the comment-skip ate `#1]` and the scan lost
+                // the list's real close); else the line comment
+                if i + 1 < bytes.len() && (bytes[i + 1] as char).is_ascii_hexdigit() {
                     i += 1;
+                    while i < bytes.len() && (bytes[i] as char).is_ascii_hexdigit() {
+                        i += 1;
+                    }
+                } else {
+                    while i < bytes.len() && bytes[i] != b'\n' {
+                        i += 1;
+                    }
                 }
             }
             b',' | b']' | b'}' => {
