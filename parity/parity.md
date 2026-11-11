@@ -623,7 +623,7 @@ tools below. Never say done when the sweep still finds shapes.
   (the pre-child-loop engine — the round-42/43 ports may move it; the
   next seed-43 re-measure tells).
 
-## The rounds 47-50 RESULT + the round-51 queue
+## The rounds 47-51 RESULT + the round-52 queue
 
 - RESOLVED (round 47): the two recorded column-pair shapes. (1) The
   `'''` TRIPLE-QUOTE header gather — theirs = the consumeUntil scan
@@ -668,12 +668,17 @@ tools below. Never say done when the sweep still finds shapes.
   line-2 field errors extra, 'Unexpected EOF' 2,1 extra, the close
   missing). Battery w1/w2 promoted. Seed-77 136→140/300 (the close
   cluster 37→29 missing).
-- ROUND-51 QUEUE (probed, unported):
-  * the ref-block SWALLOW-CHAIN fidelity (t1): a line ending in a
-    dropped partial must merge the next line into the SAME field (the
-    newline-less token stream) — ours' field walk ends the field at
-    the partial; the close + the Unexpected-EOF at the merged EOF
-    point follow;
+- ROUND 51 LANDED: the ref-block swallow-chain fidelity — (1) the
+  incomplete-infix pull: a line ending in a trailing `.` (the member
+  access with no right operand) chains the next line into the SAME
+  field (the merged application `a.id > 'b.id`); (2) the EOF operand
+  READS the EOF token (pos = toks.len()) so the application's node
+  union reaches the EOF point — the field errors anchor 1,7-2,11 not
+  the `>`'s end; (3) the broken binary's binder still rides — theirs
+  binds the left endpoint's variables even with the tuple side missing
+  (Table 'a' does not exist 1,7-1,8) — only the variable-less bindees
+  skip. t1 FULLY IDENTICAL (battery y1). Seed-77 140→141/300.
+- ROUND-52 QUEUE (probed, unported):
   * the custom-element pair span cluster (33 extra / 31 missing
     'A Custom element can only appear') — the element-node spans in
     the composite shapes;
