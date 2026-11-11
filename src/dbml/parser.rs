@@ -4468,21 +4468,74 @@ fn custom_element(
             }
             body_span = Some(vs..vend.max(vs + 1));
         } else {
-            // the inline value runs to the line end (their expression).
-            // h1 MAP (the round-59 trace, unported): their NON-QUOTED
-            // body value = the ATTRIBUTE-ENTRY parse — the value-node =
-            // the FIRST entry's comma-expression (`#1E69FD, default` =
-            // 4,12-4,28, the `:`/`1`/`,`/`]` = the consume-logs riding in
-            // NO node), the `ref: ?<> orders.code` = the ref-SETTING
-            // entry (the ref-binder ran: the binary/unequal/missing-table
-            // diags) — the port = the settings_list_occs entry-loop
-            // refactored for the unbracketed bodies, not a token walk
-            // (the walk attempt over-fired 16 vs 12 and was reverted)
-            match input.find(['\n', '\r']) {
-                Some(k) => *input = &input[k..],
-                None => *input = &input[input.len()..],
+            // the inline value = the h1-mapped ENTRY semantics: the
+            // value-phase = the operand tokens (the idents/colors/the
+            // quoted strings) extending the value-node union, the `,` =
+            // the silent comma-expression separator, the `:` = the next
+            // entry's colon (logged, the value-node ends there); the
+            // post-phase = every token logs 'Expect an identifier' and
+            // rides in no node. The ref-setting entries inside stay
+            // unqueued (the ref-binder = the follow-up)
+            let mut vend = vs;
+            let mut in_value = true;
+            loop {
+                ws(input);
+                if input.is_empty() || input.starts_with(['\n', '\r']) {
+                    break;
+                }
+                let js = offset(input, base);
+                let b0 = input.as_bytes()[0];
+                let is_operand = in_value
+                    && (b0 == b'#'
+                        || (b0 as char).is_ascii_alphabetic()
+                        || b0 == b'_');
+                let mut p2 = *input;
+                let tl = consume_one_token(&mut p2).unwrap_or(1);
+                let tl = tl.min(input.len());
+                if is_operand {
+                    let mut t2 = *input;
+                    if t2.starts_with('#') {
+                        // the color literal = `#` + the hex run as ONE
+                        // token (consume_one_token = the `#` alone — the
+                        // hex tail would re-log as the digit-lead junk)
+                        let hb = t2.as_bytes();
+                        let mut hi = 1usize;
+                        while hi < hb.len()
+                            && (hb[hi] as char).is_ascii_hexdigit()
+                        {
+                            hi += 1;
+                        }
+                        t2 = &t2[hi..];
+                        p2 = t2;
+                    } else if t2.starts_with('\'') || t2.starts_with('"') {
+                        let _ = note_value(&mut t2, base);
+                        p2 = t2;
+                    }
+                    *input = p2;
+                    vend = offset(input, base);
+                } else if b0 == b',' && in_value {
+                    // the comma-expression separator: silent
+                    *input = &input[tl..];
+                } else {
+                    if in_value && b0 == b':' {
+                        // the next entry's colon ends the value-node
+                        in_value = false;
+                    }
+                    if in_value {
+                        errs.push(ParseError {
+                            offset: js,
+                            end: Some(js + tl),
+                            message: "Expect an identifier".to_string(),
+                        });
+                    }
+                    // the post-value phase = their ATTRIBUTE-ENTRY parse
+                    // (the ref-binder runs on the `ref:` entries — the h1
+                    // map) — the silent skip until the entry-loop
+                    // extraction lands (the round-61 queue)
+                    *input = &input[tl..];
+                }
             }
-            body_span = Some(vs..offset(input, base));
+            body_span = Some(vs..vend.max(vs + 1));
         }
     }
     // their element node = the UNION of the arg spans (type, name, setting
