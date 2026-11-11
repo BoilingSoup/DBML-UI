@@ -1,6 +1,6 @@
 {
   "pinnedCommit": "6b0c25b5d87ef8f44236eeb1e9dc149848e1503e",
-  "pass": 120,
+  "pass": 122,
   "fail": 0,
   "cases": [
     {
@@ -585,6 +585,16 @@
     },
     {
       "name": "u3",
+      "status": "ok",
+      "count": 1
+    },
+    {
+      "name": "uu1",
+      "status": "ok",
+      "count": 1
+    },
+    {
+      "name": "uu2",
       "status": "ok",
       "count": 1
     },

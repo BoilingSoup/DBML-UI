@@ -891,13 +891,20 @@ tools below. Never say done when the sweep still finds shapes.
   the block contexts). The port = the qualified_name's dq-line-rule =
   the round-71 queue (the m43_0034's ident-crossing = the
   still-legal!).
-- ROUND-71 QUEUE:
-  * the qualified_name's dq-line-rule (the dq = the name-part on the
-    SAME line only; the dq across the newline = the junk-logs);
-  * the `}`-class consume-logs inside the block contexts;
-  * the composite queue (m77_0039's line-18 recovery, s5's span
-    puzzle, the colon-op cluster, the index-field paren-name,
-    m43_0242) = the background.
+- ROUND 71 LANDED — the `{`-block at the column TYPE position errs
+  'Invalid column type' over the BLOCK span (the c5/c6 list-family —
+  the block = the list's sibling; the internal 'expected column type'
+  leak dead) — the u1/u2 shape = the dq-named field with the block
+  (the m77_0099 family's cleanest slice). Probes uu1/uu2; battery
+  122/122, corpus 78/78, lib 84/84. Seed-43 = 315/600 (+1), seed-77 =
+  146/300. (The m77_0099 = the 20-diag cascade — the dq-line-rule =
+  ONE piece of it; the case = the queue.)
+- ROUND-72 QUEUE:
+  * the composite queue (m77_0039's line-18 recovery, the
+    m77_0099-family's remaining cascade pieces, s5's span puzzle, the
+    colon-op cluster, the index-field paren-name, m43_0242
+    records-comma) — the per-case grind with the tally-method
+    prioritization.
   * s5 (`, 1 int` at a field start): theirs = ONE name error at
     1,10-2,6 — the span starts at the TABLE'S OPEN-BRACE END and ends
     mid-line — the mechanism unexplained (the block-child node's
