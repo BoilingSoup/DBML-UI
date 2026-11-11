@@ -1139,3 +1139,29 @@ w1 input as the instrumented run.
 - The composite queue (the m77_0099-family cascade, s5's span puzzle,
   the colon-op cluster, the index-field paren-name, m43_0242
   records-comma).
+
+## Round 83 addendum — the emission-site audit (the partial)
+
+The DBGE instrumented the sq_string/note_value-triple EOF-returns:
+NEITHER fired on the w1. The remaining emitters = the dq-scan (the
+ident's quoted-partial path), the type_str's dq-branch (the type-
+position's `"`-quoted = the Fail with the EOF-message), and the
+backtick-EOF site (`probe b1: [default: \`now(\`` — the backtick
+consumeUntil = the Fail + the token dropped, the scan crosses the
+newlines). THE W1's = the backtick `\`x\`` CLOSED — but the
+EOF-reached fires at the backtick position 2,20 — the leading
+candidate = the type_str's dq-branch family (the type-position's
+quote-scan: the w1's `check:` value reaching the type-walk through
+the generic-key path) — the instrument of the type_str's dq/EOF
+arm + the backtick arm = the next session's first action (the
+verified-insert discipline: the grep the DBGE count after each
+edit!).
+
+## Round 84 queue
+
+- The type_str/backtick emission instrumentation (the verified
+  insert), the w1 run = the exact emitter, the fix at that caller;
+- THEN the comma-check (the verified insert);
+- The composite queue (the m77_0099-family cascade, s5's span puzzle,
+  the colon-op cluster, the index-field paren-name, m43_0242
+  records-comma).
