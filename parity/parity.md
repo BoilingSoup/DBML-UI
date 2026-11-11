@@ -923,13 +923,28 @@ tools below. Never say done when the sweep still finds shapes.
   walk's caller-side distinction = the fresh-context design; the
   naive keyword-stop = wrong on both ends). The over-fire families
   (the 102) = the queue with this finding as the map.
-- ROUND-74 QUEUE:
-  * the entry-walk's context-guard = the caller-side distinction
-    (the walk's reach = the body-value's entries; the keyword-lines =
-    the caller's dispatch — the plumbing = the fresh-context design);
-  * the composite queue (m77_0039's line-18 recovery, the
-    m77_0099-family cascade, s5's span puzzle, the colon-op cluster,
-    the index-field paren-name, m43_0242 records-comma).
+- ROUND 74 — THE m77_0039 SCOPE-FINDING: the over-fire = FILE-WIDE
+  (41 'Expect an identifier' logs across the lines 1-26 — every
+  construct in the file, not just the entry-walk's inline-body): the
+  composite cascade = MULTI-FLOW. The round-74 line-scope/caller-side
+  guard = INSUFFICIENT alone — the 102 = the sum of the per-flow
+  over-fires (the entry-walk + the field-parses + the block-loops),
+  each flow = the individual guard-work. THE STRATEGIC STATE: the
+  campaign = the deep-tail phase — the case-count metric = the
+  all-or-nothing (the m77_0039 = the ~10-flow composite = the
+  multi-round case); the diagnostic-level deltas = shrinking. The
+  session's context = the wall — the next session = the per-flow
+  guards (the entry-walk's caller-side = the one; the field-parses'
+  junk-logs = the two; the block-loops' = the three), probe-first
+  with the m77_0039's per-line map (the file = the best instrumented
+  composite — 41 logs = the per-line ledger).
+- ROUND-75 QUEUE:
+  * the per-flow guards probe-first (the entry-walk's caller-side,
+    the field-parses' junk-logs, the block-loops') with the m77_0039
+    per-line ledger;
+  * the composite queue (the m77_0099-family cascade, s5's span
+    puzzle, the colon-op cluster, the index-field paren-name,
+    m43_0242 records-comma).
   * s5 (`, 1 int` at a field start): theirs = ONE name error at
     1,10-2,6 — the span starts at the TABLE'S OPEN-BRACE END and ends
     mid-line — the mechanism unexplained (the block-child node's
