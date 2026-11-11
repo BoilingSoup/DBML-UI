@@ -1278,3 +1278,22 @@ identity = the actual emitter).
 - The composite queue (the m77_0099-family cascade, s5's span puzzle,
   the colon-op cluster, the index-field paren-name, m43_0242
   records-comma).
+
+## Round 89 addendum — the double elimination (the sq + the re-push)
+
+The sq_string's EOF-return (the DBGE2) and the 4208-region's re-push
+(the DBGE3) instrumented — **NEITHER fired** on the w1. Both
+eliminated. The remaining un-instrumented emitters of 'EOF reached
+while parsing': the RParser/ref_tokens-region sites (the 6202/6241 —
+the string-token gathers inside the ref-body lexer). The round-90 =
+instrument THOSE (the verified insert), run the w1 = the emitter's
+identity.
+
+## Round 90 queue
+
+- The RParser/ref_tokens-region sites instrumented (the verified
+  insert), the w1 run = the emitter's identity;
+- The fix at that caller; THEN the comma-check (the verified insert);
+- The composite queue (the m77_0099-family cascade, s5's span puzzle,
+  the colon-op cluster, the index-field paren-name, m43_0242
+  records-comma).
