@@ -1608,16 +1608,35 @@ pub fn validate_with_parse(
             rec.columns.iter().position(|c| c == col)
         }
     };
+    // their formatValues (records/utils/constraints/helper.ts) renders
+    // the row value with JSON.stringify — strings carry double quotes,
+    // numbers normalize through the parsed form (2.50 -> 2.5)
+    let json_quote = |t: &str| -> String {
+        format!("\"{}\"", t.replace('\\', "\\\\").replace('"', "\\\""))
+    };
+    let json_label = |v: &super::ast::RecordValue| -> String {
+        match v {
+            super::ast::RecordValue::Null => "null".to_string(),
+            super::ast::RecordValue::Bool(b) => b.to_string(),
+            super::ast::RecordValue::Number(n) => n
+                .parse::<f64>()
+                .map(|f| format!("{f}"))
+                .unwrap_or_else(|_| n.clone()),
+            super::ast::RecordValue::Text(t) => json_quote(t),
+            super::ast::RecordValue::Ident(i) => json_quote(i),
+            super::ast::RecordValue::Expr(e) => json_quote(e),
+        }
+    };
     let recorded_values = |rec: &super::ast::TableRecords,
                            idx: usize|
-     -> Vec<(String, Span)> {
+     -> Vec<(String, Span, String)> {
         rec.rows
             .iter()
             .zip(rec.value_spans.iter())
             .filter_map(|(row, spans)| {
-                row.get(idx)
-                    .zip(spans.get(idx))
-                    .map(|(v, s)| (v.label(), s.clone()))
+                row.get(idx).zip(spans.get(idx)).map(|(v, s)| {
+                    (v.label(), s.clone(), json_label(v))
+                })
             })
             .collect()
     };
@@ -1661,7 +1680,7 @@ pub fn validate_with_parse(
         // the child's recorded FK values must exist on the parent
         if let Some(fk_rec) = fk_rec {
             if !fk_rec.rows.is_empty() {
-                for (v, span) in &fk_vals {
+                for (v, span, json) in &fk_vals {
                     // their null handling: an empty or literal-null cell on
                     // a required FK column emits BOTH the NULL-not-allowed
                     // note and the must-not-be-NULL violation (probe:
@@ -1669,9 +1688,10 @@ pub fn validate_with_parse(
                     let is_null = v.is_empty() || v.eq_ignore_ascii_case("null");
                     // their message renders the empty string as `null`
                     let shown = if v.is_empty() { "null" } else { v.as_str() };
+                    let _ = shown;
                     if is_null {
                         let required = parent_vals.len() == 0
-                            || parent_vals.iter().any(|(pv, _)| pv.is_empty());
+                            || parent_vals.iter().any(|(pv, _, _)| pv.is_empty());
                         let _ = required;
                         let col_required = doc
                             .tables
@@ -1711,12 +1731,12 @@ pub fn validate_with_parse(
                         ));
                         continue;
                     }
-                    if !parent_vals.iter().any(|(pv, _)| pv == v) {
+                    if !parent_vals.iter().any(|(pv, _, _)| pv == v) {
                         out.push(Diagnostic::detail(
                             span.start,
                             span.end,
                             format!(
-                                "FK violation: `{fk_tbl}.{fk_col}` = `{v}` does not exist in `{parent_tbl}.{parent_col}`"
+                                "FK violation: `{fk_tbl}.{fk_col}` = `{json}` does not exist in `{parent_tbl}.{parent_col}`"
                             ),
                             Severity::Info,
                             Some("Record constraint violations".to_string()),
@@ -1763,6 +1783,483 @@ pub fn validate_with_parse(
                         _ => continue,
                     };
                     record_checks(fk_tbl, fk_col, parent_tbl, parent_col, doc, &mut out);
+                }
+            }
+        }
+    }
+
+    // ---- the records value-type checks (their records/interpret.ts
+    // extractValue — the RecordValueTypeMismatch family). Their type
+    // classifiers = the UNION over the five dialect sets
+    // (records/utils/data/sqlTypes.ts); the dispatch order = the null-ish
+    // short-circuit, enum, numeric, boolean, datetime, string, and
+    // unknown types stay unchecked.
+    fn norm_ty(ty: &str) -> String {
+        ty.split('(')
+            .next()
+            .unwrap_or("")
+            .to_lowercase()
+            .trim()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+    fn type_args(ty: &str) -> Vec<String> {
+        let inner = match ty.find('(') {
+            Some(k) => match ty[k + 1..].find(')') {
+                Some(e) => &ty[k + 1..k + 1 + e],
+                None => return Vec::new(),
+            },
+            None => return Vec::new(),
+        };
+        inner
+            .split(',')
+            .map(|a| a.trim().to_string())
+            .filter(|a| !a.is_empty())
+            .collect()
+    }
+    const INTEGER_TYPES: &[&str] = &[
+        "int",
+        "integer",
+        "smallint",
+        "bigint",
+        "tinyint",
+        "mediumint",
+        "serial",
+        "bigserial",
+        "smallserial",
+    ];
+    const FLOAT_TYPES: &[&str] = &[
+        "decimal",
+        "numeric",
+        "float",
+        "double",
+        "real",
+        "double precision",
+        "number",
+    ];
+    const BOOL_TYPES: &[&str] = &["bool", "boolean", "bit"];
+    const STRING_TYPES: &[&str] = &[
+        "varchar",
+        "char",
+        "text",
+        "tinytext",
+        "mediumtext",
+        "longtext",
+        "string",
+        "character",
+        "character varying",
+        "nvarchar",
+        "nchar",
+        "ntext",
+        "varchar2",
+        "nvarchar2",
+    ];
+    const DATETIME_TYPES: &[&str] = &[
+        "date",
+        "datetime",
+        "timestamp",
+        "time",
+        "timestamptz",
+        "timestamp with time zone",
+        "timestamp without time zone",
+        "timetz",
+        "time with time zone",
+        "time without time zone",
+        "datetime2",
+        "smalldatetime",
+        "timestamp with local time zone",
+    ];
+    const SERIAL_TYPES: &[&str] = &["serial", "smallserial", "bigserial"];
+    // their tryExtractDateTime (the luxon format list, pragmatic Rust):
+    // the time-only forms, the date-only forms, the space/T datetime
+    // forms, then the lax ISO fallback
+    fn valid_zone(z: &str) -> bool {
+        let b = z.as_bytes();
+        b.len() == 5
+            && b[2] == b':'
+            && b[..2].iter().all(|c| c.is_ascii_digit())
+            && b[3..].iter().all(|c| c.is_ascii_digit())
+    }
+    fn valid_time(s: &str) -> bool {
+        let s = s.strip_suffix('Z').unwrap_or(s);
+        let s = match s.char_indices().find(|(i, c)| *i >= 2 && (*c == '+' || *c == '-')) {
+            Some((k, _)) if valid_zone(&s[k + 1..]) => &s[..k],
+            _ => s,
+        };
+        let (hms, frac) = match s.split_once('.') {
+            Some((a, b)) => (a, Some(b)),
+            None => (s, None),
+        };
+        let parts: Vec<&str> = hms.split(':').collect();
+        if parts.len() != 3 {
+            return false;
+        }
+        let p2 = |p: &str| -> Option<u32> {
+            let b = p.as_bytes();
+            if b.len() == 2 && b.iter().all(|c| c.is_ascii_digit()) {
+                p.parse().ok()
+            } else {
+                None
+            }
+        };
+        let (Some(h), Some(m), Some(sec)) = (p2(parts[0]), p2(parts[1]), p2(parts[2])) else {
+            return false;
+        };
+        if h > 23 || m > 59 || sec > 59 {
+            return false;
+        }
+        frac.is_none_or(|f| !f.is_empty() && f.chars().all(|c| c.is_ascii_digit()))
+    }
+    fn days_in(month: usize, year: i64) -> usize {
+        match month {
+            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+            4 | 6 | 9 | 11 => 30,
+            2 => {
+                if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
+                    29
+                } else {
+                    28
+                }
+            }
+            _ => 0,
+        }
+    }
+    fn valid_iso_date(s: &str) -> bool {
+        let b = s.as_bytes();
+        if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
+            return false;
+        }
+        let (Ok(y), Ok(m), Ok(d)) = (s[0..4].parse::<i64>(), s[5..7].parse::<usize>(), s[8..10].parse::<usize>()) else {
+            return false;
+        };
+        m >= 1 && m <= 12 && d >= 1 && d <= days_in(m, y)
+    }
+    fn valid_mdy(s: &str) -> bool {
+        let parts: Vec<&str> = s.split('/').collect();
+        if parts.len() != 3 {
+            return false;
+        }
+        let (Ok(m), Ok(d), Ok(y)) = (
+            parts[0].parse::<usize>(),
+            parts[1].parse::<usize>(),
+            parts[2].parse::<i64>(),
+        ) else {
+            return false;
+        };
+        parts[0].len() <= 2
+            && parts[1].len() <= 2
+            && parts[2].len() == 4
+            && m >= 1
+            && m <= 12
+            && d >= 1
+            && d <= days_in(m, y)
+    }
+    const MONTHS: &[&str] = &[
+        "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+    ];
+    fn valid_d_mmm_yyyy(s: &str) -> bool {
+        let parts: Vec<&str> = s.split(' ').collect();
+        if parts.len() != 3 {
+            return false;
+        }
+        let (Ok(d), Ok(y)) = (parts[0].parse::<usize>(), parts[2].parse::<i64>()) else {
+            return false;
+        };
+        let Some(m) = MONTHS.iter().position(|mm| mm.eq_ignore_ascii_case(parts[1])) else {
+            return false;
+        };
+        parts[0].len() <= 2
+            && parts[2].len() == 4
+            && d >= 1
+            && d <= days_in(m + 1, y)
+    }
+    fn valid_mmm_d_yyyy(s: &str) -> bool {
+        let parts: Vec<&str> = s.split(' ').collect();
+        if parts.len() != 3 {
+            return false;
+        }
+        let Some(m) = MONTHS.iter().position(|mm| mm.eq_ignore_ascii_case(parts[0])) else {
+            return false;
+        };
+        let day = parts[1].strip_suffix(',');
+        let Some(Ok(d)) = day.map(|s| s.parse::<usize>()) else {
+            return false;
+        };
+        let (Ok(y), true) = (parts[2].parse::<i64>(), parts[1].len() <= 3 && parts[2].len() == 4)
+        else {
+            return false;
+        };
+        d >= 1 && d <= days_in(m + 1, y)
+    }
+    fn valid_datetime(s: &str) -> bool {
+        if valid_time(s) {
+            return true;
+        }
+        if valid_iso_date(s) || valid_mdy(s) || valid_d_mmm_yyyy(s) || valid_mmm_d_yyyy(s) {
+            return true;
+        }
+        // <date>(T| )<time> — the ISO-T form also accepts HH:mm (fromISO)
+        for (di, dc) in s.char_indices() {
+            if dc == 'T' || dc == ' ' {
+                let (d, t) = (&s[..di], &s[di + 1..]);
+                let date_ok =
+                    valid_iso_date(d) || valid_mdy(d) || valid_d_mmm_yyyy(d) || valid_mmm_d_yyyy(d);
+                if date_ok && (valid_time(t) || valid_iso_time_short(t)) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+    fn valid_iso_time_short(s: &str) -> bool {
+        // HH:mm (the fromISO lax time) — the zone rules as above
+        let s = s.strip_suffix('Z').unwrap_or(s);
+        let s = match s.char_indices().find(|(i, c)| *i >= 2 && (*c == '+' || *c == '-')) {
+            Some((k, _)) if valid_zone(&s[k + 1..]) => &s[..k],
+            _ => s,
+        };
+        let parts: Vec<&str> = s.split(':').collect();
+        if parts.len() != 2 {
+            return false;
+        }
+        let p2 = |p: &str| -> Option<u32> {
+            let b = p.as_bytes();
+            if b.len() == 2 && b.iter().all(|c| c.is_ascii_digit()) {
+                p.parse().ok()
+            } else {
+                None
+            }
+        };
+        match (p2(parts[0]), p2(parts[1])) {
+            (Some(h), Some(m)) => h <= 23 && m <= 59,
+            _ => false,
+        }
+    }
+    // their extractValue — the (message, explanation) for a value that
+    // fails its column's type, None when the value passes (or the type
+    // is not one of the checked families)
+    #[allow(clippy::too_many_arguments)]
+    fn value_type_check(
+        v: &super::ast::RecordValue,
+        col_name: &str,
+        tn: &str,
+        targs: &[String],
+        not_null: bool,
+        has_default: bool,
+        increment: bool,
+        enum_members: Option<&[String]>,
+    ) -> Option<(String, String)> {
+        let is_string = STRING_TYPES.contains(&tn);
+        let is_serial = SERIAL_TYPES.contains(&tn);
+        let null_branch = || {
+            (not_null && !has_default && !increment && !is_serial).then(|| (
+                format!("NULL not allowed for NOT NULL column `{col_name}` without a default value or auto-increment"),
+                format!("`{col_name}` is marked NOT NULL and has no default value or auto-increment."),
+            ))
+        };
+        match v {
+            // their FunctionExpressionNode: the backtick expression rides
+            // unchecked
+            super::ast::RecordValue::Expr(_) => None,
+            super::ast::RecordValue::Null => null_branch(),
+            super::ast::RecordValue::Text(t) if t.is_empty() && !is_string => null_branch(),
+            _ if enum_members.is_some() => {
+                // their enum branch: the quoted string or the bare
+                // variable; anything else (a number, a bool) misses
+                let val = match v {
+                    super::ast::RecordValue::Text(t) => Some(t.clone()),
+                    super::ast::RecordValue::Ident(i) => Some(i.clone()),
+                    _ => None,
+                };
+                let ok = val.is_some_and(|val| {
+                    enum_members.unwrap().iter().any(|m| *m == val)
+                });
+                (!ok).then(|| (
+                    format!("Invalid enum value for column `{col_name}`"),
+                    format!("`{col_name}` uses an enum type. The value must match one of the defined enum members."),
+                ))
+            }
+            _ if INTEGER_TYPES.contains(&tn) || FLOAT_TYPES.contains(&tn) => {
+                // their extractSignedNumber: the numeric literal (or a
+                // signed prefix) — quoted strings and bare words fail
+                let num = match v {
+                    super::ast::RecordValue::Number(n) => n.parse::<f64>().ok(),
+                    _ => None,
+                };
+                let Some(num) = num else {
+                    return Some((
+                        format!("Invalid numeric value for column `{col_name}`"),
+                        format!("`{col_name}` has type `{tn}` which expects a numeric value. Provide a valid integer or decimal."),
+                    ));
+                };
+                if INTEGER_TYPES.contains(&tn) && num.fract() != 0.0 {
+                    // their message formats the parsed JS number (2.50 ->
+                    // 2.5) — Rust's Display agrees for the common forms
+                    return Some((
+                        format!("Invalid integer value `{num}` for column `{col_name}`: expected integer, got decimal"),
+                        format!("`{col_name}` is an integer column and cannot store decimal values."),
+                    ));
+                }
+                if FLOAT_TYPES.contains(&tn) && !targs.is_empty() {
+                    let precision: u64 = targs[0].parse().unwrap_or(u64::MAX);
+                    let scale: u64 = targs.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+                    // their digit count runs on the number's toString
+                    let num_str = format!("{num}");
+                    let (ip, dp) = match num_str.split_once('.') {
+                        Some((a, b)) => (a, b),
+                        None => (num_str.as_str(), ""),
+                    };
+                    let ip = ip.trim_start_matches('-');
+                    let total = ip.len() + dp.len();
+                    if total as u64 > precision {
+                        return Some((
+                            format!("Numeric value `{num}` for column `{col_name}` exceeds precision: expected at most {precision} total digits, got {total}"),
+                            format!("`{col_name}` is defined as `{tn}({},{})`, allowing at most {precision} total digits. The value `{num}` has {total}.", targs[0], targs.get(1).map(|s| s.as_str()).unwrap_or("0")),
+                        ));
+                    }
+                    if dp.len() as u64 > scale {
+                        return Some((
+                            format!("Numeric value `{num}` for column `{col_name}` exceeds scale: expected at most {scale} decimal digits, got {}" , dp.len()),
+                            format!("`{col_name}` is defined as `{tn}({},{})`, allowing at most {scale} decimal places. The value `{num}` has {}.", targs[0], targs.get(1).map(|s| s.as_str()).unwrap_or("0"), dp.len()),
+                        ));
+                    }
+                }
+                None
+            }
+            _ if BOOL_TYPES.contains(&tn) => {
+                let ok = match v {
+                    super::ast::RecordValue::Bool(b) => Some(*b),
+                    super::ast::RecordValue::Number(n) => n.parse::<f64>().ok().and_then(|f| {
+                        if f == 0.0 {
+                            Some(false)
+                        } else if f == 1.0 {
+                            Some(true)
+                        } else {
+                            None
+                        }
+                    }),
+                    super::ast::RecordValue::Ident(i) => match i.to_lowercase().as_str() {
+                        "true" => Some(true),
+                        "false" => Some(false),
+                        _ => None,
+                    },
+                    super::ast::RecordValue::Text(t) => match t.to_lowercase().as_str() {
+                        "true" | "yes" | "y" | "t" | "1" => Some(true),
+                        "false" | "no" | "n" | "f" | "0" => Some(false),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                (!ok.is_some()).then(|| (
+                    format!("Invalid boolean value for column `{col_name}`"),
+                    format!("`{col_name}` is a boolean column. Use `true`/`false`, `1`/`0`, or `'yes'`/`'no'`."),
+                ))
+            }
+            _ if DATETIME_TYPES.contains(&tn) => {
+                // their tryExtractDateTime reads the QUOTED string only
+                let ok = match v {
+                    super::ast::RecordValue::Text(t) => valid_datetime(t),
+                    _ => false,
+                };
+                (!ok).then(|| (
+                    format!("Invalid datetime value for column `{col_name}`"),
+                    format!("`{col_name}` expects a date or time value. Supported formats include `'YYYY-MM-DD'`, `'HH:MM:SS'`, `'YYYY-MM-DD HH:MM:SS'`, `'MM/DD/YYYY'`, `'D MMM YYYY'`, or `'MMM D, YYYY'`."),
+                ))
+            }
+            _ if is_string => {
+                // their tryExtractString: the quoted text, else the
+                // number, else the boolean (the bare true/false pass)
+                let sval = match v {
+                    super::ast::RecordValue::Text(t) => Some(t.clone()),
+                    super::ast::RecordValue::Number(n) => Some(n.clone()),
+                    super::ast::RecordValue::Bool(b) => Some(b.to_string()),
+                    super::ast::RecordValue::Ident(i)
+                        if i.eq_ignore_ascii_case("true") || i.eq_ignore_ascii_case("false") =>
+                    {
+                        Some(i.to_lowercase())
+                    }
+                    _ => None,
+                };
+                let Some(sv) = sval else {
+                    return Some((
+                        format!("Invalid string value for column `{col_name}`"),
+                        format!("`{col_name}` is a string column. Values must be wrapped in quotes."),
+                    ));
+                };
+                if let Some(ml) = targs.first().and_then(|a| a.parse::<usize>().ok()) {
+                    if ml > 0 {
+                        let actual = sv.len(); // their UTF-8 byte length
+                        if actual > ml {
+                            return Some((
+                                format!("String value for column `{col_name}` exceeds maximum length: expected at most {ml} bytes (UTF-8), got {actual} bytes"),
+                                format!("`{col_name}` is defined as `{tn}({})`, limiting values to {ml} bytes in UTF-8 encoding. The provided value uses {actual} bytes.", targs[0]),
+                            ));
+                        }
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+    let mut value_type_errors: Vec<Diagnostic> = Vec::new();
+    for t in &doc.tables {
+        let Some(rec) = &t.records else {
+            continue;
+        };
+        if rec.rows.is_empty() {
+            continue;
+        }
+        for (ri, row) in rec.rows.iter().enumerate() {
+            for (vi, val) in row.iter().enumerate() {
+                let cname = if rec.columns.is_empty() {
+                    t.columns.get(vi).map(|c| c.name.clone())
+                } else {
+                    rec.columns.get(vi).cloned()
+                };
+                let Some(cname) = cname else {
+                    continue;
+                };
+                let Some(col) = t.columns.iter().find(|c| c.name == cname) else {
+                    continue;
+                };
+                let Some(span) = rec.value_spans.get(ri).and_then(|sp| sp.get(vi)) else {
+                    continue;
+                };
+                let tn = norm_ty(&col.ty);
+                let enum_members = doc
+                    .enums
+                    .iter()
+                    .find(|e| {
+                        e.name == tn && (e.schema.is_none() || e.schema.as_deref() == Some("public"))
+                    })
+                    .map(|e| e.values.iter().map(|v| v.name.clone()).collect::<Vec<_>>());
+                let targs = type_args(&col.ty);
+                let has_default = col
+                    .settings
+                    .default
+                    .as_deref()
+                    .map(|d| !d.eq_ignore_ascii_case("null"))
+                    .unwrap_or(false);
+                if let Some((msg, expl)) = value_type_check(
+                    val,
+                    &cname,
+                    &tn,
+                    &targs,
+                    col.settings.not_null == Some(true),
+                    has_default,
+                    col.settings.increment,
+                    enum_members.as_deref(),
+                ) {
+                    value_type_errors.push(Diagnostic::detail(
+                        span.start,
+                        span.end,
+                        msg,
+                        Severity::Info,
+                        Some("Record type errors".to_string()),
+                        vec![expl],
+                    ));
                 }
             }
         }
@@ -1987,6 +2484,22 @@ pub fn validate_with_parse(
                 *end,
                 format!("Expected {} values but got {}", expected, got),
             ));
+        }
+        out.sort_by_key(|d| d.offset);
+    }
+    // the records value-type findings ride the same interpret gate; a
+    // finding the constraint path already anchored (the same message at
+    // the same value span — their engine's dedupe) stays dropped
+    if !has_blocking_error {
+        for v in value_type_errors {
+            if !out.iter().any(|d| {
+                d.severity == v.severity
+                    && d.message == v.message
+                    && d.offset == v.offset
+                    && d.end == v.end
+            }) {
+                out.push(v);
+            }
         }
         out.sort_by_key(|d| d.offset);
     }
