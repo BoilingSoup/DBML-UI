@@ -5191,7 +5191,18 @@ fn ref_stmt(
                 // TRUE EOF)
                 let open_braces = toks.iter().filter(|t| t.kind == RTKind::LBrace).count()
                     - toks.iter().filter(|t| t.kind == RTKind::RBrace).count();
-                if (!dropped || input.is_empty()) && open_braces == 0 {
+                // t1 (`Ref { a.\nid > 'b.id`): a line ending in an
+                // incomplete infix — the trailing `.` (the member access
+                // with no right operand) — pulls the next line into the
+                // SAME field (the newline-less stream): the merged
+                // application = `a.id > 'b.id` spanning both lines
+                let incomplete_infix = toks
+                    .iter()
+                    .rev()
+                    .find(|t| t.kind != RTKind::Eof)
+                    .map(|t| t.kind == RTKind::Op && t.value == ".")
+                    .unwrap_or(false);
+                if (!dropped && !incomplete_infix || input.is_empty()) && open_braces == 0 {
                     break;
                 }
             }
@@ -5309,9 +5320,13 @@ fn ref_stmt(
                     scan_binding(a, &mut bindees);
                 }
                 for b in bindees {
-                    if b.variables.is_empty() || b.tuple.is_empty() {
+                    if b.variables.is_empty() {
                         continue;
                     }
+                    // t1: the broken binary's binder still rides — theirs
+                    // binds the LEFT endpoint's variables even when the
+                    // tuple side is missing (Table 'a' does not exist at
+                    // 1,7-1,8); only the variable-less bindees skip
                     field_chains.push(super::ast::BinderChain {
                         vars: b.variables.iter().map(var_pair).collect(),
                         tuple: b.tuple.iter().map(var_pair).collect(),
@@ -5324,6 +5339,9 @@ fn ref_stmt(
                 break;
             }
             if chained_end.is_empty() {
+                // t1: the merged field consumed to EOF — their
+                // blockExpression's close consume errs at the EOF token
+                errs.push(err_at(offset(input, base), "Expect a closing brace '}'"));
                 break;
             }
         }
@@ -6258,6 +6276,11 @@ impl RParser<'_> {
             _ => {
                 if self.at_end() {
                     self.errs.push(err_at(t.start, "Unexpected EOF"));
+                    // t1: their operand at EOF READS the EOF token — the
+                    // Empty lands at the EOF point and the application's
+                    // node union reaches it (the field errors anchor
+                    // 1,7-2,11, not the `>`'s end)
+                    self.pos = self.toks.len();
                 } else {
                     // their leftExpression_bp checks isOpToken FIRST: an
                     // op with no prefix form (the member dot) errs
