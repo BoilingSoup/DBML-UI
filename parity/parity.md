@@ -1684,3 +1684,77 @@ dumps /tmp/mut-ours-r99.json + /tmp/m43-ours-r99.json, the lists
 - The stale canvas::editor::error_tests fixtures (the 3 pre-existing
   failures at HEAD, outside the recorded gates);
 - Iterate until a full round adds zero new mechanisms.
+
+## Round 100 addendum — THE REF-BRACKET CLUSTER LANDED (the stray-`]` statement junk, the Empty field, the chain doubling) + the nb6 correction
+
+SCOPE NOTE: the index-field paren-name cluster and the m43_0242
+records-comma cluster are TRANSFERRED to Agent D
+(/home/boilingsoup/Dev/dbml-ui-parity-d) — not probed, not edited here.
+The records/index/column function families = D's; a dispatch-level
+change D requests stays ours. This round's queue = the ref machinery.
+
+THE FOUR MECHANISMS (all probe-exact, all battery-promoted):
+
+1. THE STRAY-`]` STATEMENT JUNK (nb11/rA/rB): a bracket torn by the
+   header's discardUntil (`Ref` + the name + `a int [x: y]` — the
+   discard stops at the colon INSIDE the bracket, `[x` dropped) or an
+   inline-ref tail leaves a leftover `]`; their parse = the element's
+   body application stops at it and the PROGRAM walk errs 'Expect an
+   identifier' @ the `]` token + a one-token sync (the program junk
+   rule). Ours' pipeline swallowed it inside skip_line. THE FIX: after
+   ref_body_pipeline_mode's application(), the leftover RBracket (when
+   not poisoned) errs 'Expect an identifier' @ the token span. nb11 =
+   5/5, rA 5/5, rB 3/3.
+2. THE BLOCK LEFTOVER-`]` FIELD (rC `Ref { a.b > c.d ] }`): their
+   blockExpression = TOKEN-based — field 1 = the clean binary, the
+   leftover `]` starts the NEXT field: 'Invalid start of operand "]"'
+   @ the `]`, the Empty field (prevToken = the `]`) rides
+   validateFields → the trio (REF_REDEFINED if >1 + not-binary +
+   unequal) at the bracket's END point (zero-width), the
+   synchronizeBlock advance skips the rest of the line silently. Ours'
+   line-based walk dropped it. THE FIX: after the block walk's
+   field handling, the leftover RBracket emits the operand error + the
+   trio @ (rb.end, rb.end) and the parser skips to the line end. rC =
+   6/6 (the missing-tables single — mechanism 3 made that true).
+3. THE CHAIN DOUBLING (rE/rF/m43_0444): a clean ref block's field 1
+   binds the model ref (validate.rs check_endpoint renders the
+   missing-tables) AND the block walk pushed the same field's chains
+   (bind_chain renders them AGAIN) — the missing-tables doubled.
+   Theirs = the model covers field 1, bindFields covers fields 2+.
+   THE FIX: `model_bound` gates the field-1 callee chains (the args'
+   chains still ride; a non-binding model keeps the chains as the
+   fallback — the t1 rule unchanged). m43_0444 = the seed case that
+   converged EXACTLY on this fix.
+4. THE NB6 MESSAGE CORRECTION: ours' body_bracket_scan `}`-operand
+   error carried the LITERAL `"Invalid start of operand \"{}\""` where
+   theirs quotes the token value (`"}"`). THE ROUND-99 BATTERY RECORD
+   WAS WRONG on nb6 — the round-99 "132/132" claim missed this message
+   delta (the current battery run caught it; the mechanism: the
+   message was hardcoded, not formatted). Fixed: the message = the
+   literal `"}"` (the scan's `}` arm). The r99-addendum "nb6 = exact"
+   line is superseded by this correction.
+
+THE GATES: run.mjs 78/78, run_schema.mjs 78/78, battery **138/138**
+(the 6 promotions: nb11 + rA/rB/rC/rE/rF), lib 122/122, editor 61/61,
+fmt/fuzz/oracle — all green.
+THE SEEDS: **seed-77 = 151/300 (+0), seed-43 = 324/600 (+1, m43_0444)**
+— NO regressions (the divergent-list diff = zero entries either way
+besides m43_0444 leaving). The mutation composites carry few
+stray-`]`-ref/doubling shapes; the message-delta ledger is otherwise
+FLAT (the r99↔r100 totals identical outside the nb6 message flip) —
+the fixes are probe-verified mechanisms whose seed weight is small;
+the composite queue (the m77_0099 cascade, s5) remains the weight.
+The dumps = /tmp/agentA-ours-r100-77.json + /tmp/agentA-ours-r100-43.json
+(the divergent lists /tmp/agentA-div-r100-{77,43}.json; the theirs
+dumps = the r96 pins, upstream unchanged).
+
+## Round 101 queue
+
+- The composite queue: the m77_0099-family cascade (the 'Expect an
+  identifier' over-fire remains the widest signature: 38 extra seed-77
+  / 84 extra seed-43 — the round-74 per-flow guards), s5's span
+  puzzle;
+- The emergent clusters rooted in the settings/body/ref machinery;
+- OWNED ELSEWHERE: the index-field paren-name + the m43_0242
+  records-comma (Agent D — the records/index/column function
+  families); dispatch-level changes D requests = ours.

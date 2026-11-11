@@ -439,7 +439,7 @@ fn body_bracket_scan(
                 errs.push(ParseError {
                     offset: s,
                     end: Some(s + 1),
-                    message: "Invalid start of operand \"{}\"".to_string(),
+                    message: "Invalid start of operand \"}\"".to_string(),
                 });
                 // the operand-start damage ENDS the scan — the node point
                 // lands right after the brace (nb6: [3,2)-(3,2))
@@ -6188,6 +6188,7 @@ fn ref_stmt(
                     ));
                 }
                 // field 1 of a clean binary binds the model relationship
+                let mut model_bound = false;
                 if field_index == 1 && model.is_none() {
                     if let RNode::Infix { op, left, right, .. } = &**callee {
                         if is_binary_relationship(callee) {
@@ -6195,14 +6196,21 @@ fn ref_stmt(
                                 ref_block_model(&rp, op, left, right)
                             {
                                 model = Some(parts);
+                                model_bound = true;
                             }
                         }
                     }
                 }
                 // the binder chains (their bindFields) — the same scan the
-                // `Ref:` line path runs, for validate.rs's endpoint checks
+                // `Ref:` line path runs, for validate.rs's endpoint checks.
+                // The bound model ref renders field 1's endpoint checks
+                // (validate.rs check_endpoint); pushing the same chains
+                // doubles the missing-table diagnostics (probe rE/rF:
+                // theirs renders a clean ref block's missing tables ONCE)
                 let mut bindees = Vec::new();
-                scan_binding(callee, &mut bindees);
+                if !model_bound {
+                    scan_binding(callee, &mut bindees);
+                }
                 for a in args {
                     scan_binding(a, &mut bindees);
                 }
@@ -6220,6 +6228,39 @@ fn ref_stmt(
                         group: false,
                     });
                 }
+            }
+            // their blockExpression: the leftover `]` starts the NEXT
+            // field (probe rC `Ref { a.b > c.d ] }`): 'Invalid start of
+            // operand "]"' on the bracket, the Empty field rides
+            // validateFields (the trio at the bracket's END point), and
+            // the synchronizeBlock advance skips the rest of the line
+            // silently
+            if rp.poisoned.is_none() && rp.peek().kind == RTKind::RBracket {
+                let rb = rp.peek().clone();
+                rp.errs.push(ParseError {
+                    offset: rb.start,
+                    end: Some(rb.end),
+                    message: format!("Invalid start of operand \"{}\"", rb.value),
+                });
+                field_index += 1;
+                if field_index > 1 {
+                    field_errors.push((
+                        rb.end,
+                        rb.end,
+                        "A Ref can only contain one binary relationship".to_string(),
+                    ));
+                }
+                field_errors.push((
+                    rb.end,
+                    rb.end,
+                    "A Ref field must be a binary relationship".to_string(),
+                ));
+                field_errors.push((
+                    rb.end,
+                    rb.end,
+                    "Unequal fields in ref endpoints".to_string(),
+                ));
+                rp.pos = rp.toks.len();
             }
             if chain_brace {
                 let _ = eat(input, "}");
@@ -7808,6 +7849,19 @@ fn ref_body_pipeline_mode(
         arg_spans: Vec::new(),
     };
     let tree = p.application();
+    // the statement-level junk: their program walk consumes the leftover
+    // `]` (the torn bracket — `[x` dropped by the header's discardUntil,
+    // probe nb11/rA; the inline tail — probe rB) with 'Expect an
+    // identifier' + a one-token sync; the poisoned case skips the line
+    // via synchronizeBlock silently
+    if p.poisoned.is_none() && p.peek().kind == RTKind::RBracket {
+        let t = p.peek().clone();
+        p.errs.push(ParseError {
+            offset: t.start,
+            end: Some(t.end),
+            message: "Expect an identifier".to_string(),
+        });
+    }
     if let RNode::App { callee, args, .. } = &tree {
         // their CompileError anchors carry NODE spans: the callee errors
         // anchor field.callee [start..callee end], the per-side column
