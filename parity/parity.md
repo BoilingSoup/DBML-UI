@@ -1165,3 +1165,29 @@ edit!).
 - The composite queue (the m77_0099-family cascade, s5's span puzzle,
   the colon-op cluster, the index-field paren-name, m43_0242
   records-comma).
+
+## Round 84 addendum — the emitter found, the sibling fix landed, the second emitter remains
+
+The DBGD instrumentation (the type_str's dq-arm + the backtick-EOF
+site) ran the w1: **the backtick-EOF fired at abs 29 = the space right
+after `check:`** — the type_str path reaches the backtick value and
+treats it as an unterminated quote-scan. THE FIX = the type_str's
+backtick-quoted branch (the dq-sibling): the verbatim consume to the
+close backtick. LANDED (the safe sibling-add; the battery/corpus/lib
+green).
+
+BUT w1's cascade PERSISTS = a SECOND emitter (the same shape at the
+same position — the type_str fix = not the w1's path). The round-85 =
+the DBGD instrument restored (the type_str's dq/backtick arms + the
+note_value's backtick path), the w1 run = the second emitter's
+identity, the fix at that caller, THEN the comma-check (the verified
+insert). The composite queue = the background.
+
+## Round 85 queue
+
+- The DBGD instrument restored (the verified insert), the w1 run = the
+  second emitter, the fix at that caller;
+- THEN the comma-check (the verified insert);
+- The composite queue (the m77_0099-family cascade, s5's span puzzle,
+  the colon-op cluster, the index-field paren-name, m43_0242
+  records-comma).
