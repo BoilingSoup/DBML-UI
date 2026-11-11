@@ -4536,47 +4536,138 @@ fn custom_element(
                     // `:`/`1`/`,`/`]`) — the name = the ALPHA-LEAD token
                     // (their consume(IDENTIFIER) rejects the digit-lead:
                     // h1's `1` logs)
-                    if input.starts_with(|c: char| {
+                    let name_lead = input.starts_with(|c: char| {
                         c.is_ascii_alphabetic() || c == '_'
-                    }) && ident(input, base).is_ok()
-                    {
+                    });
+                    let key_name = if name_lead {
+                        ident(input, base).ok()
+                    } else {
+                        None
+                    };
+                    if let Some(key_name) = key_name {
                         ws(input);
                         if eat(input, ":") {
                             ws(input);
-                            // the value = the operand run: the `]`/`}` =
-                            // the consume-log + stop, the rest = silent
-                            // (the ref-binder entries = the round-62
-                            // queue)
-                            loop {
-                                ws(input);
-                                if input.is_empty()
-                                    || input.starts_with(['\n', '\r'])
-                                {
-                                    break;
-                                }
-                                let vs2 = offset(input, base);
-                                if input.starts_with(']')
-                                    || input.starts_with('}')
-                                {
-                                    let mut p3 = *input;
-                                    let tl3 =
-                                        consume_one_token(&mut p3)
+                            if key_name == "ref" {
+                                // the ref-SETTING entry (the h1 map): the
+                                // value = the ref-FIELD parse — the
+                                // cardinality-op token + the endpoint
+                                // streams (`a.b`); the endpoints != 2 errs
+                                // the binary + the unequal pair over the
+                                // value-run, each endpoint's table errs
+                                // the missing-table binder (m77_0039's
+                                // `?<> orders.code` = one endpoint → all
+                                // three at 4,38-4,53/4,42-4,48)
+                                let vstart = offset(input, base);
+                                let mut endpoints: Vec<(usize, usize, Option<String>)> =
+                                    Vec::new();
+                                loop {
+                                    ws(input);
+                                    if input.is_empty()
+                                        || input.starts_with(['\n', '\r', ',', ']'])
+                                    {
+                                        break;
+                                    }
+                                    if input.starts_with('}') {
+                                        break;
+                                    }
+                                    let b3 = input.as_bytes()[0];
+                                    if is_op_char(b3) {
+                                        // the cardinality/op token
+                                        let mut p4 = *input;
+                                        let tl4 = consume_one_token(&mut p4)
                                             .unwrap_or(1);
-                                    let tl3 = tl3.min(input.len());
+                                        let tl4 = tl4.min(input.len());
+                                        *input = &input[tl4..];
+                                        continue;
+                                    }
+                                    // the endpoint stream: ident(.ident)*
+                                    // — the TABLE = the FIRST segment
+                                    // (h1's `orders.code`: the missing-table
+                                    // anchors 'orders', not the column)
+                                    let es = offset(input, base);
+                                    let first_seg = ident(input, base).ok();
+                                    let Some(first) = first_seg else {
+                                        let mut p4 = *input;
+                                        let tl4 = consume_one_token(&mut p4)
+                                            .unwrap_or(1);
+                                        let tl4 = tl4.min(input.len());
+                                        *input = &input[tl4..];
+                                        continue;
+                                    };
+                                    let mut table: Option<String> = None;
+                                    loop {
+                                        ws(input);
+                                        if input.starts_with('.') {
+                                            let _ = eat(input, ".");
+                                            ws(input);
+                                            if table.is_none() {
+                                                table = Some(first.clone());
+                                            }
+                                            if ident(input, base).is_err() {
+                                                break;
+                                            }
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                    let ee = offset(input, base);
+                                    endpoints.push((es, ee, table));
+                                }
+                                let vend = offset(input, base);
+                                if endpoints.len() != 2 {
                                     errs.push(ParseError {
-                                        offset: vs2,
-                                        end: Some(vs2 + tl3),
-                                        message: "Expect an identifier"
+                                        offset: vstart,
+                                        end: Some(vend.max(vstart + 1)),
+                                        message: "A Ref field must be a binary relationship"
                                             .to_string(),
                                     });
-                                    *input = &input[tl3..];
-                                    break;
+                                    errs.push(ParseError {
+                                        offset: vstart,
+                                        end: Some(vend.max(vstart + 1)),
+                                        message: "Unequal fields in ref endpoints"
+                                            .to_string(),
+                                    });
                                 }
-                                let mut p3 = *input;
-                                let tl3 = consume_one_token(&mut p3)
-                                    .unwrap_or(1);
-                                let tl3 = tl3.min(input.len());
-                                *input = &input[tl3..];
+                                // the missing-table check = the
+                                // DOC-dependent (the validate-layer's) —
+                                // the direct push fires on the VALID
+                                // tables too (m77_0039) and stays queued
+                                // for the binder-chains path
+                            } else {
+                                // the value = the operand run: the `]`/`}` =
+                                // the consume-log + stop, the rest = silent
+                                loop {
+                                    ws(input);
+                                    if input.is_empty()
+                                        || input.starts_with(['\n', '\r'])
+                                    {
+                                        break;
+                                    }
+                                    let vs2 = offset(input, base);
+                                    if input.starts_with(']')
+                                        || input.starts_with('}')
+                                    {
+                                        let mut p3 = *input;
+                                        let tl3 =
+                                            consume_one_token(&mut p3)
+                                                .unwrap_or(1);
+                                        let tl3 = tl3.min(input.len());
+                                        errs.push(ParseError {
+                                            offset: vs2,
+                                            end: Some(vs2 + tl3),
+                                            message: "Expect an identifier"
+                                                .to_string(),
+                                        });
+                                        *input = &input[tl3..];
+                                        break;
+                                    }
+                                    let mut p3 = *input;
+                                    let tl3 = consume_one_token(&mut p3)
+                                        .unwrap_or(1);
+                                    let tl3 = tl3.min(input.len());
+                                    *input = &input[tl3..];
+                                }
                             }
                         }
                         continue;
