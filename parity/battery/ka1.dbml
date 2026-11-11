@@ -1,0 +1,6 @@
+Table t {
+  Note: 'table note'
+  `x`
+  {}
+}
+Ref r0: a.name <>? a.id

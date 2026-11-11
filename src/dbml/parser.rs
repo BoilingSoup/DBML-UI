@@ -2772,6 +2772,39 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
             message: String::new(),
             partial_occs: Vec::new(),
         });
+    } else if gather.starts_with('[') || gather.starts_with('{') {
+        // a bracket/block node at the callee position (m43_0041: a
+        // `[default: …]` list alone on the line; m43_0549: a `{}` block)
+        // = a VALID expression that is not a variable — the same flow as
+        // the `(`-tuple callee arm: the name check anchors the NODE (the
+        // balanced scan), the type flow continues (args=[] → the type
+        // error on the same span)
+        let open = gather.as_bytes()[0];
+        let close = if open == b'[' { b']' } else { b'}' };
+        let n_start = offset(input, base);
+        let mut depth = 0i32;
+        let mut end = input.len();
+        for (k, &c) in input.as_bytes().iter().enumerate() {
+            if c == open {
+                depth += 1;
+            } else if c == close {
+                depth -= 1;
+                if depth == 0 {
+                    end = k + 1;
+                    break;
+                }
+            }
+        }
+        *input = &input[end..];
+        let n_end = offset(input, base);
+        binder_errors.push((
+            n_start,
+            n_end,
+            "A column name must be an identifier or a quoted identifier".to_string(),
+        ));
+        name_off = n_start;
+        name = String::new();
+        name_end = n_end;
     } else if input.starts_with(|c: char| c.is_ascii_digit()) {
         // (d) a digit-leading token is a NUMBER node in their stream — the
         // name check errs at it and the walk CONTINUES (probe w3: `123

@@ -1,0 +1,5 @@
+Table _x {
+  x bool 
+[default: 1, default: 'x']
+  name text [not null, unique]
+}
