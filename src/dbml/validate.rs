@@ -75,6 +75,32 @@ impl Diagnostic {
             quick_fixes: Vec::new(),
         }
     }
+
+    /// The full-shape constructor for the info-class findings (the
+    /// record-constraint infos carry a category, an explanation and the
+    /// VALUE token's own span).
+    pub fn detail(
+        offset: usize,
+        end: usize,
+        message: String,
+        severity: Severity,
+        category: Option<String>,
+        explanation: Vec<String>,
+    ) -> Self {
+        let mut d = Self {
+            offset,
+            end: None,
+            message,
+            severity,
+            category,
+            explanation,
+            quick_fixes: Vec::new(),
+        };
+        if end > offset {
+            d.end = Some(end);
+        }
+        d
+    }
 }
 
 
@@ -423,8 +449,13 @@ pub fn validate_with_parse(
     let mut enums: Vec<&str> = Vec::new();
     for e in &doc.enums {
         if enums.contains(&e.name.as_str()) {
-            out.push(Diagnostic::plain(
-                e.span.end,
+            // their dup marker anchors the duplicate declaration's NAME
+            // token (their schema dup map: errorNode = declaration.name —
+            // the same rule as the table dup above; corpus dup-enum
+            // 2,6-2,7)
+            out.push(Diagnostic::spanned(
+                e.name_span.start,
+                e.name_span.end,
                 format!("Enum '{}' already exists in schema 'public'", e.name),
             ));
         }
@@ -432,10 +463,15 @@ pub fn validate_with_parse(
     }
     // duplicate column names (their table binder, table/index.ts: the
     // seen-map flags EVERY repeat and re-flags the first sighting — 3
-    // twins yield 4 errors; anchors are the column name nodes)
+    // twins yield 4 errors; anchors are the column name nodes). Their
+    // guard: a column whose NAME symbol is undefined (our parser's
+    // empty-name recovery for junk fields) skips the machinery entirely
     for t in &doc.tables {
         let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
         for (i, c) in t.columns.iter().enumerate() {
+            if c.name.is_empty() {
+                continue;
+            }
             if let Some(&first) = seen.get(c.name.as_str()) {
                 let msg = format!("Duplicate column '{}'", c.name);
                 // their anchor = the column's full node (name through the
@@ -454,17 +490,226 @@ pub fn validate_with_parse(
         }
     }
 
-    // their engine flags EVERY occurrence of a duplicated enum field —
-    // the first twin included (probe: both 'x' rows on `Enum e { x\n x }`)
+    // their enum binder's seen-map flags EVERY repeat and re-flags the
+    // first sighting — 3 twins yield 4 errors (the same rule as the
+    // duplicate columns above; probe p3). The anchor = the field NODE:
+    // name .. the settings end (probe p1: `x [note: 'n']` spans the
+    // whole field), never a point
     for e in &doc.enums {
-        for v in &e.values {
-            if e.values.iter().filter(|o| o.name == v.name).count() > 1 {
-                out.push(Diagnostic::plain(
-                    v.name_span.start,
-                    format!("Duplicate enum field '{}'", v.name),
+        let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for (i, v) in e.values.iter().enumerate() {
+            if v.name.is_empty() {
+                continue;
+            }
+            if let Some(&first) = seen.get(v.name.as_str()) {
+                let msg = format!("Duplicate enum field '{}'", v.name);
+                out.push(Diagnostic::spanned(
+                    e.values[first].name_span.start,
+                    e.values[first].full_end,
+                    msg.clone(),
+                ));
+                out.push(Diagnostic::spanned(v.name_span.start, v.full_end, msg));
+            } else {
+                seen.insert(v.name.as_str(), i);
+            }
+        }
+    }
+
+    // their table/tableGroup validateSubElements (table/validate.ts:167
+    // + tableGroup/validate.ts:131, NOTE_REDEFINED 3046): more than one
+    // Note-kind sub-element in the body -> EVERY one errs, anchored at
+    // its element span. The colon entries and the block declarations
+    // BOTH count (probes zc4/zc5 — the handoff's block-only note was
+    // wrong); the TableGroup collection covers the colon form (n4; the
+    // group's block-note arm = a parse-side gap, recorded).
+    for t in &doc.tables {
+        if t.note_element_spans.len() > 1 {
+            for sp in &t.note_element_spans {
+                out.push(Diagnostic::spanned(
+                    sp.start,
+                    sp.end,
+                    "Duplicate notes are defined".to_string(),
                 ));
             }
         }
+    }
+    for g in &doc.table_groups {
+        if g.note_element_spans.len() > 1 {
+            for sp in &g.note_element_spans {
+                out.push(Diagnostic::spanned(
+                    sp.start,
+                    sp.end,
+                    "Duplicate notes are defined".to_string(),
+                ));
+            }
+        }
+    }
+
+    // their schema-member dup machinery covers TableGroups and top-level
+    // sticky Notes too (the anchor = the declaration's NAME token — the
+    // schema dup map's errorNode = declaration.name; each LATER
+    // declaration flags, the tables/enums rule), plus the group-field
+    // checks: the within-group seen-map (first re-flagged per repeat —
+    // the enum-field rule; the fullname = the WRITTEN member under the
+    // default schema — probes g15/g16) and the membership map
+    // (program/bind.ts: the RESOLVED table claimed by its first group;
+    // every later claimant errs, the same group's repeats included —
+    // g13; unresolved members skip the machinery — g16). The group/note
+    // ASTs carry no name/member spans, so the tokens are re-scanned from
+    // the source: their name-form = one identifier or quoted identifier,
+    // and a bound member = a pure identifier line (comma-runs and
+    // continuations bind nothing — probes g5/g9/g10).
+    fn scan_name_token(src: &str, elem_start: usize) -> Option<Span> {
+        let text = src.get(elem_start..)?;
+        let bytes = text.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let start = i;
+        if i >= bytes.len() {
+            return None;
+        }
+        if bytes[i] == b'"' || bytes[i] == b'\'' {
+            let q = bytes[i];
+            i += 1;
+            while i < bytes.len() && bytes[i] != q {
+                i += 1;
+            }
+            if i < bytes.len() {
+                i += 1;
+            }
+            return Some(elem_start + start..elem_start + i);
+        }
+        while i < bytes.len()
+            && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] >= 0x80)
+        {
+            i += 1;
+        }
+        if i == start {
+            return None;
+        }
+        Some(elem_start + start..elem_start + i)
+    }
+
+    fn scan_group_members(src: &str, gspan: &Span) -> Vec<(String, Span)> {
+        let mut out = Vec::new();
+        let Some(text) = src.get(gspan.start..gspan.end) else {
+            return out;
+        };
+        let Some(open_rel) = text.find('{') else {
+            return out;
+        };
+        let mut depth = 0i32;
+        let mut end_rel = text.len();
+        for (i, &b) in text.as_bytes().iter().enumerate().skip(open_rel) {
+            match b {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end_rel = i + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let ident = |s: &str| {
+            s.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_')
+                && s.chars().all(|c| c.is_alphanumeric() || c == '_')
+        };
+        let mut off = open_rel + 1;
+        for line in text[open_rel + 1..end_rel].split('\n') {
+            let line_start = off;
+            off += line.len() + 1;
+            let content = match line.find("//") {
+                Some(k) => &line[..k],
+                None => line,
+            };
+            // the block's own close may share the member's line (the
+            // inline form) — it rides outside the member
+            let content = match content.find('}') {
+                Some(k) => &content[..k],
+                None => content,
+            };
+            let t = content.trim();
+            if ident(t) {
+                let lead = content.len() - content.trim_start().len();
+                let s = gspan.start + line_start + lead;
+                out.push((t.to_string(), s..s + t.len()));
+            }
+        }
+        out
+    }
+
+    let mut group_names: Vec<&str> = Vec::new();
+    for g in &doc.table_groups {
+        if group_names.contains(&g.name.as_str()) {
+            if let Some(sp) = scan_name_token(src, g.span.start) {
+                out.push(Diagnostic::spanned(
+                    sp.start,
+                    sp.end,
+                    format!(
+                        "TableGroup '{}' already exists in schema 'public'",
+                        g.name
+                    ),
+                ));
+            }
+        }
+        group_names.push(&g.name);
+    }
+    let mut note_names: Vec<&str> = Vec::new();
+    for n in &doc.notes {
+        if note_names.contains(&n.name.as_str()) {
+            if let Some(sp) = scan_name_token(src, n.span.start) {
+                out.push(Diagnostic::spanned(
+                    sp.start,
+                    sp.end,
+                    format!("Duplicate Note '{}' in schema 'public'", n.name),
+                ));
+            }
+        }
+        note_names.push(&n.name);
+    }
+    let mut field_dups: Vec<(usize, usize, String)> = Vec::new();
+    let mut reappears: Vec<(usize, usize, String)> = Vec::new();
+    let mut member_owner: std::collections::HashMap<usize, &str> =
+        std::collections::HashMap::new();
+    for g in &doc.table_groups {
+        let members = scan_group_members(src, &g.span);
+        let mut seen: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
+        for (i, (name, sp)) in members.iter().enumerate() {
+            if let Some(&first) = seen.get(name.as_str()) {
+                let msg = format!("Duplicate TableGroupField 'public.{name}'");
+                field_dups.push((members[first].1.start, members[first].1.end, msg.clone()));
+                field_dups.push((sp.start, sp.end, msg));
+            } else {
+                seen.insert(name.as_str(), i);
+            }
+            if let Some(t) = doc.tables.iter().find(|t| t.matches(name)) {
+                let ti = doc.tables.iter().position(|x| std::ptr::eq(x, t)).unwrap_or(0);
+                if let Some(owner) = member_owner.get(&ti) {
+                    reappears.push((
+                        sp.start,
+                        sp.end,
+                        format!("Table \"{name}\" already appears in group \"{owner}\""),
+                    ));
+                } else {
+                    member_owner.insert(ti, g.name.as_str());
+                }
+            }
+        }
+    }
+    for (s, e, msg) in field_dups {
+        out.push(Diagnostic::spanned(s, e, msg));
+    }
+    for (s, e, msg) in reappears {
+        out.push(Diagnostic::spanned(s, e, msg));
     }
 
     // every ref endpoint must resolve to a real table and column (block
@@ -1355,7 +1600,11 @@ pub fn validate_with_parse(
                     table: &t.name,
                     cols: std::slice::from_ref(&c.name),
                     token: c.name_span.start,
-                    token_end: c.ty_end,
+                    // their lint anchors the resolved COLUMN NODE (name ..
+                    // the settings end, full_end) — the hard-won rule;
+                    // probe p2: `a_id integer [ref: > a.id]` anchors
+                    // 3,3-3,29 (through the `]`), not the type end
+                    token_end: c.full_end,
                 },
                 right: Side {
                     table: if host_of_bare { &t.name } else { &ir.to.table },
@@ -1397,16 +1646,35 @@ pub fn validate_with_parse(
             rec.columns.iter().position(|c| c == col)
         }
     };
+    // their formatValues (records/utils/constraints/helper.ts) renders
+    // the row value with JSON.stringify — strings carry double quotes,
+    // numbers normalize through the parsed form (2.50 -> 2.5)
+    let json_quote = |t: &str| -> String {
+        format!("\"{}\"", t.replace('\\', "\\\\").replace('"', "\\\""))
+    };
+    let json_label = |v: &super::ast::RecordValue| -> String {
+        match v {
+            super::ast::RecordValue::Null => "null".to_string(),
+            super::ast::RecordValue::Bool(b) => b.to_string(),
+            super::ast::RecordValue::Number(n) => n
+                .parse::<f64>()
+                .map(|f| format!("{f}"))
+                .unwrap_or_else(|_| n.clone()),
+            super::ast::RecordValue::Text(t) => json_quote(t),
+            super::ast::RecordValue::Ident(i) => json_quote(i),
+            super::ast::RecordValue::Expr(e) => json_quote(e),
+        }
+    };
     let recorded_values = |rec: &super::ast::TableRecords,
                            idx: usize|
-     -> Vec<(String, Span)> {
+     -> Vec<(String, Span, String)> {
         rec.rows
             .iter()
             .zip(rec.value_spans.iter())
             .filter_map(|(row, spans)| {
-                row.get(idx)
-                    .zip(spans.get(idx))
-                    .map(|(v, s)| (v.label(), s.clone()))
+                row.get(idx).zip(spans.get(idx)).map(|(v, s)| {
+                    (v.label(), s.clone(), json_label(v))
+                })
             })
             .collect()
     };
@@ -1450,7 +1718,7 @@ pub fn validate_with_parse(
         // the child's recorded FK values must exist on the parent
         if let Some(fk_rec) = fk_rec {
             if !fk_rec.rows.is_empty() {
-                for (v, span) in &fk_vals {
+                for (v, span, json) in &fk_vals {
                     // their null handling: an empty or literal-null cell on
                     // a required FK column emits BOTH the NULL-not-allowed
                     // note and the must-not-be-NULL violation (probe:
@@ -1458,9 +1726,10 @@ pub fn validate_with_parse(
                     let is_null = v.is_empty() || v.eq_ignore_ascii_case("null");
                     // their message renders the empty string as `null`
                     let shown = if v.is_empty() { "null" } else { v.as_str() };
+                    let _ = shown;
                     if is_null {
                         let required = parent_vals.len() == 0
-                            || parent_vals.iter().any(|(pv, _)| pv.is_empty());
+                            || parent_vals.iter().any(|(pv, _, _)| pv.is_empty());
                         let _ = required;
                         let col_required = doc
                             .tables
@@ -1470,49 +1739,49 @@ pub fn validate_with_parse(
                             .and_then(|c| c.settings.not_null)
                             .unwrap_or(false);
                         if col_required {
-                            out.push(Diagnostic {
-            end: None,
-                                offset: span.start,
-                                message: format!(
+                            // their anchor = the record VALUE's own token
+                            // span (corpus records-null-in-required:
+                            // `''` = 6,8-6,10, the quotes included)
+                            out.push(Diagnostic::detail(
+                                span.start,
+                                span.end,
+                                format!(
                                     "NULL not allowed for NOT NULL column `{fk_col}` without a default value or auto-increment"
                                 ),
-                                severity: Severity::Info,
-                                category: Some("Record type errors".to_string()),
-                                explanation: vec![format!(
+                                Severity::Info,
+                                Some("Record type errors".to_string()),
+                                vec![format!(
                                     "`{fk_col}` is marked NOT NULL and has no default value or auto-increment."
                                 )],
-                                quick_fixes: vec![],
-                            });
+                            ));
                         }
-                        out.push(Diagnostic {
-            end: None,
-                            offset: span.start,
-                            message: format!(
+                        out.push(Diagnostic::detail(
+                            span.start,
+                            span.end,
+                            format!(
                                 "FK violation: `{fk_tbl}.{fk_col}` = `{shown}` must not be NULL"
                             ),
-                            severity: Severity::Info,
-                            category: Some("Record constraint violations".to_string()),
-                            explanation: vec![format!(
+                            Severity::Info,
+                            Some("Record constraint violations".to_string()),
+                            vec![format!(
                                 "`{fk_tbl}.{fk_col}` references `{parent_tbl}.{parent_col}`, so every row must have a non-null value."
                             )],
-                            quick_fixes: vec![],
-                        });
+                        ));
                         continue;
                     }
-                    if !parent_vals.iter().any(|(pv, _)| pv == v) {
-                        out.push(Diagnostic {
-            end: None,
-                            offset: span.start,
-                            message: format!(
-                                "FK violation: `{fk_tbl}.{fk_col}` = `{v}` does not exist in `{parent_tbl}.{parent_col}`"
+                    if !parent_vals.iter().any(|(pv, _, _)| pv == v) {
+                        out.push(Diagnostic::detail(
+                            span.start,
+                            span.end,
+                            format!(
+                                "FK violation: `{fk_tbl}.{fk_col}` = `{json}` does not exist in `{parent_tbl}.{parent_col}`"
                             ),
-                            severity: Severity::Info,
-                            category: Some("Record constraint violations".to_string()),
-                            explanation: vec![format!(
+                            Severity::Info,
+                            Some("Record constraint violations".to_string()),
+                            vec![format!(
                                 "`{fk_tbl}.{fk_col}` is a foreign key referencing `{parent_tbl}.{parent_col}`. Every non-null value in an FK must match an existing row in the referenced column."
                             )],
-                            quick_fixes: vec![],
-                        });
+                        ));
                     }
                 }
             }
@@ -1552,6 +1821,483 @@ pub fn validate_with_parse(
                         _ => continue,
                     };
                     record_checks(fk_tbl, fk_col, parent_tbl, parent_col, doc, &mut out);
+                }
+            }
+        }
+    }
+
+    // ---- the records value-type checks (their records/interpret.ts
+    // extractValue — the RecordValueTypeMismatch family). Their type
+    // classifiers = the UNION over the five dialect sets
+    // (records/utils/data/sqlTypes.ts); the dispatch order = the null-ish
+    // short-circuit, enum, numeric, boolean, datetime, string, and
+    // unknown types stay unchecked.
+    fn norm_ty(ty: &str) -> String {
+        ty.split('(')
+            .next()
+            .unwrap_or("")
+            .to_lowercase()
+            .trim()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+    fn type_args(ty: &str) -> Vec<String> {
+        let inner = match ty.find('(') {
+            Some(k) => match ty[k + 1..].find(')') {
+                Some(e) => &ty[k + 1..k + 1 + e],
+                None => return Vec::new(),
+            },
+            None => return Vec::new(),
+        };
+        inner
+            .split(',')
+            .map(|a| a.trim().to_string())
+            .filter(|a| !a.is_empty())
+            .collect()
+    }
+    const INTEGER_TYPES: &[&str] = &[
+        "int",
+        "integer",
+        "smallint",
+        "bigint",
+        "tinyint",
+        "mediumint",
+        "serial",
+        "bigserial",
+        "smallserial",
+    ];
+    const FLOAT_TYPES: &[&str] = &[
+        "decimal",
+        "numeric",
+        "float",
+        "double",
+        "real",
+        "double precision",
+        "number",
+    ];
+    const BOOL_TYPES: &[&str] = &["bool", "boolean", "bit"];
+    const STRING_TYPES: &[&str] = &[
+        "varchar",
+        "char",
+        "text",
+        "tinytext",
+        "mediumtext",
+        "longtext",
+        "string",
+        "character",
+        "character varying",
+        "nvarchar",
+        "nchar",
+        "ntext",
+        "varchar2",
+        "nvarchar2",
+    ];
+    const DATETIME_TYPES: &[&str] = &[
+        "date",
+        "datetime",
+        "timestamp",
+        "time",
+        "timestamptz",
+        "timestamp with time zone",
+        "timestamp without time zone",
+        "timetz",
+        "time with time zone",
+        "time without time zone",
+        "datetime2",
+        "smalldatetime",
+        "timestamp with local time zone",
+    ];
+    const SERIAL_TYPES: &[&str] = &["serial", "smallserial", "bigserial"];
+    // their tryExtractDateTime (the luxon format list, pragmatic Rust):
+    // the time-only forms, the date-only forms, the space/T datetime
+    // forms, then the lax ISO fallback
+    fn valid_zone(z: &str) -> bool {
+        let b = z.as_bytes();
+        b.len() == 5
+            && b[2] == b':'
+            && b[..2].iter().all(|c| c.is_ascii_digit())
+            && b[3..].iter().all(|c| c.is_ascii_digit())
+    }
+    fn valid_time(s: &str) -> bool {
+        let s = s.strip_suffix('Z').unwrap_or(s);
+        let s = match s.char_indices().find(|(i, c)| *i >= 2 && (*c == '+' || *c == '-')) {
+            Some((k, _)) if valid_zone(&s[k + 1..]) => &s[..k],
+            _ => s,
+        };
+        let (hms, frac) = match s.split_once('.') {
+            Some((a, b)) => (a, Some(b)),
+            None => (s, None),
+        };
+        let parts: Vec<&str> = hms.split(':').collect();
+        if parts.len() != 3 {
+            return false;
+        }
+        let p2 = |p: &str| -> Option<u32> {
+            let b = p.as_bytes();
+            if b.len() == 2 && b.iter().all(|c| c.is_ascii_digit()) {
+                p.parse().ok()
+            } else {
+                None
+            }
+        };
+        let (Some(h), Some(m), Some(sec)) = (p2(parts[0]), p2(parts[1]), p2(parts[2])) else {
+            return false;
+        };
+        if h > 23 || m > 59 || sec > 59 {
+            return false;
+        }
+        frac.is_none_or(|f| !f.is_empty() && f.chars().all(|c| c.is_ascii_digit()))
+    }
+    fn days_in(month: usize, year: i64) -> usize {
+        match month {
+            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+            4 | 6 | 9 | 11 => 30,
+            2 => {
+                if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
+                    29
+                } else {
+                    28
+                }
+            }
+            _ => 0,
+        }
+    }
+    fn valid_iso_date(s: &str) -> bool {
+        let b = s.as_bytes();
+        if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
+            return false;
+        }
+        let (Ok(y), Ok(m), Ok(d)) = (s[0..4].parse::<i64>(), s[5..7].parse::<usize>(), s[8..10].parse::<usize>()) else {
+            return false;
+        };
+        m >= 1 && m <= 12 && d >= 1 && d <= days_in(m, y)
+    }
+    fn valid_mdy(s: &str) -> bool {
+        let parts: Vec<&str> = s.split('/').collect();
+        if parts.len() != 3 {
+            return false;
+        }
+        let (Ok(m), Ok(d), Ok(y)) = (
+            parts[0].parse::<usize>(),
+            parts[1].parse::<usize>(),
+            parts[2].parse::<i64>(),
+        ) else {
+            return false;
+        };
+        parts[0].len() <= 2
+            && parts[1].len() <= 2
+            && parts[2].len() == 4
+            && m >= 1
+            && m <= 12
+            && d >= 1
+            && d <= days_in(m, y)
+    }
+    const MONTHS: &[&str] = &[
+        "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+    ];
+    fn valid_d_mmm_yyyy(s: &str) -> bool {
+        let parts: Vec<&str> = s.split(' ').collect();
+        if parts.len() != 3 {
+            return false;
+        }
+        let (Ok(d), Ok(y)) = (parts[0].parse::<usize>(), parts[2].parse::<i64>()) else {
+            return false;
+        };
+        let Some(m) = MONTHS.iter().position(|mm| mm.eq_ignore_ascii_case(parts[1])) else {
+            return false;
+        };
+        parts[0].len() <= 2
+            && parts[2].len() == 4
+            && d >= 1
+            && d <= days_in(m + 1, y)
+    }
+    fn valid_mmm_d_yyyy(s: &str) -> bool {
+        let parts: Vec<&str> = s.split(' ').collect();
+        if parts.len() != 3 {
+            return false;
+        }
+        let Some(m) = MONTHS.iter().position(|mm| mm.eq_ignore_ascii_case(parts[0])) else {
+            return false;
+        };
+        let day = parts[1].strip_suffix(',');
+        let Some(Ok(d)) = day.map(|s| s.parse::<usize>()) else {
+            return false;
+        };
+        let (Ok(y), true) = (parts[2].parse::<i64>(), parts[1].len() <= 3 && parts[2].len() == 4)
+        else {
+            return false;
+        };
+        d >= 1 && d <= days_in(m + 1, y)
+    }
+    fn valid_datetime(s: &str) -> bool {
+        if valid_time(s) {
+            return true;
+        }
+        if valid_iso_date(s) || valid_mdy(s) || valid_d_mmm_yyyy(s) || valid_mmm_d_yyyy(s) {
+            return true;
+        }
+        // <date>(T| )<time> — the ISO-T form also accepts HH:mm (fromISO)
+        for (di, dc) in s.char_indices() {
+            if dc == 'T' || dc == ' ' {
+                let (d, t) = (&s[..di], &s[di + 1..]);
+                let date_ok =
+                    valid_iso_date(d) || valid_mdy(d) || valid_d_mmm_yyyy(d) || valid_mmm_d_yyyy(d);
+                if date_ok && (valid_time(t) || valid_iso_time_short(t)) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+    fn valid_iso_time_short(s: &str) -> bool {
+        // HH:mm (the fromISO lax time) — the zone rules as above
+        let s = s.strip_suffix('Z').unwrap_or(s);
+        let s = match s.char_indices().find(|(i, c)| *i >= 2 && (*c == '+' || *c == '-')) {
+            Some((k, _)) if valid_zone(&s[k + 1..]) => &s[..k],
+            _ => s,
+        };
+        let parts: Vec<&str> = s.split(':').collect();
+        if parts.len() != 2 {
+            return false;
+        }
+        let p2 = |p: &str| -> Option<u32> {
+            let b = p.as_bytes();
+            if b.len() == 2 && b.iter().all(|c| c.is_ascii_digit()) {
+                p.parse().ok()
+            } else {
+                None
+            }
+        };
+        match (p2(parts[0]), p2(parts[1])) {
+            (Some(h), Some(m)) => h <= 23 && m <= 59,
+            _ => false,
+        }
+    }
+    // their extractValue — the (message, explanation) for a value that
+    // fails its column's type, None when the value passes (or the type
+    // is not one of the checked families)
+    #[allow(clippy::too_many_arguments)]
+    fn value_type_check(
+        v: &super::ast::RecordValue,
+        col_name: &str,
+        tn: &str,
+        targs: &[String],
+        not_null: bool,
+        has_default: bool,
+        increment: bool,
+        enum_members: Option<&[String]>,
+    ) -> Option<(String, String)> {
+        let is_string = STRING_TYPES.contains(&tn);
+        let is_serial = SERIAL_TYPES.contains(&tn);
+        let null_branch = || {
+            (not_null && !has_default && !increment && !is_serial).then(|| (
+                format!("NULL not allowed for NOT NULL column `{col_name}` without a default value or auto-increment"),
+                format!("`{col_name}` is marked NOT NULL and has no default value or auto-increment."),
+            ))
+        };
+        match v {
+            // their FunctionExpressionNode: the backtick expression rides
+            // unchecked
+            super::ast::RecordValue::Expr(_) => None,
+            super::ast::RecordValue::Null => null_branch(),
+            super::ast::RecordValue::Text(t) if t.is_empty() && !is_string => null_branch(),
+            _ if enum_members.is_some() => {
+                // their enum branch: the quoted string or the bare
+                // variable; anything else (a number, a bool) misses
+                let val = match v {
+                    super::ast::RecordValue::Text(t) => Some(t.clone()),
+                    super::ast::RecordValue::Ident(i) => Some(i.clone()),
+                    _ => None,
+                };
+                let ok = val.is_some_and(|val| {
+                    enum_members.unwrap().iter().any(|m| *m == val)
+                });
+                (!ok).then(|| (
+                    format!("Invalid enum value for column `{col_name}`"),
+                    format!("`{col_name}` uses an enum type. The value must match one of the defined enum members."),
+                ))
+            }
+            _ if INTEGER_TYPES.contains(&tn) || FLOAT_TYPES.contains(&tn) => {
+                // their extractSignedNumber: the numeric literal (or a
+                // signed prefix) — quoted strings and bare words fail
+                let num = match v {
+                    super::ast::RecordValue::Number(n) => n.parse::<f64>().ok(),
+                    _ => None,
+                };
+                let Some(num) = num else {
+                    return Some((
+                        format!("Invalid numeric value for column `{col_name}`"),
+                        format!("`{col_name}` has type `{tn}` which expects a numeric value. Provide a valid integer or decimal."),
+                    ));
+                };
+                if INTEGER_TYPES.contains(&tn) && num.fract() != 0.0 {
+                    // their message formats the parsed JS number (2.50 ->
+                    // 2.5) — Rust's Display agrees for the common forms
+                    return Some((
+                        format!("Invalid integer value `{num}` for column `{col_name}`: expected integer, got decimal"),
+                        format!("`{col_name}` is an integer column and cannot store decimal values."),
+                    ));
+                }
+                if FLOAT_TYPES.contains(&tn) && !targs.is_empty() {
+                    let precision: u64 = targs[0].parse().unwrap_or(u64::MAX);
+                    let scale: u64 = targs.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+                    // their digit count runs on the number's toString
+                    let num_str = format!("{num}");
+                    let (ip, dp) = match num_str.split_once('.') {
+                        Some((a, b)) => (a, b),
+                        None => (num_str.as_str(), ""),
+                    };
+                    let ip = ip.trim_start_matches('-');
+                    let total = ip.len() + dp.len();
+                    if total as u64 > precision {
+                        return Some((
+                            format!("Numeric value `{num}` for column `{col_name}` exceeds precision: expected at most {precision} total digits, got {total}"),
+                            format!("`{col_name}` is defined as `{tn}({},{})`, allowing at most {precision} total digits. The value `{num}` has {total}.", targs[0], targs.get(1).map(|s| s.as_str()).unwrap_or("0")),
+                        ));
+                    }
+                    if dp.len() as u64 > scale {
+                        return Some((
+                            format!("Numeric value `{num}` for column `{col_name}` exceeds scale: expected at most {scale} decimal digits, got {}" , dp.len()),
+                            format!("`{col_name}` is defined as `{tn}({},{})`, allowing at most {scale} decimal places. The value `{num}` has {}.", targs[0], targs.get(1).map(|s| s.as_str()).unwrap_or("0"), dp.len()),
+                        ));
+                    }
+                }
+                None
+            }
+            _ if BOOL_TYPES.contains(&tn) => {
+                let ok = match v {
+                    super::ast::RecordValue::Bool(b) => Some(*b),
+                    super::ast::RecordValue::Number(n) => n.parse::<f64>().ok().and_then(|f| {
+                        if f == 0.0 {
+                            Some(false)
+                        } else if f == 1.0 {
+                            Some(true)
+                        } else {
+                            None
+                        }
+                    }),
+                    super::ast::RecordValue::Ident(i) => match i.to_lowercase().as_str() {
+                        "true" => Some(true),
+                        "false" => Some(false),
+                        _ => None,
+                    },
+                    super::ast::RecordValue::Text(t) => match t.to_lowercase().as_str() {
+                        "true" | "yes" | "y" | "t" | "1" => Some(true),
+                        "false" | "no" | "n" | "f" | "0" => Some(false),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                (!ok.is_some()).then(|| (
+                    format!("Invalid boolean value for column `{col_name}`"),
+                    format!("`{col_name}` is a boolean column. Use `true`/`false`, `1`/`0`, or `'yes'`/`'no'`."),
+                ))
+            }
+            _ if DATETIME_TYPES.contains(&tn) => {
+                // their tryExtractDateTime reads the QUOTED string only
+                let ok = match v {
+                    super::ast::RecordValue::Text(t) => valid_datetime(t),
+                    _ => false,
+                };
+                (!ok).then(|| (
+                    format!("Invalid datetime value for column `{col_name}`"),
+                    format!("`{col_name}` expects a date or time value. Supported formats include `'YYYY-MM-DD'`, `'HH:MM:SS'`, `'YYYY-MM-DD HH:MM:SS'`, `'MM/DD/YYYY'`, `'D MMM YYYY'`, or `'MMM D, YYYY'`."),
+                ))
+            }
+            _ if is_string => {
+                // their tryExtractString: the quoted text, else the
+                // number, else the boolean (the bare true/false pass)
+                let sval = match v {
+                    super::ast::RecordValue::Text(t) => Some(t.clone()),
+                    super::ast::RecordValue::Number(n) => Some(n.clone()),
+                    super::ast::RecordValue::Bool(b) => Some(b.to_string()),
+                    super::ast::RecordValue::Ident(i)
+                        if i.eq_ignore_ascii_case("true") || i.eq_ignore_ascii_case("false") =>
+                    {
+                        Some(i.to_lowercase())
+                    }
+                    _ => None,
+                };
+                let Some(sv) = sval else {
+                    return Some((
+                        format!("Invalid string value for column `{col_name}`"),
+                        format!("`{col_name}` is a string column. Values must be wrapped in quotes."),
+                    ));
+                };
+                if let Some(ml) = targs.first().and_then(|a| a.parse::<usize>().ok()) {
+                    if ml > 0 {
+                        let actual = sv.len(); // their UTF-8 byte length
+                        if actual > ml {
+                            return Some((
+                                format!("String value for column `{col_name}` exceeds maximum length: expected at most {ml} bytes (UTF-8), got {actual} bytes"),
+                                format!("`{col_name}` is defined as `{tn}({})`, limiting values to {ml} bytes in UTF-8 encoding. The provided value uses {actual} bytes.", targs[0]),
+                            ));
+                        }
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+    let mut value_type_errors: Vec<Diagnostic> = Vec::new();
+    for t in &doc.tables {
+        let Some(rec) = &t.records else {
+            continue;
+        };
+        if rec.rows.is_empty() {
+            continue;
+        }
+        for (ri, row) in rec.rows.iter().enumerate() {
+            for (vi, val) in row.iter().enumerate() {
+                let cname = if rec.columns.is_empty() {
+                    t.columns.get(vi).map(|c| c.name.clone())
+                } else {
+                    rec.columns.get(vi).cloned()
+                };
+                let Some(cname) = cname else {
+                    continue;
+                };
+                let Some(col) = t.columns.iter().find(|c| c.name == cname) else {
+                    continue;
+                };
+                let Some(span) = rec.value_spans.get(ri).and_then(|sp| sp.get(vi)) else {
+                    continue;
+                };
+                let tn = norm_ty(&col.ty);
+                let enum_members = doc
+                    .enums
+                    .iter()
+                    .find(|e| {
+                        e.name == tn && (e.schema.is_none() || e.schema.as_deref() == Some("public"))
+                    })
+                    .map(|e| e.values.iter().map(|v| v.name.clone()).collect::<Vec<_>>());
+                let targs = type_args(&col.ty);
+                let has_default = col
+                    .settings
+                    .default
+                    .as_deref()
+                    .map(|d| !d.eq_ignore_ascii_case("null"))
+                    .unwrap_or(false);
+                if let Some((msg, expl)) = value_type_check(
+                    val,
+                    &cname,
+                    &tn,
+                    &targs,
+                    col.settings.not_null == Some(true),
+                    has_default,
+                    col.settings.increment,
+                    enum_members.as_deref(),
+                ) {
+                    value_type_errors.push(Diagnostic::detail(
+                        span.start,
+                        span.end,
+                        msg,
+                        Severity::Info,
+                        Some("Record type errors".to_string()),
+                        vec![expl],
+                    ));
                 }
             }
         }
@@ -1637,8 +2383,11 @@ pub fn validate_with_parse(
                     Some(Sym::Schema(name))
                 } else {
                     if emit {
-                        out.push(Diagnostic::plain(
-                            *off,
+                        // their anchors carry the FRAGMENT token (probe
+                        // g11: the member `b.a` errs 4:18-4:19)
+                        out.push(Diagnostic::spanned(
+                            frag.start,
+                            frag.end,
                             format!("Table or schema '{}' does not exist", name),
                         ));
                     }
@@ -1671,8 +2420,10 @@ pub fn validate_with_parse(
                     Some(Sym::Schema(name))
                 } else {
                     if emit {
-                        out.push(Diagnostic::plain(
-                            *off,
+                        // the fragment token, not a point (probe g11)
+                        out.push(Diagnostic::spanned(
+                            frag.start,
+                            frag.end,
                             format!("Schema '{}' does not exist", name),
                         ));
                     }
@@ -1771,6 +2522,42 @@ pub fn validate_with_parse(
                 *end,
                 format!("Expected {} values but got {}", expected, got),
             ));
+        }
+        out.sort_by_key(|d| d.offset);
+    }
+    // the records value-type findings ride the same interpret gate; a
+    // finding the constraint path already anchored (the same message at
+    // the same value span — their engine's dedupe) stays dropped
+    if !has_blocking_error {
+        for v in value_type_errors {
+            if !out.iter().any(|d| {
+                d.severity == v.severity
+                    && d.message == v.message
+                    && d.offset == v.offset
+                    && d.end == v.end
+            }) {
+                out.push(v);
+            }
+        }
+        out.sort_by_key(|d| d.offset);
+    }
+    // their interpret-layer EMPTY_TABLE (table/interpret.ts, code 3018):
+    // a zero-column table errs 'A Table must have at least one column'
+    // anchored at the ELEMENT span — only while the file's binder/parse
+    // error set is empty (the file gate; probes zc1/zc2 — a note-only
+    // body still has zero columns; zc3/zc6/k4 — the dup-notes, the
+    // missing-column and the nameless-name binder errors gate it off).
+    // The gate is evaluated ABOVE, so the dup-notes errors pushed
+    // earlier close it exactly like theirs.
+    if !has_blocking_error {
+        for t in &doc.tables {
+            if t.columns.is_empty() {
+                out.push(Diagnostic::spanned(
+                    t.span.start,
+                    t.span.end,
+                    "A Table must have at least one column".to_string(),
+                ));
+            }
         }
         out.sort_by_key(|d| d.offset);
     }
@@ -2054,6 +2841,141 @@ mod tests {
             .find(|f| f.short_title == "Change to -")
             .expect("the one fix");
         assert_eq!(one.new_text, "-");
+    }
+
+    /// The interpret-layer EMPTY_TABLE (their table/interpret.ts, 3018)
+    /// + the duplicate-notes check (the validateSubElements 3046). The
+    /// colon entries and the block declarations BOTH count (probes
+    /// zc4/zc5); the duplicate-notes = a binder-class error that gates
+    /// the EMPTY_TABLE off (probe zc3); a note-only body still has zero
+    /// columns (probe zc2); the file's other binder errors gate the
+    /// EMPTY_TABLE off (probe zc6).
+    #[test]
+    fn empty_table_and_duplicate_notes_follow_the_file_gate() {
+        // zc1: the empty table errs over the ELEMENT span
+        let out = parser::parse("Table t {\n}\n");
+        let d = validate(&out.doc, "Table t {\n}\n");
+        assert_eq!(
+            d,
+            vec![Diagnostic {
+                end: Some(11),
+                offset: 0,
+                message: "A Table must have at least one column".to_string(),
+                severity: Severity::Error,
+                category: None,
+                explanation: vec![],
+                quick_fixes: vec![],
+            }],
+            "{d:?}"
+        );
+        // zc2: a note-only body still has zero columns
+        let src2 = "Table t {\n  Note { 'x' }\n}\n";
+        let out2 = parser::parse(src2);
+        let d2 = validate(&out2.doc, src2);
+        assert_eq!(d2.len(), 1, "{d:?}");
+        assert_eq!(d2[0].message, "A Table must have at least one column");
+        assert_eq!(d2[0].offset, 0);
+        assert_eq!(d2[0].end, Some(26));
+        // zc3: the duplicate-notes (both block forms) gate the
+        // EMPTY_TABLE off; the anchors = the note-element spans
+        let src3 = "Table t {\n  Note { 'x' }\n  Note { 'y' }\n}\n";
+        let out3 = parser::parse(src3);
+        let d3 = validate(&out3.doc, src3);
+        assert_eq!(d3.len(), 2, "{d:?}");
+        assert!(d3.iter().all(
+            |x| x.message == "Duplicate notes are defined"
+        ), "{d:?}");
+        assert_eq!(d3[0].offset, 12);
+        assert_eq!(d3[0].end, Some(24));
+        assert_eq!(d3[1].offset, 27);
+        // zc4: the colon form counts too (the handoff's block-only note
+        // was wrong — their engine errs the colon-note spans)
+        let src4 = "Table a {\n  id int\n  Note: 'x'\n  Note: 'y'\n}\n";
+        let out4 = parser::parse(src4);
+        let d4 = validate(&out4.doc, src4);
+        assert_eq!(d4.len(), 2, "{d:?}");
+        assert_eq!(d4[0].offset, 21);
+        assert_eq!(d4[0].end, Some(30));
+        // zc6: the file's binder errors gate the EMPTY_TABLE off (the
+        // missing column on the empty table)
+        let src5 = "Table t {\n}\nTable u { id int }\nRef: u.id > t.id\n";
+        let out5 = parser::parse(src5);
+        let d5 = validate_with_parse(
+            &out5.doc,
+            src5,
+            &out5.binder_errors,
+            &out5.binder_chains,
+            &out5.record_count_errors,
+            &out5.errors,
+        );
+        assert_eq!(d5.len(), 1, "{d:?}");
+        assert!(
+            d5[0].message.contains("does not exist"),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn group_and_note_dups_flag_the_later_declarations() {
+        // their schema dup map covers TableGroups and sticky Notes; the
+        // anchor = the NAME token (g1/g3/g8), and the group fields carry
+        // the within-group seen-map (g13) + the membership map (g4/g9)
+        let out = super::super::parser::parse(
+            "Table a { id int }\nTableGroup g { a }\nTableGroup g { a }\nTableGroup g { a }\n",
+        );
+        let d = validate(&out.doc, "Table a { id int }\nTableGroup g { a }\nTableGroup g { a }\nTableGroup g { a }\n");
+        let group_dups: Vec<_> = d
+            .iter()
+            .filter(|x| x.message == "TableGroup 'g' already exists in schema 'public'")
+            .collect();
+        assert_eq!(group_dups.len(), 2, "{d:?}");
+        // each later group's name token (g 3:12-3:13, 4:12-4:13)
+        assert_eq!(group_dups[0].offset, 49);
+        assert_eq!(group_dups[0].end, Some(50));
+        // the later groups' member `a` reappears: Table "a" already
+        // appears in group "g" (the first claimer named), anchored at
+        // each member token
+        let reappears: Vec<_> = d
+            .iter()
+            .filter(|x| x.message == "Table \"a\" already appears in group \"g\"")
+            .collect();
+        assert_eq!(reappears.len(), 2, "{d:?}");
+        assert_eq!(reappears[0].offset, 53);
+
+        let src2 = "Table a { id int }\nTableGroup g {\n  a\n  a\n}\n";
+        let out2 = super::super::parser::parse(src2);
+        let d2 = validate(&out2.doc, src2);
+        // the within-group seen-map re-flags the first sighting (both
+        // members err, the enum-field rule) + the second member's
+        // membership error
+        let field_dups: Vec<_> = d2
+            .iter()
+            .filter(|x| x.message == "Duplicate TableGroupField 'public.a'")
+            .collect();
+        assert_eq!(field_dups.len(), 2, "{d:?}");
+        assert!(d2.iter().any(
+            |x| x.message == "Table \"a\" already appears in group \"g\""
+        ), "{d:?}");
+
+        let src3 = "Note n { 'x' }\nNote m { 'y' }\nNote n { 'z' }\n";
+        let out3 = super::super::parser::parse(src3);
+        let d3 = validate(&out3.doc, src3);
+        let note_dups: Vec<_> = d3
+            .iter()
+            .filter(|x| x.message == "Duplicate Note 'n' in schema 'public'")
+            .collect();
+        assert_eq!(note_dups.len(), 1, "{d:?}");
+        assert_eq!(note_dups[0].offset, 35);
+
+        // a comma-run body binds nothing (their field-form error rides
+        // the parse side) — no member machinery fires (g5)
+        let src4 = "Table a { id int }\nTableGroup g { a, a }\n";
+        let out4 = super::super::parser::parse(src4);
+        let d4 = validate(&out4.doc, src4);
+        assert!(
+            !d4.iter().any(|x| x.message.contains("already appears")),
+            "{d:?}"
+        );
     }
 
     #[test]

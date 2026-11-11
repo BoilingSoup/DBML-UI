@@ -41,6 +41,12 @@ pub struct Table {
     pub note: Option<String>,
     /// The `Note:` block-entry token (their attribute node).
     pub note_span: Option<Span>,
+    /// Every `Note` sub-element's span in the body, in source order —
+    /// the colon entries (`Note: 'x'`) and the block declarations
+    /// (`Note [name] { … }`) both count (their validateSubElements
+    /// Note-kind filter). Additively collected at parse time; the
+    /// duplicate-notes and the note-only EMPTY_TABLE checks consume.
+    pub note_element_spans: Vec<Span>,
     pub columns: Vec<Column>,
     pub indexes: Vec<Index>,
     /// `Checks { ... }` block content, verbatim (their importer emits it).
@@ -350,6 +356,9 @@ pub struct TableGroup {
     pub note: Option<String>,
     /// The `Note:` block-entry token.
     pub note_span: Option<Span>,
+    /// Every `Note:` entry's element span (their tableGroup
+    /// validateSubElements counts them for the duplicate-notes check).
+    pub note_element_spans: Vec<Span>,
     /// Any other `key: "value"` header settings — dbdiagram custom
     /// properties, in order.
     pub custom: Vec<(String, String)>,
