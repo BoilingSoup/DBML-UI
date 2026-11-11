@@ -879,9 +879,22 @@ tools below. Never say done when the sweep still finds shapes.
   wrong message + the unconsumed tail + the extra close-error dead).
   Probes pp2/pp3; battery 120/120, corpus 78/78, lib 84/84. Both seeds
   hold (146/300, 314/600).
-- ROUND-70 QUEUE (the wide-cluster pivot continues):
-  * the Expect-an-identifier stack (the missing remainder) — the
-    position-tally first;
+- ROUND 70 — the Expect-an-identifier tally (14 cases) + the lead
+  mapped: the WIDEST = the dq-name-across-the-newline shape
+  (m77_0099: the bare `Table` + the NEXT line's `"quoted name" {` —
+  their name-stream = the ident-only, the dq = the JUNK (the two
+  consume-logs: the dq 7,2-7,15 + the `{` 7,16-7,17); ours'
+  qualified_name = the trivia-crossing = the dq = the legal name-part
+  — the delta = the qualified_name's dq-part = the SAME-LINE-only
+  rule (the newline = the stream-stop, the dq = the junk-log). The
+  `}`-class = the second pattern (4 cases — the consume-logs inside
+  the block contexts). The port = the qualified_name's dq-line-rule =
+  the round-71 queue (the m43_0034's ident-crossing = the
+  still-legal!).
+- ROUND-71 QUEUE:
+  * the qualified_name's dq-line-rule (the dq = the name-part on the
+    SAME line only; the dq across the newline = the junk-logs);
+  * the `}`-class consume-logs inside the block contexts;
   * the composite queue (m77_0039's line-18 recovery, s5's span
     puzzle, the colon-op cluster, the index-field paren-name,
     m43_0242) = the background.
