@@ -838,12 +838,16 @@ tools below. Never say done when the sweep still finds shapes.
   weeks; probes kk1/kk2; battery 115/115, corpus 78/78, lib 84/84.
   The position-start tally drove the choice: the paren-lead (17) +
   the quote-lead (11) = the widest patterns in the column-pair extras.
-- ROUND-65 QUEUE (the wide-cluster pivot continues):
-  * the tuple-callee field SURVIVES with its settings (j2: theirs =
-    the name-error at the tuple + 'Invalid column type' at the
-    settings-list — ours = the pair + the die + the retry extras; the
-    u2-shape re-structure);
-  * the close-brace cluster (28 missing);
+- ROUND 65 LANDED — the tuple-callee field SURVIVES: the paren-arm =
+  the name-error at the TUPLE node via the binder channel + the
+  fall-through (the Err-die and the retry-storm extras dead); the
+  ty-walk supplies the type-missing at the tuple (u2's pair, the bare
+  tuple) or 'Invalid column type' at the settings-list (j2's
+  2,10-2,30). SEED-43 = 312/600 (+2!), seed-77 = 145/300. Probe mm1;
+  battery 116/116, corpus 78/78, lib 84/84.
+- ROUND-66 QUEUE (the wide-cluster pivot continues):
+  * the close-brace cluster (28 missing 'Expect a closing brace' —
+    the widest remaining);
   * the custom-element appear extras (29-32);
   * the composite queue (m77_0039's line-18 recovery, the
     Expect-an-identifier remainder, s5's span puzzle, the colon-op
