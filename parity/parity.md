@@ -623,7 +623,7 @@ tools below. Never say done when the sweep still finds shapes.
   (the pre-child-loop engine — the round-42/43 ports may move it; the
   next seed-43 re-measure tells).
 
-## The rounds 47-52 RESULT + the round-53 queue
+## The rounds 47-53 RESULT + the round-54 queue
 
 - RESOLVED (round 47): the two recorded column-pair shapes. (1) The
   `'''` TRIPLE-QUOTE header gather — theirs = the consumeUntil scan
@@ -687,12 +687,25 @@ tools below. Never say done when the sweep still finds shapes.
   and the later-line PLAIN idents do NOT join the name (v3/v4: the
   name stays `int`, the body check errs at them). Battery aa1
   promoted. Seed-77 141→142/300.
-- ROUND-53 QUEUE (probed, unported):
-  * the custom-element pair span cluster remainder (32 extra / 30
-    missing) — the composite element-node spans (m77_0014's
-    2,13-3,28 start-at-the-type-arg shape, m77_0039's `Tabl[e orders {`,
-    m77_0043's Note-sticky span);
-  * the 'Expect an identifier' stack (31 missing / 17 extra);
+- ROUND 53 LANDED (abe5e84): the QUOTED-TYPE RESTART — their
+  elementDeclaration type = an IDENTIFIER only: a quoted token errs
+  'Expect an identifier' at the token's full span and the element
+  RESTARTS at the next token (b1 `\n  "odd col" int[]\n  x varchar(255)
+  [note: 'n']\n}`: the ident error 2,3-2,12, the element = type `int`
+  from 2,13, the `[]` = the setting list 2,16-2,18, the body check at
+  `x` 3,3-3,4 — 4/6 identical). Seed-77 142/300 (the 'Expect an
+  identifier' missing 31→29; the composites hold on the deeper spans).
+- ROUND-54 QUEUE (probed, unported):
+  * the no-body element's DISCARD-PHASE ARGS WALK (b1's remaining 2):
+    theirs' node = the ARGS union through the last real token (3,28 =
+    the 'n's end, NOT the `]`'s end) and the `]` after the list errs
+    'Expect an identifier' at 3,28-3,29 — ours' discard = the silent
+    swallow to the `]`'s end (3,29), no error;
+  * the composite spans (m77_0039's `Tabl[e orders {`, m77_0043's
+    Note-sticky span);
+  * the 'Expect an identifier' stack (29 missing);
+  * s5's span puzzle, the colon-op cluster (17), the index-field
+    paren-name (17), m43_0242 records-comma.
   * s5 (`, 1 int` at a field start): theirs = ONE name error at
     1,10-2,6 — the span starts at the TABLE'S OPEN-BRACE END and ends
     mid-line — the mechanism unexplained (the block-child node's
