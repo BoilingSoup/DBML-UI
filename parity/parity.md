@@ -2195,3 +2195,20 @@ THE PRODUCTION EMBED DESIGN (the remaining work): the background thread
 + the debounced parse → the JSON payload (the diagnostics + the quick
 fixes) → the marks wiring; the native diagnostics = the fallback on any
 engine failure. The errs.dbml-class divergence = killed by construction.
+
+## THE PRODUCTION EMBED — LANDED (no fallback)
+
+The Boa diagnostics-oracle is THE app's diagnostics source:
+`src/dbml/boa_diag.rs` (the sync Engine + the worker thread whose inbox
+drains to the latest request) — `Tab::set_source` kicks a generation per
+edit, the 120ms poll tick (`Message::BoaPoll`) carries the finished reply
+into the matching tab, and `error_marks` draws THEIR findings only (the
+native `parse_errors` stay on the Tab for the model-integrity checks,
+off the marks). The quick fixes ride the payload into the existing
+panel structures (the utf16-offset → byte conversion included).
+The bundle = committed (`parity/bundle/dbml-parse.iife.js`, 1.18MB,
+include_str! — no fs at runtime); `boa_engine` = in [dependencies].
+The error_tests = pinned to their marks (the sync fill helper — every
+campaign-era assertion held unchanged). lib 126/126 (the engine tests
+incl. the errs.dbml shape: their recovery keeps the broken-bracket
+column bound), corpus/schema/battery/editor/fmt/fuzz/oracle all green.

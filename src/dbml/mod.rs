@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod boa_diag;
 pub mod fmt;
 pub mod highlight;
 pub mod parser;

@@ -20,6 +20,9 @@ pub enum Message {
     CanvasReleased(Point),
     /// Wheel notches (normalized: lines, or pixels / 40).
     Wheel(f32),
+    /// The diagnostics-engine poll tick: their engine (boa_diag) runs on
+    /// a worker thread; each tick picks up the newest finished reply.
+    BoaPoll,
     /// Wheel over a field-card popup: scroll the card's body by px.
     FindToggle,
     FindNext,
@@ -621,7 +624,13 @@ pub struct Tab {
     pub parse_errors: Vec<dbml::parser::ParseError>,
     /// Semantic diagnostics (dangling refs, duplicates) + parser
     /// warnings — squiggled in the editor like dbdiagram's markers.
+    /// FILLED BY THEIR ENGINE (boa_diag): the vendored dbml-parse runs on
+    /// a worker thread per generation; parse_errors below = the native
+    /// parse's own record, kept off the marks (the squiggles = theirs).
     pub diagnostics: Vec<dbml::validate::Diagnostic>,
+    /// The document generation this tab's diagnostics request carries —
+    /// the stale replies drop against it.
+    pub diag_gen: u64,
     /// Syntax-highlight tokens for `source` (byte spans), rebuilt with it.
     pub highlights: Vec<dbml_ui::dbml::highlight::Token>,
     /// User-dragged table positions (diagram cells, by table name);
@@ -685,6 +694,7 @@ impl Tab {
             diagram: layout::layout(&model::build(&dbml::parser::parse("").doc)),
             parse_errors: Vec::new(),
             diagnostics: Vec::new(),
+            diag_gen: 0,
             highlights: Vec::new(),
             table_pos: Default::default(),
             note_pos: Default::default(),
@@ -765,6 +775,10 @@ impl Tab {
             self.edge_anim.resize(self.diagram.edges.len(), 0.0);
         }
         self.diagnostics = diagnostics;
+        // their engine takes over the squiggles: kick the diagnostics
+        // request for this generation (the worker drains to the latest)
+        self.diag_gen = self.diag_gen.wrapping_add(1);
+        dbml::boa_diag::request(self.diag_gen, self.source.clone());
     }
 
     /// Unsaved changes: the buffer differs from the last save/open.
@@ -2909,6 +2923,11 @@ pub fn subscription(app: &App) -> iced::Subscription<Message> {
         mouse,
         keys,
         tick,
+        // the diagnostics-engine poll: their engine (boa_diag) finishes
+        // parses on the worker thread; this tick carries each finished
+        // reply into the update loop
+        iced::time::every(std::time::Duration::from_millis(120))
+            .map(|_| Message::BoaPoll),
         file_poll,
         drag_watch,
         window_resize(),
@@ -3487,6 +3506,16 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
         Message::CanvasReleased(p) => {
             app.canvas_released(p);
             app.consume_pending_jump();
+        }
+        Message::BoaPoll => {
+            if let Some(reply) = dbml::boa_diag::try_recv() {
+                for t in &mut app.tabs {
+                    if t.diag_gen == reply.gen {
+                        t.diagnostics = reply.diagnostics();
+                        break;
+                    }
+                }
+            }
         }
         Message::Wheel(n) => app.wheel(n),
         Message::FindToggle => app.editor_mut().toggle_find(),

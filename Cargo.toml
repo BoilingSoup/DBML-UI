@@ -22,6 +22,7 @@ iced_wgpu = { path = "vendor/iced_wgpu" }
 [dependencies]
 iced_tiny_skia = { path = "vendor/iced_tiny_skia" }
 serde_json = "1"
+boa_engine = "0.19"
 # measured text widths for the diagram's icon clusters: shape through the
 # same stack iced renders with (version pinned to iced's own copy)
 cosmic-text = "0.12.1"
@@ -95,7 +96,3 @@ incremental = true
 [dev-dependencies]
 iced_tiny_skia = { path = "vendor/iced_tiny_skia" }
 serde = { version = "1", features = ["derive"] }
-# the Boa spike: the vendored dbml-parse as the diagnostics oracle
-# (examples/boa_spike.rs) — a dev-dependency until the embed graduates.
-# 0.19 = the last line that compiles on the pre-2024-edition toolchain
-boa_engine = "0.19"

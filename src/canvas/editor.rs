@@ -1076,12 +1076,10 @@ pub fn error_marks(app: &App) -> Vec<Mark> {
             }
         }
     };
-    for e in &app.cur().parse_errors {
-        // the lexer/parser errors carry their own spans now (their
-        // Monaco endColumn): the partial-token anchors and the
-        // MISSING_SPACES node spans
-        push(e.offset, e.end, &e.message, false);
-    }
+    // the squiggles = THEIR engine's findings only (boa_diag): parse,
+    // binder and interpret all flow from the vendored dbml-parse — the
+    // native parse_errors stay on the Tab for the model-integrity checks,
+    // never on the marks
     for d in &app.cur().diagnostics {
         push(
             d.offset,
@@ -1887,6 +1885,15 @@ mod error_tests {
     use super::*;
     use crate::app::App;
 
+    /// The marks = their engine's findings (boa_diag); the tests fill
+    /// them synchronously (the app path = the worker + the poll tick).
+    fn fill_their_diags(app: &mut App) {
+        let src = app.source();
+        let mut e = dbml_ui::dbml::boa_diag::Engine::new().expect("engine");
+        let diags = e.parse(&src);
+        app.cur_mut().diagnostics = diags.iter().map(|d| d.to_diagnostic()).collect();
+    }
+
     fn broken_app() -> App {
         // junk between the table name and the brace: a PARSE error pointing
         // at the junk — ours and theirs agree ("Expect an opening brace
@@ -1905,8 +1912,9 @@ mod error_tests {
         // dangling ref: parses fine (non-blocking) but validates into a
         // RED mark carrying dbdiagram's message — their parseError class
         // (pk keeps the nullable-FK lint out of this one)
-        let app = App::with_source("Table a { id integer [pk] }\nRef: a.id > b.x\n".into());
+        let mut app = App::with_source("Table a { id integer [pk] }\nRef: a.id > b.x\n".into());
         assert!(app.cur().parse_errors.is_empty());
+        fill_their_diags(&mut app);
         let marks = error_marks(&app);
         assert_eq!(marks.len(), 1, "{marks:?}");
         assert!(!marks[0].warn);
@@ -1914,9 +1922,10 @@ mod error_tests {
 
         // strict-grammar recovery (comma index settings): their
         // validateNode class — a red mark, not soft-blue
-        let app = App::with_source(
+        let mut app = App::with_source(
             "Table t {\n  id integer\n  indexes {\n    (id), unique\n  }\n}\n".into(),
         );
+        fill_their_diags(&mut app);
         let marks = error_marks(&app);
         assert_eq!(marks.len(), 1, "{marks:?}");
         assert!(!marks[0].warn);
@@ -1924,7 +1933,8 @@ mod error_tests {
 
     #[test]
     fn parse_errors_become_line_marks() {
-        let app = broken_app();
+        let mut app = broken_app();
+        fill_their_diags(&mut app);
         assert!(!app.cur().parse_errors.is_empty(), "fixture is broken");
         let marks = error_marks(&app);
         assert!(!marks.is_empty());
@@ -1943,7 +1953,7 @@ mod error_tests {
         // makes the diagnostic span TWO rows — dbdiagram (Monaco) draws
         // the range's portion on every line; the old single mark clipped
         // to the first row
-        let app = App::with_source(
+        let mut app = App::with_source(
             "Table users {\n  id integer\n  username varchar\n  Records users(id, username) {\n    0, 'Alice, 'admin'\n    1, 'Bob', 'moderator'\n    2, 'Candice'\n  }\n}\n".into(),
         );
         let marks = error_marks(&app);
@@ -1978,7 +1988,8 @@ mod error_tests {
 
     #[test]
     fn hovering_a_mark_finds_its_message() {
-        let app = broken_app();
+        let mut app = broken_app();
+        fill_their_diags(&mut app);
         let marks = error_marks(&app);
         let m = &marks[0];
         // hover the squiggled char (left edge of its column)
@@ -2005,8 +2016,10 @@ mod error_tests {
         // damaged-header element's column errors span every row (the
         // campaign's node-span anchoring), leaving no hoverable
         // non-error row.
-        let app = App::with_source("Table users {\n  id integer [pk]\n}\ngibberish\n".into());
+        let mut app =
+            App::with_source("Table users {\n  id integer [pk]\n}\ngibberish\n".into());
         assert!(!app.cur().parse_errors.is_empty(), "fixture is broken");
+        fill_their_diags(&mut app);
         let marks = error_marks(&app);
         // hover a different line than any mark
         let other = (0..app.editor().buf.line_count())
@@ -2027,8 +2040,10 @@ mod error_tests {
         // line, and empty space under the buffer must not resolve onto
         // that line — px_to_pos clamps its row, so the mark hit-test, the
         // word lookup and the I-beam def cursor all used to fire there
-        let app = App::with_source("Table users {\n  id integer [pk]\n}\ngibberish\n".into());
+        let mut app =
+            App::with_source("Table users {\n  id integer [pk]\n}\ngibberish\n".into());
         assert!(!app.cur().parse_errors.is_empty(), "fixture is broken");
+        fill_their_diags(&mut app);
         let marks = error_marks(&app);
         // the first parse error anchors at EOF, one row PAST the gibberish
         // token (theirs-dump-verified: their first diagnostic is the same
