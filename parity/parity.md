@@ -2052,8 +2052,44 @@ revert). The gates = the r105 state.
 
 ## Round 107 queue
 
-- The EMPTY_TABLE/validate-layer design (the user's scope call: the
-  ast/validate files are outside the parser.rs brief);
-- The long-tail grind continues (the D-owned = skip);
+- ~~The EMPTY_TABLE/validate-layer design~~ — **HANDED TO AGENT D**
+  (the user's scope call at the r106 closure: my scope stays strictly
+  parser.rs; the validate layer adjoins D's importer-emission work).
+  THE HANDOFF PACKAGE for D (resume from here):
+  * THE MECHANISM: 'A Table must have at least one column' = their
+    INTERPRET-layer check (core/global_modules/table/interpret.ts
+    EMPTY_TABLE, the SYMBOL members — NOT the validator); the
+    interpret is FILE-gated: any parse/binder error ANYWHERE
+    suppresses it. 'Duplicate notes are defined' = the
+    validateSubElements check, per note-ELEMENT span (the `Note { … }`
+    block form only; the colon-form = a field in their parse).
+  * THE PROBE SHAPES (recreate under any name; the DBML_TRACE anchor
+    node = ElementDeclarationNode, codes 3018/3046):
+    - zc1 `Table t {\n}\n` → the EMPTY_TABLE @ [1,1-2,2) (the element
+      span) only;
+    - zc2 `Table t {\n  Note { 'x' }\n}\n` → the EMPTY_TABLE @
+      [1,1-3,2) (a note-only body still has zero columns);
+    - zc3 `Table t {\n  Note { 'x' }\n  Note { 'y' }\n}\n` → 'Duplicate
+      notes are defined' @ [2,3-2,15) AND @ [3,3-3,15) (both note
+      spans), NO EMPTY_TABLE (the duplicates = the binder-class errors
+      that gate the interpret off);
+    - s5l `Table t {\n  Note { 'x' }\n}\n` = zc2 (the r106 note);
+      k4 (`Table {\n}`, the battery) = the nameless name error ALSO
+      gates the EMPTY_TABLE off.
+  * THE PORT DESIGN: the parse-side marks the zero-column tables and
+    collects the note-element spans per table (the table-tail attempt
+    = REVERTED — see the r106 addendum: the table-tail gate sees only
+    the table's own errors, the file-level gate = the OTHER elements'
+    binder/parse errors = invisible there, 9 seed regressions); the
+    CORRECT push = the validate layer (the file's binder/parse set =
+    complete at render time; ours' validate.rs already receives
+    binder_errors + the parse errors — the gate = both empty), with
+    the note-element list carried on the doc's Table (an ast field).
+  * OURS' CURRENT STATE: both checks = absent (zc1/zc2/zc3/s5l =
+    zero diagnostics — the probes are NOT in the battery, they never
+    passed ours).
 - The s5 open tails (the after-element merge, the cross-line name
-  comma).
+  comma) — the composite-bound shapes, the next session's queue;
+- The long-tail grind continues (the D-owned = skip).
+- OWNED ELSEWHERE: the paren-name + the records-comma + the
+  EMPTY_TABLE/notes design (Agent D).
