@@ -623,6 +623,35 @@ tools below. Never say done when the sweep still finds shapes.
   (the pre-child-loop engine — the round-42/43 ports may move it; the
   next seed-43 re-measure tells).
 
+## The round-47 queue (the next session's clusters, probed not ported)
+
+- The column-pair EXTRAS cluster (44 extra name-form + 37 extra type
+  across 171 divergent seed-77 cases) — two identified shapes:
+  1. the `'''` TRIPLE-QUOTE in a header (m77_0017 `Table parent '''{ id
+     integer ...`): theirs = the invalid note-string gather, ONE error
+     'EOF reached while parsing' spanning the token (1,14-7,1); ours
+     errs the column pair at the token position instead — the
+     triple-quote token must gather out at the header/field positions;
+  2. the broken-bracket args (m77_0013 `"odd col" integer lt: 1, pk]` —
+     a `]` without `[`): ours errs the column pair at `lt`/`pk]`
+     (the colon-form cascade); theirs consumes the args silently —
+     ours' colon-form dispatch fires where theirs treats `lt: 1` as
+     the field's args (probe-first: is `lt: 1` = args[0]?).
+- The colon-op cluster (17): 'Invalid start of operand ":"' missing at
+  the `:` of `Ref r0:` NAMED-REF headers inside composite-damage files
+  (m77_0021/0043/0057 — the colon at the ref-header position when the
+  upstream damage skews the parse).
+- The r1 shape (`a in"t int`) = COMPOSITE with the open lexer cluster
+  ('Expect a following space' at the type token `in` + the dq newline
+  + the inline-settings cascade 3,3-3,9) — the lexer's invalid-char +
+  keyword-space handling, unported (the v7 probe `@#$ x int` = the
+  same cluster).
+- The index-field paren-name cluster (17): 'An index field must be an
+  identifier, a quoted identifier, or a functional...' extra — the
+  `(name) [unique, name: 'ix']` shape.
+- m43_0242's records-comma cluster (17): 'Expect a comma' missing —
+  the recorded consume-anchor + the mid-typing recovery finding.
+
 ## Workflow rules
 
 - Builds are the user's hardware. Use `cargo check` (or
