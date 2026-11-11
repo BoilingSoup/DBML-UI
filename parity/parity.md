@@ -623,7 +623,7 @@ tools below. Never say done when the sweep still finds shapes.
   (the pre-child-loop engine — the round-42/43 ports may move it; the
   next seed-43 re-measure tells).
 
-## The rounds 47-53 RESULT + the round-54 queue
+## The rounds 47-54 RESULT + the round-55 queue
 
 - RESOLVED (round 47): the two recorded column-pair shapes. (1) The
   `'''` TRIPLE-QUOTE header gather — theirs = the consumeUntil scan
@@ -695,15 +695,21 @@ tools below. Never say done when the sweep still finds shapes.
   from 2,13, the `[]` = the setting list 2,16-2,18, the body check at
   `x` 3,3-3,4 — 4/6 identical). Seed-77 142/300 (the 'Expect an
   identifier' missing 31→29; the composites hold on the deeper spans).
-- ROUND-54 QUEUE (probed, unported):
-  * the no-body element's DISCARD-PHASE ARGS WALK (b1's remaining 2):
-    theirs' node = the ARGS union through the last real token (3,28 =
-    the 'n's end, NOT the `]`'s end) and the `]` after the list errs
-    'Expect an identifier' at 3,28-3,29 — ours' discard = the silent
-    swallow to the `]`'s end (3,29), no error;
+- ROUND 54 LANDED: the INLINE-BODY STRING-TOKEN RULE — the colon
+  body's inline value = the STRING TOKEN: the body node ends at the
+  string's end (b1: 3,28 = the 'n's end, NOT the raw-slice line end
+  3,29) and the trailing junk errs 'Expect an identifier' ONLY on the
+  invalid-operand `]` (3,28-3,29) — the juxtaposed words are their
+  application's args and stay silent, and the `}` is LEFT for the
+  enclosing flow (the program's junk arm errs it at 4,1-4,2; the host
+  table's close stays silent — the first cut's per-token walk and the
+  `}`-inclusion both regressed and were caught by the seed-77
+  signature before commit). b1 6/6 (battery bb1). Seed-77 142→143/300
+  (the 'Expect an identifier' extras signature GONE from the top-6).
+- ROUND-55 QUEUE (probed, unported):
   * the composite spans (m77_0039's `Tabl[e orders {`, m77_0043's
     Note-sticky span);
-  * the 'Expect an identifier' stack (29 missing);
+  * the 'Expect an identifier' stack (the missing remainder);
   * s5's span puzzle, the colon-op cluster (17), the index-field
     paren-name (17), m43_0242 records-comma.
   * s5 (`, 1 int` at a field start): theirs = ONE name error at
