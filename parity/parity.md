@@ -623,7 +623,7 @@ tools below. Never say done when the sweep still finds shapes.
   (the pre-child-loop engine — the round-42/43 ports may move it; the
   next seed-43 re-measure tells).
 
-## The rounds 47-48 RESULT + the round-49 queue
+## The rounds 47-49 RESULT + the round-50 queue
 
 - RESOLVED (round 47): the two recorded column-pair shapes. (1) The
   `'''` TRIPLE-QUOTE header gather — theirs = the consumeUntil scan
@@ -644,10 +644,22 @@ tools below. Never say done when the sweep still finds shapes.
   call-form field `abc, def` streams the name node across the comma —
   the pair anchors the whole node 2,3-2,11, the type parses after;
   battery c26). Seed-77 135→136/300.
-- ROUND-49 QUEUE (probed, unported):
-  * the 'expected identifier' LEAK remainder (19 extra): the enum/ref/
-    group/records header flows + the note-value sites — the same
-    structured treatment as the table header (round 48's arm);
+- ROUND 49 LANDED: the enum/ref/project header syncs — the enum's
+  duplicate body-check at EOF suppressed after the discard already
+  erred (p4 `Enum e]x` at EOF = ONE error); the ref's body-check at
+  the offending token + the sync to the `:` with the INLINE REF STILL
+  PARSING (p2 `Ref r]x: a.b > c.d` = the body check + the two
+  missing-table binder errors); the project's body-check + the sync to
+  the `{` (p3 `Project p]x { }`). p-probes 4/4 (p1 `Enum e]x { a }`
+  already matched). Battery u1-u3 promoted (105 files, all green).
+- ROUND-50 QUEUE (probed, unported):
+  * the close-count cluster (37 missing 'Expect a closing brace' +
+    12 extra) — the deepest remaining signature, the composite-damage
+    close flows;
+  * the custom-element pair span cluster (33 extra / 31 missing
+    'A Custom element can only appear') — the element-node spans in
+    the composite shapes;
+  * the 'Expect an identifier' stack (31 missing / 17 extra);
   * s5 (`, 1 int` at a field start): theirs = ONE name error at
     1,10-2,6 — the span starts at the TABLE'S OPEN-BRACE END and ends
     mid-line — the mechanism unexplained (the block-child node's
