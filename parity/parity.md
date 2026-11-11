@@ -759,9 +759,20 @@ tools below. Never say done when the sweep still finds shapes.
     'Expect an identifier' remainder, s5's span puzzle, the colon-op
     cluster (17), the index-field paren-name (17), m43_0242
     records-comma.
-- ROUND-58 QUEUE (trace-first):
-  * the composite spans (m77_0039's remaining stack, m77_0043's
-    Note-sticky span);
+- ROUND 58 LANDED — the nested NOTE DECLARATION in the table body:
+  `Note <name> { triple-quote }` errs 'A Note shouldn't have a name'
+  at the name span (m77_0043's Note-delta resolved); the NAME-LESS
+  `Note {` form falls through to the dedicated legal arm (the first
+  cut shadowed it — the battery's e22 caught the regression: the
+  broken body value errs its lexer error AND 'A Note must have a
+  content' over the note-element span 2,3-4,2). Probe nn1. The
+  m77_0039 composite = improved by the round-57 fix but remains the
+  multi-damage tail (the broken-ref-occ's union-end exclusion, the
+  line-18 recovery).
+- ROUND-59 QUEUE (trace-first):
+  * the composite spans: m77_0039's remaining stack (the union-end =
+    the last VALID arg, the broken occs excluded; the line-18
+    recovery);
   * the 'Expect an identifier' stack (the missing remainder);
   * s5's span puzzle, the colon-op cluster (17), the index-field
     paren-name (17), m43_0242 records-comma.
