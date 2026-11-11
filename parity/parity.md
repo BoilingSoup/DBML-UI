@@ -794,9 +794,21 @@ tools below. Never say done when the sweep still finds shapes.
   ref-binder running (the ref-diags + the 4 consume-logs = the
   remaining 7) — the settings_list_occs entry-loop extraction = the
   round-61 queue (hh1 = 5/12, NOT promoted per the open-shapes rule).
-- ROUND-61 QUEUE:
-  * the settings_list_occs entry-loop extraction for the unbracketed
-    colon-bodies (the ref-binder + the consume-logs semantics);
+- ROUND 61 LANDED — the post-value ENTRY-walk merged into the
+  inline-body loop: the alpha-lead name-attempts (the ident = the
+  silent entry name with the `:`-value introducer — their
+  consume(IDENTIFIER) REJECTS the digit-lead: h1's `1` logs; ours'
+  ident() accepts digits so the walk checks the lead explicitly), the
+  junk tokens log 'Expect an identifier' at their spans (d1's
+  `:`/`1`/`,`/`]` = four logs ✓), the value-runs log the `]`/`}`
+  terminators and stay silent on the operands. h1 = 9/12 — the
+  missing 3 = the ref-binder trio (the ref-SETTING entries inside the
+  inline body = the round-62 queue). hh1 = still not promoted (the
+  open-shapes rule). Both seeds hold.
+- ROUND-62 QUEUE:
+  * the ref-SETTING entries inside the inline bodies (the ref-binder:
+    the ref-field parse on the `ref: ?<> orders.code` shape = hh1's
+    remaining 3);
   * the 'Expect an identifier' stack (the missing remainder);
   * s5's span puzzle, the colon-op cluster (17), the index-field
     paren-name (17), m43_0242 records-comma.
