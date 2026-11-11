@@ -986,11 +986,22 @@ tools below. Never say done when the sweep still finds shapes.
   the fix = the value-parse's tail-handling FIRST (the probe-first
   = the fresh-context round-79). The parser.rs edits reverted (the
   tree clean).
-- ROUND-79 QUEUE:
-  * the first-entry's value-parse tail-handling (the backtick-string
-    consume = the `indexes {` swallowed — the w1's EOF-reached
-    2,20-4,1 = the sq-message path) probe-first, THEN the comma-check
-    (the verified insert);
+- ROUND 79 — THE PARTIAL READ: the w1's EOF-reached = @2,20 = the
+  BACKTICK position (the `\`x\``'s opener — the col 20) — ours'
+  first-entry value-parse mis-scans the backtick string through the
+  sq/note_value family (the 'EOF reached while parsing' = their
+  message, the span 2,20-4,1 = the swallow to the EOF) — the value =
+  the backtick-string consumed as a string, the tail (`indexes {`)
+  swallowed, the field = the EOF-cascade. The ref-region's string-flow
+  (the sq/swallow_gather = the read) = the ref-only path — the
+  check:-value = the non-ref = the colon-branch's backtick handling =
+  the un-read region. The session's context = the wall — the fix =
+  the next session's first action (the backtick-value parse = the
+  read + the fix, THEN the comma-check).
+- ROUND-80 QUEUE:
+  * the backtick-value parse at the colon-branch (the w1's
+    EOF-reached @2,20 = the backtick position — the read + the fix),
+    THEN the comma-check (the verified insert);
   * the composite queue (the m77_0099-family cascade, s5's span
     puzzle, the colon-op cluster, the index-field paren-name,
     m43_0242 records-comma).
