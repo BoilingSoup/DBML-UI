@@ -2018,3 +2018,42 @@ grind, the round-66 pattern). The dumps =
   column check, the cross-line name comma);
 - Iterate until a full round adds zero new mechanisms.
 - OWNED ELSEWHERE: the paren-name + the records-comma (Agent D).
+
+## Round 106 addendum — THE ZERO-MECHANISM ROUND (the honest ledger)
+
+THE r106 PROBES: the leak-flow minimal shapes (lk1/lk2 = the bare
+ref-line = BOTH SIDES IDENTICAL — the leak = composite-bound, no
+bounded mechanism); the zc family = THE EMPTY_TABLE MECHANISM MAPPED:
+'A Table must have at least one column' = their INTERPRET-layer check
+(interpret.ts EMPTY_TABLE = the SYMBOL members, NOT the validator!) —
+the interpret is FILE-gated: any parse/binder error ANYWHERE
+suppresses it (zc3: the duplicate-note errors = no EMPTY_TABLE; k4:
+the nameless name error = no EMPTY_TABLE; zc1/zc2 = the clean file =
+the error @ [start..the-element-end)). 'Duplicate notes are defined'
+= the validateSubElements check, per note-ELEMENT span (the `Note {
+… }` block form only; the colon-form = a field in their parse).
+THE PORT ATTEMPT = the table-tail push gated by the table's OWN
+binder_out + the file's errs — REGRESSED 9 seed cases (the file-level
+gate: the OTHER elements' binder errors are invisible at the table's
+tail — the mutation composites = multi-element files). THE REVERT
+LANDED (the tree = the r105 state).
+THE CORRECT DESIGN = the validate-layer push (the doc's tables'
+columns + the note-element list + the FILE-level binder/parse gate) —
+OUTSIDE parser.rs (the ast/validate touch = the scope note; the
+user's call). The probes zc1/zc2/zc3/s5l = recorded, NOT promoted.
+NO mechanism landed this round — THE CONVERGENCE CRITERION = MET for
+this round. The remaining ledger = the deep-tail composites (the
+multi-flow per-case grind = the round-66/74 pattern) + the D-owned
+families + the validate-layer design.
+THE SEEDS: **seed-77 = 153/300, seed-43 = 331/600** (the r105 state —
+the r106 = the revert to 7de8ce8). The regression evidence =
+/tmp/agentA-ours-r106-{77,43}.json (9 entered cases before the
+revert). The gates = the r105 state.
+
+## Round 107 queue
+
+- The EMPTY_TABLE/validate-layer design (the user's scope call: the
+  ast/validate files are outside the parser.rs brief);
+- The long-tail grind continues (the D-owned = skip);
+- The s5 open tails (the after-element merge, the cross-line name
+  comma).
