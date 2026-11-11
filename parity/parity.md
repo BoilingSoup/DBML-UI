@@ -1590,6 +1590,24 @@ THE RECOVERY MODEL (the nb probe series):
   @ the `]` only, the commas clean).
 - nb1 (the bracket as a FIELD's settings inside a real block): ours =
   theirs 5/5 ALREADY (the settings_list machinery ✓).
+- nb8 `Table / a int [x, y] / b varchar / }` (the clean bracket + the
+  following line): ONE error — no body-block error, no downstream
+  walk (the clean bracket = silently consumed).
+- nb9 `Table / a int [x: y] / b varchar / }` (the COLON inside): SIX
+  — the brace @ int, 'Expect an identifier' @ the `:` [2,14-15), "A
+  Table's body must be a block" @ [2,13..2,14) = the application node
+  `x:` (the parsed prefix AT the colon), the custom-element pair for
+  line 3, the `}`-brace error. THE DISCRIMINATOR = the `:` inside the
+  bracket: the clean `[x, y]` stays silent (nb8), the `:`-bearing
+  bracket = the body-application recovery (nb9, m77_0005). BUT the
+  error placement shifts with the value shape: nb9 errs 'Expect an
+  identifier' AT the colon (the arg-name consume), m77_0005's
+  `note: 'x` errs NOTHING at the colon (the broken string = the VALUE
+  position = the lexer CE instead) and errs 'Expect an identifier' at
+  the `]` (the close consumed as the arg position). The body node
+  span = the parsed application prefix (nb9 `x:` = one char past the
+  arg; m77_0005 = [`[`..the last comma end) [20,29) — the `]` and the
+  space ride OUTSIDE the node).
 
 THE IMPLEMENTATION DESIGN (the round-99 first action): after ours'
 discardUntil loop in the header parse (the ~4327 site), when the next
