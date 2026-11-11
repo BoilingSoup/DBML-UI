@@ -728,7 +728,7 @@ fn note_value(input: &mut &str, base: usize) -> R<String> {
 /// args (`varchar(255)`, `decimal(10, 2)`, `"character varying"`). Their
 /// grammar has no multi-word types: `timestamp with time zone` reads as
 /// type `timestamp` plus the bare fields `with`, `time`, `zone`.
-fn type_str(input: &mut &str, base: usize) -> R<String> {
+fn type_str(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<String> {
     let mut out = String::new();
     loop {
         if let Some(rest) = input.strip_prefix('`') {
@@ -799,10 +799,15 @@ fn type_str(input: &mut &str, base: usize) -> R<String> {
         sp(input);
     }
     // parenthesized args ride the word, spaces inside them intact —
-    // `decimal (10, 2)` keeps the gap, `varchar(255)` does not grow one
+    // `decimal (10, 2)` keeps the gap, `varchar(255)` does not grow one.
+    // The args = their tupleExpression grammar: a missing comma errs at
+    // the offending token (m43_0206: `decimal(1 2)` errs at `2`)
     let save = *input;
     sp(input);
     if peek_is(input, "(") {
+        // the verbatim slice rides the type text (the balanced scan);
+        // the tuple grammar errs the missing commas (m43_0206:
+        // `decimal(1 2)` errs at `2`)
         let mut depth = 0i32;
         let mut end = input.len();
         for (k, &c) in input.as_bytes().iter().enumerate() {
@@ -818,8 +823,9 @@ fn type_str(input: &mut &str, base: usize) -> R<String> {
                 _ => {}
             }
         }
-        out.push_str(&input[..end]);
-        *input = &input[end..];
+        let args_text = input[..end].to_string();
+        tuple_scan(input, base, errs);
+        out.push_str(&args_text);
     } else {
         *input = save;
     }
@@ -2994,22 +3000,11 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
                 // SURVIVES (j2: the settings-list after the tuple = the
                 // ty-walk's list branch errs 'Invalid column type' at the
                 // list; u2: no settings = the type-missing error at the
-                // tuple — the pair)
+                // tuple — the pair). The tuple = their tupleExpression
+                // grammar: the missing comma errs at the offending token
+                // (m43_0518: `(odd col)` errs at `col` 5.10-5.13)
                 let g_start = offset(input, base);
-                let mut depth = 0i32;
-                let mut end = input.len();
-                for (k, &c) in input.as_bytes().iter().enumerate() {
-                    if c == b'(' {
-                        depth += 1;
-                    } else if c == b')' {
-                        depth -= 1;
-                        if depth == 0 {
-                            end = k + 1;
-                            break;
-                        }
-                    }
-                }
-                *input = &input[end..];
+                tuple_scan(input, base, errs);
                 let g_end = offset(input, base);
                 binder_errors.push((
                     g_start,
@@ -3281,7 +3276,7 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
         binder_errors.push((bs, be, "Invalid column type".to_string()));
         ty = String::new();
     } else {
-        ty = type_str(input, base)?;
+        ty = type_str(input, base, errs)?;
     }
     // their column-node lint anchor reads [name start .. type end]
     let ty_end = offset(input, base);
@@ -3579,6 +3574,64 @@ fn parse_check_entries(
         }
     }
     out
+}
+
+/// Their tupleExpression inside a `(...)`: one element, then the
+/// comma-terminated loop — a missing comma errs 'Expect a comma' at the
+/// offending TOKEN (token width) and the sync skips silently to the
+/// next `,`/`)`, the skipped tokens never becoming elements (`(odd col)`
+/// flags odd, errs at col; `(a b c)` errs at b only, tuple [a]). At EOF
+/// the close consume errs 'Expect a closing parenthesis ')' at the EOF
+/// point. Leaves the input just past the closing `)` (or at EOF).
+fn tuple_scan(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) {
+    *input = &input[1..];
+    loop {
+        sp(input);
+        if input.is_empty() {
+            errs.push(err_at(offset(input, base), "Expect a closing parenthesis ')'"));
+            break;
+        }
+        if eat(input, ")") {
+            break;
+        }
+        // the element: one token
+        if consume_one_token(input).is_none() {
+            break;
+        }
+        sp(input);
+        if eat(input, ",") {
+            continue;
+        }
+        if input.is_empty() {
+            errs.push(err_at(offset(input, base), "Expect a closing parenthesis ')'"));
+            break;
+        }
+        if eat(input, ")") {
+            break;
+        }
+        // their consume anchors the offending TOKEN (token width) — the
+        // trivia (the newline included) is skipped before the anchor
+        // (m43_0242: `records (c\node)` anchors the next line's `ode`)
+        let mut probe = *input;
+        let tok_len = consume_one_token(&mut probe).unwrap_or(1);
+        errs.push(ParseError {
+            offset: offset(input, base),
+            end: Some(offset(input, base) + tok_len),
+            message: "Expect a comma ','".to_string(),
+        });
+        // the sync: skip to (not past) the next `,`/`)`
+        let to_comma = input.find(',');
+        let to_rparen = input.find(')');
+        match (to_comma, to_rparen) {
+            (Some(c), Some(p)) => {
+                let k = c.min(p);
+                *input = &input[k..];
+            }
+            (Some(c), None) => *input = &input[c..],
+            (None, Some(p)) => *input = &input[p..],
+            (None, None) => break,
+        }
+    }
 }
 
 /// Index column: an identifier. Upstream importers emit unquoted
@@ -4306,22 +4359,38 @@ fn records_block(
             if eat(input, ",") {
                 continue;
             }
-            if input.is_empty() || eat(input, ")") {
+            if input.is_empty() {
+                // the close consume at the EOF token (m43_0440: the
+                // torn header errs 'Expect a closing parenthesis ')' at
+                // the EOF point, zero-width)
+                errs.push(err_at(offset(input, base), "Expect a closing parenthesis ')'"));
+                break;
+            }
+            if eat(input, ")") {
                 break;
             }
             // their consume anchors the offending TOKEN (token width) —
-            // the CURRENT token after the trivia (the newline is trivia:
-            // probe m43_0242/records (c + newline + ode): the anchor =
-            // the next line's `ode` at 5,1-5,4). OPEN: the naive trivia
-            // skip regresses the mid-typing recovery (the records_
-            // partial_input test: `records (a, b\n}` — the later table
-            // must survive); the skip needs the mid-typing `}` and the
-            // `ode) {` continuation distinguished first
-            let mut probe = *input;
-            let tok_len = consume_one_token(&mut probe).unwrap_or(1);
+            // the trivia (the newline is trivia: probe m43_0242/records
+            // (c + newline + ode)) is skipped first, the anchor = the
+            // next real token. The skip runs on a PROBE: the real input
+            // stays at the boundary so the recovery keeps bouncing at
+            // the line (the mid-typing contract — the records_partial_
+            // input test — ours' line-local recovery is deliberate:
+            // theirs swallows the next construct into the tuple).
+            let skipped = input.len() - {
+                let mut probe2 = *input;
+                let _ = ws(&mut probe2);
+                probe2.len()
+            };
+            let anchor = offset(input, base) + skipped;
+            let tok_len = {
+                let mut probe2 = *input;
+                let _ = ws(&mut probe2);
+                consume_one_token(&mut probe2).unwrap_or(1)
+            };
             errs.push(ParseError {
-                offset: offset(input, base),
-                end: Some(offset(input, base) + tok_len),
+                offset: anchor,
+                end: Some(anchor + tok_len),
                 message: "Expect a comma ','".to_string(),
             });
             // their canHandle (parser.ts): the tuple recovers locally only
