@@ -2511,7 +2511,11 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
             Err(_) if input.starts_with('(') => {
                 // a `(` at the name position = their tuple-as-callee: a VALID
                 // expression, just not a variable — no operand error, the
-                // validateColumn pair anchors the TUPLE node (probe u2)
+                // name check anchors the TUPLE node and the field
+                // SURVIVES (j2: the settings-list after the tuple = the
+                // ty-walk's list branch errs 'Invalid column type' at the
+                // list; u2: no settings = the type-missing error at the
+                // tuple — the pair)
                 let g_start = offset(input, base);
                 let mut depth = 0i32;
                 let mut end = input.len();
@@ -2528,23 +2532,15 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
                 }
                 *input = &input[end..];
                 let g_end = offset(input, base);
-                errs.push(ParseError {
-                    offset: g_start,
-                    end: Some(g_end),
-                    message: "A column must have a type".to_string(),
-                });
-                errs.push(ParseError {
-                    offset: g_start,
-                    end: Some(g_end),
-                    message: "A column name must be an identifier or a quoted identifier"
+                binder_errors.push((
+                    g_start,
+                    g_end,
+                    "A column name must be an identifier or a quoted identifier"
                         .to_string(),
-                });
-                return Err(Fail {
-                    offset: g_end,
-                    end: None,
-                    message: String::new(),
-                    partial_occs: Vec::new(),
-                });
+                ));
+                name_off = g_start;
+                name = String::new();
+                name_end = g_end;
             }
             Err(e)
                 if e.message == "Invalid newline encountered while parsing"
