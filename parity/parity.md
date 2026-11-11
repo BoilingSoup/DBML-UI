@@ -1417,3 +1417,35 @@ vs the first-close = the measured trade).
 - The composite queue (the m77_0099-family cascade, s5's span puzzle,
   the colon-op cluster, the index-field paren-name, m43_0242
   records-comma).
+
+## Round 95 addendum — the close-rule resolved (the design recorded)
+
+The probe-driven resolution: theirs = the FIRST-close ALWAYS — the w1's
+close + the space-then-junk = the comma-error at the junk-name ✓ and
+the n1's nested close = the comma-error at the inner-token ✓. Both
+shapes confirm: theirs closes the backtick string at the FIRST
+close-backtick, the tail resumes into the settings, and the junk
+tokens after the close = the comma-logs.
+
+THE CONFLICT = the ours-side only: the golden's nested-backtick (the
+importer fixture's own output) = the re-parse under the FIRST-close =
+the format_source failure (the BOTH-sides-fail in the test = the
+strings-differ assert). The nested-aware rule = the golden's = green
+but the w1's = the file-swallow.
+
+THE DESIGN: the FIRST-close = the diagnostics-correct rule (the
+landed candidate). The golden's re-parse breakage = the OURS-side
+format/render issue — the golden's nested-backtick = ours' own
+generated output = the re-parse must work = the generated output's
+backtick-escape (the sqldump's exporter = the nested-backtick =
+the escaped = `\``-form?) = the round-96's first probe (the
+upstream's generated = the escaped or the raw = the trace-check).
+
+## Round 96 queue
+
+- The generated output's backtick-escape probe (the upstream's
+  sqldump = the nested-backtick = the escaped `\``-form or the raw);
+- The exporter-side fix (the escape) or the parser-side nested-aware
+  (the probe-driven);
+- THEN the comma-check (the verified insert) for the w1's first-close;
+- The composite queue per the convergence criterion.
