@@ -998,9 +998,19 @@ tools below. Never say done when the sweep still finds shapes.
   the un-read region. The session's context = the wall — the fix =
   the next session's first action (the backtick-value parse = the
   read + the fix, THEN the comma-check).
-- ROUND-80 QUEUE:
-  * the backtick-value parse at the colon-branch (the w1's
-    EOF-reached @2,20 = the backtick position — the read + the fix),
+- ROUND 80 — THE VALUE-PARSE MAP (the read): settings_list_occs's
+  colon-branch = the key-dispatch (`ref` = the endpoint/ref-binder
+  flow; `default` = the verbatim-quoted flow; the OTHER keys = the
+  generic-value tail = the UN-READ region — the w1's `check:` = the
+  generic = the backtick mis-scan site). The EOF-reached @2,20 = the
+  backtick's opener = the generic-value's sq/note mis-scan. The fix =
+  the generic-value's backtick consume (the `\`…\`` = the verbatim
+  token) = the round-81 first action, THEN the comma-check (the
+  verified insert). The session's context = the wall — the read's
+  scope = the recorded.
+- ROUND-81 QUEUE:
+  * the generic-value's backtick consume (the read the tail-region +
+    the fix — the w1's EOF-reached @2,20 = the backtick mis-scan),
     THEN the comma-check (the verified insert);
   * the composite queue (the m77_0099-family cascade, s5's span
     puzzle, the colon-op cluster, the index-field paren-name,
