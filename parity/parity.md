@@ -1255,3 +1255,26 @@ corrected placement).
 - The composite queue (the m77_0099-family cascade, s5's span puzzle,
   the colon-op cluster, the index-field paren-name, m43_0242
   records-comma).
+
+## Round 88 addendum — the note-triple doubly eliminated
+
+The note_value's triple-EOF re-instrumented (the DBGI1, the verified
+count 1): **STILL did not fire** on the w1 — that site is doubly
+eliminated. The remaining candidates for the w1's EOF-reached @2,20:
+the sq_string's EOF-return (the re-verify = the round-89's first
+action — the round-83's instrument was verified but the run's
+absence was never explained), and the 4208-region's e.message
+pass-through (the re-push of an upstream Fail — the upstream's
+identity = the actual emitter).
+
+## Round 89 queue
+
+- The sq_string's EOF-return re-verified (the DBGE re-insert + the
+  count + the build + the run);
+- The 4208-region's upstream-Fail identity (the instrument the
+  re-push site = the e.message's source);
+- The fix at the identified emitter; THEN the comma-check (the
+  verified insert);
+- The composite queue (the m77_0099-family cascade, s5's span puzzle,
+  the colon-op cluster, the index-field paren-name, m43_0242
+  records-comma).
