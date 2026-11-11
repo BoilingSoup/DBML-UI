@@ -507,6 +507,173 @@ pub fn validate_with_parse(
         }
     }
 
+    // their schema-member dup machinery covers TableGroups and top-level
+    // sticky Notes too (the anchor = the declaration's NAME token — the
+    // schema dup map's errorNode = declaration.name; each LATER
+    // declaration flags, the tables/enums rule), plus the group-field
+    // checks: the within-group seen-map (first re-flagged per repeat —
+    // the enum-field rule; the fullname = the WRITTEN member under the
+    // default schema — probes g15/g16) and the membership map
+    // (program/bind.ts: the RESOLVED table claimed by its first group;
+    // every later claimant errs, the same group's repeats included —
+    // g13; unresolved members skip the machinery — g16). The group/note
+    // ASTs carry no name/member spans, so the tokens are re-scanned from
+    // the source: their name-form = one identifier or quoted identifier,
+    // and a bound member = a pure identifier line (comma-runs and
+    // continuations bind nothing — probes g5/g9/g10).
+    fn scan_name_token(src: &str, elem_start: usize) -> Option<Span> {
+        let text = src.get(elem_start..)?;
+        let bytes = text.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let start = i;
+        if i >= bytes.len() {
+            return None;
+        }
+        if bytes[i] == b'"' || bytes[i] == b'\'' {
+            let q = bytes[i];
+            i += 1;
+            while i < bytes.len() && bytes[i] != q {
+                i += 1;
+            }
+            if i < bytes.len() {
+                i += 1;
+            }
+            return Some(elem_start + start..elem_start + i);
+        }
+        while i < bytes.len()
+            && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] >= 0x80)
+        {
+            i += 1;
+        }
+        if i == start {
+            return None;
+        }
+        Some(elem_start + start..elem_start + i)
+    }
+
+    fn scan_group_members(src: &str, gspan: &Span) -> Vec<(String, Span)> {
+        let mut out = Vec::new();
+        let Some(text) = src.get(gspan.start..gspan.end) else {
+            return out;
+        };
+        let Some(open_rel) = text.find('{') else {
+            return out;
+        };
+        let mut depth = 0i32;
+        let mut end_rel = text.len();
+        for (i, &b) in text.as_bytes().iter().enumerate().skip(open_rel) {
+            match b {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end_rel = i + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let ident = |s: &str| {
+            s.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_')
+                && s.chars().all(|c| c.is_alphanumeric() || c == '_')
+        };
+        let mut off = open_rel + 1;
+        for line in text[open_rel + 1..end_rel].split('\n') {
+            let line_start = off;
+            off += line.len() + 1;
+            let content = match line.find("//") {
+                Some(k) => &line[..k],
+                None => line,
+            };
+            // the block's own close may share the member's line (the
+            // inline form) — it rides outside the member
+            let content = match content.find('}') {
+                Some(k) => &content[..k],
+                None => content,
+            };
+            let t = content.trim();
+            if ident(t) {
+                let lead = content.len() - content.trim_start().len();
+                let s = gspan.start + line_start + lead;
+                out.push((t.to_string(), s..s + t.len()));
+            }
+        }
+        out
+    }
+
+    let mut group_names: Vec<&str> = Vec::new();
+    for g in &doc.table_groups {
+        if group_names.contains(&g.name.as_str()) {
+            if let Some(sp) = scan_name_token(src, g.span.start) {
+                out.push(Diagnostic::spanned(
+                    sp.start,
+                    sp.end,
+                    format!(
+                        "TableGroup '{}' already exists in schema 'public'",
+                        g.name
+                    ),
+                ));
+            }
+        }
+        group_names.push(&g.name);
+    }
+    let mut note_names: Vec<&str> = Vec::new();
+    for n in &doc.notes {
+        if note_names.contains(&n.name.as_str()) {
+            if let Some(sp) = scan_name_token(src, n.span.start) {
+                out.push(Diagnostic::spanned(
+                    sp.start,
+                    sp.end,
+                    format!("Duplicate Note '{}' in schema 'public'", n.name),
+                ));
+            }
+        }
+        note_names.push(&n.name);
+    }
+    let mut field_dups: Vec<(usize, usize, String)> = Vec::new();
+    let mut reappears: Vec<(usize, usize, String)> = Vec::new();
+    let mut member_owner: std::collections::HashMap<usize, &str> =
+        std::collections::HashMap::new();
+    for g in &doc.table_groups {
+        let members = scan_group_members(src, &g.span);
+        let mut seen: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
+        for (i, (name, sp)) in members.iter().enumerate() {
+            if let Some(&first) = seen.get(name.as_str()) {
+                let msg = format!("Duplicate TableGroupField 'public.{name}'");
+                field_dups.push((members[first].1.start, members[first].1.end, msg.clone()));
+                field_dups.push((sp.start, sp.end, msg));
+            } else {
+                seen.insert(name.as_str(), i);
+            }
+            if let Some(t) = doc.tables.iter().find(|t| t.matches(name)) {
+                let ti = doc.tables.iter().position(|x| std::ptr::eq(x, t)).unwrap_or(0);
+                if let Some(owner) = member_owner.get(&ti) {
+                    reappears.push((
+                        sp.start,
+                        sp.end,
+                        format!("Table \"{name}\" already appears in group \"{owner}\""),
+                    ));
+                } else {
+                    member_owner.insert(ti, g.name.as_str());
+                }
+            }
+        }
+    }
+    for (s, e, msg) in field_dups {
+        out.push(Diagnostic::spanned(s, e, msg));
+    }
+    for (s, e, msg) in reappears {
+        out.push(Diagnostic::spanned(s, e, msg));
+    }
+
     // every ref endpoint must resolve to a real table and column (block
     // refs and inline `ref:` settings alike)
     fn check_endpoint(doc: &Document, ep: &super::ast::Endpoint, anchor: usize, out: &mut Vec<Diagnostic>) {
@@ -1681,8 +1848,11 @@ pub fn validate_with_parse(
                     Some(Sym::Schema(name))
                 } else {
                     if emit {
-                        out.push(Diagnostic::plain(
-                            *off,
+                        // their anchors carry the FRAGMENT token (probe
+                        // g11: the member `b.a` errs 4:18-4:19)
+                        out.push(Diagnostic::spanned(
+                            frag.start,
+                            frag.end,
                             format!("Table or schema '{}' does not exist", name),
                         ));
                     }
@@ -1715,8 +1885,10 @@ pub fn validate_with_parse(
                     Some(Sym::Schema(name))
                 } else {
                     if emit {
-                        out.push(Diagnostic::plain(
-                            *off,
+                        // the fragment token, not a point (probe g11)
+                        out.push(Diagnostic::spanned(
+                            frag.start,
+                            frag.end,
                             format!("Schema '{}' does not exist", name),
                         ));
                     }
@@ -2098,6 +2270,69 @@ mod tests {
             .find(|f| f.short_title == "Change to -")
             .expect("the one fix");
         assert_eq!(one.new_text, "-");
+    }
+
+    #[test]
+    fn group_and_note_dups_flag_the_later_declarations() {
+        // their schema dup map covers TableGroups and sticky Notes; the
+        // anchor = the NAME token (g1/g3/g8), and the group fields carry
+        // the within-group seen-map (g13) + the membership map (g4/g9)
+        let out = super::super::parser::parse(
+            "Table a { id int }\nTableGroup g { a }\nTableGroup g { a }\nTableGroup g { a }\n",
+        );
+        let d = validate(&out.doc, "Table a { id int }\nTableGroup g { a }\nTableGroup g { a }\nTableGroup g { a }\n");
+        let group_dups: Vec<_> = d
+            .iter()
+            .filter(|x| x.message == "TableGroup 'g' already exists in schema 'public'")
+            .collect();
+        assert_eq!(group_dups.len(), 2, "{d:?}");
+        // each later group's name token (g 3:12-3:13, 4:12-4:13)
+        assert_eq!(group_dups[0].offset, 49);
+        assert_eq!(group_dups[0].end, Some(50));
+        // the later groups' member `a` reappears: Table "a" already
+        // appears in group "g" (the first claimer named), anchored at
+        // each member token
+        let reappears: Vec<_> = d
+            .iter()
+            .filter(|x| x.message == "Table \"a\" already appears in group \"g\"")
+            .collect();
+        assert_eq!(reappears.len(), 2, "{d:?}");
+        assert_eq!(reappears[0].offset, 53);
+
+        let src2 = "Table a { id int }\nTableGroup g {\n  a\n  a\n}\n";
+        let out2 = super::super::parser::parse(src2);
+        let d2 = validate(&out2.doc, src2);
+        // the within-group seen-map re-flags the first sighting (both
+        // members err, the enum-field rule) + the second member's
+        // membership error
+        let field_dups: Vec<_> = d2
+            .iter()
+            .filter(|x| x.message == "Duplicate TableGroupField 'public.a'")
+            .collect();
+        assert_eq!(field_dups.len(), 2, "{d:?}");
+        assert!(d2.iter().any(
+            |x| x.message == "Table \"a\" already appears in group \"g\""
+        ), "{d:?}");
+
+        let src3 = "Note n { 'x' }\nNote m { 'y' }\nNote n { 'z' }\n";
+        let out3 = super::super::parser::parse(src3);
+        let d3 = validate(&out3.doc, src3);
+        let note_dups: Vec<_> = d3
+            .iter()
+            .filter(|x| x.message == "Duplicate Note 'n' in schema 'public'")
+            .collect();
+        assert_eq!(note_dups.len(), 1, "{d:?}");
+        assert_eq!(note_dups[0].offset, 35);
+
+        // a comma-run body binds nothing (their field-form error rides
+        // the parse side) — no member machinery fires (g5)
+        let src4 = "Table a { id int }\nTableGroup g { a, a }\n";
+        let out4 = super::super::parser::parse(src4);
+        let d4 = validate(&out4.doc, src4);
+        assert!(
+            !d4.iter().any(|x| x.message.contains("already appears")),
+            "{d:?}"
+        );
     }
 
     #[test]
