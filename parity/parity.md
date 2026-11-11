@@ -1624,13 +1624,59 @@ close-position error — port that as part of the body-bracket scan
 (the list-context vs the body-context error texts DIFFER — the nb2
 vs m77_0005 evidence).
 
-## Round 99 queue
+## Round 99 addendum — THE BODY-BRACKET RECOVERY LANDED
 
-- LAND the body-bracket recovery (the design above; the m77_0005
-  target = the 7-error set; nb6/nb7/nb5 = the secondary probes);
+THE MECHANISM (the round-98 design, implemented): the colon-bearing
+`[` bracket where the block was expected = their BODY application.
+`body_bracket_scan` (beside the bracket_body_has_colon /
+bracket_has_ref_key lookaheads) + the discard-loop stops, wired at TWO
+sites: the `table()` body-check (a token-wise pre-discard now stops at
+the bracket — the bulk `find('{')` swallowed it whole, which was the
+m77_0005 silence) and the `custom_element` discard arm (nb10 = theirs
+EXACTLY).
+
+THE SPAN MODEL (the final, all probes exact): no survivors = the
+point at the scan end (nb6 [3,2..3,2) — the `}`-operand damage ENDS
+the scan); no dropped args = the bare union of the survivors
+(nb9 `y` [2,13..2,14), nb12 `y, z` [2,13..2,17)); with a dropped arg
+= right-after-the-colon .. the max arg end (m77_0005 [2,15..3,6)).
+The errors: the broken strings = the lexer CEs ('Invalid newline' on
+the partial token [quote..the newline); 'EOF reached while parsing'
+at the EOF) + DROPPED; the commas = the separator-args (silent); the
+first top-level `:` = the attribute colon (the node = the POST-colon
+args — nb9's `x` rides outside); the `]` = 'Expect an identifier' +
+consumed (nb9/nb12/m77_0005); the `}` = 'Invalid start of operand
+"{}"' + the scan ends (nb6).
+THE VALIDATOR: Table = "A Table's body must be a block" @ the node;
+a single closed-string value PASSES their value-string check (bb1's
+`note: 'n'` — the string_valued suppressor); a bracket carrying a
+top-level `ref:` key = the binder territory (hh1's
+`[color: …, ref: ?<> t.c]` — the ref-body port is open) — the scan
+STAYS OFF there and the pre-round-99 discard behavior holds. BOTH
+discriminators were caught as the battery regressions (bb1/hh1) and
+fixed in-round; bb1/hh1 = theirs EXACTLY after.
+
+THE TARGETS: m77_0005 = the 7-error set EXACT (the walk resumes:
+line 4 = the custom-element pair, line 5 = the `}` brace error — all
+existing machinery); nb6/nb8/nb9/nb10/nb12 = exact; nb11 (the Ref) =
+4/5 — ours' Ref machinery already parses the bracket body (the
+ref-field/unequal errors ✓) but misses the `]`-close 'Expect an
+identifier' — OPEN.
+Probes promoted: parity/battery/m77_0005.dbml + nb6/nb9/nb10/nb12
+(132 battery files).
+THE GATES: corpus 78/78, schema 78/78, battery 132/132 (the standing
+granularity), lib 122/122, editor 61/61, fuzz, fmt — all green.
+THE SEEDS: **seed-77 = 151/300 (+1), seed-43 = 323/600 (+2)** (the
+dumps /tmp/mut-ours-r99.json + /tmp/m43-ours-r99.json, the lists
+/tmp/mut-div-r99.json + /tmp/m43-div-r99.json).
+
+## Round 100 queue
+
 - The composite queue per the convergence criterion: the
   m77_0099-family cascade, s5's span puzzle, the index-field
   paren-name, m43_0242 records-comma;
+- The nb11 `]`-close error in the Ref bracket-body path (the
+  ref-machinery's close consume);
 - The importer-emission parity (the raw-contract axis): the
   bool-setting order, the check/default order, the ref-setting
   rendering, the index paren/grouping style, inline-vs-block Indexes
