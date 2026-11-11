@@ -4527,11 +4527,65 @@ fn custom_element(
                             end: Some(js + tl),
                             message: "Expect an identifier".to_string(),
                         });
+                        *input = &input[tl..];
+                        continue;
                     }
-                    // the post-value phase = their ATTRIBUTE-ENTRY parse
-                    // (the ref-binder runs on the `ref:` entries — the h1
-                    // map) — the silent skip until the entry-loop
-                    // extraction lands (the round-61 queue)
+                    // the ENTRY-walk (the h1 map): the ident = the entry
+                    // name (silent, the `:` introduces the value), the
+                    // junk = 'Expect an identifier' at the token (d1's
+                    // `:`/`1`/`,`/`]`) — the name = the ALPHA-LEAD token
+                    // (their consume(IDENTIFIER) rejects the digit-lead:
+                    // h1's `1` logs)
+                    if input.starts_with(|c: char| {
+                        c.is_ascii_alphabetic() || c == '_'
+                    }) && ident(input, base).is_ok()
+                    {
+                        ws(input);
+                        if eat(input, ":") {
+                            ws(input);
+                            // the value = the operand run: the `]`/`}` =
+                            // the consume-log + stop, the rest = silent
+                            // (the ref-binder entries = the round-62
+                            // queue)
+                            loop {
+                                ws(input);
+                                if input.is_empty()
+                                    || input.starts_with(['\n', '\r'])
+                                {
+                                    break;
+                                }
+                                let vs2 = offset(input, base);
+                                if input.starts_with(']')
+                                    || input.starts_with('}')
+                                {
+                                    let mut p3 = *input;
+                                    let tl3 =
+                                        consume_one_token(&mut p3)
+                                            .unwrap_or(1);
+                                    let tl3 = tl3.min(input.len());
+                                    errs.push(ParseError {
+                                        offset: vs2,
+                                        end: Some(vs2 + tl3),
+                                        message: "Expect an identifier"
+                                            .to_string(),
+                                    });
+                                    *input = &input[tl3..];
+                                    break;
+                                }
+                                let mut p3 = *input;
+                                let tl3 = consume_one_token(&mut p3)
+                                    .unwrap_or(1);
+                                let tl3 = tl3.min(input.len());
+                                *input = &input[tl3..];
+                            }
+                        }
+                        continue;
+                    }
+                    errs.push(ParseError {
+                        offset: js,
+                        end: Some(js + tl),
+                        message: "Expect an identifier".to_string(),
+                    });
                     *input = &input[tl..];
                 }
             }
