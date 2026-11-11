@@ -3976,12 +3976,29 @@ fn custom_element(
         let name_start = offset(input, base);
         match ident(input, base) {
             Ok(_) => name_span = Some(name_start..offset(input, base)),
-            Err(_) => {
+            Err(e) => {
                 // their operand() at EOF logs 'Unexpected EOF' on the EOF
                 // token (a zero-width point at the source end) and returns
                 // an EmptyNode WITHOUT throwing; the junk case errs
                 // INVALID_OPERAND on the junk token's full span and the
-                // EmptyNode's span is the junk token's END point
+                // EmptyNode's span is the junk token's END point. A
+                // dq-quoted partial (probe r2 `Tabl"e a { id int }`) errs
+                // the NEWLINE error at the partial token first, the gather
+                // takes it (to the newline), and the operand walk
+                // RE-ATTEMPTS across the trivia — at EOF the 'Unexpected
+                // EOF' log fires with the EmptyNode there (2,1-2,1)
+                if e.message == "Invalid newline encountered while parsing"
+                    || e.message == "EOF reached while parsing"
+                {
+                    errs.push(ParseError {
+                        offset: e.offset,
+                        end: e.end,
+                        message: e.message,
+                    });
+                    let nl = input.find('\n').unwrap_or(input.len());
+                    *input = &input[nl..];
+                    ws(input);
+                }
                 if input.is_empty() {
                     let eof = offset(input, base);
                     errs.push(ParseError {
