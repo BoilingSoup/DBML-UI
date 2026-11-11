@@ -567,20 +567,29 @@ tools below. Never say done when the sweep still finds shapes.
 ## The mutation-campaign state (round 44 entry point)
 
 - Seed 77 (300 cases, /tmp/mut-cases.json, the dumps /tmp/mut-ours-*.json
-  + /tmp/mut-theirs.json): **123/300 identical** after rounds 41-43 (from
-  120 pre-port). The divergent set = /tmp/mut-div.json; the
+  + /tmp/mut-theirs.json): **124/300 identical** after rounds 42-44 (from
+  120 at the round-41 base). The divergent set = /tmp/mut-div.json; the
   message-signature clusters (Counter diffs, per-message counts across
   cases):
   * close: 34 cases — 'Expect a closing brace' missing 38 / extra 12;
-  * expect-ident: 31 cases — 'Expect an identifier' missing 31 / extra
-    17, PLUS our INTERNAL leak: 'expected identifier' extra 22 and
-    'expected column type' extra 17 (parser.rs:224/:419 fail() messages
-    surfacing as diagnostics where theirs emits structured errors —
-    probe m77_0025 `Table ` at EOF: theirs = 'Unexpected EOF' +
-    "Expect an opening brace '{' or a colon ':'" + 'A Table name must
-    be of the form <table> or <schema>.<table>' all at 1,7; ours = the
-    leak only). NEXT TARGET (round 44): the bare/truncated-keyword
-    header flow + the leak suppression;
+    * expect-ident: 31 cases — 'Expect an identifier' missing 31 / extra
+    17. The INTERNAL-LEAK HALF RESOLVED in round 44 (f7be49e): the
+    bare/truncated-keyword header flow — Table/Ref/Project name-failure
+    at EOF errs the TRIO ('Unexpected EOF' + "Expect an opening brace
+    '{' or a colon ':'" + the keyword's name-form message — Table =
+    'A Table name must be of the form <table> or <schema>.<table>',
+    Ref/Project = 'A X's name is optional or must be an identifier or a
+    quoted IDENTIFER' (their typo preserved verbatim)), the nameless
+    `Table {` with a body errs 'A Table must have a name' over the
+    whole ELEMENT span (1,1-2,2, deferred until the body parses);
+    k-probes 8/8 (k1 `Table ` EOF trio, k4 the nameless-with-body, k6
+    the Ref trio, k7 the Project trio, k5 = the Enum trio already
+    green); battery 96/96 (h1-h5 promoted). The leak signatures
+    ('expected identifier' x22, 'expected column type' x17) VANISHED
+    from the seed-77 deltas; seed-77 = 124/300. The REMAINING half =
+    the structured 'Expect an identifier' stack in the composite
+    shapes (31 missing / 17 extra) — deeper recovery flows, the
+    next-round work;
   * newline: 24 cases — 'Invalid newline encountered while parsing'
     missing 24;
   * colon-op: 17 cases — 'Invalid start of operand ":"' missing at the
