@@ -871,10 +871,17 @@ tools below. Never say done when the sweep still finds shapes.
   — the round-64+ mechanisms covered it.) The audit-note: the same
   None-arm shape exists in the enum/project/group body-checks — the
   same consume-fix applies when the probes show it.
-- ROUND-69 QUEUE (the wide-cluster pivot continues):
-  * the None-arm audit: the enum/project/group/tablepartial
-    body-checks' no-`{` arms = the same consume-fix probe-first;
-  * the Expect-an-identifier stack (the missing remainder);
+- ROUND 69 LANDED — the None-arm audit: the ENUM already consumes
+  (q3 green); the PROJECT's no-`{` arm = the consume-fix (q4
+  `Project p foo bar`: the phantom element dead); the GROUP's fail =
+  the body-check-style error at the offending token's full span + the
+  discardUntil with the direct return (q5 `TableGroup g foo bar`: the
+  wrong message + the unconsumed tail + the extra close-error dead).
+  Probes pp2/pp3; battery 120/120, corpus 78/78, lib 84/84. Both seeds
+  hold (146/300, 314/600).
+- ROUND-70 QUEUE (the wide-cluster pivot continues):
+  * the Expect-an-identifier stack (the missing remainder) — the
+    position-tally first;
   * the composite queue (m77_0039's line-18 recovery, s5's span
     puzzle, the colon-op cluster, the index-field paren-name,
     m43_0242) = the background.
