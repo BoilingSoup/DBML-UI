@@ -564,6 +564,38 @@ tools below. Never say done when the sweep still finds shapes.
    (user reports included) becomes a battery case + a corpus case when
    user-shaped, permanently.
 
+## The mutation-campaign state (round 44 entry point)
+
+- Seed 77 (300 cases, /tmp/mut-cases.json, the dumps /tmp/mut-ours-*.json
+  + /tmp/mut-theirs.json): **123/300 identical** after rounds 41-43 (from
+  120 pre-port). The divergent set = /tmp/mut-div.json; the
+  message-signature clusters (Counter diffs, per-message counts across
+  cases):
+  * close: 34 cases — 'Expect a closing brace' missing 38 / extra 12;
+  * expect-ident: 31 cases — 'Expect an identifier' missing 31 / extra
+    17, PLUS our INTERNAL leak: 'expected identifier' extra 22 and
+    'expected column type' extra 17 (parser.rs:224/:419 fail() messages
+    surfacing as diagnostics where theirs emits structured errors —
+    probe m77_0025 `Table ` at EOF: theirs = 'Unexpected EOF' +
+    "Expect an opening brace '{' or a colon ':'" + 'A Table name must
+    be of the form <table> or <schema>.<table>' all at 1,7; ours = the
+    leak only). NEXT TARGET (round 44): the bare/truncated-keyword
+    header flow + the leak suppression;
+  * newline: 24 cases — 'Invalid newline encountered while parsing'
+    missing 24;
+  * colon-op: 17 cases — 'Invalid start of operand ":"' missing at the
+    `:` in `Ref r0:` NAMED-REF headers inside composite-damage files
+    (m77_0021/0043/0057 — the colon at the ref-header position when
+    upstream damage skews the parse);
+  * records-comma: 17 cases — m43_0242's cluster ('Expect a comma'
+    missing);
+  * eof-parse: 14 cases — 'EOF reached while parsing' missing;
+  * the index-field cluster: 'An index field must be an identifier...'
+    extra 17 (the `(name) [unique, name: 'ix']` paren-name shape);
+- The seed-43 600-case campaign state: 295/600 at the round-41 base
+  (the pre-child-loop engine — the round-42/43 ports may move it; the
+  next seed-43 re-measure tells).
+
 ## Workflow rules
 
 - Builds are the user's hardware. Use `cargo check` (or
