@@ -3303,30 +3303,6 @@ fn column(
     }
     // their column-node lint anchor reads [name start .. type end]
     let ty_end = offset(input, base);
-    sp(input);
-    // their commaExpression: a `,` after the type token (the same line
-    // or across the trivia newlines) continues the expression — the
-    // comma-fields absorb into ONE CommaExpressionNode = args[0] whose
-    // union = [type start .. the last field's end]; 'Invalid column
-    // type' anchors the union and the standalone type checks above are
-    // REPLACED (probes s5a/s5g/s5i/s5j/s5m/s5n/s5q/s5r). The trailing
-    // tokens = the remains (the walk below).
-    let comma_type_end: Option<usize> = if !input.is_empty()
-        && !input.starts_with(['}', '#'])
-    {
-        comma_expr_continuation(input, base)
-    } else {
-        None
-    };
-    if let Some(ce) = comma_type_end {
-        binder_errors.push((ty_start, ce, "Invalid column type".to_string()));
-    } else if !ty.is_empty() && ty.bytes().all(|c| c.is_ascii_digit()) {
-        // a NUMBER node at the type position: their validateColumn's
-        // type check errs 'Invalid column type' at the type node
-        // (probe w3: `123 456` = the name error at `123` + the
-        // invalid-type at `456` 2,7-2,10)
-        binder_errors.push((ty_start, ty_end, "Invalid column type".to_string()));
-    }
     // the indexer suffix binds ACROSS newline-only trivia (probe
     // col16/col19: `bool\n[default: …]` = the array node — 'Invalid
     // column type' @ type..]; a trailing SPACE detaches the list into
@@ -3382,6 +3358,30 @@ fn column(
             }
             let _ = sfx_start;
         }
+    }
+    sp(input);
+    // their commaExpression: a `,` after the type token (the same line
+    // or across the trivia newlines) continues the expression — the
+    // comma-fields absorb into ONE CommaExpressionNode = args[0] whose
+    // union = [type start .. the last field's end]; 'Invalid column
+    // type' anchors the union and the standalone type checks above are
+    // REPLACED (probes s5a/s5g/s5i/s5j/s5m/s5n/s5q/s5r). The trailing
+    // tokens = the remains (the walk below).
+    let comma_type_end: Option<usize> = if !input.is_empty()
+        && !input.starts_with(['}', '#'])
+    {
+        comma_expr_continuation(input, base)
+    } else {
+        None
+    };
+    if let Some(ce) = comma_type_end {
+        binder_errors.push((ty_start, ce, "Invalid column type".to_string()));
+    } else if !ty.is_empty() && ty.bytes().all(|c| c.is_ascii_digit()) {
+        // a NUMBER node at the type position: their validateColumn's
+        // type check errs 'Invalid column type' at the type node
+        // (probe w3: `123 456` = the name error at `123` + the
+        // invalid-type at `456` 2,7-2,10)
+        binder_errors.push((ty_start, ty_end, "Invalid column type".to_string()));
     }
     sp(input);
     // their table-body field = a function application: callee = the name,
