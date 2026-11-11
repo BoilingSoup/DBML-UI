@@ -623,7 +623,7 @@ tools below. Never say done when the sweep still finds shapes.
   (the pre-child-loop engine — the round-42/43 ports may move it; the
   next seed-43 re-measure tells).
 
-## The rounds 47-49 RESULT + the round-50 queue
+## The rounds 47-50 RESULT + the round-51 queue
 
 - RESOLVED (round 47): the two recorded column-pair shapes. (1) The
   `'''` TRIPLE-QUOTE header gather — theirs = the consumeUntil scan
@@ -652,10 +652,28 @@ tools below. Never say done when the sweep still finds shapes.
   missing-table binder errors); the project's body-check + the sync to
   the `{` (p3 `Project p]x { }`). p-probes 4/4 (p1 `Enum e]x { a }`
   already matched). Battery u1-u3 promoted (105 files, all green).
-- ROUND-50 QUEUE (probed, unported):
-  * the close-count cluster (37 missing 'Expect a closing brace' +
-    12 extra) — the deepest remaining signature, the composite-damage
-    close flows;
+- ROUND 50 LANDED: the EOF close errors in the block flows — the
+  TableGroup members loop errs the close at the EOF token on BOTH
+  exits (the loop-top branch AND the post-binder `input.is_empty()`
+  break, which had been skipping it; t2 `TableGroup g { orde` at EOF =
+  the binder + the close 1,20) and the records-block EOF path errs the
+  SECOND close at the EOF point instead of the internal 'unterminated
+  records block' message (the blockExpression nesting: EVERY unclosed
+  block's close errs; t3 = the binder + TWO closes at 3,8). The t1
+  shape (`Ref { a.\nid > 'b.id` at EOF) = the SWALLOW-CHAIN divergence
+  recorded below — theirs merges the lines into ONE field spanning
+  1,7-2,11 (the field error + 'Unequal fields' + the sq EOF error all
+  at that span, then the close 2,11 + 'Unexpected EOF' 2,11); ours
+  parses the lines as two fields (the field-1 errors at 1,7-1,9, the
+  line-2 field errors extra, 'Unexpected EOF' 2,1 extra, the close
+  missing). Battery w1/w2 promoted. Seed-77 136→140/300 (the close
+  cluster 37→29 missing).
+- ROUND-51 QUEUE (probed, unported):
+  * the ref-block SWALLOW-CHAIN fidelity (t1): a line ending in a
+    dropped partial must merge the next line into the SAME field (the
+    newline-less token stream) — ours' field walk ends the field at
+    the partial; the close + the Unexpected-EOF at the merged EOF
+    point follow;
   * the custom-element pair span cluster (33 extra / 31 missing
     'A Custom element can only appear') — the element-node spans in
     the composite shapes;
