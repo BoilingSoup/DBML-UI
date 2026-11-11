@@ -1,0 +1,6 @@
+Table t1 {
+  "odd col" int
+  indexes {
+    "odd col" varchar(255)
+  }
+}

@@ -3914,6 +3914,151 @@ fn index(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Index> 
         column_spans.push(col_start..offset(input, base));
         expressions.push(is_expr);
     }
+    // their index field = the application: the callee + the args (the
+    // inline multi-tuple form `(id, name) (age, weight)` and the junk
+    // args like `"odd col" varchar(255)` — m77_0004). Each arg =
+    // destructureIndexNode: a `(...)` arg's elements must ALL be
+    // identifiers (all-or-nothing — any failure errs 'An index field
+    // must be…' ONCE on the tuple span and that tuple's columns drop;
+    // the callee and the earlier args ride — probe na1). A BARE-WORD
+    // arg parses but is NOT a column (m77_0004: no binder ride for
+    // `varchar`)
+    loop {
+        sp(input);
+        if input.is_empty()
+            || input.starts_with(['\n', '\r', '}', ','])
+            || peek_is(input, "[")
+        {
+            break;
+        }
+        if peek_is(input, "(") {
+            let t_start = offset(input, base);
+            *input = &input[1..];
+            let mut arg_cols: Vec<(String, Span, bool)> = Vec::new();
+            let mut all_ok = true;
+            loop {
+                sp(input);
+                if input.is_empty() {
+                    errs.push(err_at(
+                        offset(input, base),
+                        "Expect a closing parenthesis ')'",
+                    ));
+                    all_ok = false;
+                    break;
+                }
+                if eat(input, ")") {
+                    break;
+                }
+                let es = offset(input, base);
+                let is_expr = input.starts_with('`');
+                // their lexer lexes a digit-leading run as a NUMERIC
+                // literal — never a valid index name (m77_0004's `(255)`)
+                let elem: R<String> =
+                    if !is_expr && input.starts_with(|c: char| c.is_ascii_digit()) {
+                        // their lexer lexes a digit-leading run as a NUMERIC
+                        // literal — never a valid index name (m77_0004's `(255)`)
+                        Err(Fail {
+                            offset: es,
+                            end: None,
+                            message: String::new(),
+                            partial_occs: Vec::new(),
+                        })
+                    } else {
+                        index_ident(input, base)
+                    };
+                match elem {
+                    Ok(w) => arg_cols.push((w, es..offset(input, base), is_expr)),
+                    Err(_) => {
+                        all_ok = false;
+                        let mut probe = *input;
+                        let tl = consume_one_token(&mut probe).unwrap_or(1);
+                        *input = &input[tl.min(input.len())..];
+                    }
+                }
+                sp(input);
+                if eat(input, ",") {
+                    continue;
+                }
+                if input.is_empty() {
+                    errs.push(err_at(
+                        offset(input, base),
+                        "Expect a closing parenthesis ')'",
+                    ));
+                    all_ok = false;
+                    break;
+                }
+                if eat(input, ")") {
+                    break;
+                }
+                // the tuple's own comma grammar: the anchor = the next
+                // real token after the trivia (probe-anchored)
+                let skipped = input.len() - {
+                    let mut probe2 = *input;
+                    let _ = ws(&mut probe2);
+                    probe2.len()
+                };
+                let anchor = offset(input, base) + skipped;
+                let tok_len = {
+                    let mut probe2 = *input;
+                    let _ = ws(&mut probe2);
+                    consume_one_token(&mut probe2).unwrap_or(1)
+                };
+                errs.push(ParseError {
+                    offset: anchor,
+                    end: Some(anchor + tok_len),
+                    message: "Expect a comma ','".to_string(),
+                });
+                let to_comma = input.find(',');
+                let to_rparen = input.find(')');
+                match (to_comma, to_rparen) {
+                    (Some(c), Some(p)) => {
+                        let k = c.min(p);
+                        *input = &input[k..];
+                    }
+                    (Some(c), None) => *input = &input[c..],
+                    (None, Some(p)) => *input = &input[p..],
+                    (None, None) => break,
+                }
+            }
+            let t_end = offset(input, base);
+            if all_ok {
+                for (w, sp_, is_expr) in arg_cols {
+                    columns.push(w);
+                    column_spans.push(sp_);
+                    expressions.push(is_expr);
+                }
+            } else {
+                errs.push(ParseError {
+                    offset: t_start,
+                    end: Some(t_end),
+                    message: "An index field must be an identifier, a quoted identifier, a functional expression or a tuple of such".to_string(),
+                });
+            }
+        } else {
+            let is_expr = input.starts_with('`');
+            let col_start = offset(input, base);
+            match index_ident(input, base) {
+                Ok(w) => {
+                    // the call-expr form `word(...)`: the word rides NO
+                    // column — the model contributes only the
+                    // argumentList (m77_0004: no binder check for
+                    // `varchar`); a BARE-word arg = a column (m77_0152:
+                    // `odd col` flags both). A failed ident (junk) MUST
+                    // break — the loop-top would otherwise spin forever
+                    // on the unconsumed position
+                    let save2 = *input;
+                    sp(input);
+                    if is_expr || !peek_is(input, "(") {
+                        *input = save2;
+                        columns.push(w);
+                        column_spans.push(col_start..offset(input, base));
+                        expressions.push(is_expr);
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    }
     sp(input);
     let mut comma_form = false;
     let mut idx = Index {
@@ -4368,6 +4513,7 @@ fn records_block(
     // at end of line must fail here rather than swallow the next
     // statement as its target.
     let mut target = None;
+    let target_start = offset(input, base);
     if !input.is_empty() && !input.starts_with(['(', '[', '{', '\n', '\r']) {
         let mut parts = vec![ident(input, base)?];
         while eat(input, ".") {
@@ -4378,6 +4524,7 @@ fn records_block(
     sp(input);
     let mut columns = Vec::new();
     let mut column_spans = Vec::new();
+    let paren_start = offset(input, base);
     if eat(input, "(") {
         // their tupleExpression: one element, then a comma-terminated
         // loop; a missing comma errs once at the offending token and
@@ -4461,6 +4608,32 @@ fn records_block(
                     }
                 }
             }
+        }
+        // the header node ends just past `)` — capture BEFORE the
+        // trailing sp so the span keeps the gap out
+        let tuple_end = offset(input, base);
+        // their RecordsValidator's context checks (local_modules/records):
+        // INSIDE a Table the header must be the bare column list — a target
+        // present errs on the whole `target(cols)` header node; AT TOP LEVEL
+        // the target is REQUIRED — the bare `(cols)` shorthand errs on the
+        // tuple (probes r3 / m77_0004's line 19)
+        if block_ctx && target.is_some() {
+            errs.push(ParseError {
+                offset: target_start,
+                end: Some(tuple_end),
+                message: "Records inside a Table can only have a column list like (col1, col2, ...)".to_string(),
+            });
+            // the invalid header drops the columns — the binder ride
+            // included (probe r3: no 'Column does not exist' fires)
+            columns.clear();
+            column_spans.clear();
+        }
+        if !block_ctx && target.is_none() {
+            errs.push(ParseError {
+                offset: paren_start,
+                end: Some(tuple_end),
+                message: "Records at top-level must have a name in the form of table(col1, col2, ...) or schema.table(col1, col2, ...)".to_string(),
+            });
         }
         sp(input);
     }
