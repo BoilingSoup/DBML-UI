@@ -1,0 +1,5 @@
+Table t {
+  Note sticky {
+    '''x'''
+  }
+}

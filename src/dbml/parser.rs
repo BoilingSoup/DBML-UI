@@ -4871,6 +4871,64 @@ fn table(
             }
             continue;
         }
+        if peek_kw(input, "Note") {
+            // m77_0043: the nested NOTE DECLARATION (`Note sticky {
+            // '''…''' }`) — their table-body's element dispatch parses the
+            // note-element: the name errs 'A Note shouldn't have a name'
+            // at the name span (the NAME-LESS `Note {` form is the legal
+            // table note — it falls through to the dedicated arm below),
+            // the body = the note value; a broken value errs its lexer
+            // error AND 'A Note must have a content' over the note-element
+            // span (e22)
+            let save_note = *input;
+            let note_start = offset(input, base);
+            let _ = eat(input, "Note");
+            ws(input);
+            let name_off = offset(input, base);
+            let name_res = ident(input, base);
+            if name_res.is_ok() {
+                let name_end = offset(input, base);
+                binder_out.push((
+                    name_off,
+                    name_end,
+                    "A Note shouldn't have a name".to_string(),
+                ));
+                ws(input);
+                if eat(input, "{") {
+                    ws(input);
+                    let mut val_ok = false;
+                    if input.starts_with('\'') || input.starts_with('"') {
+                        let mut t2 = *input;
+                        match note_value(&mut t2, base) {
+                            Ok(_) => {
+                                val_ok = true;
+                                *input = t2;
+                            }
+                            Err(e) => {
+                                errs.push(ParseError {
+                                    offset: e.offset,
+                                    end: e.end,
+                                    message: e.message,
+                                });
+                                *input = t2;
+                            }
+                        }
+                    }
+                    ws(input);
+                    let _ = eat(input, "}");
+                    if !val_ok {
+                        binder_out.push((
+                            note_start,
+                            offset(input, base),
+                            "A Note must have a content".to_string(),
+                        ));
+                    }
+                }
+                continue;
+            }
+            // the name-less form: restore for the dedicated `Note {` arm
+            *input = save_note;
+        }
         if peek_kw(input, "Records") {
             // records [target][(cols)] [example] { rows } — sample rows
             // shown in the record view
