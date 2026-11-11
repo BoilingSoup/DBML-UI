@@ -7740,9 +7740,6 @@ fn table_group(
         }
         ws(input);
     }
-    if !eat(input, "{") {
-        return fail(offset(input, base), "expected '{' after group name");
-    }
     let mut g = TableGroup {
         name,
         span: start..0,
@@ -7754,6 +7751,33 @@ fn table_group(
         note_span: None,
     };
     let mut out_group_errors: Vec<(usize, usize, String)> = Vec::new();
+    if !eat(input, "{") {
+        // q5: their body-check = the error at the OFFENDING TOKEN's full
+        // span + the discardUntil consumes the junk (the old fail left
+        // the tail unconsumed and it re-dispatched)
+        let off = offset(input, base);
+        let mut probe = *input;
+        let tok_len = consume_one_token(&mut probe).unwrap_or(1);
+        errs.push(ParseError {
+            offset: off,
+            end: Some(off + tok_len),
+            message: "Expect an opening brace '{' or a colon ':'".to_string(),
+        });
+        if !input.starts_with('{') {
+            match input.find('{') {
+                Some(k) => {
+                    *input = &input[k..];
+                    let _ = eat(input, "{");
+                }
+                None => {
+                    *input = &input[input.len()..];
+                    g.span = start..offset(input, base);
+                    doc_binder_errors.extend(out_group_errors);
+                    return Ok(g);
+                }
+            }
+        }
+    }
     'members: loop {
         ws(input);
         if input.is_empty() {
@@ -8018,6 +8042,10 @@ fn project(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Proje
                     let _ = eat(input, "{");
                 }
                 None => {
+                    // q4: their discardUntil CONSUMES the junk — the
+                    // unconsumed tail re-dispatched as a phantom custom
+                    // element (`Project p foo bar` = the body-check once)
+                    *input = &input[input.len()..];
                     return Ok(Project {
                         name,
                         span: start..offset(input, base),
