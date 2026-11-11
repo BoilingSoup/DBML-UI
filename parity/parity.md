@@ -938,10 +938,25 @@ tools below. Never say done when the sweep still finds shapes.
   junk-logs = the two; the block-loops' = the three), probe-first
   with the m77_0039's per-line map (the file = the best instrumented
   composite — 41 logs = the per-line ledger).
-- ROUND-75 QUEUE:
-  * the per-flow guards probe-first (the entry-walk's caller-side,
-    the field-parses' junk-logs, the block-loops') with the m77_0039
-    per-line ledger;
+- ROUND 75 — THE m77_0039 PER-LINE LEDGER (the deepest finding): the
+  lines 1-4 = the h1-slice = ours = theirs (the round-63's ✓); the
+  lines 5-10 = the mixed over-fires (the line 5's fields + the
+  records-block); BUT the lines 11-26 = THE VALID CONSTRUCTS (`Table
+  ñT {`, `Table B {`, `Enum e_status {`, `TableGroup g {...}`) — ours
+  logs THEIR LINES as entry-junk (the walk = the element's post-value
+  = swallowing the REST OF THE FILE) while theirs parses them
+  (the duplicate-column/comma/TableGroup-field diags = the missing).
+  THE ROOT = the element's post-value walk = NOT bounded by the line
+  — the walk = the file-swallow = the entry-logs on the following
+  constructs' lines. THE FIX-DESIGN: the post-value walk = the
+  LINE-SCOPED (the value-loop's line-end break = the wall — the
+  walk's line-4 stop = the existing ✓ — the LOGS = the lines 5-26 =
+  the WALK = ... the audit = the walk's actual reach vs the logs'
+  positions = the round-76 first action with the fresh eyes).
+- ROUND-76 QUEUE:
+  * the post-value walk's reach audit (the line-scope verification
+    against the m77_0039 ledger — the walk's line-4 stop = the
+    existing claim vs the 41 logs' positions);
   * the composite queue (the m77_0099-family cascade, s5's span
     puzzle, the colon-op cluster, the index-field paren-name,
     m43_0242 records-comma).
