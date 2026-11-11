@@ -720,19 +720,43 @@ tools below. Never say done when the sweep still finds shapes.
   Reverted to the balanced entry parse: seed-43 = 309/600 restored,
   seed-77 = 143/300, battery 110/110 (ff1 = d1 removed as the open
   shape). The methodological rule added below.
-- ROUND-55 QUEUE (the settings-list entry-parse deep-dive, trace-first
-  with the node builders instrumented):
-  * d1 (`Tabl[e orders {` + the nested list) = 1/4 under the balanced
-    engine: the value-position invalid operand (`{` 1,15-1,16) errs
-    'Expect an identifier' and the parse CONTINUES (ours dies); the
-    close-fail at the `}` is a SILENT partial (the node = the union
-    through the last arg 2,21) — ours errs 'Expect a variable or
-    literal' at the `}`; the element node = 1,1-2,21;
-  * the composite spans (m77_0039's remaining stack, m77_0043's
-    Note-sticky span);
-  * the 'Expect an identifier' stack (the missing remainder);
-  * s5's span puzzle, the colon-op cluster (17), the index-field
-    paren-name (17), m43_0242 records-comma.
+- ROUND 56 — the settings-list SOURCE MAP (read, not yet ported; the
+  session's context ran out mid-debug — the parser.rs edits were
+  reverted to the committed state, the tree = clean at the round-55
+  closure):
+  * THEIR listExpression (core/parser/parser.ts:1326) = READ: consume
+    `[`; the FIRST attribute() ONCE (the catch = push the partial +
+    canHandle ? synchronizeList : rethrow); the WHILE loop =
+    consume('Expect a comma') + attribute() per iteration (the same
+    catch shape); consume('Expect a closing bracket') at the end —
+    every catch = synchronizeList (skip to the `,`/`]`) and the loop
+    CONTINUES — no entry error ever kills the list;
+  * their attributeName (parser.ts:1495) = the ident-stream: the while
+    !check(COLON,COMMA,RBRACKET) → consume('Expect an identifier') per
+    ident — the JUNK token inside the stream logs 'Expect an
+    identifier' at the junk token (d1's `{` @1,15-1,16 = code 1005 = a
+    SyntaxToken = THIS consume) and throws the partial
+    IdentifierStreamNode;
+  * d1 under THEIR engine: the stream `e orders` + the `{`-log + the
+    sync (skip to the `]` at 2,20) → the while-loop exits (the `]` =
+    RBRACKET) → the close consume = the `]` ✓ → the list = [4,36)
+    CLOSED — the element = [0,36), the body check at the `}` 3,1 —
+    4/4;
+  * OURS' gap: the entry-tail error EXISTS (settings_list_occs's tail:
+    the colon-less junk errs 'Expect an identifier' ✓) and the
+    dispatch's sync = TO the closer — but the walk re-enters PAST the
+    list's real close (the debug: the loop-entry @37 = past the `]` at
+    36) and the span dies at 1,14 — the exact consumer of the `]`
+    between the tail-Continue and the loop re-entry = UNRESOLVED (the
+    debug print's exit-paths never fired — suspect the debug inserts
+    no-op'd on a stale-match). NEXT SESSION: re-run the exit-path
+    debug with verified insertions (grep the DBGD count after the
+    edit!), find the `]`-consumer, port the continue-past-the-error
+    semantics;
+  * the queue: m77_0039's remaining stack, m77_0043's Note-sticky, the
+    'Expect an identifier' remainder, s5's span puzzle, the colon-op
+    cluster (17), the index-field paren-name (17), m43_0242
+    records-comma.
 - ROUND-55 QUEUE (after the in-flight port lands):
   * the composite spans (m77_0039's remaining stack, m77_0043's
     Note-sticky span) — trace-first;
