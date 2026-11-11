@@ -708,18 +708,31 @@ tools below. Never say done when the sweep still finds shapes.
   `}`-inclusion both regressed and were caught by the seed-77
   signature before commit). b1 6/6 (battery bb1). Seed-77 142→143/300
   (the 'Expect an identifier' extras signature GONE from the top-6).
-- ROUND 55 IN FLIGHT (the white-box method's first round; the WIP
-  commit holds the port): the custom-element settings list = the FLAT
-  bracket scan (d1 `Tabl[e orders {` + a nested `[...]`: their
-  ListExpressionNode = [`[`..the FIRST `]`] INCLUSIVE, the contents =
-  expressions, the entries never validated — the binder flags the list
-  itself; ours' balanced scan swallowed to EOF and diverged into a
-  different recovery path). d1 = 3/4 — the REMAINING DELTA: the `{`
-  inside the list contents errs 'Expect an identifier' at 1,15-1,16
-  (ours' flat scan skips the contents silently). The battery = 110/110
-  with the port; the corpus/lib re-run pending. NEXT: port the
-  `{`-inside-list error, all three gates, promote d1, commit, re-measure
-  both seeds.
+- ROUND 55 RESULT — THE FLAT SCAN REVERTED (the method's first lesson):
+  the d1 trace's ListExpressionNode [4,36) was MISREAD as a flat bracket
+  scan; the dual-seed re-measure caught it (seed-43 309→307: m43_0087's
+  'Expect a comma' at the entry tail and m43_0308's quoted-type-in-list
+  error both vanished under the flat scan) and the pass-set diff pinned
+  the flips to exactly m43_0087 + m43_0308. The truth: their list = the
+  ENTRY parse (settings_list_occs-class), the [4,36) node = the UNION
+  rule through the last real arg when the close fails — the node span
+  shows the WHAT, the mechanism still needs the behavioral probes.
+  Reverted to the balanced entry parse: seed-43 = 309/600 restored,
+  seed-77 = 143/300, battery 110/110 (ff1 = d1 removed as the open
+  shape). The methodological rule added below.
+- ROUND-55 QUEUE (the settings-list entry-parse deep-dive, trace-first
+  with the node builders instrumented):
+  * d1 (`Tabl[e orders {` + the nested list) = 1/4 under the balanced
+    engine: the value-position invalid operand (`{` 1,15-1,16) errs
+    'Expect an identifier' and the parse CONTINUES (ours dies); the
+    close-fail at the `}` is a SILENT partial (the node = the union
+    through the last arg 2,21) — ours errs 'Expect a variable or
+    literal' at the `}`; the element node = 1,1-2,21;
+  * the composite spans (m77_0039's remaining stack, m77_0043's
+    Note-sticky span);
+  * the 'Expect an identifier' stack (the missing remainder);
+  * s5's span puzzle, the colon-op cluster (17), the index-field
+    paren-name (17), m43_0242 records-comma.
 - ROUND-55 QUEUE (after the in-flight port lands):
   * the composite spans (m77_0039's remaining stack, m77_0043's
     Note-sticky span) — trace-first;
@@ -768,7 +781,10 @@ scan to the FIRST `]` (the balanced-scan assumption was wrong — one
 trace exposed the whole m77_0039 span family).
 
 Limits: the trace shows the validators' anchors, not the parse-time
-control flow — the rules living IN the parse (the swallow-chain class,
+control flow — and a node's SPAN is the union rule's OUTPUT, not the
+scan rule's definition (round 55's flat-scan misread: the [4,36) node
+was the partial-list union, not a flat scan — the dual-seed re-measure
+caught the regression the probe missed) — the rules living IN the parse (the swallow-chain class,
 round 51) still need behavioral probes; the probes become
 confirmations, not searches. The per-cluster deep-dive = instrument the
 specific node builder (core/types/nodes.ts's span setters or the
