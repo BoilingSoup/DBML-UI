@@ -2162,3 +2162,36 @@ agent-d ⊇ agent-a). THE MERGE = clean, zero conflicts
 - C's open queue: the records PK/unique constraint families;
 - The user's manual test of the sensible states (the divergence
   check on real mid-edit shapes).
+
+## THE BOA SPIKE — the diagnostics-oracle embed PROVEN (the user's plan)
+
+The proposal: run the vendored dbml-parse engine directly in the app via
+Boa (the Rust JS interpreter) — the diagnostics = theirs BY CONSTRUCTION
+(the one-shot for the mutation tail AND the real mid-edit states like the
+user's errs.dbml: theirs keeps the broken-bracket column registered, ours
+dropped it and flagged the two later refs). THE SPIKE RESULT:
+**987/987 files byte-identical** (corpus 78/78, seed-77 300/300, seed-43
+600/600, battery 209/209) — the full-span multisets vs the node driver
+pins, ZERO diffs. Boa executes their compiler faithfully.
+
+THE RECIPE (all verified):
+- esbuild --bundle src/index.ts --format=iife --global-name=DBML
+  --alias:@=. → a 1.18MB IIFE (no node builtins in their code);
+- the host shims BEFORE the bundle: `var console = {log(){}…}`,
+  `var process = {env:{}, argv:[], …}` — the only two Node-isms touched;
+- examples/boa_spike.rs: Context::default() + the evals; the cases JSON
+  inlined as the object literal (no string-escaping seam); the contract =
+  the driver's dump verbatim;
+- the toolchain: boa 0.19 (the 2024-edition gate blocks 0.20 on the
+  cargo 1.84) + the pins time 0.3.36 / thin-vec 0.2.13 / regress 0.10.3
+  (Cargo.lock);
+- the perf: the bundle eval = ~150ms one-time; the batch = 0.4-1.1s per
+  file under Boa → the production embed = the debounced background
+  thread (its own context), the diagnostics latency = the editor
+  budget; the native parser stays the canvas/completion/formatter
+  backbone AND the fallback tier.
+
+THE PRODUCTION EMBED DESIGN (the remaining work): the background thread
++ the debounced parse → the JSON payload (the diagnostics + the quick
+fixes) → the marks wiring; the native diagnostics = the fallback on any
+engine failure. The errs.dbml-class divergence = killed by construction.

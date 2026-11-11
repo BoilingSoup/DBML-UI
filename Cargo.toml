@@ -95,3 +95,7 @@ incremental = true
 [dev-dependencies]
 iced_tiny_skia = { path = "vendor/iced_tiny_skia" }
 serde = { version = "1", features = ["derive"] }
+# the Boa spike: the vendored dbml-parse as the diagnostics oracle
+# (examples/boa_spike.rs) — a dev-dependency until the embed graduates.
+# 0.19 = the last line that compiles on the pre-2024-edition toolchain
+boa_engine = "0.19"
