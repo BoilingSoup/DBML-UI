@@ -2315,6 +2315,31 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
     let gather = input[..gather_len].to_string();
     let mut name_end;
     let name;
+    if gather.starts_with("'''") {
+        // j3: a `'''` at the field-name position = their lexer's
+        // triple-quote token — the consumeUntil scan errs 'EOF reached
+        // while parsing' at the PARTIAL token (multi-line, to EOF) and
+        // the field dies (the round-47 header mechanism at the field
+        // position)
+        let mut t3 = *input;
+        match note_value(&mut t3, base) {
+            Ok(_) => *input = t3,
+            Err(e) => {
+                errs.push(ParseError {
+                    offset: e.offset,
+                    end: e.end,
+                    message: e.message,
+                });
+                *input = t3;
+            }
+        }
+        return Err(Fail {
+            offset: offset(input, base),
+            end: None,
+            message: String::new(),
+            partial_occs: Vec::new(),
+        });
+    }
     if gather == "." {
         // their leftExpression_bp checks isOpToken FIRST: a prefix-invalid
         // op (the member dot) errs UNKNOWN_PREFIX_OP quoting the value
@@ -2550,7 +2575,9 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
                 if !gather.is_empty()
                     && gather
                         .bytes()
-                        .any(|c| c.is_ascii_alphanumeric() || c == b'_') =>
+                        .any(|c| c.is_ascii_alphanumeric() || c == b'_')
+                    && !gather.starts_with(['(', ')', '{', '}', '[', ']'])
+                    && !gather.starts_with("'''") =>
             {
                 // (b) a punct+ident gather (`!x`, `!!!broken`) = ONE
                 // invalid token in their lexer — the name = the junk node,
