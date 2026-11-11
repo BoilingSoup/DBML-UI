@@ -1,0 +1,3 @@
+Table t {
+  "odd col" integer lt: 1, pk]
+}

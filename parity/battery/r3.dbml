@@ -1,0 +1,4 @@
+Table t {
+  id integer lt: 1
+  code int
+}

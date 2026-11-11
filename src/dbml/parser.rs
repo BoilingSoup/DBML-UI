@@ -2554,6 +2554,13 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
                         .to_string(),
                 });
                 *input = &input[tok_len.min(input.len())..];
+                // their gatherInvalid's field death takes the LINE
+                // REMAINDER — the next line parses fresh (probe s6: `id
+                // integer lt: 1\ncode int` = the death at the `:` eats
+                // `1`, `code int` parses clean; probe s2: `lt: 1, pk]`
+                // dies whole)
+                let nl = input.find('\n').unwrap_or(input.len());
+                *input = &input[nl..];
                 return Err(Fail {
                     offset: empty,
                     end: None,
@@ -4584,6 +4591,24 @@ fn table(
         // anchors the offending token (zero-width at EOF — c25j's header
         // list sync ate everything to the EOF), the junk is consumed
         // silently, and a found `{` still opens the block body
+        // s1: a `'''` at the header = their lexer's triple-quote token —
+        // the consumeUntil scan errs 'EOF reached while parsing' at the
+        // PARTIAL token (multi-line, to EOF: 1,14-3,1), the scan consumes
+        // it, and the body check lands at the scan stop (3,1)
+        if input.starts_with("'''") {
+            let mut t3 = *input;
+            match note_value(&mut t3, base) {
+                Ok(_) => *input = t3,
+                Err(e) => {
+                    errs.push(ParseError {
+                        offset: e.offset,
+                        end: e.end,
+                        message: e.message,
+                    });
+                    *input = t3;
+                }
+            }
+        }
         let off = offset(input, base);
         let mut probe = *input;
         let tok_len = consume_one_token(&mut probe).unwrap_or(0);
