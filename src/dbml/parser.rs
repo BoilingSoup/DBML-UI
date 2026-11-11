@@ -2434,6 +2434,43 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
             Ok(n) => {
                 name = n;
                 name_end = offset(input, base);
+                // their call-form/streamed name (probe c1/c2): a `,` after
+                // the name continues the node across the comma — `abc, def`
+                // errs the name check at the WHOLE node (2,3-2,11), the
+                // type parses after (c2: `int` = the type, no type error;
+                // c1: no type → the type error anchors the node too). The
+                // stream stays on the line (the call-arg same-line rule).
+                let mut streamed = false;
+                while input.starts_with(',') {
+                    let save2 = *input;
+                    let send = name_end;
+                    let _ = eat(input, ",");
+                    sp(input);
+                    if input.starts_with(['\n', '\r']) {
+                        *input = save2;
+                        name_end = send;
+                        break;
+                    }
+                    match ident(input, base) {
+                        Ok(_) => {
+                            name_end = offset(input, base);
+                            streamed = true;
+                        }
+                        Err(_) => {
+                            *input = save2;
+                            name_end = send;
+                            break;
+                        }
+                    }
+                }
+                if streamed {
+                    binder_errors.push((
+                        name_off,
+                        name_end,
+                        "A column name must be an identifier or a quoted identifier"
+                            .to_string(),
+                    ));
+                }
             }
             Err(_) if input.starts_with('(') => {
                 // a `(` at the name position = their tuple-as-callee: a VALID
@@ -4441,6 +4478,7 @@ fn table(
     ws(input);
     let name_off = offset(input, base);
     let name_missing;
+    let mut header_junk = false;
     let (schema, name) = match qualified_name(input, base) {
         Ok(x) => {
             name_missing = false;
@@ -4486,7 +4524,69 @@ fn table(
             name_missing = true;
             (None, String::new())
         }
-        Err(e) => return Err(e),
+        Err(_) => {
+            // the junk-name shape at the header (the m42_0014 shape,
+            // probe m77_0006 `Table]Group g { ñT, users }`): the operand
+            // error on the junk token, the name-form error at the junk's
+            // END point, then their synchronizeElementDeclarationName
+            // consumes to the body's `{` — NO body-check error after the
+            // junk — and the body still parses
+            let mut probe = *input;
+            let tok_len = consume_one_token(&mut probe).unwrap_or(1);
+            let jstart = offset(input, base);
+            let junk = input[..tok_len.min(input.len())].to_string();
+            let msg = if junk == "." {
+                "Unexpected '.' in an expression".to_string()
+            } else {
+                format!("Invalid start of operand \"{}\"", junk)
+            };
+            errs.push(ParseError {
+                offset: jstart,
+                end: Some(jstart + tok_len),
+                message: msg,
+            });
+            let empty = jstart + tok_len;
+            binder_out.push((
+                empty,
+                empty,
+                "A Table name must be of the form <table> or <schema>.<table>"
+                    .to_string(),
+            ));
+            *input = &input[tok_len.min(input.len())..];
+            if !input.starts_with('{') {
+                match input.find('{') {
+                    Some(k) => {
+                        *input = &input[k..];
+                        let _ = eat(input, "{");
+                    }
+                    None => {
+                        let eof = offset(input, base);
+                        return Ok(Table {
+                            name: String::new(),
+                            schema: None,
+                            alias: None,
+                            span: start..eof,
+                            name_span: empty..empty,
+                            header_color: None,
+                            note: None,
+                            columns: Vec::new(),
+                            indexes: Vec::new(),
+                            checks: None,
+                            check_entries: Vec::new(),
+                            records: None,
+                            custom: Vec::new(),
+                            custom_spans: Vec::new(),
+                            note_span: None,
+                        });
+                    }
+                }
+            } else {
+                let _ = eat(input, "{");
+            }
+            name_missing = false;
+            header_junk = true;
+            (None, String::new())
+        }
     };
     let name_end = offset(input, base);
     ws(input);
@@ -4586,11 +4686,12 @@ fn table(
         }
         ws(input);
     }
-    if !eat(input, "{") {
+    if !eat(input, "{") && !header_junk {
         // their elementDeclaration: discardUntil('{', ':') — the error
         // anchors the offending token (zero-width at EOF — c25j's header
         // list sync ate everything to the EOF), the junk is consumed
-        // silently, and a found `{` still opens the block body
+        // silently, and a found `{` still opens the block body.
+        // (the header-junk arm synced to the `{` itself — no check here)
         // s1: a `'''` at the header = their lexer's triple-quote token —
         // the consumeUntil scan errs 'EOF reached while parsing' at the
         // PARTIAL token (multi-line, to EOF: 1,14-3,1), the scan consumes
