@@ -1,0 +1,3 @@
+Table t {
+  a decimal(10, 2)ref: [pk]
+}

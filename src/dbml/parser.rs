@@ -3317,7 +3317,43 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
     } else {
         ty_end
     };
+    // their expression() args loop (parser.ts:711): before each arg the
+    // previous token must carry a trailing SPACE — a glued arg (`[unique]
+    // pk`) errs MISSING_SPACES 'Expect a following space' anchored on the
+    // PREVIOUS arg's node. The first arg = the type (or the stand-in
+    // list); the glue at the type→item boundary is unreachable (the
+    // glued `[` = the indexer suffix, consumed in the type flow)
+    let mut prev_arg: Option<Span> = if ty_is_list {
+        items.first().map(|(_, s)| s.clone())
+    } else if !ty.is_empty() {
+        Some(ty_start..ty_end)
+    } else {
+        None
+    };
     loop {
+        if let Some(ps) = &prev_arg {
+            // their shouldStopFunctionApplication runs BEFORE the space
+            // check: the closers (`,`/`]`/`)`/`:`/`}`), the line end and
+            // EOF stop the args loop with no check (m77_0152: the glued
+            // `ref:` errs once — against the TYPE, not against `ref`).
+            // The unconsumed space sits at the input (the loop's sp has
+            // not run yet) — whitespace counts as the separator too, and
+            // a glued `[` = the indexer-suffix grammar (theirs probed:
+            // `integer[pk,increment]` = the array node, no space error —
+            // the app's messy-doc fmt contract keeps it parsing)
+            if offset(input, base) == ps.end
+                && !input.is_empty()
+                && !input.starts_with([
+                    ' ', '\t', '\n', '\r', '}', '#', ']', ')', ',', ':', '[', '\'', '"',
+                ])
+            {
+                errs.push(ParseError {
+                    offset: ps.start,
+                    end: Some(ps.end),
+                    message: "Expect a following space".to_string(),
+                });
+            }
+        }
         sp(input);
         if input.is_empty() || input.starts_with(['\n', '\r', '}', '#']) {
             break;
@@ -3333,6 +3369,7 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
                 ty_is_list = true;
             }
             items.push((Item::List(kvs, occs), settings_start..lend));
+            prev_arg = Some(settings_start..lend);
             full_end = lend;
             continue;
         }
@@ -3357,6 +3394,7 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
         // the word is an arg in its own right BEFORE the block check —
         // `indexes { … }` gathers [indexes, block] (their application)
         items.push((Item::Word(word), off..wend));
+        prev_arg = Some(off..wend);
         full_end = wend;
         if peek_is(input, "{") {
             let bs = offset(input, base);
