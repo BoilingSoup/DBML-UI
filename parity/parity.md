@@ -567,8 +567,19 @@ tools below. Never say done when the sweep still finds shapes.
 ## The mutation-campaign state (round 44 entry point)
 
 - Seed 77 (300 cases, /tmp/mut-cases.json, the dumps /tmp/mut-ours-*.json
-  + /tmp/mut-theirs.json): **124/300 identical** after rounds 42-44 (from
-  120 at the round-41 base). The divergent set = /tmp/mut-div.json; the
+  + /tmp/mut-theirs.json): **128/300 identical** after rounds 42-45 (from
+  120 at the round-41 base). ROUND 45: the dq-quoted scan's newline/EOF
+  error ported into ident() (consumeUntil hits a newline → 'Invalid
+  newline encountered while parsing' at the PARTIAL token — spaces do
+  not stop it, m77_0056's `"odd col` = 2,3-2,11; EOF → 'EOF reached
+  while parsing'); at the field-NAME position the dq error REPLACES
+  the name-form error and the field DIES (no type error after, the
+  next line parses fresh — battery q1). RESOLVED: the name-position
+  newline shapes (the 24-missing signature left the top-8). REMAINING
+  newline positions: the TYPE-position `"` (m77_0029 `a in"t ...`),
+  the arg-walk `"` (m77_0058 `Tabl"e a ...`), the Note-value sq at
+  the TableGroup (m77_0058 `Note: 'x` + the note-content follow-up) —
+  the next round's probes. The divergent set = /tmp/mut-div.json; the
   message-signature clusters (Counter diffs, per-message counts across
   cases):
   * close: 34 cases — 'Expect a closing brace' missing 38 / extra 12;

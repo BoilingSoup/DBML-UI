@@ -1,6 +1,6 @@
 {
   "pinnedCommit": "6b0c25b5d87ef8f44236eeb1e9dc149848e1503e",
-  "pass": 96,
+  "pass": 97,
   "fail": 0,
   "cases": [
     {
@@ -482,6 +482,11 @@
       "name": "nl1",
       "status": "ok",
       "count": 6
+    },
+    {
+      "name": "q1",
+      "status": "ok",
+      "count": 1
     }
   ]
 }
