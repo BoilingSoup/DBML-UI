@@ -1089,3 +1089,25 @@ errors.ts's constructor.
   but full clean rebuilds are rare events (profile change only).
 - Their engine's real behavior beats source-reading guesses: probe first
   (the driver tools), then port.
+
+## Round 81 addendum — the else-region read (the partial)
+
+The generic-value tail = the entry-tail flow (the occ-push + the
+comma-eat + the close-eat + the tail-error dispatch — the c25e/d2
+machinery = read and understood). The w1's EOF-reached @2,20 = the
+backtick = the value-PARSE (the colon eaten, the value = the sq/note
+mis-scan — the eat = eq_ignore_ascii_case = the backtick U+0060 vs
+the quote U+0027 = NOT matching — the mis-scan = the deeper path in
+the ':'-value's string-dispatch region, settings_list_occs's
+colon-branch tail). The session's context = the wall — the exact
+mis-scan site = the next session's first read.
+
+## Round 82 queue
+
+- The ':'-value's string-dispatch (the colon-branch's tail = the
+  backtick mis-scan site — the w1's EOF-reached @2,20 = the read +
+  the backtick consume fix), THEN the comma-check (the verified
+  insert);
+- The composite queue (the m77_0099-family cascade, s5's span puzzle,
+  the colon-op cluster, the index-field paren-name, m43_0242
+  records-comma).
