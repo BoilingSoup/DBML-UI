@@ -1387,3 +1387,33 @@ step-wise = the un-instrumented site = the located).
 - The composite queue (the m77_0099-family cascade, s5's span puzzle,
   the colon-op cluster, the index-field paren-name, m43_0242
   records-comma).
+
+## Round 94 addendum — the w1 fixed, the importer conflict found
+
+The step-debug landed: the colon-entry fires with lead=": \`" (the
+`:` not yet eaten) and sq_string is never called. The value()'s
+backtick branch located: the close + the whitespace-skip + the
+non-terminator check (`indexes`) = the continuation = the
+file-swallow. THE FIX = the value()'s backtick = the verbatim consume
+to the FIRST close-backtick: w1 = theirs EXACTLY (one diagnostic,
+`Expect a comma ','` at the junk-name 2,24-2,31). BUT the lib's
+importer fixture broke: the golden carries the NESTED-backtick shape
+(`json_valid(`Privilege`)`) and the FIRST-close breaks the re-parse —
+the probe n1 = the nested shape = BOTH SIDES IDENTICAL even with the
+FIRST-close (the format path = the difference, not the diagnostics).
+THE CONFLICT = the close-rule: w1's first-close vs the importer's
+nested-aware. The tree = reverted to the committed green state; the
+conflict = the round-95's design decision (the probe the golden's
+format_source failure = the actual breakage point; the nested-aware
+vs the first-close = the measured trade).
+
+## Round 95 queue
+
+- The importer fixture's format_source failure diagnosed (the golden's
+  re-parse = the actual breakage point — the nested-aware = the
+  golden's = the green?);
+- The close-rule's design (the w1's first-close vs the importer's
+  nested-aware = the probe-driven resolution);
+- The composite queue (the m77_0099-family cascade, s5's span puzzle,
+  the colon-op cluster, the index-field paren-name, m43_0242
+  records-comma).
