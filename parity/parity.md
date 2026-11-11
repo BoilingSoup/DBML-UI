@@ -1318,3 +1318,26 @@ level) = the round-91's port.
 - The composite queue (the m77_0099-family cascade, s5's span puzzle,
   the colon-op cluster, the index-field paren-name, m43_0242
   records-comma).
+
+## Round 91 addendum — the swallow_gather's head read (the partial)
+
+The swallow_gather = the value-continuation after the failed string
+(the newline-skip = 957-961) then the per-line ref_tokens loop. The
+CONFIRMED emitter (the round-84's bt-EOF @29 = the bt_start/bt_end
+swallow) = the backtick-string's unclosed scan crossing lines = the
+swallow_gather's caller-site flow. The w1's ours-flow = the
+`check:`-value = the backtick-string = ... the emitter-site = the
+value-parse's backtick handling = the read = the NEXT session's
+first action (the 957-1000 region + the caller-region = the
+1647-site = the ref-entry's string-Err flow = the
+settings_list_occs's = the h1-mapped).
+
+## Round 92 queue
+
+- The value-parse's backtick handling at the caller-region (the
+  1647-site = the settings_list_occs's string-Err flow = the h1 map)
+  — the read + the fix;
+- THEN the comma-check (the verified insert);
+- The composite queue (the m77_0099-family cascade, s5's span puzzle,
+  the colon-op cluster, the index-field paren-name, m43_0242
+  records-comma).
