@@ -1,0 +1,6 @@
+Table t {
+  a int
+  records t(odd col) {
+    'a'
+  }
+}

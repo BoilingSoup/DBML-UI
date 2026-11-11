@@ -1,0 +1,4 @@
+Table t {
+  a int [pk]
+  , 1 int
+}

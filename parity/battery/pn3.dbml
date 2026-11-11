@@ -1,0 +1,4 @@
+Table t {
+  id int
+}
+Note sticky

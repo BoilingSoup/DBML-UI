@@ -1,0 +1,6 @@
+Table t {
+  a int
+  indexes {
+    (a) [name: 1]
+  }
+}

@@ -1,0 +1,9 @@
+Table parent {
+  id int
+}
+foo: Bar baz {
+  x int
+}
+Table child {
+  pid int
+}

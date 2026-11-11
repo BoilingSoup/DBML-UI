@@ -1684,3 +1684,412 @@ dumps /tmp/mut-ours-r99.json + /tmp/m43-ours-r99.json, the lists
 - The stale canvas::editor::error_tests fixtures (the 3 pre-existing
   failures at HEAD, outside the recorded gates);
 - Iterate until a full round adds zero new mechanisms.
+
+## Round 100 addendum — THE REF-BRACKET CLUSTER LANDED (the stray-`]` statement junk, the Empty field, the chain doubling) + the nb6 correction
+
+SCOPE NOTE: the index-field paren-name cluster and the m43_0242
+records-comma cluster are TRANSFERRED to Agent D
+(/home/boilingsoup/Dev/dbml-ui-parity-d) — not probed, not edited here.
+The records/index/column function families = D's; a dispatch-level
+change D requests stays ours. This round's queue = the ref machinery.
+
+THE FOUR MECHANISMS (all probe-exact, all battery-promoted):
+
+1. THE STRAY-`]` STATEMENT JUNK (nb11/rA/rB): a bracket torn by the
+   header's discardUntil (`Ref` + the name + `a int [x: y]` — the
+   discard stops at the colon INSIDE the bracket, `[x` dropped) or an
+   inline-ref tail leaves a leftover `]`; their parse = the element's
+   body application stops at it and the PROGRAM walk errs 'Expect an
+   identifier' @ the `]` token + a one-token sync (the program junk
+   rule). Ours' pipeline swallowed it inside skip_line. THE FIX: after
+   ref_body_pipeline_mode's application(), the leftover RBracket (when
+   not poisoned) errs 'Expect an identifier' @ the token span. nb11 =
+   5/5, rA 5/5, rB 3/3.
+2. THE BLOCK LEFTOVER-`]` FIELD (rC `Ref { a.b > c.d ] }`): their
+   blockExpression = TOKEN-based — field 1 = the clean binary, the
+   leftover `]` starts the NEXT field: 'Invalid start of operand "]"'
+   @ the `]`, the Empty field (prevToken = the `]`) rides
+   validateFields → the trio (REF_REDEFINED if >1 + not-binary +
+   unequal) at the bracket's END point (zero-width), the
+   synchronizeBlock advance skips the rest of the line silently. Ours'
+   line-based walk dropped it. THE FIX: after the block walk's
+   field handling, the leftover RBracket emits the operand error + the
+   trio @ (rb.end, rb.end) and the parser skips to the line end. rC =
+   6/6 (the missing-tables single — mechanism 3 made that true).
+3. THE CHAIN DOUBLING (rE/rF/m43_0444): a clean ref block's field 1
+   binds the model ref (validate.rs check_endpoint renders the
+   missing-tables) AND the block walk pushed the same field's chains
+   (bind_chain renders them AGAIN) — the missing-tables doubled.
+   Theirs = the model covers field 1, bindFields covers fields 2+.
+   THE FIX: `model_bound` gates the field-1 callee chains (the args'
+   chains still ride; a non-binding model keeps the chains as the
+   fallback — the t1 rule unchanged). m43_0444 = the seed case that
+   converged EXACTLY on this fix.
+4. THE NB6 MESSAGE CORRECTION: ours' body_bracket_scan `}`-operand
+   error carried the LITERAL `"Invalid start of operand \"{}\""` where
+   theirs quotes the token value (`"}"`). THE ROUND-99 BATTERY RECORD
+   WAS WRONG on nb6 — the round-99 "132/132" claim missed this message
+   delta (the current battery run caught it; the mechanism: the
+   message was hardcoded, not formatted). Fixed: the message = the
+   literal `"}"` (the scan's `}` arm). The r99-addendum "nb6 = exact"
+   line is superseded by this correction.
+
+THE GATES: run.mjs 78/78, run_schema.mjs 78/78, battery **138/138**
+(the 6 promotions: nb11 + rA/rB/rC/rE/rF), lib 122/122, editor 61/61,
+fmt/fuzz/oracle — all green.
+THE SEEDS: **seed-77 = 151/300 (+0), seed-43 = 324/600 (+1, m43_0444)**
+— NO regressions (the divergent-list diff = zero entries either way
+besides m43_0444 leaving). The mutation composites carry few
+stray-`]`-ref/doubling shapes; the message-delta ledger is otherwise
+FLAT (the r99↔r100 totals identical outside the nb6 message flip) —
+the fixes are probe-verified mechanisms whose seed weight is small;
+the composite queue (the m77_0099 cascade, s5) remains the weight.
+The dumps = /tmp/agentA-ours-r100-77.json + /tmp/agentA-ours-r100-43.json
+(the divergent lists /tmp/agentA-div-r100-{77,43}.json; the theirs
+dumps = the r96 pins, upstream unchanged).
+
+## Round 101 queue
+
+- The composite queue: the m77_0099-family cascade (the 'Expect an
+  identifier' over-fire remains the widest signature: 38 extra seed-77
+  / 84 extra seed-43 — the round-74 per-flow guards), s5's span
+  puzzle;
+- The emergent clusters rooted in the settings/body/ref machinery;
+- OWNED ELSEWHERE: the index-field paren-name + the m43_0242
+  records-comma (Agent D — the records/index/column function
+  families); dispatch-level changes D requests = ours.
+
+## Round 101 addendum — THE S5 SPAN PUZZLE SOLVED (the newline-trivia comma-expression model), the port LANDED
+
+THE MECHANISM (the s5 family, fully traced from their sources):
+- Their NEWLINE = a trivia token — gatherTrivia attaches it to the
+  PREVIOUS non-trivia token's trailingTrivia; the parser's token list
+  = trivia-free. hasTrailingNewLines(previous) = the application's
+  args-walk stop — but the commaExpression's OWN comma-loop has NO
+  such stop: `check(COMMA)` sees ACROSS any trivia.
+- CONSEQUENCE: any arg whose next token (across any newlines) is `,`
+  absorbs the comma-separated fields into ONE CommaExpressionNode.
+  The Empty field (a leading/trailing/double comma) = the point at
+  previous().end (the `{`'s end at the body start — probe s5: the
+  node = [1,10-2,6) = the brace end .. the `1` end).
+- The merge KILLS convertFuncAppToElem (the last arg stops being a
+  block — s5h's `Note { 'x' }` + the comma-line = a plain field) and
+  REWRITES the previous arg's diagnostics: the type-position merge →
+  'Invalid column type' @ the union (s5n: the standalone numeric-type
+  error @ `123` REPLACED by [123-start..1-end)); the settings-position
+  merge → the remains walk ('These fields' per part — s5o/s5q).
+- The body-start comma-line = the commaExpression as the CALLEE: ONE
+  name error @ the node, the type parses after (s5/s5b/s5c/s5e/s5f/
+  s5k; s5f's double comma = TWO Empty points inside the node).
+
+THE PORT (all in column()/table(), probe-exact on 15 shapes):
+- `comma_expr_continuation` (beside the brace swallower): the
+  `,`-separated field scanner across the trivia (the bare runs, the
+  balanced blocks/parens; the Empty points; the `}`/`#` stop).
+- The `,`-lead arm (empty_point = the `{`'s end, the body-start only):
+  the CE = the callee, the name error @ [Empty..the-last-field-end),
+  the field survives into the type machinery.
+- The type-position absorption (site 1): after the ty-walk, a `,`
+  (the same line or across the newlines) = 'Invalid column type' @
+  [ty-start..the-run-end), the standalone numeric-type check
+  REPLACED, the trailing = the remains walk. The same-line form
+  covers `var,char(255)` (m77_0290 = the seed case that converged).
+- The items-position absorption (site 2): the line-end peek = `,` →
+  the LAST item + the run = ONE Item::CommaExpr (never a Word/List/
+  Block — the 'These fields' per-part rule follows from the existing
+  head_ok/last_ok checks); s5q's chain = TWO runs = two nodes, the
+  trailing word separate.
+
+THE OPEN TAILS (recorded): s5h (the comma-line after a converted
+ELEMENT = theirs merges into the element's application args — ours
+errs the callee-field name error instead), s5l (a note-only table =
+theirs 'A Table must have at least one column' @ the element — ours
+silent: the zero-column check has no note-only arm), s5s (the
+duplicate triple-quote strings in a Note = theirs 'A Note can only
+contain one string' @ the second block — ours storms), the
+cross-line NAME comma (the c1/c2 stream is same-line-only; their
+commaExpression crosses — ours breaks at the newline), the comments
+inside a comma-run (the `#` stops ours' scan).
+THE GATES: corpus 78/78, schema 78/78, battery **153/153** (the 15
+s5 probes promoted), lib 122/122, editor 61/61, fmt/fuzz/oracle —
+all green.
+THE SEEDS: **seed-77 = 152/300 (+1, m77_0290), seed-43 = 325/600
+(+1, m43_0569)** — zero regressions (the divergent-list diff clean
+both ways). The dumps = /tmp/agentA-ours-r101-{77,43}.json + the
+divergent lists /tmp/agentA-div-r101-{77,43}.json.
+
+## Round 102 queue
+
+- THE 'EXPECT AN IDENTIFIER' OVER-FIRE (the widest signature: 38
+  extra seed-77 / 84 extra seed-43) = THREE sub-classes (the
+  position-ledger, the r101 clustering):
+  * the `}`-line logs (21 seed-43 + 5 seed-77): ours errs ident on
+    `}` lines where theirs is silent — the m43_0067 records-flow +
+    the m43_0285 composite (the digit-lead nested element
+    `1Table orders {...}` = theirs converts + the CLOSED-nested
+    swallow; ours' child walk spills TEN errors — the round-42 child
+    loop needs the ident-ident-block conversion);
+  * the `'''` triple-quote logs (10 + 7): the duplicate note-string
+    check (s5s = the probe) + the sticky-note flows;
+  * the ref-op tokens on the `Ref:`-lines (15 + 15): `.`,`<`,`>`,`?`,
+    `(`,`)` logged as ident-junk by ours' walk where theirs' ref
+    machinery consumes them (m77_0070 = the round-72 recorded shape).
+- The s5 open tails (the after-element merge, the note-only zero-
+  column check, the note one-string check, the cross-line name
+  comma).
+- OWNED ELSEWHERE: the paren-name + the records-comma (Agent D).
+
+## Round 102 addendum — THE NOTE ONE-STRING MECHANISM LANDED (+ the battery-harness correction)
+
+THE MECHANISM: their NoteValidator walks the note body's string
+children — the SECOND (and later) string block errs 'A Note can only
+contain one string' @ the block's own node span ([start..end), the
+`'''…'''` or `'…'` block); the blocks still parse. Probes: s5s (the
+top-level sticky note, the triple-quote pair), nt1 (the sq pair),
+nt2 (the nested nameless in a table — OURS WAS SILENT there), nt3
+(the triple then the sq), nt5 (the named note-in-table — ours already
+had the name error, the one-string was missing).
+THE PORT: `note_extra_strings` (beside sticky_note_value) — after the
+content parse, the loop scans further string blocks (note_value per
+block, the span = the block), errs once each, consumes; wired at
+THREE sites: the top-level sticky_note, the table's nameless `Note {`
+arm, the table's `Note <name> {` arm.
+THE NT4 TAIL LANDED: the NAMELESS top-level sticky note (`Note {` at
+the program level) = theirs 'Sticky note must have a name' @ the
+WHOLE element span (start .. the block's end) with the body STILL
+parsing (the one-string error rides) — ours' sticky_note ident-
+required fail replaced by the deferred check (the probe nt4: TWO
+errors).
+
+THE BATTERY-HARNESS CORRECTION: the round-101 addendum's "battery
+153/153" was premature — the battery cases.json was NOT rewritten
+after the s5 promotion, so the r101 compare ran on the stale
+138-entry set (the 15 new probes = never compared; the fresh-vs-
+stale theirs-dump mismatch masked it). The r102 battery = the FULL
+160-entry set, both sides fresh: **160/160**. The r101 seed claims
+were unaffected (the seeds = compared per-case, complete).
+
+THE GATES: run.mjs 78/78, run_schema.mjs 78/78, battery **160/160**
+(the 7 promotions: s5s + nt1-nt6), lib 122/122, editor 61/61,
+fmt/fuzz/oracle — all green.
+THE SEEDS: **seed-77 = 152/300 (+0), seed-43 = 326/600 (+1,
+m43_0550 — a `'''` note-string case)** — zero regressions. The
+dumps = /tmp/agentA-ours-r102-{77,43}.json + the lists
+/tmp/agentA-div-r102-{77,43}.json.
+
+## Round 103 queue
+
+- THE 'EXPECT AN IDENTIFIER' OVER-FIRE — the two remaining
+  sub-classes (the position-ledger, the r102 clustering):
+  * the `}`-line logs (21 seed-43 + 5 seed-77): the m43_0067
+    records-in-table flow + the m43_0285 composite (the digit-lead
+    nested element `1Table orders {...}` = theirs converts via
+    convertFuncAppToElem + the CLOSED-nested swallow; ours' child
+    walk spills — the round-42 child loop needs the
+    ident-ident-block conversion);
+  * the ref-op tokens on the `Ref:`-lines (15 + 15): the
+    `.`,`<`,`>`,`?`,`(`,`)` logged by ours' walk where theirs' ref
+    machinery consumes them (m77_0070 = the minimal ledger: the line-5
+    op tokens + the line-6 dq-newline CE missing — the composite
+    reach = via the upstream unclosed bodies, the round-72/74 map
+    applies; the per-flow context guards).
+- The s5 open tails (the after-element merge, the note-only zero-
+  column check, the cross-line name comma).
+- OWNED ELSEWHERE: the paren-name + the records-comma (Agent D).
+
+## Round 103 addendum — THE NESTED-ELEMENT COLON BODY LANDED (m43_0285 CONVERGED)
+
+THE MECHANISM: their elementDeclaration's colon-body expression = the
+Pratt parse + convertFuncAppToElem — `ident [ident] { block }`
+converts to a NESTED ElementDeclarationNode; the body check
+markInvalids it: 'An element's simple body must not be an element
+declaration' @ the nested span ([the value start .. the block's `}`
+end) — the digit-lead `1Table` = their lexer's identifier, the same
+shape as ne1-ne4. The markInvalid'd body rides in NO arg: the
+element node = the type token + the bodyColon ONLY (ne1: [0,4) =
+`foo:`; ne2's `y:` = [19,21)) and the nested's INTERNALS are fully
+silent (ne3's `!!!broken` junk = nothing). The placement error
+anchors the keyword+colon span, NOT the whole element.
+THE PORT: the nested-element pre-dispatch in custom_element's
+colon-body non-quoted branch (the bare-run closure, the one-arg
+`Bar { … }` and the two-arg `Bar baz { … }` forms, the balanced
+swallow) + the `body_nested` flag: the placement = [type_start ..
+the colon end), the value-string/inline-field checks stay off, the
+walk skipped. m43_0285 = 2/2 on the seed case → the FULL case
+CONVERGED (its 8 remaining deltas were all downstream of these two).
+THE GATES: corpus 78/78, schema 78/78, battery **165/165** (the 5
+promotions: ne1-ne4 + m43_0285), lib 122/122, editor 61/61,
+fmt/fuzz/oracle — all green.
+THE SEEDS: **seed-77 = 152/300 (+0), seed-43 = 327/600 (+1,
+m43_0285)** — zero regressions. The dumps =
+/tmp/agentA-ours-r103-{77,43}.json + the lists
+/tmp/agentA-div-r103-{77,43}.json.
+
+## Round 104 queue
+
+- THE 'EXPECT AN IDENTIFIER' OVER-FIRE — the ref-op sub-class (15 +
+  15): the `.`,`<`,`>`,`?`,`(`,`)` logged by ours' walk where theirs'
+  ref machinery consumes them (m77_0070 = the minimal ledger) + the
+  remaining `}`-line cases (the records-in-table flow = m43_0067);
+- The s5 open tails (the after-element merge, the note-only zero-
+  column check, the cross-line name comma);
+- OWNED ELSEWHERE: the paren-name + the records-comma (Agent D).
+
+## Round 104 addendum — THE REF-OP/INFIX VALUE MECHANISMS LANDED (m77_0070 CONVERGED, +4 seed-43)
+
+THE MECHANISMS (the m77_0070 ledger's two halves):
+1. THE INFIX VALUE CHAIN: the colon-body value's OP tokens (`<>?`,
+   `.`, …) are their expression's infix chain — NEVER logged; the
+   value-node = the union through the last operand (ours already
+   matched the span). Ours' entry-walk logged them as post-phase
+   junk. THE FIX: the walk's value-phase op tokens = silent-advance.
+2. THE PER-ARG VALUE ERRORS (the pre-existing gap, ro5/ro6): their
+   validateBody errs PER ARG — the body = the application {callee:
+   the first comma-expression unit, args: the JUXTAPOSITION-separated
+   units}; the infix-ops bind WITHIN a unit (ro1: `bar baz <>? qux` =
+   ONE arg [baz..qux]); the comma = the commaExpression's field
+   separator (the unit CONTINUES — the h1 map); the callee unit never
+   errs per-arg (ro3: `bar.baz` = ONE error). THE FIX: the walk's
+   unit tracking (the callee/arg units, the after_op/after_comma
+   flags) + the per-arg 'A Custom element value can only be a
+   string' @ each arg's span at the walk's exit.
+3. THE UNTERMINATED DQ AT THE TYPE POSITION: their LEXER's
+   broken-string token — the newline hit errs 'Invalid newline
+   encountered while parsing' @ the partial token, the EOF hit errs
+   'EOF reached while parsing'; the token is gathered OUT of the
+   stream (gatherInvalid) → the element NEVER starts: no restart, no
+   EOF junk-logs (the m77_0070 line-6: ours logged the b1 ident +
+   the restart's EOF pair; theirs = the CE + the clean exit). THE
+   FIX: the type-loop's dq arm = the unterminated branch (the CE +
+   the drop-return).
+
+THE GATES: corpus 78/78, schema 78/78, battery **170/170** (the 5
+promotions: ro1/ro3/ro5/ro6 + m77_0070), lib 122/122, editor 61/61,
+fmt/fuzz/oracle — all green.
+THE SEEDS: **seed-77 = 153/300 (+1, m77_0070), seed-43 = 331/600
+(+4: m43_0083, m43_0295, m43_0304, m43_0387)** — zero regressions.
+The dumps = /tmp/agentA-ours-r104-{77,43}.json + the lists
+/tmp/agentA-div-r104-{77,43}.json.
+
+## Round 105 queue
+
+- The remaining `}`-line cases (the records-in-table flow = m43_0067)
+  + the next over-fire clustering (the ledger re-run on the r104
+  divergent set);
+- The s5 open tails (the after-element merge, the note-only zero-
+  column check, the cross-line name comma);
+- Iterate until a full round adds zero new mechanisms.
+- OWNED ELSEWHERE: the paren-name + the records-comma (Agent D).
+
+## Round 105 addendum — THE NOTE-BRACE TRIO LANDED (the invented-message swap)
+
+THE MECHANISM: the `Note <name>` header WITHOUT the `{` — their
+elementDeclaration's body check = the discardUntil: the NAME present
+= ONE 'Expect an opening brace '{' or a colon ':'' at the EOF point
+(probes pn1/pn3); the NAMELESS at EOF = the k-family TRIO
+('Unexpected EOF' + the brace error, both at the EOF point) PLUS the
+keyword's name-form message 'Invalid name for sticky note ' @
+[start..the-EOF) — the trailing space is their typo, preserved
+verbatim (probe pn2). OURS' invented "expected '{' after note name"
+= dead.
+THE PORT: sticky_note's brace-eat fail arm = the two branches (the
+name_missing flag = the nt4 machinery); the note returns as the
+partial element either way.
+THE GATES: corpus 78/78, schema 78/78, battery **173/173** (the 3
+promotions: pn1-pn3), lib 122/122, editor 61/61, fmt/fuzz/oracle —
+all green.
+THE SEEDS: **seed-77 = 153/300 (+0), seed-43 = 331/600 (+0)** — the
+truncated-note shapes sit inside composites that stay divergent for
+other reasons; zero regressions. The r105 ledger (the re-cluster):
+'Expect an identifier' extra 21+45 (from 38+84 at r100 — the
+mechanism-level deltas = shrinking); the 'expected identifier' leak
+(13+18) = the LONG-TAIL scatter (the `'''`-lines 2, the indexes 3,
+the paren-shapes 2, the singles — NO single flow = the per-case
+grind, the round-66 pattern). The dumps =
+/tmp/agentA-ours-r105-{77,43}.json + the lists
+/tmp/agentA-div-r105-{77,43}.json.
+
+## Round 106 queue
+
+- The long-tail grind: the 'expected identifier' leak flows (the
+  per-case ledger: m77_0085's indexes-paren cluster = the widest at
+  3-4 deltas/case), the records-in-table flow (m43_0067);
+- The s5 open tails (the after-element merge, the note-only zero-
+  column check, the cross-line name comma);
+- Iterate until a full round adds zero new mechanisms.
+- OWNED ELSEWHERE: the paren-name + the records-comma (Agent D).
+
+## Round 106 addendum — THE ZERO-MECHANISM ROUND (the honest ledger)
+
+THE r106 PROBES: the leak-flow minimal shapes (lk1/lk2 = the bare
+ref-line = BOTH SIDES IDENTICAL — the leak = composite-bound, no
+bounded mechanism); the zc family = THE EMPTY_TABLE MECHANISM MAPPED:
+'A Table must have at least one column' = their INTERPRET-layer check
+(interpret.ts EMPTY_TABLE = the SYMBOL members, NOT the validator!) —
+the interpret is FILE-gated: any parse/binder error ANYWHERE
+suppresses it (zc3: the duplicate-note errors = no EMPTY_TABLE; k4:
+the nameless name error = no EMPTY_TABLE; zc1/zc2 = the clean file =
+the error @ [start..the-element-end)). 'Duplicate notes are defined'
+= the validateSubElements check, per note-ELEMENT span (the `Note {
+… }` block form only; the colon-form = a field in their parse).
+THE PORT ATTEMPT = the table-tail push gated by the table's OWN
+binder_out + the file's errs — REGRESSED 9 seed cases (the file-level
+gate: the OTHER elements' binder errors are invisible at the table's
+tail — the mutation composites = multi-element files). THE REVERT
+LANDED (the tree = the r105 state).
+THE CORRECT DESIGN = the validate-layer push (the doc's tables'
+columns + the note-element list + the FILE-level binder/parse gate) —
+OUTSIDE parser.rs (the ast/validate touch = the scope note; the
+user's call). The probes zc1/zc2/zc3/s5l = recorded, NOT promoted.
+NO mechanism landed this round — THE CONVERGENCE CRITERION = MET for
+this round. The remaining ledger = the deep-tail composites (the
+multi-flow per-case grind = the round-66/74 pattern) + the D-owned
+families + the validate-layer design.
+THE SEEDS: **seed-77 = 153/300, seed-43 = 331/600** (the r105 state —
+the r106 = the revert to 7de8ce8). The regression evidence =
+/tmp/agentA-ours-r106-{77,43}.json (9 entered cases before the
+revert). The gates = the r105 state.
+
+## Round 107 queue
+
+- ~~The EMPTY_TABLE/validate-layer design~~ — **HANDED TO AGENT D**
+  (the user's scope call at the r106 closure: my scope stays strictly
+  parser.rs; the validate layer adjoins D's importer-emission work).
+  THE HANDOFF PACKAGE for D (resume from here):
+  * THE MECHANISM: 'A Table must have at least one column' = their
+    INTERPRET-layer check (core/global_modules/table/interpret.ts
+    EMPTY_TABLE, the SYMBOL members — NOT the validator); the
+    interpret is FILE-gated: any parse/binder error ANYWHERE
+    suppresses it. 'Duplicate notes are defined' = the
+    validateSubElements check, per note-ELEMENT span (the `Note { … }`
+    block form only; the colon-form = a field in their parse).
+  * THE PROBE SHAPES (recreate under any name; the DBML_TRACE anchor
+    node = ElementDeclarationNode, codes 3018/3046):
+    - zc1 `Table t {\n}\n` → the EMPTY_TABLE @ [1,1-2,2) (the element
+      span) only;
+    - zc2 `Table t {\n  Note { 'x' }\n}\n` → the EMPTY_TABLE @
+      [1,1-3,2) (a note-only body still has zero columns);
+    - zc3 `Table t {\n  Note { 'x' }\n  Note { 'y' }\n}\n` → 'Duplicate
+      notes are defined' @ [2,3-2,15) AND @ [3,3-3,15) (both note
+      spans), NO EMPTY_TABLE (the duplicates = the binder-class errors
+      that gate the interpret off);
+    - s5l `Table t {\n  Note { 'x' }\n}\n` = zc2 (the r106 note);
+      k4 (`Table {\n}`, the battery) = the nameless name error ALSO
+      gates the EMPTY_TABLE off.
+  * THE PORT DESIGN: the parse-side marks the zero-column tables and
+    collects the note-element spans per table (the table-tail attempt
+    = REVERTED — see the r106 addendum: the table-tail gate sees only
+    the table's own errors, the file-level gate = the OTHER elements'
+    binder/parse errors = invisible there, 9 seed regressions); the
+    CORRECT push = the validate layer (the file's binder/parse set =
+    complete at render time; ours' validate.rs already receives
+    binder_errors + the parse errors — the gate = both empty), with
+    the note-element list carried on the doc's Table (an ast field).
+  * OURS' CURRENT STATE: both checks = absent (zc1/zc2/zc3/s5l =
+    zero diagnostics — the probes are NOT in the battery, they never
+    passed ours).
+- The s5 open tails (the after-element merge, the cross-line name
+  comma) — the composite-bound shapes, the next session's queue;
+- The long-tail grind continues (the D-owned = skip).
+- OWNED ELSEWHERE: the paren-name + the records-comma + the
+  EMPTY_TABLE/notes design (Agent D).

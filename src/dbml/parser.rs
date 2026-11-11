@@ -439,7 +439,7 @@ fn body_bracket_scan(
                 errs.push(ParseError {
                     offset: s,
                     end: Some(s + 1),
-                    message: "Invalid start of operand \"{}\"".to_string(),
+                    message: "Invalid start of operand \"}\"".to_string(),
                 });
                 // the operand-start damage ENDS the scan — the node point
                 // lands right after the brace (nb6: [3,2)-(3,2))
@@ -728,7 +728,7 @@ fn note_value(input: &mut &str, base: usize) -> R<String> {
 /// args (`varchar(255)`, `decimal(10, 2)`, `"character varying"`). Their
 /// grammar has no multi-word types: `timestamp with time zone` reads as
 /// type `timestamp` plus the bare fields `with`, `time`, `zone`.
-fn type_str(input: &mut &str, base: usize) -> R<String> {
+fn type_str(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<String> {
     let mut out = String::new();
     loop {
         if let Some(rest) = input.strip_prefix('`') {
@@ -799,10 +799,15 @@ fn type_str(input: &mut &str, base: usize) -> R<String> {
         sp(input);
     }
     // parenthesized args ride the word, spaces inside them intact —
-    // `decimal (10, 2)` keeps the gap, `varchar(255)` does not grow one
+    // `decimal (10, 2)` keeps the gap, `varchar(255)` does not grow one.
+    // The args = their tupleExpression grammar: a missing comma errs at
+    // the offending token (m43_0206: `decimal(1 2)` errs at `2`)
     let save = *input;
     sp(input);
     if peek_is(input, "(") {
+        // the verbatim slice rides the type text (the balanced scan);
+        // the tuple grammar errs the missing commas (m43_0206:
+        // `decimal(1 2)` errs at `2`)
         let mut depth = 0i32;
         let mut end = input.len();
         for (k, &c) in input.as_bytes().iter().enumerate() {
@@ -818,8 +823,9 @@ fn type_str(input: &mut &str, base: usize) -> R<String> {
                 _ => {}
             }
         }
-        out.push_str(&input[..end]);
-        *input = &input[end..];
+        let args_text = input[..end].to_string();
+        tuple_scan(input, base, errs);
+        out.push_str(&args_text);
     } else {
         *input = save;
     }
@@ -2636,7 +2642,12 @@ fn column_settings_from(kvs: Vec<(String, Option<SettingVal>)>) -> ColumnSetting
     s
 }
 
-fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column> {
+fn column(
+    input: &mut &str,
+    base: usize,
+    errs: &mut Vec<ParseError>,
+    empty_point: Option<usize>,
+) -> R<Column> {
     let start = offset(input, base);
     let mut name_off = offset(input, base);
     let mut binder_errors: Vec<(usize, usize, String)> = Vec::new();
@@ -2647,8 +2658,14 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
         .find(|c: char| c.is_whitespace())
         .unwrap_or(input.len());
     let gather = input[..gather_len].to_string();
-    let mut name_end;
-    let name;
+    let mut name_end = 0usize;
+    let mut name = String::new();
+    // the bad-name shapes that consume their token and CONTINUE into the
+    // type flow (their validateColumn: the name check fires always, the
+    // type error only on args=[] — col-probes: `'x'` = the pair, `'x' int`
+    // = the name error only, `'x' [pk]` = the name + the invalid-type at
+    // the list, the same flow as the `(`-tuple callee arm below)
+    let mut bad_name_consumed = false;
     if gather.starts_with('\'') && !gather.starts_with("'''") {
         // r5: a single-quoted token at the field-name position = the
         // sq-string scan — an unterminated string errs the newline
@@ -2659,7 +2676,9 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
             Ok(_) => {
                 // a terminated string as the name = the string value
                 // rides (the name-check = theirs' identifier rule — the
-                // walk continues after the string)
+                // walk continues after the string; the TYPE FLOW runs on
+                // the remainder — col5: `int` suppresses the type error,
+                // col6: the `[pk]` list takes the invalid-type check)
                 *input = t5;
                 name_end = offset(input, base);
                 name = String::new();
@@ -2669,16 +2688,7 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
                     "A column name must be an identifier or a quoted identifier"
                         .to_string(),
                 ));
-                return Ok(Column {
-                    name: String::new(),
-                    name_span: name_off..name_end,
-                    ty: String::new(),
-                    ty_end: name_end,
-                    full_end: name_end,
-                    span: start..offset(input, base),
-                    binder_errors,
-                    settings: Default::default(),
-                });
+                bad_name_consumed = true;
             }
             Err(e) => {
                 errs.push(ParseError {
@@ -2697,15 +2707,38 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
             }
         }
     }
-    if gather.starts_with("'''") {
+    if bad_name_consumed {
+        // the sq-string name consumed its token and rode the name check
+        // above — the type flow below parses the remainder
+    } else if gather.starts_with("'''") {
         // j3: a `'''` at the field-name position = their lexer's
-        // triple-quote token — the consumeUntil scan errs 'EOF reached
-        // while parsing' at the PARTIAL token (multi-line, to EOF) and
-        // the field dies (the round-47 header mechanism at the field
-        // position)
+        // triple-quote token. Their fieldDeclaration takes the string
+        // operand as the CALLEE and validateFields flags it: the pair
+        // anchors the STRING node (m43_0501: 6.3-8.6 = the whole
+        // triple-quote token, no operand error), then the field dies
+        // (the round-47 header mechanism at the field position)
         let mut t3 = *input;
         match note_value(&mut t3, base) {
-            Ok(_) => *input = t3,
+            Ok(_) => {
+                *input = t3;
+                // the terminated string = the field's callee: the pair
+                // anchors the STRING node (m43_0501: 6.3-8.6); an
+                // UNTERMINATED triple keeps the pre-existing flow (probe
+                // col11: theirs carries only the lexer + brace errors)
+                let sq3_end = offset(input, base);
+                errs.push(ParseError {
+                    offset: name_off,
+                    end: Some(sq3_end),
+                    message: "A column must have a type".to_string(),
+                });
+                errs.push(ParseError {
+                    offset: name_off,
+                    end: Some(sq3_end),
+                    message:
+                        "A column name must be an identifier or a quoted identifier"
+                            .to_string(),
+                });
+            }
             Err(e) => {
                 errs.push(ParseError {
                     offset: e.offset,
@@ -2721,8 +2754,7 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
             message: String::new(),
             partial_occs: Vec::new(),
         });
-    }
-    if gather == "." {
+    } else if gather == "." {
         // their leftExpression_bp checks isOpToken FIRST: a prefix-invalid
         // op (the member dot) errs UNKNOWN_PREFIX_OP quoting the value
         // (probe m43_0059) — the pair anchors the post-dot point, the
@@ -2751,8 +2783,40 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
             message: String::new(),
             partial_occs: Vec::new(),
         });
-    }
-    if input.starts_with(|c: char| c.is_ascii_digit()) {
+    } else if gather.starts_with('[') || gather.starts_with('{') {
+        // a bracket/block node at the callee position (m43_0041: a
+        // `[default: …]` list alone on the line; m43_0549: a `{}` block)
+        // = a VALID expression that is not a variable — the same flow as
+        // the `(`-tuple callee arm: the name check anchors the NODE (the
+        // balanced scan), the type flow continues (args=[] → the type
+        // error on the same span)
+        let open = gather.as_bytes()[0];
+        let close = if open == b'[' { b']' } else { b'}' };
+        let n_start = offset(input, base);
+        let mut depth = 0i32;
+        let mut end = input.len();
+        for (k, &c) in input.as_bytes().iter().enumerate() {
+            if c == open {
+                depth += 1;
+            } else if c == close {
+                depth -= 1;
+                if depth == 0 {
+                    end = k + 1;
+                    break;
+                }
+            }
+        }
+        *input = &input[end..];
+        let n_end = offset(input, base);
+        binder_errors.push((
+            n_start,
+            n_end,
+            "A column name must be an identifier or a quoted identifier".to_string(),
+        ));
+        name_off = n_start;
+        name = String::new();
+        name_end = n_end;
+    } else if input.starts_with(|c: char| c.is_ascii_digit()) {
         // (d) a digit-leading token is a NUMBER node in their stream — the
         // name check errs at it and the walk CONTINUES (probe w3: `123
         // 456` = the name error at `123` + 'Invalid column type' at the
@@ -2847,11 +2911,73 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
                 "A column name must be an identifier or a quoted identifier".to_string(),
             ));
         }
+    } else if gather == "," && empty_point.is_some() {
+        // their commaExpression as the field CALLEE (the body-start
+        // comma-line): the Empty = the point at the previous real
+        // token's end (the body's `{`), the comma-separated fields
+        // follow; the name check anchors the node [Empty .. the last
+        // field's end] and the field SURVIVES (probes s5/s5b/s5c/s5e/
+        // s5f/s5k: ONE name error, the type parses after). The walk
+        // falls through to the type machinery below.
+        let ep = empty_point.unwrap();
+        let ce_end = comma_expr_continuation(input, base).unwrap_or(ep);
+        name_off = ep;
+        name = String::new();
+        name_end = ce_end.max(ep);
+        binder_errors.push((
+            name_off,
+            name_end,
+            "A column name must be an identifier or a quoted identifier".to_string(),
+        ));
     } else {
         match ident(input, base) {
             Ok(n) => {
                 name = n;
                 name_end = offset(input, base);
+                // their callee = the application expression: a member
+                // chain glues into ONE node (`a.b`, `a . b` — the dot
+                // binds across trivia, probe t_dot) and the chain is
+                // not a variable → the name check errs on the WHOLE
+                // node (col13/col14: the type still parses after;
+                // col12/col15: args=[] → the type error on the same
+                // span)
+                let mut glued = false;
+                loop {
+                    let save_m = *input;
+                    sp(input);
+                    if !input.starts_with('.') {
+                        *input = save_m;
+                        break;
+                    }
+                    let _ = eat(input, ".");
+                    sp(input);
+                    let pend = input
+                        .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+                        .unwrap_or(input.len());
+                    if pend == 0 {
+                        *input = save_m;
+                        break;
+                    }
+                    let part = input[..pend].to_string();
+                    *input = &input[pend..];
+                    name_end = offset(input, base);
+                    name.push('.');
+                    name.push_str(&part);
+                    glued = true;
+                }
+                // their lexer lexes `…` as a FUNCTION token — never a
+                // valid column name: the name check fires ALWAYS (probe
+                // col3: `x` int errs the name error only; col1: no type
+                // on the line → the type error rides the args=[] rule
+                // below; col7: the [pk] list takes the invalid-type)
+                if glued || gather.starts_with('`') {
+                    binder_errors.push((
+                        name_off,
+                        name_end,
+                        "A column name must be an identifier or a quoted identifier"
+                            .to_string(),
+                    ));
+                }
                 // their call-form/streamed name (probe c1/c2): a `,` after
                 // the name continues the node across the comma — `abc, def`
                 // errs the name check at the WHOLE node (2,3-2,11), the
@@ -2897,22 +3023,11 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
                 // SURVIVES (j2: the settings-list after the tuple = the
                 // ty-walk's list branch errs 'Invalid column type' at the
                 // list; u2: no settings = the type-missing error at the
-                // tuple — the pair)
+                // tuple — the pair). The tuple = their tupleExpression
+                // grammar: the missing comma errs at the offending token
+                // (m43_0518: `(odd col)` errs at `col` 5.10-5.13)
                 let g_start = offset(input, base);
-                let mut depth = 0i32;
-                let mut end = input.len();
-                for (k, &c) in input.as_bytes().iter().enumerate() {
-                    if c == b'(' {
-                        depth += 1;
-                    } else if c == b')' {
-                        depth -= 1;
-                        if depth == 0 {
-                            end = k + 1;
-                            break;
-                        }
-                    }
-                }
-                *input = &input[end..];
+                tuple_scan(input, base, errs);
                 let g_end = offset(input, base);
                 binder_errors.push((
                     g_start,
@@ -3184,11 +3299,84 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
         binder_errors.push((bs, be, "Invalid column type".to_string()));
         ty = String::new();
     } else {
-        ty = type_str(input, base)?;
+        ty = type_str(input, base, errs)?;
     }
     // their column-node lint anchor reads [name start .. type end]
     let ty_end = offset(input, base);
-    if !ty.is_empty() && ty.bytes().all(|c| c.is_ascii_digit()) {
+    // the indexer suffix binds ACROSS newline-only trivia (probe
+    // col16/col19: `bool\n[default: …]` = the array node — 'Invalid
+    // column type' @ type..]; a trailing SPACE detaches the list into
+    // its own field instead, col18/col20 = the bracket/block callee
+    // arm). The elements must all be colon-less signed numbers (their
+    // indexer rule) — an empty or all-number indexer is a valid array
+    // type and rides silently; anything else errs ONCE on the array
+    // node span. The same-line glued `[` stays the settings path (the
+    // messy-doc fmt contract)
+    {
+        let mut probe = *input;
+        while probe.starts_with(['\n', '\r']) {
+            probe = &probe[1..];
+        }
+        if probe.len() < input.len() && probe.starts_with('[') {
+            while input.starts_with(['\n', '\r']) {
+                *input = &input[1..];
+            }
+            let sfx_start = offset(input, base);
+            let mut depth = 0i32;
+            let mut end = input.len();
+            for (k, &c) in input.as_bytes().iter().enumerate() {
+                match c {
+                    b'[' => depth += 1,
+                    b']' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = k + 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let content = &input[1..end.min(input.len()).saturating_sub(1).max(1)];
+            let sfx_end = offset(input, base) + end.min(input.len());
+            *input = &input[end.min(input.len())..];
+            let valid = content.trim().is_empty()
+                || content.split(',').all(|el| {
+                    let el = el.trim();
+                    let el = el
+                        .strip_prefix('+')
+                        .or_else(|| el.strip_prefix('-'))
+                        .unwrap_or(el);
+                    !el.is_empty() && el.bytes().all(|c| c.is_ascii_digit())
+                });
+            if !valid {
+                binder_errors.push((
+                    ty_start,
+                    sfx_end,
+                    "Invalid column type".to_string(),
+                ));
+            }
+            let _ = sfx_start;
+        }
+    }
+    sp(input);
+    // their commaExpression: a `,` after the type token (the same line
+    // or across the trivia newlines) continues the expression — the
+    // comma-fields absorb into ONE CommaExpressionNode = args[0] whose
+    // union = [type start .. the last field's end]; 'Invalid column
+    // type' anchors the union and the standalone type checks above are
+    // REPLACED (probes s5a/s5g/s5i/s5j/s5m/s5n/s5q/s5r). The trailing
+    // tokens = the remains (the walk below).
+    let comma_type_end: Option<usize> = if !input.is_empty()
+        && !input.starts_with(['}', '#'])
+    {
+        comma_expr_continuation(input, base)
+    } else {
+        None
+    };
+    if let Some(ce) = comma_type_end {
+        binder_errors.push((ty_start, ce, "Invalid column type".to_string()));
+    } else if !ty.is_empty() && ty.bytes().all(|c| c.is_ascii_digit()) {
         // a NUMBER node at the type position: their validateColumn's
         // type check errs 'Invalid column type' at the type node
         // (probe w3: `123 456` = the name error at `123` + the
@@ -3216,6 +3404,10 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
         Word(String),
         List(Vec<(String, Option<SettingVal>)>, Vec<super::ast::SettingOcc>),
         Block,
+        /// the comma-expression continuation: the last arg + the
+        /// comma-fields = ONE node (their commaExpression — the s5
+        /// family); never a Word/List/Block for the shape rules
+        CommaExpr,
     }
     let mut items: Vec<(Item, Span)> = Vec::new();
     // the last REAL arg's end — the column node's union end (a field with
@@ -3225,9 +3417,59 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
     } else {
         ty_end
     };
+    // their expression() args loop (parser.ts:711): before each arg the
+    // previous token must carry a trailing SPACE — a glued arg (`[unique]
+    // pk`) errs MISSING_SPACES 'Expect a following space' anchored on the
+    // PREVIOUS arg's node. The first arg = the type (or the stand-in
+    // list); the glue at the type→item boundary is unreachable (the
+    // glued `[` = the indexer suffix, consumed in the type flow)
+    let mut prev_arg: Option<Span> = if ty_is_list {
+        items.first().map(|(_, s)| s.clone())
+    } else if !ty.is_empty() {
+        Some(ty_start..ty_end)
+    } else {
+        None
+    };
     loop {
+        if let Some(ps) = &prev_arg {
+            // their shouldStopFunctionApplication runs BEFORE the space
+            // check: the closers (`,`/`]`/`)`/`:`/`}`), the line end and
+            // EOF stop the args loop with no check (m77_0152: the glued
+            // `ref:` errs once — against the TYPE, not against `ref`).
+            // The unconsumed space sits at the input (the loop's sp has
+            // not run yet) — whitespace counts as the separator too, and
+            // a glued `[` = the indexer-suffix grammar (theirs probed:
+            // `integer[pk,increment]` = the array node, no space error —
+            // the app's messy-doc fmt contract keeps it parsing)
+            if offset(input, base) == ps.end
+                && !input.is_empty()
+                && !input.starts_with([
+                    ' ', '\t', '\n', '\r', '}', '#', ']', ')', ',', ':', '[', '\'', '"',
+                ])
+            {
+                errs.push(ParseError {
+                    offset: ps.start,
+                    end: Some(ps.end),
+                    message: "Expect a following space".to_string(),
+                });
+            }
+        }
         sp(input);
         if input.is_empty() || input.starts_with(['\n', '\r', '}', '#']) {
+            // their commaExpression continues across the trivia: a `,`
+            // after the LAST arg absorbs the comma-fields into ONE node
+            // [the arg's start .. the last field's end]; the items after
+            // the run = separate args (probe s5q: two comma-lines chain
+            // into two nodes, the trailing word = its own arg)
+            if !items.is_empty() && !input.is_empty() && !input.starts_with(['}', '#']) {
+                let mstart = items.len() - 1;
+                let ms = items[mstart].1.start;
+                if let Some(me) = comma_expr_continuation(input, base) {
+                    items.truncate(mstart);
+                    items.push((Item::CommaExpr, ms..me));
+                    continue;
+                }
+            }
             break;
         }
         if peek_is(input, "[") {
@@ -3241,6 +3483,7 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
                 ty_is_list = true;
             }
             items.push((Item::List(kvs, occs), settings_start..lend));
+            prev_arg = Some(settings_start..lend);
             full_end = lend;
             continue;
         }
@@ -3265,6 +3508,7 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
         // the word is an arg in its own right BEFORE the block check —
         // `indexes { … }` gathers [indexes, block] (their application)
         items.push((Item::Word(word), off..wend));
+        prev_arg = Some(off..wend);
         full_end = wend;
         if peek_is(input, "{") {
             let bs = offset(input, base);
@@ -3385,6 +3629,7 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
                             }
                         }
                         Item::Block => {}
+                        Item::CommaExpr => {}
                     }
                 }
             }
@@ -3425,6 +3670,79 @@ fn swallow_balanced_braces(input: &mut &str) {
     // exhaust within the source: a foreign "" slice would break the
     // pointer-difference offsets
     *input = &input[input.len()..];
+}
+
+/// Skip a balanced `( … )` group — the comma-expression's paren field.
+fn swallow_balanced_parens(input: &mut &str) {
+    let mut depth = 0i32;
+    for (k, &c) in input.as_bytes().iter().enumerate() {
+        match c {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    *input = &input[k + 1..];
+                    return;
+                }
+            }
+            _ => {}
+        }
+    }
+    *input = &input[input.len()..];
+}
+
+/// Their commaExpression: the fields are the `,`-separated operand runs
+/// and the trivia (the newlines included) is INVISIBLE between tokens —
+/// so a `,` after any parsed arg (the same line or the next line's lead)
+/// continues the expression. The Empty field (a leading/trailing/double
+/// comma) anchors prevToken.end = the comma's end (probe s5f: the node
+/// spans the Empty point .. the last field). The run's caller supplies
+/// the node START (the last parsed arg's start / the Empty's point);
+/// returns the run's END (the last field's end) when a comma followed.
+/// The `}`/`#`/EOF stops the scan (the mid-typing close belongs to the
+/// enclosing flow).
+fn comma_expr_continuation(
+    input: &mut &str,
+    base: usize,
+) -> Option<usize> {
+    let mut end: Option<usize> = None;
+    loop {
+        let probe = input.trim_start_matches(|c| matches!(c, ' ' | '\t' | '\r' | '\n'));
+        if !probe.starts_with(',') {
+            break;
+        }
+        *input = probe;
+        let _ = eat(input, ",");
+        // the Empty field rides before the next comma / the line end —
+        // the point = the comma's end (prevToken = the comma token)
+        let comma_end = offset(input, base);
+        end = Some(comma_end.max(end.unwrap_or(comma_end)));
+        sp(input);
+        if input.is_empty() || input.starts_with([',', '\n', '\r', '}', '#']) {
+            continue;
+        }
+        // the field: their normalExpression's operand shapes — the bare
+        // run (the digit-lead = a number), the block, the paren group
+        let fe = if input.starts_with('{') {
+            swallow_balanced_braces(input);
+            offset(input, base)
+        } else if input.starts_with('(') {
+            swallow_balanced_parens(input);
+            offset(input, base)
+        } else {
+            let g = input
+                .find(|c: char| c.is_whitespace() || c == ',')
+                .unwrap_or(input.len());
+            if g == 0 {
+                // a junk char — the recorded tail; stop the scan
+                break;
+            }
+            *input = &input[g..];
+            offset(input, base)
+        };
+        end = Some(fe.max(end.unwrap_or(fe)));
+    }
+    end
 }
 
 
@@ -3484,6 +3802,64 @@ fn parse_check_entries(
     out
 }
 
+/// Their tupleExpression inside a `(...)`: one element, then the
+/// comma-terminated loop — a missing comma errs 'Expect a comma' at the
+/// offending TOKEN (token width) and the sync skips silently to the
+/// next `,`/`)`, the skipped tokens never becoming elements (`(odd col)`
+/// flags odd, errs at col; `(a b c)` errs at b only, tuple [a]). At EOF
+/// the close consume errs 'Expect a closing parenthesis ')' at the EOF
+/// point. Leaves the input just past the closing `)` (or at EOF).
+fn tuple_scan(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) {
+    *input = &input[1..];
+    loop {
+        sp(input);
+        if input.is_empty() {
+            errs.push(err_at(offset(input, base), "Expect a closing parenthesis ')'"));
+            break;
+        }
+        if eat(input, ")") {
+            break;
+        }
+        // the element: one token
+        if consume_one_token(input).is_none() {
+            break;
+        }
+        sp(input);
+        if eat(input, ",") {
+            continue;
+        }
+        if input.is_empty() {
+            errs.push(err_at(offset(input, base), "Expect a closing parenthesis ')'"));
+            break;
+        }
+        if eat(input, ")") {
+            break;
+        }
+        // their consume anchors the offending TOKEN (token width) — the
+        // trivia (the newline included) is skipped before the anchor
+        // (m43_0242: `records (c\node)` anchors the next line's `ode`)
+        let mut probe = *input;
+        let tok_len = consume_one_token(&mut probe).unwrap_or(1);
+        errs.push(ParseError {
+            offset: offset(input, base),
+            end: Some(offset(input, base) + tok_len),
+            message: "Expect a comma ','".to_string(),
+        });
+        // the sync: skip to (not past) the next `,`/`)`
+        let to_comma = input.find(',');
+        let to_rparen = input.find(')');
+        match (to_comma, to_rparen) {
+            (Some(c), Some(p)) => {
+                let k = c.min(p);
+                *input = &input[k..];
+            }
+            (Some(c), None) => *input = &input[c..],
+            (None, Some(p)) => *input = &input[p..],
+            (None, None) => break,
+        }
+    }
+}
+
 /// Index column: an identifier. Upstream importers emit unquoted
 /// multi-word names (`date of birth`), so consecutive bare words on the
 /// same line join into one name.
@@ -3518,6 +3894,140 @@ fn index_ident(input: &mut &str, base: usize) -> R<String> {
     // their grammar never joins bare words here: `odd col` reads as two
     // columns, each flagged separately (probe-verified)
     ident(input, base)
+}
+
+/// Their IndexesModule validator (local_modules/indexes/index.ts): the
+/// per-field settings checks after aggregateSettingList — the known keys
+/// (note/name = quoted strings, unique/pk = no value, type = a variable
+/// node) plus the unknown-key default arm. Anchors = the attribute nodes
+/// (the occ spans). Runs on the completed attrs of a closed list AND on
+/// the partial attrs riding the block-close sentinel (m43_0112: the `}`
+/// at the next-attr position — their validator walks the partial list the
+/// same way; probe ixe5/ixe6: the checks fire on erroring values too, no
+/// broken-value suppression here). `src`/`src_start` = the source text
+/// from the field's start: the quote char of a quoted value rides only
+/// in the source (the occ value text is the STRIPPED content — probe
+/// ixe4: `type: "btree"` passes their VariableNode check, `'btree'`
+/// fails it).
+fn validate_index_settings(
+    occs: &[super::ast::SettingOcc],
+    src: &str,
+    src_start: usize,
+    errs: &mut Vec<ParseError>,
+) {
+    // aggregateSettingList: group the attributes per lowercased name, in
+    // first-appearance order
+    let mut order: Vec<&str> = Vec::new();
+    let mut groups: Vec<Vec<&super::ast::SettingOcc>> = Vec::new();
+    for o in occs {
+        if let Some(i) = order.iter().position(|k| *k == o.key.as_str()) {
+            groups[i].push(o);
+        } else {
+            order.push(o.key.as_str());
+            groups.push(vec![o]);
+        }
+    }
+    for (key, attrs) in order.into_iter().zip(groups.into_iter()) {
+        match key {
+            "note" | "name" => {
+                if attrs.len() > 1 {
+                    for a in &attrs {
+                        errs.push(ParseError {
+                            offset: a.offset,
+                            end: Some(a.end),
+                            message: format!("'{}' can only appear once", key),
+                        });
+                    }
+                }
+                for a in &attrs {
+                    // isExpressionAQuotedString: a single- or double-quoted
+                    // string; the undefined value fails it too (ixe1: `[name]`)
+                    if !a.quoted {
+                        errs.push(ParseError {
+                            offset: a.offset,
+                            end: Some(a.end),
+                            message: format!("'{}' must be a string", key),
+                        });
+                    }
+                }
+            }
+            "unique" | "pk" => {
+                if attrs.len() > 1 {
+                    for a in &attrs {
+                        errs.push(ParseError {
+                            offset: a.offset,
+                            end: Some(a.end),
+                            message: format!("'{}' can only appear once", key),
+                        });
+                    }
+                }
+                for a in &attrs {
+                    // their check = attr.value !== undefined — any consumed
+                    // value text fires, an erroring gather included (ixe5)
+                    if a.has_value {
+                        errs.push(ParseError {
+                            offset: a.offset,
+                            end: Some(a.end),
+                            message: format!("'{}' must not have a value", key),
+                        });
+                    }
+                }
+            }
+            "type" => {
+                if attrs.len() > 1 {
+                    for a in &attrs {
+                        errs.push(ParseError {
+                            offset: a.offset,
+                            end: Some(a.end),
+                            message: "'type' can only appear once".to_string(),
+                        });
+                    }
+                }
+                for a in &attrs {
+                    // isExpressionAVariableNode: one identifier token or one
+                    // double-quoted string — a number, a single-quoted string
+                    // or a multi-token application fails it (ixe2/3/4/6)
+                    let ok = a.has_value
+                        && match &a.value {
+                            Some(v) => {
+                                if a.quoted {
+                                    let q = src
+                                        [a.value_span.start.saturating_sub(src_start)..]
+                                        .as_bytes()
+                                        .first()
+                                        .copied();
+                                    q == Some(b'"')
+                                } else {
+                                    let v = v.trim();
+                                    !v.is_empty()
+                                        && v.starts_with(|c: char| c.is_alphabetic() || c == '_')
+                                        && v.chars().all(|c| c.is_alphanumeric() || c == '_')
+                                }
+                            }
+                            None => false,
+                        };
+                    if !ok {
+                        errs.push(ParseError {
+                            offset: a.offset,
+                            end: Some(a.end),
+                            message: "'type' must be \"btree\" or \"hash\"".to_string(),
+                        });
+                    }
+                }
+            }
+            _ => {
+                // the default arm — `ref` included (their IndexesValidator
+                // has no ref case: m43_0243)
+                for a in &attrs {
+                    errs.push(ParseError {
+                        offset: a.offset,
+                        end: Some(a.end),
+                        message: format!("Unknown index setting '{}'", key),
+                    });
+                }
+            }
+        }
+    }
 }
 
 fn index(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Index> {
@@ -3592,6 +4102,151 @@ fn index(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Index> 
         column_spans.push(col_start..offset(input, base));
         expressions.push(is_expr);
     }
+    // their index field = the application: the callee + the args (the
+    // inline multi-tuple form `(id, name) (age, weight)` and the junk
+    // args like `"odd col" varchar(255)` — m77_0004). Each arg =
+    // destructureIndexNode: a `(...)` arg's elements must ALL be
+    // identifiers (all-or-nothing — any failure errs 'An index field
+    // must be…' ONCE on the tuple span and that tuple's columns drop;
+    // the callee and the earlier args ride — probe na1). A BARE-WORD
+    // arg parses but is NOT a column (m77_0004: no binder ride for
+    // `varchar`)
+    loop {
+        sp(input);
+        if input.is_empty()
+            || input.starts_with(['\n', '\r', '}', ','])
+            || peek_is(input, "[")
+        {
+            break;
+        }
+        if peek_is(input, "(") {
+            let t_start = offset(input, base);
+            *input = &input[1..];
+            let mut arg_cols: Vec<(String, Span, bool)> = Vec::new();
+            let mut all_ok = true;
+            loop {
+                sp(input);
+                if input.is_empty() {
+                    errs.push(err_at(
+                        offset(input, base),
+                        "Expect a closing parenthesis ')'",
+                    ));
+                    all_ok = false;
+                    break;
+                }
+                if eat(input, ")") {
+                    break;
+                }
+                let es = offset(input, base);
+                let is_expr = input.starts_with('`');
+                // their lexer lexes a digit-leading run as a NUMERIC
+                // literal — never a valid index name (m77_0004's `(255)`)
+                let elem: R<String> =
+                    if !is_expr && input.starts_with(|c: char| c.is_ascii_digit()) {
+                        // their lexer lexes a digit-leading run as a NUMERIC
+                        // literal — never a valid index name (m77_0004's `(255)`)
+                        Err(Fail {
+                            offset: es,
+                            end: None,
+                            message: String::new(),
+                            partial_occs: Vec::new(),
+                        })
+                    } else {
+                        index_ident(input, base)
+                    };
+                match elem {
+                    Ok(w) => arg_cols.push((w, es..offset(input, base), is_expr)),
+                    Err(_) => {
+                        all_ok = false;
+                        let mut probe = *input;
+                        let tl = consume_one_token(&mut probe).unwrap_or(1);
+                        *input = &input[tl.min(input.len())..];
+                    }
+                }
+                sp(input);
+                if eat(input, ",") {
+                    continue;
+                }
+                if input.is_empty() {
+                    errs.push(err_at(
+                        offset(input, base),
+                        "Expect a closing parenthesis ')'",
+                    ));
+                    all_ok = false;
+                    break;
+                }
+                if eat(input, ")") {
+                    break;
+                }
+                // the tuple's own comma grammar: the anchor = the next
+                // real token after the trivia (probe-anchored)
+                let skipped = input.len() - {
+                    let mut probe2 = *input;
+                    let _ = ws(&mut probe2);
+                    probe2.len()
+                };
+                let anchor = offset(input, base) + skipped;
+                let tok_len = {
+                    let mut probe2 = *input;
+                    let _ = ws(&mut probe2);
+                    consume_one_token(&mut probe2).unwrap_or(1)
+                };
+                errs.push(ParseError {
+                    offset: anchor,
+                    end: Some(anchor + tok_len),
+                    message: "Expect a comma ','".to_string(),
+                });
+                let to_comma = input.find(',');
+                let to_rparen = input.find(')');
+                match (to_comma, to_rparen) {
+                    (Some(c), Some(p)) => {
+                        let k = c.min(p);
+                        *input = &input[k..];
+                    }
+                    (Some(c), None) => *input = &input[c..],
+                    (None, Some(p)) => *input = &input[p..],
+                    (None, None) => break,
+                }
+            }
+            let t_end = offset(input, base);
+            if all_ok {
+                for (w, sp_, is_expr) in arg_cols {
+                    columns.push(w);
+                    column_spans.push(sp_);
+                    expressions.push(is_expr);
+                }
+            } else {
+                errs.push(ParseError {
+                    offset: t_start,
+                    end: Some(t_end),
+                    message: "An index field must be an identifier, a quoted identifier, a functional expression or a tuple of such".to_string(),
+                });
+            }
+        } else {
+            let is_expr = input.starts_with('`');
+            let col_start = offset(input, base);
+            match index_ident(input, base) {
+                Ok(w) => {
+                    // the call-expr form `word(...)`: the word rides NO
+                    // column — the model contributes only the
+                    // argumentList (m77_0004: no binder check for
+                    // `varchar`); a BARE-word arg = a column (m77_0152:
+                    // `odd col` flags both). A failed ident (junk) MUST
+                    // break — the loop-top would otherwise spin forever
+                    // on the unconsumed position
+                    let save2 = *input;
+                    sp(input);
+                    if is_expr || !peek_is(input, "(") {
+                        *input = save2;
+                        columns.push(w);
+                        column_spans.push(col_start..offset(input, base));
+                        expressions.push(is_expr);
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    }
     sp(input);
     let mut comma_form = false;
     let mut idx = Index {
@@ -3606,7 +4261,23 @@ fn index(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Index> 
         comma_form: false,
     };
     if peek_is(input, "[") {
-        let kvs = settings_list(input, base, errs, true)?;
+        // their IndexesModule validator sees the field's settings list —
+        // on the Ok attrs AND on the partial attrs riding the block-close
+        // sentinel (m43_0112: the completed `pk note` attr still validates
+        // after the `}` hands to the enclosing block)
+        let src = *input;
+        let src_start = offset(input, base);
+        let list_res = settings_list_occs(input, base, errs, true);
+        match &list_res {
+            Ok((_, occs, _)) => validate_index_settings(occs, &src, src_start, errs),
+            Err(Fail {
+                message, partial_occs, ..
+            }) if message.is_empty() => {
+                validate_index_settings(partial_occs, &src, src_start, errs)
+            }
+            _ => {}
+        }
+        let (kvs, _, _) = list_res?;
         for (key, val) in kvs {
             match val {
                 None => match key.as_str() {
@@ -4030,6 +4701,7 @@ fn records_block(
     // at end of line must fail here rather than swallow the next
     // statement as its target.
     let mut target = None;
+    let target_start = offset(input, base);
     if !input.is_empty() && !input.starts_with(['(', '[', '{', '\n', '\r']) {
         let mut parts = vec![ident(input, base)?];
         while eat(input, ".") {
@@ -4040,6 +4712,11 @@ fn records_block(
     sp(input);
     let mut columns = Vec::new();
     let mut column_spans = Vec::new();
+    let paren_start = offset(input, base);
+    // the last REAL token's end inside the tuple — the partial header
+    // node's end for the death-path pair (the trivia stays out,
+    // m43_0520: the pair ends at `odd` 4.15, not at the EOF)
+    let mut last_elem_end = paren_start;
     if eat(input, "(") {
         // their tupleExpression: one element, then a comma-terminated
         // loop; a missing comma errs once at the offending token and
@@ -4048,33 +4725,92 @@ fn records_block(
         // flags odd, errs at col; `(a b c)` errs at b only, tuple [a])
         loop {
             sp(input);
-            if input.is_empty() || eat(input, ")") {
+            if eat(input, ")") {
                 break;
+            }
+            if input.is_empty() {
+                // the loop-top EOF (m43_0520: the sync ran to the EOF):
+                // the same torn-header death as the comma-fail path below
+                errs.push(err_at(offset(input, base), "Expect a closing parenthesis ')'"));
+                errs.push(ParseError {
+                    offset: rec_start,
+                    end: Some(last_elem_end),
+                    message: "A column must have a type".to_string(),
+                });
+                errs.push(ParseError {
+                    offset: rec_start,
+                    end: Some(last_elem_end),
+                    message: "A column name must be an identifier or a quoted identifier"
+                        .to_string(),
+                });
+                return Err(Fail {
+                    offset: offset(input, base),
+                    end: None,
+                    message: String::new(),
+                    partial_occs: Vec::new(),
+                });
             }
             let start = offset(input, base);
             let name = ident(input, base)?;
             column_spans.push(start..offset(input, base));
             columns.push(name);
+            last_elem_end = offset(input, base);
             sp(input);
             if eat(input, ",") {
                 continue;
             }
-            if input.is_empty() || eat(input, ")") {
+            if input.is_empty() {
+                // the close consume at the EOF token (m43_0440: the
+                // torn header errs 'Expect a closing parenthesis ')' at
+                // the EOF point, zero-width) — and the partial records
+                // node rides validateColumn: the pair anchors the whole
+                // header .. the EOF, then the header DIES (their block
+                // catch pushes the partial node; no 'expected {' after
+                // records header)
+                errs.push(err_at(offset(input, base), "Expect a closing parenthesis ')'"));
+                errs.push(ParseError {
+                    offset: rec_start,
+                    end: Some(last_elem_end),
+                    message: "A column must have a type".to_string(),
+                });
+                errs.push(ParseError {
+                    offset: rec_start,
+                    end: Some(last_elem_end),
+                    message: "A column name must be an identifier or a quoted identifier"
+                        .to_string(),
+                });
+                return Err(Fail {
+                    offset: offset(input, base),
+                    end: None,
+                    message: String::new(),
+                    partial_occs: Vec::new(),
+                });
+            }
+            if eat(input, ")") {
                 break;
             }
             // their consume anchors the offending TOKEN (token width) —
-            // the CURRENT token after the trivia (the newline is trivia:
-            // probe m43_0242/records (c + newline + ode): the anchor =
-            // the next line's `ode` at 5,1-5,4). OPEN: the naive trivia
-            // skip regresses the mid-typing recovery (the records_
-            // partial_input test: `records (a, b\n}` — the later table
-            // must survive); the skip needs the mid-typing `}` and the
-            // `ode) {` continuation distinguished first
-            let mut probe = *input;
-            let tok_len = consume_one_token(&mut probe).unwrap_or(1);
+            // the trivia (the newline is trivia: probe m43_0242/records
+            // (c + newline + ode)) is skipped first, the anchor = the
+            // next real token. The skip runs on a PROBE: the real input
+            // stays at the boundary so the recovery keeps bouncing at
+            // the line (the mid-typing contract — the records_partial_
+            // input test — ours' line-local recovery is deliberate:
+            // theirs swallows the next construct into the tuple).
+            let skipped = input.len() - {
+                let mut probe2 = *input;
+                let _ = ws(&mut probe2);
+                probe2.len()
+            };
+            let anchor = offset(input, base) + skipped;
+            let tok_len = {
+                let mut probe2 = *input;
+                let _ = ws(&mut probe2);
+                consume_one_token(&mut probe2).unwrap_or(1)
+            };
             errs.push(ParseError {
-                offset: offset(input, base),
-                end: Some(offset(input, base) + tok_len),
+                offset: anchor,
+                end: Some(anchor + tok_len),
                 message: "Expect a comma ','".to_string(),
             });
             // their canHandle (parser.ts): the tuple recovers locally only
@@ -4092,7 +4828,15 @@ fn records_block(
                 (Some(c), Some(p), Some(b)) => c.min(p) < b,
                 (Some(c), None, Some(b)) => c < b,
                 (None, Some(p), Some(b)) => p < b,
-                (None, None, _) => false,
+                // a `}` ahead with no `,`/`)` before it = the BLOCK
+                // handler — the error propagates (mt1/la4: the mid-typing
+                // contract keeps the later constructs alive)
+                (None, None, Some(_)) => false,
+                // NO closer ahead at all: the tuple's OWN handler
+                // recovers — the sync runs to the EOF and the close
+                // consume errs there (m43_0520: the paren at the EOF
+                // point + the pair at the header)
+                (None, None, None) => true,
                 // no block close ahead: the tuple's own handler recovers
                 _ => true,
             };
@@ -4106,7 +4850,57 @@ fn records_block(
                         break;
                     }
                 }
+            } else {
+                // the `}` hands the error to the BLOCK handler — the
+                // PartialParsingError PROPAGATES (their blockExpression
+                // catches it and validateColumn flags the partial
+                // records node: the pair anchors the whole header,
+                // mt1/m43_0440's shape); ours' line-local recovery keeps
+                // the later table alive (the mid-typing contract)
+                errs.push(ParseError {
+                    offset: rec_start,
+                    end: Some(last_elem_end),
+                    message: "A column must have a type".to_string(),
+                });
+                errs.push(ParseError {
+                    offset: rec_start,
+                    end: Some(last_elem_end),
+                    message: "A column name must be an identifier or a quoted identifier"
+                        .to_string(),
+                });
+                return Err(Fail {
+                    offset: offset(input, base),
+                    end: None,
+                    message: String::new(),
+                    partial_occs: Vec::new(),
+                });
             }
+        }
+        // the header node ends just past `)` — capture BEFORE the
+        // trailing sp so the span keeps the gap out
+        let tuple_end = offset(input, base);
+        // their RecordsValidator's context checks (local_modules/records):
+        // INSIDE a Table the header must be the bare column list — a target
+        // present errs on the whole `target(cols)` header node; AT TOP LEVEL
+        // the target is REQUIRED — the bare `(cols)` shorthand errs on the
+        // tuple (probes r3 / m77_0004's line 19)
+        if block_ctx && target.is_some() {
+            errs.push(ParseError {
+                offset: target_start,
+                end: Some(tuple_end),
+                message: "Records inside a Table can only have a column list like (col1, col2, ...)".to_string(),
+            });
+            // the invalid header drops the columns — the binder ride
+            // included (probe r3: no 'Column does not exist' fires)
+            columns.clear();
+            column_spans.clear();
+        }
+        if !block_ctx && target.is_none() {
+            errs.push(ParseError {
+                offset: paren_start,
+                end: Some(tuple_end),
+                message: "Records at top-level must have a name in the form of table(col1, col2, ...) or schema.table(col1, col2, ...)".to_string(),
+            });
         }
         sp(input);
     }
@@ -4422,6 +5216,30 @@ fn custom_element(
                 .find('"')
                 .map(|k| k + 2)
                 .unwrap_or(line_nl);
+            if close == line_nl {
+                // the UNTERMINATED dq at the type position = their LEXER's
+                // broken-string token: the newline hit errs 'Invalid
+                // newline encountered while parsing' at the partial token,
+                // the EOF hit errs 'EOF reached while parsing' — the token
+                // is gathered OUT of the stream (gatherInvalid), so the
+                // element NEVER starts: no restart, no EOF junk-logs (the
+                // m77_0070 ledger: theirs = the CE + the clean exit)
+                let (msg, end) = if line_nl < input.len() {
+                    (
+                        "Invalid newline encountered while parsing",
+                        qs + line_nl,
+                    )
+                } else {
+                    ("EOF reached while parsing", qs + line_nl)
+                };
+                errs.push(ParseError {
+                    offset: qs,
+                    end: Some(end),
+                    message: msg.to_string(),
+                });
+                *input = &input[close..];
+                return Ok(());
+            }
             errs.push(ParseError {
                 offset: qs,
                 end: Some(qs + close),
@@ -4612,6 +5430,9 @@ fn custom_element(
     // the body: a colon introduces the inline value; a brace the block
     let mut body_span: Option<Span> = None;
     let mut body_is_block = false;
+    // the nested-element colon body (the markInvalid'd ElementDeclaration):
+    // the element node = the KEYWORD ONLY and the body checks stay off
+    let mut body_nested = false;
     let mut body_quoted = false;
     // their discardUntil: whenever the current token isn't `{`/`:` — AT EOF
     // TOO — it logs on the CURRENT token's full span (the EOF token is a
@@ -4908,6 +5729,56 @@ fn custom_element(
             }
             body_span = Some(vs..vend.max(vs + 1));
         } else {
+            // the NESTED-ELEMENT body: their expression parse converts
+            // `ident [ident] { block }` via convertFuncAppToElem and the
+            // elementDeclaration's body check markInvalids it — 'An
+            // element's simple body must not be an element declaration'
+            // @ the nested span, the element node = the KEYWORD ONLY
+            // (the markInvalid'd body rides in no arg), the nested's
+            // internals fully silent (probes ne1-ne4; the m43_0285
+            // digit-lead form — their lexer's `1Table` = an identifier)
+            let nested_brace = (|inp: &str| -> Option<usize> {
+                let is_bare = |s: &str| {
+                    !s.is_empty()
+                        && s.bytes()
+                            .all(|b| (b as char).is_ascii_alphanumeric() || b == b'_')
+                };
+                let bare_stop =
+                    |s: &str| s.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(s.len());
+                let mut p = inp;
+                let g1 = bare_stop(p);
+                if !is_bare(&p[..g1]) {
+                    return None;
+                }
+                p = p[g1..].trim_start();
+                // the one-arg form `Bar { … }` (the element = {type, body})
+                // or the two-arg `Bar baz { … }` ({type, name, body})
+                if !p.starts_with('{') {
+                    let g2 = bare_stop(p);
+                    if !is_bare(&p[..g2]) {
+                        return None;
+                    }
+                    p = p[g2..].trim_start();
+                }
+                if p.starts_with('{') {
+                    Some(inp.len() - p.len())
+                } else {
+                    None
+                }
+            })(input);
+            if let Some(brace_off) = nested_brace {
+                let vs_nested = offset(input, base);
+                *input = &input[brace_off..];
+                swallow_balanced_braces(input);
+                let be = offset(input, base);
+                errs.push(ParseError {
+                    offset: vs_nested,
+                    end: Some(be),
+                    message: "An element's simple body must not be an element declaration"
+                        .to_string(),
+                });
+                body_nested = true;
+            } else {
             // the inline value = the h1-mapped ENTRY semantics: the
             // value-phase = the operand tokens (the idents/colors/the
             // quoted strings) extending the value-node union, the `,` =
@@ -4917,6 +5788,19 @@ fn custom_element(
             // rides in no node. The ref-setting entries inside stay
             // unqueued (the ref-binder = the follow-up)
             let mut vend = vs;
+            // their validateBody's PER-ARG errors: the body = the
+            // application {callee: the first comma-expression, args: the
+            // JUXTAPOSITION-separated units}; the infix-ops bind WITHIN a
+            // unit (probe ro6: `bar baz qux` = the args [baz],[qux];
+            // probe ro1: `bar baz <>? qux` = ONE arg [baz..qux]); the
+            // comma = the commaExpression's field separator (the unit
+            // continues — the h1 map)
+            let mut unit_start: Option<usize> = None;
+            let mut unit_end = vs;
+            let mut callee_closed = false;
+            let mut after_op = false;
+            let mut after_comma = false;
+            let mut arg_spans: Vec<Span> = Vec::new();
             let mut in_value = true;
             loop {
                 // the RAW pre-ws lookahead: the newline = the walk's wall
@@ -4960,13 +5844,50 @@ fn custom_element(
                     }
                     *input = p2;
                     vend = offset(input, base);
+                    // the unit tracking: the first operand = the callee
+                    // unit; a juxtaposed operand closes it (or the prior
+                    // arg) and opens a new arg; an infix-right EXTENDS the
+                    // current unit; a comma-field EXTENDS it too
+                    if !callee_closed {
+                        if unit_start.is_none() {
+                            unit_start = Some(js);
+                        } else if after_op || after_comma {
+                            unit_end = vend;
+                        } else {
+                            // the juxtaposition closes the CALLEE unit (the
+                            // callee itself never errs per-arg)
+                            callee_closed = true;
+                            unit_start = Some(js);
+                            unit_end = vend;
+                        }
+                    } else if after_op {
+                        unit_end = vend;
+                    } else if after_comma {
+                        unit_end = vend;
+                    } else {
+                        arg_spans.push(unit_start.unwrap()..unit_end);
+                        unit_start = Some(js);
+                        unit_end = vend;
+                    }
+                    after_op = false;
+                    after_comma = false;
                 } else if b0 == b',' && in_value {
                     // the comma-expression separator: silent
                     *input = &input[tl..];
+                    after_comma = true;
                 } else {
                     if in_value && b0 == b':' {
                         // the next entry's colon ends the value-node
                         in_value = false;
+                    }
+                    if in_value && is_op_char(b0) {
+                        // the infix-op token: their expression parse binds
+                        // it into the value's expression chain — silent
+                        // (the m77_0070 ledger: `parent.id <>? child.paren`
+                        // = ONE infix value, the op tokens never log)
+                        *input = &input[tl..];
+                        after_op = true;
+                        continue;
                     }
                     if in_value {
                         errs.push(ParseError {
@@ -5144,7 +6065,23 @@ fn custom_element(
                     *input = &input[tl..];
                 }
             }
+            // the walk's exit: the open arg-unit closes — the callee unit
+            // never errs per-arg; each arg errs 'A Custom element value
+            // can only be a string' at its own span (their validateBody)
+            if let Some(us) = unit_start {
+                if callee_closed {
+                    arg_spans.push(us..unit_end);
+                }
+            }
+            for sp in &arg_spans {
+                doc_binder_errors.push((
+                    sp.start,
+                    sp.end,
+                    "A Custom element value can only be a string".to_string(),
+                ));
+            }
             body_span = Some(vs..vend.max(vs + 1));
+            }
         }
     }
     // their element node = the UNION of the arg spans (type, name, setting
@@ -5169,7 +6106,14 @@ fn custom_element(
     let indexes_kind = known_ctx == Some("An Indexes can only appear inside a Table or a TablePartial");
     doc_binder_errors.push((
         type_start,
-        element_end,
+        if body_nested {
+            // the markInvalid'd nested-element body rides in NO arg —
+            // the element node = the type token + the bodyColon (probe
+            // ne1: [0,4) = `foo:`, ne2's `y:` = [19,21))
+            type_start + ty_word.len() + 1
+        } else {
+            element_end
+        },
         known_ctx
             .unwrap_or("A Custom element can only appear in a Project or a Dep")
             .to_string(),
@@ -5210,14 +6154,88 @@ fn custom_element(
 
 /// A top-level sticky note: `Note name { '''text''' }` — dbdiagram's
 /// canvas sticky. The body is one note value (triple- or single-quoted).
+/// their NoteValidator: the note body's EXTRA string blocks err
+/// 'A Note can only contain one string' at each block's node span
+/// (probes nt1/nt2/nt3/nt5 — the second `'''…'''`/`'…'` block's own
+/// span); the blocks are consumed either way
+fn note_extra_strings(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) {
+    loop {
+        let save = *input;
+        ws(input);
+        if !(input.starts_with('\'') || input.starts_with('"')) {
+            *input = save;
+            break;
+        }
+        let ss = offset(input, base);
+        let mut t2 = *input;
+        match note_value(&mut t2, base) {
+            Ok(_) => {
+                let se = offset(&t2, base);
+                errs.push(ParseError {
+                    offset: ss,
+                    end: Some(se),
+                    message: "A Note can only contain one string".to_string(),
+                });
+                *input = t2;
+            }
+            Err(e) => {
+                errs.push(ParseError {
+                    offset: e.offset,
+                    end: e.end,
+                    message: e.message,
+                });
+                *input = t2;
+                break;
+            }
+        }
+    }
+}
+
 fn sticky_note(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<StickyNote> {
     let start = offset(input, base);
     let _ = eat(input, "Note");
     ws(input);
-    let name = ident(input, base)?;
+    // nt4: the NAMELESS top-level sticky note — their
+    // StickyNoteValidator errs at the whole element span (start .. the
+    // block's end) and the body STILL parses (the one-string check rides)
+    let mut name = String::new();
+    let name_missing = match ident(input, base) {
+        Ok(n) => {
+            name = n;
+            false
+        }
+        Err(_) => true,
+    };
     ws(input);
     if !eat(input, "{") {
-        return fail(offset(input, base), "expected '{' after note name");
+        // pn1/pn2: their elementDeclaration's body check — the name
+        // present = the brace error at the EOF point; the NAMELESS at
+        // EOF = the k-family trio with their keyword's name-form message
+        // ('Invalid name for sticky note ' — the trailing space is their
+        // typo, preserved verbatim)
+        let eof = offset(input, base);
+        if name_missing {
+            errs.push(err_at(eof, "Unexpected EOF"));
+            errs.push(err_at(
+                eof,
+                "Expect an opening brace '{' or a colon ':'",
+            ));
+            errs.push(ParseError {
+                offset: start,
+                end: Some(eof),
+                message: "Invalid name for sticky note ".to_string(),
+            });
+        } else {
+            errs.push(err_at(
+                eof,
+                "Expect an opening brace '{' or a colon ':'",
+            ));
+        }
+        return Ok(StickyNote {
+            name,
+            span: start..eof,
+            text: String::new(),
+        });
     }
     ws(input);
     let text = match sticky_note_value(input, base, errs) {
@@ -5233,12 +6251,23 @@ fn sticky_note(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<S
         }
     };
     ws(input);
+    // their NoteValidator: the body's EXTRA string blocks err once each
+    // at the block's span (probes s5s/nt1/nt3)
+    note_extra_strings(input, base, errs);
+    ws(input);
     if !eat(input, "}") {
         // their blockExpression's close consume errs at the EOF token /
         // the current token — the same message as every block close
         // (probe m43_0223)
         errs.push(err_at(offset(input, base), "Expect a closing brace '}'"));
         skip_line(input);
+    }
+    if name_missing {
+        errs.push(ParseError {
+            offset: start,
+            end: Some(offset(input, base)),
+            message: "Sticky note must have a name".to_string(),
+        });
     }
     Ok(StickyNote {
         name,
@@ -5559,6 +6588,9 @@ fn table(
             }
         }
     }
+    // the Empty's anchor for the body-start comma-line: the `{`'s end
+    // (their EmptyNode = prevToken.end; the `{` = the previous real token)
+    let body_open_end = offset(input, base);
     loop {
         ws(input);
         if input.is_empty() {
@@ -5569,6 +6601,21 @@ fn table(
         if eat(input, "}") {
             break;
         }
+        // the body-start comma-line: their commaExpression = the field
+        // CALLEE with the Empty anchored at the `{`'s end (the previous
+        // real token) — later comma-lines merge into the previous arg
+        // instead (the s5 family; the after-element form = the recorded
+        // tail)
+        let empty_point = if t.columns.is_empty()
+            && t.indexes.is_empty()
+            && t.checks.is_none()
+            && t.note.is_none()
+            && t.custom.is_empty()
+        {
+            Some(body_open_end)
+        } else {
+            None
+        };
         if peek_kw_then(input, "Note", ':') {
             let note_start = offset(input, base);
             let _ = eat(input, "Note");
@@ -5630,6 +6677,9 @@ fn table(
                             }
                         }
                     }
+                    ws(input);
+                    // the extra string blocks err once each (probe nt5)
+                    note_extra_strings(input, base, errs);
                     ws(input);
                     let _ = eat(input, "}");
                     if !val_ok {
@@ -5768,6 +6818,9 @@ fn table(
                 }
             };
             ws(input);
+            // the extra string blocks err once each (probe nt2)
+            note_extra_strings(input, base, errs);
+            ws(input);
             let be;
             if eat(input, "}") {
                 be = offset(input, base);
@@ -5886,7 +6939,7 @@ fn table(
             }
             continue;
         }
-        match column(input, base, errs) {
+        match column(input, base, errs, empty_point) {
             Ok(c) => t.columns.push(c),
             Err(e) => {
                 // an empty message = the block-close sentinel: the errors
@@ -6188,6 +7241,7 @@ fn ref_stmt(
                     ));
                 }
                 // field 1 of a clean binary binds the model relationship
+                let mut model_bound = false;
                 if field_index == 1 && model.is_none() {
                     if let RNode::Infix { op, left, right, .. } = &**callee {
                         if is_binary_relationship(callee) {
@@ -6195,14 +7249,21 @@ fn ref_stmt(
                                 ref_block_model(&rp, op, left, right)
                             {
                                 model = Some(parts);
+                                model_bound = true;
                             }
                         }
                     }
                 }
                 // the binder chains (their bindFields) — the same scan the
-                // `Ref:` line path runs, for validate.rs's endpoint checks
+                // `Ref:` line path runs, for validate.rs's endpoint checks.
+                // The bound model ref renders field 1's endpoint checks
+                // (validate.rs check_endpoint); pushing the same chains
+                // doubles the missing-table diagnostics (probe rE/rF:
+                // theirs renders a clean ref block's missing tables ONCE)
                 let mut bindees = Vec::new();
-                scan_binding(callee, &mut bindees);
+                if !model_bound {
+                    scan_binding(callee, &mut bindees);
+                }
                 for a in args {
                     scan_binding(a, &mut bindees);
                 }
@@ -6220,6 +7281,39 @@ fn ref_stmt(
                         group: false,
                     });
                 }
+            }
+            // their blockExpression: the leftover `]` starts the NEXT
+            // field (probe rC `Ref { a.b > c.d ] }`): 'Invalid start of
+            // operand "]"' on the bracket, the Empty field rides
+            // validateFields (the trio at the bracket's END point), and
+            // the synchronizeBlock advance skips the rest of the line
+            // silently
+            if rp.poisoned.is_none() && rp.peek().kind == RTKind::RBracket {
+                let rb = rp.peek().clone();
+                rp.errs.push(ParseError {
+                    offset: rb.start,
+                    end: Some(rb.end),
+                    message: format!("Invalid start of operand \"{}\"", rb.value),
+                });
+                field_index += 1;
+                if field_index > 1 {
+                    field_errors.push((
+                        rb.end,
+                        rb.end,
+                        "A Ref can only contain one binary relationship".to_string(),
+                    ));
+                }
+                field_errors.push((
+                    rb.end,
+                    rb.end,
+                    "A Ref field must be a binary relationship".to_string(),
+                ));
+                field_errors.push((
+                    rb.end,
+                    rb.end,
+                    "Unequal fields in ref endpoints".to_string(),
+                ));
+                rp.pos = rp.toks.len();
             }
             if chain_brace {
                 let _ = eat(input, "}");
@@ -7808,6 +8902,19 @@ fn ref_body_pipeline_mode(
         arg_spans: Vec::new(),
     };
     let tree = p.application();
+    // the statement-level junk: their program walk consumes the leftover
+    // `]` (the torn bracket — `[x` dropped by the header's discardUntil,
+    // probe nb11/rA; the inline tail — probe rB) with 'Expect an
+    // identifier' + a one-token sync; the poisoned case skips the line
+    // via synchronizeBlock silently
+    if p.poisoned.is_none() && p.peek().kind == RTKind::RBracket {
+        let t = p.peek().clone();
+        p.errs.push(ParseError {
+            offset: t.start,
+            end: Some(t.end),
+            message: "Expect an identifier".to_string(),
+        });
+    }
     if let RNode::App { callee, args, .. } = &tree {
         // their CompileError anchors carry NODE spans: the callee errors
         // anchor field.callee [start..callee end], the per-side column

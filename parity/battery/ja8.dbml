@@ -1,0 +1,7 @@
+Table posts {
+  user_id integer
+  Ref r0: posts. < "missing".x
+  '''
+  text
+  '''
+}

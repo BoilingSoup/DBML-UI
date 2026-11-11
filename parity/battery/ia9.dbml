@@ -1,0 +1,7 @@
+Table t {
+  a int
+  indexes {
+    (a) [pk
+  Note: 'x'
+}
+}
