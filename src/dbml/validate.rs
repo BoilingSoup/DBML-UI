@@ -515,6 +515,36 @@ pub fn validate_with_parse(
         }
     }
 
+    // their table/tableGroup validateSubElements (table/validate.ts:167
+    // + tableGroup/validate.ts:131, NOTE_REDEFINED 3046): more than one
+    // Note-kind sub-element in the body -> EVERY one errs, anchored at
+    // its element span. The colon entries and the block declarations
+    // BOTH count (probes zc4/zc5 — the handoff's block-only note was
+    // wrong); the TableGroup collection covers the colon form (n4; the
+    // group's block-note arm = a parse-side gap, recorded).
+    for t in &doc.tables {
+        if t.note_element_spans.len() > 1 {
+            for sp in &t.note_element_spans {
+                out.push(Diagnostic::spanned(
+                    sp.start,
+                    sp.end,
+                    "Duplicate notes are defined".to_string(),
+                ));
+            }
+        }
+    }
+    for g in &doc.table_groups {
+        if g.note_element_spans.len() > 1 {
+            for sp in &g.note_element_spans {
+                out.push(Diagnostic::spanned(
+                    sp.start,
+                    sp.end,
+                    "Duplicate notes are defined".to_string(),
+                ));
+            }
+        }
+    }
+
     // their schema-member dup machinery covers TableGroups and top-level
     // sticky Notes too (the anchor = the declaration's NAME token — the
     // schema dup map's errorNode = declaration.name; each LATER
@@ -2511,6 +2541,26 @@ pub fn validate_with_parse(
         }
         out.sort_by_key(|d| d.offset);
     }
+    // their interpret-layer EMPTY_TABLE (table/interpret.ts, code 3018):
+    // a zero-column table errs 'A Table must have at least one column'
+    // anchored at the ELEMENT span — only while the file's binder/parse
+    // error set is empty (the file gate; probes zc1/zc2 — a note-only
+    // body still has zero columns; zc3/zc6/k4 — the dup-notes, the
+    // missing-column and the nameless-name binder errors gate it off).
+    // The gate is evaluated ABOVE, so the dup-notes errors pushed
+    // earlier close it exactly like theirs.
+    if !has_blocking_error {
+        for t in &doc.tables {
+            if t.columns.is_empty() {
+                out.push(Diagnostic::spanned(
+                    t.span.start,
+                    t.span.end,
+                    "A Table must have at least one column".to_string(),
+                ));
+            }
+        }
+        out.sort_by_key(|d| d.offset);
+    }
     // their shouldInterpretNode (core/global_modules/utils.ts): the
     // interpretation layer runs only while bindFile reports no errors —
     // binder-class (Error-severity) findings suppress the infos; raw
@@ -2791,6 +2841,78 @@ mod tests {
             .find(|f| f.short_title == "Change to -")
             .expect("the one fix");
         assert_eq!(one.new_text, "-");
+    }
+
+    /// The interpret-layer EMPTY_TABLE (their table/interpret.ts, 3018)
+    /// + the duplicate-notes check (the validateSubElements 3046). The
+    /// colon entries and the block declarations BOTH count (probes
+    /// zc4/zc5); the duplicate-notes = a binder-class error that gates
+    /// the EMPTY_TABLE off (probe zc3); a note-only body still has zero
+    /// columns (probe zc2); the file's other binder errors gate the
+    /// EMPTY_TABLE off (probe zc6).
+    #[test]
+    fn empty_table_and_duplicate_notes_follow_the_file_gate() {
+        // zc1: the empty table errs over the ELEMENT span
+        let out = parser::parse("Table t {\n}\n");
+        let d = validate(&out.doc, "Table t {\n}\n");
+        assert_eq!(
+            d,
+            vec![Diagnostic {
+                end: Some(11),
+                offset: 0,
+                message: "A Table must have at least one column".to_string(),
+                severity: Severity::Error,
+                category: None,
+                explanation: vec![],
+                quick_fixes: vec![],
+            }],
+            "{d:?}"
+        );
+        // zc2: a note-only body still has zero columns
+        let src2 = "Table t {\n  Note { 'x' }\n}\n";
+        let out2 = parser::parse(src2);
+        let d2 = validate(&out2.doc, src2);
+        assert_eq!(d2.len(), 1, "{d:?}");
+        assert_eq!(d2[0].message, "A Table must have at least one column");
+        assert_eq!(d2[0].offset, 0);
+        assert_eq!(d2[0].end, Some(26));
+        // zc3: the duplicate-notes (both block forms) gate the
+        // EMPTY_TABLE off; the anchors = the note-element spans
+        let src3 = "Table t {\n  Note { 'x' }\n  Note { 'y' }\n}\n";
+        let out3 = parser::parse(src3);
+        let d3 = validate(&out3.doc, src3);
+        assert_eq!(d3.len(), 2, "{d:?}");
+        assert!(d3.iter().all(
+            |x| x.message == "Duplicate notes are defined"
+        ), "{d:?}");
+        assert_eq!(d3[0].offset, 12);
+        assert_eq!(d3[0].end, Some(24));
+        assert_eq!(d3[1].offset, 27);
+        // zc4: the colon form counts too (the handoff's block-only note
+        // was wrong — their engine errs the colon-note spans)
+        let src4 = "Table a {\n  id int\n  Note: 'x'\n  Note: 'y'\n}\n";
+        let out4 = parser::parse(src4);
+        let d4 = validate(&out4.doc, src4);
+        assert_eq!(d4.len(), 2, "{d:?}");
+        assert_eq!(d4[0].offset, 21);
+        assert_eq!(d4[0].end, Some(30));
+        // zc6: the file's binder errors gate the EMPTY_TABLE off (the
+        // missing column on the empty table)
+        let src5 = "Table t {\n}\nTable u { id int }\nRef: u.id > t.id\n";
+        let out5 = parser::parse(src5);
+        let d5 = validate_with_parse(
+            &out5.doc,
+            src5,
+            &out5.binder_errors,
+            &out5.binder_chains,
+            &out5.record_count_errors,
+            &out5.errors,
+        );
+        assert_eq!(d5.len(), 1, "{d:?}");
+        assert!(
+            d5[0].message.contains("does not exist"),
+            "{d:?}"
+        );
     }
 
     #[test]

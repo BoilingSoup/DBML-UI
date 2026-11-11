@@ -1,0 +1,4 @@
+Table t {
+  Note { 'x' }
+  Note { 'y' }
+}

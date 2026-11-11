@@ -5298,6 +5298,7 @@ fn table(
                 custom: Vec::new(),
                 custom_spans: Vec::new(),
                 note_span: None,
+                note_element_spans: Vec::new(),
             });
         }
         // `Table {` (the name MISSING, a body follows): their
@@ -5360,6 +5361,7 @@ fn table(
                             custom: Vec::new(),
                             custom_spans: Vec::new(),
                             note_span: None,
+                            note_element_spans: Vec::new(),
                         });
                     }
                 }
@@ -5389,6 +5391,7 @@ fn table(
         custom: Vec::new(),
         custom_spans: Vec::new(),
         note_span: None,
+        note_element_spans: Vec::new(),
     };
     if peek_kw(input, "as") {
         let _ = eat(input, "as");
@@ -5578,7 +5581,12 @@ fn table(
             match sticky_note_value(input, base, errs) {
                 Ok(n) => {
                     t.note = Some(n);
-                    t.note_span = Some(note_start..offset(input, base));
+                    let sp = note_start..offset(input, base);
+                    t.note_span = Some(sp.clone());
+                    // their table body's Note-kind sub-element (the
+                    // colon form counts toward the duplicate-notes /
+                    // EMPTY_TABLE machinery — probes zc4/zc5)
+                    t.note_element_spans.push(sp);
                 }
                 Err(e) => {
                     errs.push(err_at(e.offset, &e.message));
@@ -5632,6 +5640,9 @@ fn table(
                     }
                     ws(input);
                     let _ = eat(input, "}");
+                    // the element span rides the same machinery as the
+                    // colon form (probe zc5: 4,3-4,18)
+                    t.note_element_spans.push(note_start..offset(input, base));
                     if !val_ok {
                         binder_out.push((
                             note_start,
@@ -5812,6 +5823,9 @@ fn table(
                     be = offset(input, base);
                 }
             }
+            // the element span = the keyword .. the block end (probe
+            // zc3: `Note { 'x' }` = 2,3-2,15)
+            t.note_element_spans.push(note_start..be);
             if content.is_empty() {
                 binder_out.push((
                     note_start,
@@ -8171,6 +8185,7 @@ fn table_group(
         custom,
         custom_spans: Vec::new(),
         note_span: None,
+        note_element_spans: Vec::new(),
     };
     let mut out_group_errors: Vec<(usize, usize, String)> = Vec::new();
     if !eat(input, "{") {
@@ -8213,15 +8228,19 @@ fn table_group(
         }
         // `Note: ...` — the group's note (label-hover tooltip)
         if peek_kw_then(input, "Note", ':') {
+            // the element span = the keyword .. the value end (their
+            // group validateSubElements counts it — probe n4)
+            let note_start = offset(input, base);
             let _ = eat(input, "Note");
             ws(input);
             let _ = eat(input, ":");
             ws(input);
-            let note_start = offset(input, base);
             match sticky_note_value(input, base, errs) {
                 Ok(n) => {
                     g.note = Some(n);
-                    g.note_span = Some(note_start..offset(input, base));
+                    let sp = note_start..offset(input, base);
+                    g.note_span = Some(sp.clone());
+                    g.note_element_spans.push(sp);
                 }
                 Err(e) => {
                     errs.push(err_at(e.offset, &e.message));
