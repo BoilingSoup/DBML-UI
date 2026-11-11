@@ -1111,3 +1111,31 @@ mis-scan site = the next session's first read.
 - The composite queue (the m77_0099-family cascade, s5's span puzzle,
   the colon-op cluster, the index-field paren-name, m43_0242
   records-comma).
+
+## Round 82 addendum — the ':'-value's dispatch region read (the partial)
+
+The region confirmed: `if key == "ref"` = the endpoint/ref-binder flow
+(the sq_string + swallow_gather machinery); the generic keys = the
+else where ours pushes `(key, None)` — the value "never parsed" — YET
+ours' w1 emits the EOF-reached (the sq/note-family message) at the
+backtick position. The contradiction = the diagnostic's SOURCE is not
+the settings-value parse — it is the caller-side (the field's
+type-position block = the round-71's `{`-block flow REACHED from the
+settings entry: ours' type-walk's `{`-branch = the round-71's
+'Invalid column type' + the field survives — the EOF-reached =
+the OTHER caller = the column()'s sq/note = the type_str-fail path).
+The round-71's `{`-branch = the FIX = in place — the w1's =
+the caller = the column() with the `{`-value = hmm — the audit =
+the next session's first read: the EOF-reached's emission-site =
+grep the message-family in the column()/type-walk paths with the
+w1 input as the instrumented run.
+
+## Round 83 queue
+
+- The EOF-reached's emission-site audit (the grep the message-family
+  + the instrumented run on the w1 = the exact caller), THEN the
+  backtick consume fix (the w1's = the caller-side = the round-71's
+  `{`-branch-adjacent), THEN the comma-check (the verified insert);
+- The composite queue (the m77_0099-family cascade, s5's span puzzle,
+  the colon-op cluster, the index-field paren-name, m43_0242
+  records-comma).
