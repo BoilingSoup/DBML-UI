@@ -1980,3 +1980,41 @@ The dumps = /tmp/agentA-ours-r104-{77,43}.json + the lists
   column check, the cross-line name comma);
 - Iterate until a full round adds zero new mechanisms.
 - OWNED ELSEWHERE: the paren-name + the records-comma (Agent D).
+
+## Round 105 addendum — THE NOTE-BRACE TRIO LANDED (the invented-message swap)
+
+THE MECHANISM: the `Note <name>` header WITHOUT the `{` — their
+elementDeclaration's body check = the discardUntil: the NAME present
+= ONE 'Expect an opening brace '{' or a colon ':'' at the EOF point
+(probes pn1/pn3); the NAMELESS at EOF = the k-family TRIO
+('Unexpected EOF' + the brace error, both at the EOF point) PLUS the
+keyword's name-form message 'Invalid name for sticky note ' @
+[start..the-EOF) — the trailing space is their typo, preserved
+verbatim (probe pn2). OURS' invented "expected '{' after note name"
+= dead.
+THE PORT: sticky_note's brace-eat fail arm = the two branches (the
+name_missing flag = the nt4 machinery); the note returns as the
+partial element either way.
+THE GATES: corpus 78/78, schema 78/78, battery **173/173** (the 3
+promotions: pn1-pn3), lib 122/122, editor 61/61, fmt/fuzz/oracle —
+all green.
+THE SEEDS: **seed-77 = 153/300 (+0), seed-43 = 331/600 (+0)** — the
+truncated-note shapes sit inside composites that stay divergent for
+other reasons; zero regressions. The r105 ledger (the re-cluster):
+'Expect an identifier' extra 21+45 (from 38+84 at r100 — the
+mechanism-level deltas = shrinking); the 'expected identifier' leak
+(13+18) = the LONG-TAIL scatter (the `'''`-lines 2, the indexes 3,
+the paren-shapes 2, the singles — NO single flow = the per-case
+grind, the round-66 pattern). The dumps =
+/tmp/agentA-ours-r105-{77,43}.json + the lists
+/tmp/agentA-div-r105-{77,43}.json.
+
+## Round 106 queue
+
+- The long-tail grind: the 'expected identifier' leak flows (the
+  per-case ledger: m77_0085's indexes-paren cluster = the widest at
+  3-4 deltas/case), the records-in-table flow (m43_0067);
+- The s5 open tails (the after-element merge, the note-only zero-
+  column check, the cross-line name comma);
+- Iterate until a full round adds zero new mechanisms.
+- OWNED ELSEWHERE: the paren-name + the records-comma (Agent D).

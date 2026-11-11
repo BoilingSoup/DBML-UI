@@ -5545,7 +5545,34 @@ fn sticky_note(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<S
     };
     ws(input);
     if !eat(input, "{") {
-        return fail(offset(input, base), "expected '{' after note name");
+        // pn1/pn2: their elementDeclaration's body check — the name
+        // present = the brace error at the EOF point; the NAMELESS at
+        // EOF = the k-family trio with their keyword's name-form message
+        // ('Invalid name for sticky note ' — the trailing space is their
+        // typo, preserved verbatim)
+        let eof = offset(input, base);
+        if name_missing {
+            errs.push(err_at(eof, "Unexpected EOF"));
+            errs.push(err_at(
+                eof,
+                "Expect an opening brace '{' or a colon ':'",
+            ));
+            errs.push(ParseError {
+                offset: start,
+                end: Some(eof),
+                message: "Invalid name for sticky note ".to_string(),
+            });
+        } else {
+            errs.push(err_at(
+                eof,
+                "Expect an opening brace '{' or a colon ':'",
+            ));
+        }
+        return Ok(StickyNote {
+            name,
+            span: start..eof,
+            text: String::new(),
+        });
     }
     ws(input);
     let text = match sticky_note_value(input, base, errs) {
