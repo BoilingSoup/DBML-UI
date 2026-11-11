@@ -4388,20 +4388,24 @@ impl App {
         self.keep_cursor_visible();
     }
 
-    /// Every problem of the active document, in source order: parse
-    /// errors (red) then semantic/strict-grammar diagnostics — the list
-    /// the floating badge and its pop-out panel show.
+    /// Every problem of the active document, in source order — their
+    /// engine's findings (boa_diag), the same list the squiggles draw.
+    /// The native parse_errors stay internal (the model-integrity
+    /// record) and are NOT listed: listing both = each problem twice.
     pub fn all_diagnostics(&self) -> Vec<dbml::validate::Diagnostic> {
-        use dbml::validate::Diagnostic;
-        let mut out: Vec<Diagnostic> = self
-            .cur()
-            .parse_errors
-            .iter()
-            .map(|e| Diagnostic::plain(e.offset, e.message.clone()))
-            .collect();
-        out.extend(self.cur().diagnostics.iter().cloned());
+        let mut out = self.cur().diagnostics.clone();
         out.sort_by_key(|d| d.offset);
         out
+    }
+
+    /// The test-side synchronous fill: the app path pumps the worker via
+    /// the poll tick; the tests await their engine's findings directly.
+    #[cfg(test)]
+    pub fn fill_their_diags(&mut self) {
+        let src = self.source().to_string();
+        let mut e = dbml::boa_diag::Engine::new().expect("engine");
+        let diags = e.parse(&src);
+        self.cur_mut().diagnostics = diags.iter().map(|d| d.to_diagnostic()).collect();
     }
 
     /// Hash file bytes with the runtime-only std hasher (not persisted;
@@ -10015,7 +10019,8 @@ mod diagnostics_panel_tests {
 
     #[test]
     fn all_diagnostics_merge_and_sort_by_source_order() {
-        let app = diagapp();
+        let mut app = diagapp();
+        app.fill_their_diags();
         let all = app.all_diagnostics();
         // the parse error ("expected 'Table'") is at the last line, the
         // dangling table is mid-file: source order, not category order
