@@ -623,21 +623,30 @@ tools below. Never say done when the sweep still finds shapes.
   (the pre-child-loop engine — the round-42/43 ports may move it; the
   next seed-43 re-measure tells).
 
-## The round-47 queue (the next session's clusters, probed not ported)
+## The round-47 RESULT + the round-48 queue
 
-- The column-pair EXTRAS cluster (44 extra name-form + 37 extra type
-  across 171 divergent seed-77 cases) — two identified shapes:
-  1. the `'''` TRIPLE-QUOTE in a header (m77_0017 `Table parent '''{ id
-     integer ...`): theirs = the invalid note-string gather, ONE error
-     'EOF reached while parsing' spanning the token (1,14-7,1); ours
-     errs the column pair at the token position instead — the
-     triple-quote token must gather out at the header/field positions;
-  2. the broken-bracket args (m77_0013 `"odd col" integer lt: 1, pk]` —
-     a `]` without `[`): ours errs the column pair at `lt`/`pk]`
-     (the colon-form cascade); theirs consumes the args silently —
-     ours' colon-form dispatch fires where theirs treats `lt: 1` as
-     the field's args (probe-first: is `lt: 1` = args[0]?).
-- The colon-op cluster (17): 'Invalid start of operand ":"' missing at
+- RESOLVED (round 47): the two recorded column-pair shapes. (1) The
+  `'''` TRIPLE-QUOTE header gather — theirs = the consumeUntil scan
+  erring 'EOF reached while parsing' at the PARTIAL token (multi-line
+  to EOF: s1 1,14-3,1), the scan consumes it, the body check lands at
+  the scan stop (3,1); ported into the table header's body-check block
+  via note_value (battery r1). (2) The broken-bracket args — the ROOT
+  = their gatherInvalid's field death takes the LINE REMAINDER (s6:
+  `id integer lt: 1\ncode int` = the death at the `:` eats `1`, the
+  next line parses clean; s2's `1, pk]` dies whole); ported into the
+  legacy junk arm's Err (battery r2/r3). s-probes 5/5 (s4 `pk]`
+  already matched). Seed-77 129→135/300; the pair-extras signatures
+  dropped 44→30 / 37→30.
+- ROUND-48 QUEUE (probed, unported):
+  * the 'expected identifier' LEAK re-exposed (21 extra): the line-death
+    change re-opens ident()-fail leaks at NEW call sites — the
+    remaining structured-trio positions (the enum/ref/group field
+    flows?), the same treatment as round 44;
+  * s5 (`, 1 int` at a field start): theirs = ONE name error at
+    1,10-2,6 — the span starts at the TABLE'S OPEN-BRACE END and ends
+    mid-line — the mechanism unexplained (the block-child node's
+    union?); ours errs the operand storm + the pairs;
+  * the colon-op cluster (17): 'Invalid start of operand ":"' missing at
   the `:` of `Ref r0:` NAMED-REF headers inside composite-damage files
   (m77_0021/0043/0057 — the colon at the ref-header position when the
   upstream damage skews the parse).
