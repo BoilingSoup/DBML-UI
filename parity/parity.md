@@ -973,9 +973,24 @@ tools below. Never say done when the sweep still finds shapes.
   The fix = the settings-list's recovery on the nested-`{` junk =
   the round-78 queue (the settings_list_occs's `]`-terminator vs the
   nested-brace handling).
-- ROUND-78 QUEUE:
-  * the settings-list's nested-`{` recovery (the m77_0039's L18 shape:
-    the 'Expect a comma' at the junk-name + the parse continues);
+- ROUND 78 — THE W1 TRACE + THE COMMA-CHECK ATTEMPT: the trace =
+  theirs' comma-log @ [33,40) = the SyntaxToken code 1005 = the
+  list-loop's consume('Expect a comma', COMMA) = the round-56
+  source-map CONFIRMED (the comma-before-each-subsequent-attribute).
+  The ours-side comma-check = inserted at the entry-loop's top but
+  UNREACHED — ours dies in the FIRST entry's value-parse (the
+  backtick-string's tail swallows the `indexes {` into the
+  EOF-reached = the sq-message path) before the loop's second
+  iteration. THE ROOT = the first entry's value-parse = the
+  upstream-die — the comma-check = the SECOND-iteration semantics;
+  the fix = the value-parse's tail-handling FIRST (the probe-first
+  = the fresh-context round-79). The parser.rs edits reverted (the
+  tree clean).
+- ROUND-79 QUEUE:
+  * the first-entry's value-parse tail-handling (the backtick-string
+    consume = the `indexes {` swallowed — the w1's EOF-reached
+    2,20-4,1 = the sq-message path) probe-first, THEN the comma-check
+    (the verified insert);
   * the composite queue (the m77_0099-family cascade, s5's span
     puzzle, the colon-op cluster, the index-field paren-name,
     m43_0242 records-comma).
