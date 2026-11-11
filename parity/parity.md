@@ -1231,3 +1231,27 @@ THOSE (the verified insert), run the w1 = the emitter's identity.
 - The composite queue (the m77_0099-family cascade, s5's span puzzle,
   the colon-op cluster, the index-field paren-name, m43_0242
   records-comma).
+
+## Round 87 addendum — the triple elimination
+
+The type_str's dq-Fail-closure (the correctly-placed eprintln inside
+the ok_or_else closure) instrumented: **DBGH1 did NOT fire** — that
+site eliminated. The ref_tokens' dq-arm instrumented: the run's
+output was inconclusive (the session's context hit the wall before
+the verification completed) — the site = the round-88's first
+re-check. The elimination table: the sq_string, the note_value
+triple, the backtick-EOF, the dq-scan, the type_str's dq-Fail —
+five eliminated. The remaining = the ref_tokens' dq-arm (the
+re-verify) and the type_str's dq-arm (the re-verify with the
+corrected placement).
+
+## Round 88 queue
+
+- The ref_tokens' dq-arm re-verified (the DBGH3 insert + the grep
+  count + the build verify + the run) = the emitter's identity;
+- The type_str's dq-arm re-verified (the correctly-placed eprintln);
+- The fix at the identified caller; THEN the comma-check (the
+  verified insert);
+- The composite queue (the m77_0099-family cascade, s5's span puzzle,
+  the colon-op cluster, the index-field paren-name, m43_0242
+  records-comma).
