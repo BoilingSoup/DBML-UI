@@ -516,26 +516,15 @@ fn value(input: &mut &str, base: usize) -> R<String> {
         return ident(input, base);
     }
     if input.starts_with('`') {
-        // a backtick closes the expression only when `,`/`]`/newline
-        // follows — nested `ident` groups inside (upstream emits
-        // `json_valid(`Privilege`)`) don't terminate it
-        let b = input.as_bytes();
-        let mut end = 1;
-        let mut closed = false;
-        while end < b.len() {
-            if b[end] == b'`' {
-                let mut k = end + 1;
-                while k < b.len() && (b[k] == b' ' || b[k] == b'\t') {
-                    k += 1;
-                }
-                if k >= b.len() || matches!(b[k], b',' | b']' | b'\n' | b'\r') {
-                    closed = true;
-                    break;
-                }
-            }
-            end += 1;
-        }
-        if !closed {
+        // their FUNCTION token scan: consumeUntil to the FIRST backtick
+        // (raw — no escapes; newlines allowed, EOF not). A nested `ident`
+        // group (`json_valid(`Privilege`)`) CLOSES at the inner backtick
+        // and the tail resumes into the settings list — its comma-check
+        // flags the first tail token (the upstream exporter emits that
+        // raw nested form for the mysql golden and their own parser
+        // flags it: w1/n1/n1b probes, golden 493:55-64)
+        let close = input[1..].as_bytes().iter().position(|&c| c == b'`');
+        if close.is_none() {
             // their FUNCTION token scan at EOF: 'EOF reached while
             // parsing' on the partial token [backtick..the input end) and
             // the token is DROPPED (the gather continues at the EOF —
@@ -546,8 +535,9 @@ fn value(input: &mut &str, base: usize) -> R<String> {
             *input = &input[input.len()..];
             return fail_with_end(bt_start, bt_end, "EOF reached while parsing");
         }
-        let v = input[1..end].to_string();
-        *input = &input[end + 1..];
+        let close = close.unwrap();
+        let v = input[1..1 + close].to_string();
+        *input = &input[2 + close..];
         return Ok(v);
     }
     let end = input.find([',', ']', '\n', '\r']).unwrap_or(input.len());
@@ -1893,27 +1883,19 @@ fn settings_list_occs(
                     }
                 } else if input.starts_with('`') {
                     // keep the backticks: marks an expression for exporters.
-                    // A backtick closes the value only when a `,`/`]`/
-                    // newline follows — nested `ident` groups inside the
-                    // expression (upstream emits `json_valid(`Privilege`)`)
-                    // don't terminate it
-                    let b = input.as_bytes();
-                    let mut end = 1;
-                    while end < b.len() {
-                        if b[end] == b'`' {
-                            let mut k = end + 1;
-                            while k < b.len() && (b[k] == b' ' || b[k] == b'\t') {
-                                k += 1;
-                            }
-                            if k >= b.len() || matches!(b[k], b',' | b']' | b'\n' | b'\r') {
-                                end += 1;
-                                break;
-                            }
-                        }
-                        end += 1;
-                    }
-                    let v = input[..end.min(input.len())].to_string();
-                    *input = &input[end.min(input.len())..];
+                    // Their FUNCTION token closes at the FIRST backtick (the
+                    // lexer scan is raw — no escapes); a nested `ident`
+                    // group (`json_valid(`Privilege`)`) closes at the inner
+                    // backtick and the tail hits the list's comma-check —
+                    // the upstream exporter emits that raw nested form and
+                    // their own parser flags it (n1/n1b probes)
+                    let end = input[1..]
+                        .as_bytes()
+                        .iter()
+                        .position(|&c| c == b'`')
+                        .map_or(input.len(), |i| i + 2);
+                    let v = input[..end].to_string();
+                    *input = &input[end..];
                     v
                 } else {
                     let end = input.find([',', ']', '\n', '\r']).unwrap_or(input.len());
@@ -7393,8 +7375,11 @@ fn ref_body_pipeline_mode(
     // args: an unclosed-`{` value extends the stream past the line to
     // the file end (probe q1: `Ref r0: ... p {user_id` + the following
     // Enum lines — the swallowed block's close errs at the TRUE EOF)
+    // saturating: the FIRST-close FUNCTION scan leaves a `}` that the
+    // old nested-aware value scan used to swallow as a real RBrace
+    // token, so the r-brace count can exceed the l-brace count
     let open_braces = toks.iter().filter(|t| t.kind == RTKind::LBrace).count()
-        - toks.iter().filter(|t| t.kind == RTKind::RBrace).count();
+        .saturating_sub(toks.iter().filter(|t| t.kind == RTKind::RBrace).count());
     if open_braces > 0 {
         let (t2, _) = ref_tokens_ml(input, base, None, errs, true);
         toks = t2;

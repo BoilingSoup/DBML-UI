@@ -1,0 +1,3 @@
+Table t {
+  x json [check: `json_valid(`Privilege`)`]
+}

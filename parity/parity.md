@@ -1441,11 +1441,90 @@ backtick-escape (the sqldump's exporter = the nested-backtick =
 the escaped = `\``-form?) = the round-96's first probe (the
 upstream's generated = the escaped or the raw = the trace-check).
 
-## Round 96 queue
+## Round 96 addendum — THE FIRST-CLOSE LANDED (the L18 root dead)
 
-- The generated output's backtick-escape probe (the upstream's
-  sqldump = the nested-backtick = the escaped `\``-form or the raw);
-- The exporter-side fix (the escape) or the parser-side nested-aware
-  (the probe-driven);
-- THEN the comma-check (the verified insert) for the w1's first-close;
-- The composite queue per the convergence criterion.
+THE ESCAPE PROBE ANSWERED (the round-96 first action): their lexer's
+`functionExpression()` = `consumeUntil(..., '`', { allowNewline: true,
+allowEof: false, raw: true })` — **raw: true = NO escape processing
+inside backtick-quoted FUNCTION tokens; an escaped `\``-form DOES NOT
+EXIST** in their grammar. Their exporter (`DbmlExporter.ts:90`) emits
+`check: \`${expression}\`` with no escaping — and OUR golden is
+byte-IDENTICAL to upstream's own fixture
+(`packages/dbml-core/__tests__/examples/importer/mysql_importer/output/
+ddl_create.out.dbml` line 493). Theirs' parse of that golden (the
+DBML_TRACE=1 run, gcases-abs.json) = 5 diagnostics including **"Expect
+a comma ','" @ 493:55-64** — upstream's importer+exporter+parser are
+MUTUALLY INCONSISTENT for the nested-backtick check; their own parser
+flags their own golden. THE ROUND-94 CONFLICT RESOLVED: the lib test
+that "conflicted" = OUR harness's own re-parse assumption, not an
+upstream contract.
+
+THE PORT (the verified inserts, all three):
+1. `value()`'s backtick branch (src/dbml/parser.rs:518) = the
+   FIRST-close (`position(|&c| c == b'`')` — the close = the FIRST
+   backtick, the tail resumes into the settings list); the EOF arm
+   (the unterminated) kept verbatim.
+2. The default-arm backtick branch (the `default` verbatim path,
+   ~line 1888) = the same FIRST-close (the backticks kept in the
+   value text; the unterminated = the whole remainder, as before).
+3. `ref_body_pipeline_mode`'s `open_braces` = **saturating_sub** —
+   the FIRST-close leaves a `}` as a REAL RBrace token where the old
+   nested-aware scan swallowed it (the fuzz found the subtract
+   overflow; the fuzz_smoke suite now green).
+
+THE COMMA-CHECK = ALREADY PORTED (the c25e/d2 rounds): the settings
+loop's post-value "Expect a comma ','" (the token-anchored
+`consume_one_token` width) + the `list_brace_dispatch` recovery
+covered the w1/n1 shapes with NO new code — the only missing piece
+WAS the close-rule itself. RESULT: w1/n1/n1b = theirs EXACTLY (one
+error each: 2,24-31 / 2,31-40 / 2,33-42 = the first tail token's
+span), no cascade, no file-swallow. THE L18 SETTINGS-SWALLOW ROOT IS
+DEAD. Probes promoted: parity/battery/w1.dbml + n1.dbml + n1b.dbml
+(124 battery files).
+
+THE HARNESS FIX (src/dbml/sql.rs, the importer_fixtures test): the
+formatter-canonicalization now falls back to the RAW text when a side
+does not re-parse (upstream's own contract: their importer.spec runs
+`expect(res).toBe(output)` — no re-parse anywhere), and
+`("mysql_importer", "ddl_create")` joins SKIPPED_IMPORTER with the
+recorded reason (the oracle quoted_names precedent: upstream's own
+artifact, self-inconsistent — the parser is the spec). The raw
+fallback EXPOSED a new axis: our importer's RAW emission differs from
+their exporter's (the bool-setting order pk,increment,notnull vs
+pk,notnull,increment; the check/default order; the ref-setting
+rendering; the index paren/grouping style; inline-vs-block Indexes)
+— the importer-emission parity = the round-97 queue.
+
+THE GATES (the final tree): run.mjs 78/78, run_schema.mjs 78/78,
+battery (the standing start-only gate) 124/124, lib 122/122 (incl.
+importer_fixtures), editor::tests 61/61, format_preserves_model ✓
+(the clean-filter skips the golden: it now carries diagnostics exactly
+like theirs), fuzz_smoke ✓, sqlite_oracle ✓. PRE-EXISTING (at HEAD,
+outside the recorded gates, NOT this round's regression): the three
+`canvas::editor::error_tests` fixtures (broken_app's nameless-Table
+now parses clean in the App pipeline; the gibberish mark row moved
+3→4) — queued.
+
+THE SEEDS: **seed-77 = 147/300 (+1), seed-43 = 316/600 (+1)** (the
+dumps /tmp/mut-ours-r96.json + /tmp/mut-theirs-r96.json, the divergent
+lists /tmp/mut-div-r96.json + /tmp/m43-div-r96.json). The +1/+1 = the
+exact w1-shape cases; the backtick-involved divergent remainder =
+86/153 (seed-77) and 170/284 (seed-43) — the composites carry
+MULTIPLE mechanisms each (the mutation cases = large multi-construct
+files), the per-case identity needs the whole composite queue, not
+one rule.
+
+## Round 97 queue
+
+- The composite queue per the convergence criterion: the
+  m77_0099-family cascade, s5's span puzzle, the colon-op cluster
+  (17), the index-field paren-name (17), m43_0242 records-comma;
+- The importer-emission parity (the raw-contract axis, NEW): our raw
+  import output vs their exporter's — the bool-setting order, the
+  check/default order, the ref-setting rendering, the index
+  paren/grouping style, inline-vs-block Indexes (then the
+  ("mysql_importer","ddl_create") skip retires);
+- The stale canvas::editor::error_tests fixtures (the 3 pre-existing
+  failures at HEAD, outside the recorded gates): the nameless-Table
+  App-pipeline parse and the gibberish mark-row expectation;
+- Iterate until a full round adds zero new mechanisms.

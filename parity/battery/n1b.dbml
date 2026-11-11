@@ -1,0 +1,3 @@
+Table t {
+  code int [check: `json_valid(`Privilege`)`, default: '{}']
+}

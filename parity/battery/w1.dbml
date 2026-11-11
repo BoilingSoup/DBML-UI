@@ -1,1 +1,3 @@
-TableGroup g { orde
+Table t {
+  code int [check: `x` indexes {
+}
