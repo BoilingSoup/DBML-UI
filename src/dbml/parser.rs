@@ -3287,6 +3287,62 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
         // invalid-type at `456` 2,7-2,10)
         binder_errors.push((ty_start, ty_end, "Invalid column type".to_string()));
     }
+    // the indexer suffix binds ACROSS newline-only trivia (probe
+    // col16/col19: `bool\n[default: …]` = the array node — 'Invalid
+    // column type' @ type..]; a trailing SPACE detaches the list into
+    // its own field instead, col18/col20 = the bracket/block callee
+    // arm). The elements must all be colon-less signed numbers (their
+    // indexer rule) — an empty or all-number indexer is a valid array
+    // type and rides silently; anything else errs ONCE on the array
+    // node span. The same-line glued `[` stays the settings path (the
+    // messy-doc fmt contract)
+    {
+        let mut probe = *input;
+        while probe.starts_with(['\n', '\r']) {
+            probe = &probe[1..];
+        }
+        if probe.len() < input.len() && probe.starts_with('[') {
+            while input.starts_with(['\n', '\r']) {
+                *input = &input[1..];
+            }
+            let sfx_start = offset(input, base);
+            let mut depth = 0i32;
+            let mut end = input.len();
+            for (k, &c) in input.as_bytes().iter().enumerate() {
+                match c {
+                    b'[' => depth += 1,
+                    b']' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = k + 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let content = &input[1..end.min(input.len()).saturating_sub(1).max(1)];
+            let sfx_end = offset(input, base) + end.min(input.len());
+            *input = &input[end.min(input.len())..];
+            let valid = content.trim().is_empty()
+                || content.split(',').all(|el| {
+                    let el = el.trim();
+                    let el = el
+                        .strip_prefix('+')
+                        .or_else(|| el.strip_prefix('-'))
+                        .unwrap_or(el);
+                    !el.is_empty() && el.bytes().all(|c| c.is_ascii_digit())
+                });
+            if !valid {
+                binder_errors.push((
+                    ty_start,
+                    sfx_end,
+                    "Invalid column type".to_string(),
+                ));
+            }
+            let _ = sfx_start;
+        }
+    }
     sp(input);
     // their table-body field = a function application: callee = the name,
     // args = [type, ...inline items]. convertFuncAppToElem turns it into a
