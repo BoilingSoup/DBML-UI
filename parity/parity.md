@@ -1191,3 +1191,24 @@ insert). The composite queue = the background.
 - The composite queue (the m77_0099-family cascade, s5's span puzzle,
   the colon-op cluster, the index-field paren-name, m43_0242
   records-comma).
+
+## Round 85 addendum — the DBGD6 elimination
+
+The backtick-EOF site (the note_value's backtick arm, the 544-region)
+instrumented with the verified insert: **DBGD6 did NOT fire** on the
+w1 — that site is eliminated too. The remaining candidates for the
+w1's EOF-reached @2,20: the dq-scan (the ident's quoted-partial
+path) and the type_str's dq-branch (the `"`-quoted Fail) — both
+quote-family scans that could mis-fire on a backtick-lead token.
+The round-86 = instrument THOSE two arms (the verified insert), run
+the w1, identify the emitter, fix at that caller.
+
+## Round 86 queue
+
+- The dq-scan + the type_str's dq-branch instrumentation (the
+  verified insert), the w1 run = the emitter's identity, the fix at
+  that caller;
+- THEN the comma-check (the verified insert);
+- The composite queue (the m77_0099-family cascade, s5's span puzzle,
+  the colon-op cluster, the index-field paren-name, m43_0242
+  records-comma).
