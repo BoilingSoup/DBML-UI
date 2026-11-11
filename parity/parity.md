@@ -912,10 +912,21 @@ tools below. Never say done when the sweep still finds shapes.
   delegate to the ref-parse, the block-closes end the walk) = the
   round-73 spec. The h1/hh1 = the narrow shapes where the walk = the
   measured-correct — the guard = the generalization.
-- ROUND-73 QUEUE:
-  * the entry-walk's context-guard (the line-end/EOF stop + the
-    ref-op delegation + the block-close handling) — probe-first with
-    the m77_0070/0085 shapes;
+- ROUND 73 — THE KEYWORD-STOP GUARD = THE LOCAL-AMBIGUITY (the
+  attempted, reverted): the walk's loop-top keyword-break regressed
+  h1 by one — the peek_kw('Ref') matches the h1's ENTRY-KEY `ref:`
+  (the lowercase, the icase!) AND the m77_0070's `Ref:`-statement —
+  the two = locally indistinguishable at the walk's position. The
+  distinguishing signal = the entry-context (the walk = inside the
+  h1's body-value = the entries = the keys; the m77_0070's = the
+  top-level-ish statement) — the guard = the CONTEXT-plumbing (the
+  walk's caller-side distinction = the fresh-context design; the
+  naive keyword-stop = wrong on both ends). The over-fire families
+  (the 102) = the queue with this finding as the map.
+- ROUND-74 QUEUE:
+  * the entry-walk's context-guard = the caller-side distinction
+    (the walk's reach = the body-value's entries; the keyword-lines =
+    the caller's dispatch — the plumbing = the fresh-context design);
   * the composite queue (m77_0039's line-18 recovery, the
     m77_0099-family cascade, s5's span puzzle, the colon-op cluster,
     the index-field paren-name, m43_0242 records-comma).
