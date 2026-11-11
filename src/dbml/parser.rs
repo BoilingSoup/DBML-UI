@@ -4561,8 +4561,15 @@ fn custom_element(
             let mut vend = vs;
             let mut in_value = true;
             loop {
-                ws(input);
+                // the RAW pre-ws lookahead: the newline = the walk's wall
+                // (the ws-before-check consumed the line-break and the
+                // walk swallowed the rest of the file — the m77_0039
+                // ledger's 67-iteration finding)
                 if input.is_empty() || input.starts_with(['\n', '\r']) {
+                    break;
+                }
+                ws(input);
+                if input.is_empty() {
                     break;
                 }
                 let js = offset(input, base);
