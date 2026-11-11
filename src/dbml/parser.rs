@@ -4376,7 +4376,54 @@ fn table(
     }
     ws(input);
     let name_off = offset(input, base);
-    let (schema, name) = qualified_name(input, base)?;
+    let name_missing;
+    let (schema, name) = match qualified_name(input, base) {
+        Ok(x) => {
+            name_missing = false;
+            x
+        }
+        // `Table` at EOF: their name = the normalExpression at EOF —
+        // 'Unexpected EOF' on the EOF token, the EmptyNode name rides the
+        // EOF point, the body-check errs at the same point, and the
+        // TableValidator's name-form error anchors it (probe k1/k2: the
+        // trio at the EOF point, no body)
+        Err(_) if input.is_empty() => {
+            let eof = offset(input, base);
+            errs.push(err_at(eof, "Unexpected EOF"));
+            errs.push(err_at(eof, "Expect an opening brace '{' or a colon ':'"));
+            binder_out.push((
+                eof,
+                eof,
+                "A Table name must be of the form <table> or <schema>.<table>"
+                    .to_string(),
+            ));
+            return Ok(Table {
+                name: String::new(),
+                schema: None,
+                alias: None,
+                span: start..eof,
+                name_span: eof..eof,
+                header_color: None,
+                note: None,
+                columns: Vec::new(),
+                indexes: Vec::new(),
+                checks: None,
+                check_entries: Vec::new(),
+                records: None,
+                custom: Vec::new(),
+                custom_spans: Vec::new(),
+                note_span: None,
+            });
+        }
+        // `Table {` (the name MISSING, a body follows): their
+        // 'A Table must have a name' anchors the whole ELEMENT span —
+        // known only after the body parses (probe k4: 1,1-2,2)
+        Err(_) if input.starts_with('{') => {
+            name_missing = true;
+            (None, String::new())
+        }
+        Err(e) => return Err(e),
+    };
     let name_end = offset(input, base);
     ws(input);
     let mut t = Table {
@@ -4814,6 +4861,15 @@ fn table(
         }
     }
     t.span = start..offset(input, base);
+    if name_missing {
+        // the k4 flow: the nameless table's validator error anchors the
+        // whole element span (probe k4: `Table {\n}` = 1,1-2,2)
+        binder_out.push((
+            start,
+            t.span.end,
+            "A Table must have a name".to_string(),
+        ));
+    }
     Ok(t)
 }
 
@@ -4834,7 +4890,26 @@ fn ref_stmt(
         // `Ref: ...` has no name; `Ref {` is the ANONYMOUS block form —
         // their elementDeclaration consumes the type then peeks, so both
         // reach the block without a name
-        name = Some(ident(input, base)?);
+        match ident(input, base) {
+            Ok(n) => name = Some(n),
+            // `Ref` at EOF: their name operand fails on the EOF token —
+            // 'Unexpected EOF', the body-check, and the RefValidator's
+            // optional-name message all anchor the EOF point (probe k6);
+            // the ref dies there
+            Err(_) if input.is_empty() => {
+                let eof = offset(input, base);
+                errs.push(err_at(eof, "Unexpected EOF"));
+                errs.push(err_at(eof, "Expect an opening brace '{' or a colon ':'"));
+                doc_binder_errors.push((
+                    eof,
+                    eof,
+                    "A Ref's name is optional or must be an identifier or a quoted identifer"
+                        .to_string(),
+                ));
+                return Ok(None);
+            }
+            Err(e) => return Err(e),
+        }
         ws(input);
     }
     if peek_is(input, "{") {
@@ -7193,7 +7268,29 @@ fn project(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Proje
         return fail(offset(input, base), "expected 'Project'");
     }
     ws(input);
-    let name = ident(input, base)?;
+    let name = match ident(input, base) {
+        Ok(n) => n,
+        // `Project` at EOF: the trio with the ProjectValidator's
+        // optional-name message at the EOF point (probe k7)
+        Err(_) if input.is_empty() => {
+            let eof = offset(input, base);
+            errs.push(err_at(eof, "Unexpected EOF"));
+            errs.push(err_at(eof, "Expect an opening brace '{' or a colon ':'"));
+            return Ok(Project {
+                name: String::new(),
+                span: start..eof,
+                database_type: None,
+                note: None,
+                binder_errors: vec![(
+                    eof,
+                    eof,
+                    "A Project's name is optional or must be an identifier or a quoted identifer"
+                        .to_string(),
+                )],
+            });
+        }
+        Err(e) => return Err(e),
+    };
     ws(input);
     if !eat(input, "{") {
         return fail(offset(input, base), "expected '{' after project name");
