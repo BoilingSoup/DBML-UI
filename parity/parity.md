@@ -1341,3 +1341,23 @@ settings_list_occs's = the h1-mapped).
 - The composite queue (the m77_0099-family cascade, s5's span puzzle,
   the colon-op cluster, the index-field paren-name, m43_0242
   records-comma).
+
+## Round 92 addendum — the caller-region read (the partial)
+
+The 1647-site's region read: the ref-value's string-Err flow (the
+sq_string attempt + the swallow_gather) = the `ref:`-entry's path.
+The w1's key = `check` = the NON-ref = the generic-value branch = the
+un-read region. The ours' value-parse for the generic keys = the
+missing backtick handling (the backtick-string at the generic-value =
+the mis-scan = the EOF-reached). The session's context = the wall —
+the generic-value's backtick consume = the round-93's first action.
+
+## Round 93 queue
+
+- The generic-value branch's backtick consume (the read the generic
+  region + the fix — the w1's backtick value parses verbatim, the
+  tail = the settings-resume), THEN the comma-check (the verified
+  insert);
+- The composite queue (the m77_0099-family cascade, s5's span puzzle,
+  the colon-op cluster, the index-field paren-name, m43_0242
+  records-comma).
