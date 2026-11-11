@@ -1,0 +1,5 @@
+Table t {
+  "quoted name" {
+    name varchar(255)
+  }
+}

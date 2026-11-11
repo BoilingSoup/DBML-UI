@@ -2840,6 +2840,15 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
         *input = &input[n..];
         binder_errors.push((name_off, name_end, "A column must have a type".to_string()));
         ty = String::new();
+    } else if input.starts_with('{') {
+        // u1/u2: a `{`-block at the type position errs 'Invalid column
+        // type' over the BLOCK span (the c5/c6 list-family — the block =
+        // the list's sibling) and the field survives
+        let bs = offset(input, base);
+        swallow_balanced_braces(input);
+        let be = offset(input, base);
+        binder_errors.push((bs, be, "Invalid column type".to_string()));
+        ty = String::new();
     } else {
         ty = type_str(input, base)?;
     }
