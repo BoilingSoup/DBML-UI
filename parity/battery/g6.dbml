@@ -1,0 +1,4 @@
+Table t {
+  !!!broken int [pk]
+  id int
+}

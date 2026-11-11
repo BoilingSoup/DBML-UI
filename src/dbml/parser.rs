@@ -2278,99 +2278,251 @@ fn column_settings_from(kvs: Vec<(String, Option<SettingVal>)>) -> ColumnSetting
 
 fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column> {
     let start = offset(input, base);
-    let name_off = offset(input, base);
+    let mut name_off = offset(input, base);
     let mut binder_errors: Vec<(usize, usize, String)> = Vec::new();
-    let name = match ident(input, base) {
-        Ok(n) => n,
-        Err(_) if input.starts_with('(') => {
-            // a `(` at the name position = their tuple-as-callee: a VALID
-            // expression, just not a variable — no operand error, the
-            // validateColumn pair anchors the TUPLE node (probe u2)
-            let g_start = offset(input, base);
-            let mut depth = 0i32;
-            let mut end = input.len();
-            for (k, &c) in input.as_bytes().iter().enumerate() {
-                if c == b'(' {
-                    depth += 1;
-                } else if c == b')' {
-                    depth -= 1;
-                    if depth == 0 {
-                        end = k + 1;
-                        break;
-                    }
+    // the whitespace-delimited gather at the name position — the dispatch
+    // key for their fieldDeclaration's junk-name flows (the round-43 probe
+    // map v1-v8/w1-w5/x1-x3)
+    let gather_len = input
+        .find(|c: char| c.is_whitespace())
+        .unwrap_or(input.len());
+    let gather = input[..gather_len].to_string();
+    let mut name_end;
+    let name;
+    if gather == "." {
+        // their leftExpression_bp checks isOpToken FIRST: a prefix-invalid
+        // op (the member dot) errs UNKNOWN_PREFIX_OP quoting the value
+        // (probe m43_0059) — the pair anchors the post-dot point, the
+        // field dies
+        errs.push(ParseError {
+            offset: name_off,
+            end: Some(name_off + 1),
+            message: "Unexpected '.' in an expression".to_string(),
+        });
+        let empty = name_off + 1;
+        errs.push(ParseError {
+            offset: empty,
+            end: Some(empty),
+            message: "A column must have a type".to_string(),
+        });
+        errs.push(ParseError {
+            offset: empty,
+            end: Some(empty),
+            message: "A column name must be an identifier or a quoted identifier"
+                .to_string(),
+        });
+        *input = &input[1..];
+        return Err(Fail {
+            offset: empty,
+            end: None,
+            message: String::new(),
+            partial_occs: Vec::new(),
+        });
+    }
+    if input.starts_with(|c: char| c.is_ascii_digit()) {
+        // (d) a digit-leading token is a NUMBER node in their stream — the
+        // name check errs at it and the walk CONTINUES (probe w3: `123
+        // 456` = the name error at `123` + 'Invalid column type' at the
+        // numeric type; probe v4: `123 broken` = the name error only —
+        // the field survives with the type `broken`)
+        name = gather.clone();
+        name_end = name_off + gather_len;
+        *input = &input[gather_len..];
+        binder_errors.push((
+            name_off,
+            name_end,
+            "A column name must be an identifier or a quoted identifier".to_string(),
+        ));
+    } else if !gather.is_empty() && gather.bytes().all(is_op_char) {
+        // (a) an operator run = their prefix-op application: the name node
+        // = the run .. the next operand's END, further operator tokens
+        // folding across trivia (probe x2 `! !`, x3 `-`, v5 `!!!` all
+        // cross to the next line's `id`; w2 skips blank lines too). The
+        // name check errs at the node and the field SURVIVES — the type
+        // parses after the operand (probe v1: `int`, no type error). A
+        // `}` operand errs the operand-start error and the pair anchors
+        // the node (w1); EOF errs 'Unexpected EOF' and the pair anchors
+        // the run (x1).
+        let run_start = name_off;
+        let mut run_end = name_off + gather_len;
+        *input = &input[gather_len..];
+        loop {
+            ws(input);
+            let mut p2 = *input;
+            let tl2 = consume_one_token(&mut p2).unwrap_or(0);
+            if tl2 == 0 || tl2 > input.len() || !input[..tl2].bytes().all(is_op_char) {
+                break;
+            }
+            run_end = offset(input, base) + tl2;
+            *input = &input[tl2..];
+        }
+        ws(input);
+        name_off = run_start;
+        name = String::new();
+        if input.is_empty() {
+            name_end = run_end;
+            errs.push(err_at(offset(input, base), "Unexpected EOF"));
+            binder_errors.push((
+                name_off,
+                name_end,
+                "A column name must be an identifier or a quoted identifier".to_string(),
+            ));
+        } else if input.starts_with('}') {
+            // w1: the failed operand errs AT the `}` (the full token
+            // span) but the `}` STAYS — it is the enclosing block's own
+            // close; the application node still spans THROUGH it (the
+            // pair anchors 2,3-3,2)
+            let o_start = offset(input, base);
+            let mut p3 = *input;
+            let tl3 = consume_one_token(&mut p3).unwrap_or(1);
+            errs.push(ParseError {
+                offset: o_start,
+                end: Some(o_start + tl3),
+                message: format!("Invalid start of operand \"{}\"", &input[..tl3]),
+            });
+            name_end = o_start + tl3;
+            binder_errors.push((
+                name_off,
+                name_end,
+                "A column name must be an identifier or a quoted identifier".to_string(),
+            ));
+        } else {
+            match ident(input, base) {
+                Ok(_) => {
+                    name_end = offset(input, base);
+                }
+                Err(_) => {
+                    let o_start = offset(input, base);
+                    let mut p4 = *input;
+                    let tl4 = consume_one_token(&mut p4).unwrap_or(1);
+                    let tl4 = tl4.min(input.len());
+                    errs.push(ParseError {
+                        offset: o_start,
+                        end: Some(o_start + tl4),
+                        message: format!(
+                            "Invalid start of operand \"{}\"",
+                            &input[..tl4]
+                        ),
+                    });
+                    *input = &input[tl4..];
+                    name_end = offset(input, base);
                 }
             }
-            *input = &input[end..];
-            let g_end = offset(input, base);
-            errs.push(ParseError {
-                offset: g_start,
-                end: Some(g_end),
-                message: "A column must have a type".to_string(),
-            });
-            errs.push(ParseError {
-                offset: g_start,
-                end: Some(g_end),
-                message: "A column name must be an identifier or a quoted identifier"
-                    .to_string(),
-            });
-            return Err(Fail {
-                offset: g_end,
-                end: None,
-                message: String::new(),
-                partial_occs: Vec::new(),
-            });
+            binder_errors.push((
+                name_off,
+                name_end,
+                "A column name must be an identifier or a quoted identifier".to_string(),
+            ));
         }
-        Err(_) => {
-            // their fieldDeclaration: the name operand attempt - junk errs
-            // the operand-start error and the name = the EmptyNode at the
-            // junk's END; both binder errors anchor that point (probe
-            // m42_0014), the field dies, input resumes after the junk
-            let mut probe = *input;
-            let tok_len = consume_one_token(&mut probe).unwrap_or(1);
-            let jstart = offset(input, base);
-            let junk = input[..tok_len.min(input.len())].to_string();
-            // their leftExpression_bp checks isOpToken FIRST: a
-            // prefix-invalid op (the member dot) errs UNKNOWN_PREFIX_OP
-            // quoting the value (probe m43_0059)
-            let msg = if junk == "." {
-                "Unexpected '.' in an expression".to_string()
-            } else {
-                format!("Invalid start of operand \"{}\"", junk)
-            };
-            errs.push(ParseError {
-                offset: jstart,
-                end: Some(jstart + tok_len),
-                message: msg,
-            });
-            let empty = jstart + tok_len;
-            // their blockExpression keeps the failed expression's partial
-            // node (the EmptyNode at the junk's END) as a body child and
-            // the column extraction flags it: BOTH binder errors anchor
-            // that point. The field dies here (the Err below), so the
-            // pair rides the parse-error channel — the binder vec would
-            // die with the dropped Column.
-            let _ = &mut binder_errors;
-            errs.push(ParseError {
-                offset: empty,
-                end: Some(empty),
-                message: "A column must have a type".to_string(),
-            });
-            errs.push(ParseError {
-                offset: empty,
-                end: Some(empty),
-                message: "A column name must be an identifier or a quoted identifier"
-                    .to_string(),
-            });
-            *input = &input[tok_len.min(input.len())..];
-            return Err(Fail {
-                offset: empty,
-                end: None,
-                message: String::new(),
-                partial_occs: Vec::new(),
-            });
+    } else {
+        match ident(input, base) {
+            Ok(n) => {
+                name = n;
+                name_end = offset(input, base);
+            }
+            Err(_) if input.starts_with('(') => {
+                // a `(` at the name position = their tuple-as-callee: a VALID
+                // expression, just not a variable — no operand error, the
+                // validateColumn pair anchors the TUPLE node (probe u2)
+                let g_start = offset(input, base);
+                let mut depth = 0i32;
+                let mut end = input.len();
+                for (k, &c) in input.as_bytes().iter().enumerate() {
+                    if c == b'(' {
+                        depth += 1;
+                    } else if c == b')' {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = k + 1;
+                            break;
+                        }
+                    }
+                }
+                *input = &input[end..];
+                let g_end = offset(input, base);
+                errs.push(ParseError {
+                    offset: g_start,
+                    end: Some(g_end),
+                    message: "A column must have a type".to_string(),
+                });
+                errs.push(ParseError {
+                    offset: g_start,
+                    end: Some(g_end),
+                    message: "A column name must be an identifier or a quoted identifier"
+                        .to_string(),
+                });
+                return Err(Fail {
+                    offset: g_end,
+                    end: None,
+                    message: String::new(),
+                    partial_occs: Vec::new(),
+                });
+            }
+            Err(_)
+                if !gather.is_empty()
+                    && gather
+                        .bytes()
+                        .any(|c| c.is_ascii_alphanumeric() || c == b'_') =>
+            {
+                // (b) a punct+ident gather (`!x`, `!!!broken`) = ONE
+                // invalid token in their lexer — the name = the junk node,
+                // NO operand error, the walk continues on the line (probe
+                // w4: the type + the settings ride; probe v2: no type on
+                // the line → the type error anchors the junk node too —
+                // the pair; probe v3: the pair at the whole gather)
+                name = gather.clone();
+                *input = &input[gather_len..];
+                name_end = offset(input, base);
+                binder_errors.push((
+                    name_off,
+                    name_end,
+                    "A column name must be an identifier or a quoted identifier"
+                        .to_string(),
+                ));
+            }
+            Err(_) => {
+                // their fieldDeclaration: the name operand attempt - junk errs
+                // the operand-start error and the name = the EmptyNode at the
+                // junk's END; both binder errors anchor that point (probe
+                // m42_0014), the field dies, input resumes after the junk
+                let mut probe = *input;
+                let tok_len = consume_one_token(&mut probe).unwrap_or(1);
+                let jstart = offset(input, base);
+                let junk = input[..tok_len.min(input.len())].to_string();
+                errs.push(ParseError {
+                    offset: jstart,
+                    end: Some(jstart + tok_len),
+                    message: format!("Invalid start of operand \"{}\"", junk),
+                });
+                let empty = jstart + tok_len;
+                // their blockExpression keeps the failed expression's partial
+                // node (the EmptyNode at the junk's END) as a body child and
+                // the column extraction flags it: BOTH binder errors anchor
+                // that point. The field dies here (the Err below), so the
+                // pair rides the parse-error channel — the binder vec would
+                // die with the dropped Column.
+                let _ = &mut binder_errors;
+                errs.push(ParseError {
+                    offset: empty,
+                    end: Some(empty),
+                    message: "A column must have a type".to_string(),
+                });
+                errs.push(ParseError {
+                    offset: empty,
+                    end: Some(empty),
+                    message: "A column name must be an identifier or a quoted identifier"
+                        .to_string(),
+                });
+                *input = &input[tok_len.min(input.len())..];
+                return Err(Fail {
+                    offset: empty,
+                    end: None,
+                    message: String::new(),
+                    partial_occs: Vec::new(),
+                });
+            }
         }
-    };
-    let name_end = offset(input, base);
+    }
     sp(input);
     // the type word's start — the conversion's `name` arg anchors here
     let ty_start = offset(input, base);
@@ -2527,6 +2679,13 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
     }
     // their column-node lint anchor reads [name start .. type end]
     let ty_end = offset(input, base);
+    if !ty.is_empty() && ty.bytes().all(|c| c.is_ascii_digit()) {
+        // a NUMBER node at the type position: their validateColumn's
+        // type check errs 'Invalid column type' at the type node
+        // (probe w3: `123 456` = the name error at `123` + the
+        // invalid-type at `456` 2,7-2,10)
+        binder_errors.push((ty_start, ty_end, "Invalid column type".to_string()));
+    }
     sp(input);
     // their table-body field = a function application: callee = the name,
     // args = [type, ...inline items]. convertFuncAppToElem turns it into a

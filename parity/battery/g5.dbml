@@ -1,0 +1,4 @@
+Table t {
+  123 456
+  id int
+}
