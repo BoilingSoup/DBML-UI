@@ -720,6 +720,17 @@ tools below. Never say done when the sweep still finds shapes.
   Reverted to the balanced entry parse: seed-43 = 309/600 restored,
   seed-77 = 143/300, battery 110/110 (ff1 = d1 removed as the open
   shape). The methodological rule added below.
+- ROUND 57 LANDED (317fec9) — THE ']' CONSUMER FOUND: the
+  handler-scan's `#`-handler. The dispatch scan treated `#1` (the
+  COLOR literal inside d1's nested `[color: #1]`) as a LINE COMMENT
+  and ate `#1]` — the scan lost the list's real close and the `}`
+  became the handler (the closer=Some((23,125)) debug line pinned it;
+  the `]` sat at the relative 21, the scan jumped to 23). THE FIX: the
+  `#` immediately followed by a hex digit = the color literal (skip
+  the hex run), else the line comment. d1 = 4/4 (battery ff1
+  re-promoted), seed-77 = 143/300, seed-43 = 309/600 — NO
+  regressions. The round-56 source map = the map that made the fix
+  findable in one session.
 - ROUND 56 — the settings-list SOURCE MAP (read, not yet ported; the
   session's context ran out mid-debug — the parser.rs edits were
   reverted to the committed state, the tree = clean at the round-55
@@ -742,24 +753,15 @@ tools below. Never say done when the sweep still finds shapes.
     RBRACKET) → the close consume = the `]` ✓ → the list = [4,36)
     CLOSED — the element = [0,36), the body check at the `}` 3,1 —
     4/4;
-  * OURS' gap: the entry-tail error EXISTS (settings_list_occs's tail:
-    the colon-less junk errs 'Expect an identifier' ✓) and the
-    dispatch's sync = TO the closer — but the walk re-enters PAST the
-    list's real close (the debug: the loop-entry @37 = past the `]` at
-    36) and the span dies at 1,14 — the exact consumer of the `]`
-    between the tail-Continue and the loop re-entry = UNRESOLVED (the
-    debug print's exit-paths never fired — suspect the debug inserts
-    no-op'd on a stale-match). NEXT SESSION: re-run the exit-path
-    debug with verified insertions (grep the DBGD count after the
-    edit!), find the `]`-consumer, port the continue-past-the-error
-    semantics;
+  * OURS' gap = RESOLVED in round 57 (the handler-scan's `#`-handler —
+    see above);
   * the queue: m77_0039's remaining stack, m77_0043's Note-sticky, the
     'Expect an identifier' remainder, s5's span puzzle, the colon-op
     cluster (17), the index-field paren-name (17), m43_0242
     records-comma.
-- ROUND-55 QUEUE (after the in-flight port lands):
+- ROUND-58 QUEUE (trace-first):
   * the composite spans (m77_0039's remaining stack, m77_0043's
-    Note-sticky span) — trace-first;
+    Note-sticky span);
   * the 'Expect an identifier' stack (the missing remainder);
   * s5's span puzzle, the colon-op cluster (17), the index-field
     paren-name (17), m43_0242 records-comma.
