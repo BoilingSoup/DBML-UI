@@ -852,9 +852,19 @@ tools below. Never say done when the sweep still finds shapes.
   where the upstream damage shifts the block-flow before the EOF
   close. NOT a single-mechanism cluster — the per-case grind = the
   background queue (the round-50 audit-pattern applies per-flow).
-- ROUND-67 QUEUE (the wide-cluster pivot continues):
-  * the custom-element appear extras (29-32) — the position-tally
-    first (the same method as the round-64 paren/quote discovery);
+- ROUND 67 LANDED — the single-quoted token at the field-name
+  position = the sq-string scan: an unterminated string errs the
+  newline error at the partial token (r5: 2,3-2,22 to the line end)
+  and the field DIES — theirs builds no custom element from the
+  broken-quote line (ours' gather-arm misrouted it into the
+  custom-element conversion: the appear/inline/name trio). The
+  terminated string = the name-value rides with the identifier-check.
+  The position-tally = the method that found it (the `'`-lead = 11 of
+  the appear-extras). Probe pp1; battery 117/117, corpus 78/78, lib
+  84/84. Both seeds hold (145/300, 312/600).
+- ROUND-68 QUEUE (the wide-cluster pivot continues):
+  * the appear-extras' remainder (the T-lead = 7 — the `Table]`-class
+    keyword-breaks; the R-lead = 3; the multi-span union-ends = 14);
   * the Expect-an-identifier stack (the missing remainder);
   * the composite queue (m77_0039's line-18 recovery, s5's span
     puzzle, the colon-op cluster, the index-field paren-name,
