@@ -75,6 +75,32 @@ impl Diagnostic {
             quick_fixes: Vec::new(),
         }
     }
+
+    /// The full-shape constructor for the info-class findings (the
+    /// record-constraint infos carry a category, an explanation and the
+    /// VALUE token's own span).
+    pub fn detail(
+        offset: usize,
+        end: usize,
+        message: String,
+        severity: Severity,
+        category: Option<String>,
+        explanation: Vec<String>,
+    ) -> Self {
+        let mut d = Self {
+            offset,
+            end: None,
+            message,
+            severity,
+            category,
+            explanation,
+            quick_fixes: Vec::new(),
+        };
+        if end > offset {
+            d.end = Some(end);
+        }
+        d
+    }
 }
 
 
@@ -423,8 +449,13 @@ pub fn validate_with_parse(
     let mut enums: Vec<&str> = Vec::new();
     for e in &doc.enums {
         if enums.contains(&e.name.as_str()) {
-            out.push(Diagnostic::plain(
-                e.span.end,
+            // their dup marker anchors the duplicate declaration's NAME
+            // token (their schema dup map: errorNode = declaration.name —
+            // the same rule as the table dup above; corpus dup-enum
+            // 2,6-2,7)
+            out.push(Diagnostic::spanned(
+                e.name_span.start,
+                e.name_span.end,
                 format!("Enum '{}' already exists in schema 'public'", e.name),
             ));
         }
@@ -454,15 +485,24 @@ pub fn validate_with_parse(
         }
     }
 
-    // their engine flags EVERY occurrence of a duplicated enum field —
-    // the first twin included (probe: both 'x' rows on `Enum e { x\n x }`)
+    // their enum binder's seen-map flags EVERY repeat and re-flags the
+    // first sighting — 3 twins yield 4 errors (the same rule as the
+    // duplicate columns above; probe p3). The anchor = the field NODE:
+    // name .. the settings end (probe p1: `x [note: 'n']` spans the
+    // whole field), never a point
     for e in &doc.enums {
-        for v in &e.values {
-            if e.values.iter().filter(|o| o.name == v.name).count() > 1 {
-                out.push(Diagnostic::plain(
-                    v.name_span.start,
-                    format!("Duplicate enum field '{}'", v.name),
+        let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for (i, v) in e.values.iter().enumerate() {
+            if let Some(&first) = seen.get(v.name.as_str()) {
+                let msg = format!("Duplicate enum field '{}'", v.name);
+                out.push(Diagnostic::spanned(
+                    e.values[first].name_span.start,
+                    e.values[first].full_end,
+                    msg.clone(),
                 ));
+                out.push(Diagnostic::spanned(v.name_span.start, v.full_end, msg));
+            } else {
+                seen.insert(v.name.as_str(), i);
             }
         }
     }
@@ -1355,7 +1395,11 @@ pub fn validate_with_parse(
                     table: &t.name,
                     cols: std::slice::from_ref(&c.name),
                     token: c.name_span.start,
-                    token_end: c.ty_end,
+                    // their lint anchors the resolved COLUMN NODE (name ..
+                    // the settings end, full_end) — the hard-won rule;
+                    // probe p2: `a_id integer [ref: > a.id]` anchors
+                    // 3,3-3,29 (through the `]`), not the type end
+                    token_end: c.full_end,
                 },
                 right: Side {
                     table: if host_of_bare { &t.name } else { &ir.to.table },
@@ -1470,49 +1514,49 @@ pub fn validate_with_parse(
                             .and_then(|c| c.settings.not_null)
                             .unwrap_or(false);
                         if col_required {
-                            out.push(Diagnostic {
-            end: None,
-                                offset: span.start,
-                                message: format!(
+                            // their anchor = the record VALUE's own token
+                            // span (corpus records-null-in-required:
+                            // `''` = 6,8-6,10, the quotes included)
+                            out.push(Diagnostic::detail(
+                                span.start,
+                                span.end,
+                                format!(
                                     "NULL not allowed for NOT NULL column `{fk_col}` without a default value or auto-increment"
                                 ),
-                                severity: Severity::Info,
-                                category: Some("Record type errors".to_string()),
-                                explanation: vec![format!(
+                                Severity::Info,
+                                Some("Record type errors".to_string()),
+                                vec![format!(
                                     "`{fk_col}` is marked NOT NULL and has no default value or auto-increment."
                                 )],
-                                quick_fixes: vec![],
-                            });
+                            ));
                         }
-                        out.push(Diagnostic {
-            end: None,
-                            offset: span.start,
-                            message: format!(
+                        out.push(Diagnostic::detail(
+                            span.start,
+                            span.end,
+                            format!(
                                 "FK violation: `{fk_tbl}.{fk_col}` = `{shown}` must not be NULL"
                             ),
-                            severity: Severity::Info,
-                            category: Some("Record constraint violations".to_string()),
-                            explanation: vec![format!(
+                            Severity::Info,
+                            Some("Record constraint violations".to_string()),
+                            vec![format!(
                                 "`{fk_tbl}.{fk_col}` references `{parent_tbl}.{parent_col}`, so every row must have a non-null value."
                             )],
-                            quick_fixes: vec![],
-                        });
+                        ));
                         continue;
                     }
                     if !parent_vals.iter().any(|(pv, _)| pv == v) {
-                        out.push(Diagnostic {
-            end: None,
-                            offset: span.start,
-                            message: format!(
+                        out.push(Diagnostic::detail(
+                            span.start,
+                            span.end,
+                            format!(
                                 "FK violation: `{fk_tbl}.{fk_col}` = `{v}` does not exist in `{parent_tbl}.{parent_col}`"
                             ),
-                            severity: Severity::Info,
-                            category: Some("Record constraint violations".to_string()),
-                            explanation: vec![format!(
+                            Severity::Info,
+                            Some("Record constraint violations".to_string()),
+                            vec![format!(
                                 "`{fk_tbl}.{fk_col}` is a foreign key referencing `{parent_tbl}.{parent_col}`. Every non-null value in an FK must match an existing row in the referenced column."
                             )],
-                            quick_fixes: vec![],
-                        });
+                        ));
                     }
                 }
             }
