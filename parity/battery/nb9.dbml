@@ -1,0 +1,4 @@
+Table
+  a int [x: y]
+  b varchar
+}

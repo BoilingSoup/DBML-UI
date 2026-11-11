@@ -1,0 +1,5 @@
+Table
+  a int [note: 'x
+  , , ]
+  b varchar
+}

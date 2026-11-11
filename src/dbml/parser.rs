@@ -206,6 +206,300 @@ fn peek_named_colon_header(input: &str) -> bool {
     false
 }
 
+/// The string-aware lookahead: does the `[`-bracket starting at `input`
+/// contain a `:` outside the strings before its matching `]` (or EOF)?
+/// The colon-bearing bracket in the header-failure position = their BODY
+/// application (the nb9/nb12/m77_0005 probes); the clean no-colon
+/// bracket stays on the discard path (nb8 = silently consumed).
+fn bracket_body_has_colon(input: &str) -> bool {
+    let b = input.as_bytes();
+    if b.first() != Some(&b'[') {
+        return false;
+    }
+    let mut i = 1;
+    while i < b.len() {
+        match b[i] {
+            b'\'' | b'"' => {
+                let q = b[i];
+                i += 1;
+                while i < b.len() && b[i] != q && b[i] != b'\n' {
+                    i += if b[i] == b'\\' { 2 } else { 1 };
+                }
+                if i >= b.len() {
+                    return false; // the unterminated: no colon decision
+                }
+                i += 1;
+            }
+            b'`' => {
+                i += 1;
+                while i < b.len() && b[i] != b'`' {
+                    i += 1;
+                }
+                if i >= b.len() {
+                    return false;
+                }
+                i += 1;
+            }
+            b':' => return true,
+            b']' => return false,
+            _ => i += 1,
+        }
+    }
+    false
+}
+
+/// The string-aware lookahead: does the `[`-bracket contain a top-level
+/// `ref` identifier followed by `:`? Such a bracket = their binder
+/// territory (the ref-body parse — hh1's `[color: …, ref: ?<> t.c]`);
+/// the body-application port does not cover it, so the scan stays off
+/// and the pre-round-99 discard behavior holds.
+fn bracket_has_ref_key(input: &str) -> bool {
+    let b = input.as_bytes();
+    if b.first() != Some(&b'[') {
+        return false;
+    }
+    let mut i = 1;
+    while i < b.len() {
+        match b[i] {
+            b'\'' | b'"' => {
+                let q = b[i];
+                i += 1;
+                while i < b.len() && b[i] != q && b[i] != b'\n' {
+                    i += if b[i] == b'\\' { 2 } else { 1 };
+                }
+                if i >= b.len() {
+                    return false;
+                }
+                i += 1;
+            }
+            b'`' => {
+                i += 1;
+                while i < b.len() && b[i] != b'`' {
+                    i += 1;
+                }
+                if i >= b.len() {
+                    return false;
+                }
+                i += 1;
+            }
+            b'r' | b'R' => {
+                let rest = &input[i..];
+                if rest.len() >= 4
+                    && rest[..3].eq_ignore_ascii_case("ref")
+                    && !rest[3..].starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '-')
+                {
+                    let after = rest[3..].trim_start_matches([' ', '\t']);
+                    if after.starts_with(':') {
+                        return true;
+                    }
+                }
+                i += 1;
+            }
+            b']' => return false,
+            _ => i += 1,
+        }
+    }
+    false
+}
+
+/// The body-application scan: the colon-bearing `[` bracket where the
+/// block was expected (the m77_0005 family — their element parse
+/// recovers with the bracket as the body application node). The
+/// contents = the args: the strings (a broken one = the lexer CE on the
+/// partial token and the token is DROPPED — the scan continues after
+/// the newline), the commas = the separator-args, the first top-level
+/// `:` = the attribute colon (the node covers the POST-colon args
+/// only — nb9's `x` rides outside), the `]` = the close that errs
+/// 'Expect an identifier' (nb9/nb12/m77_0005 all log it), the `}` =
+/// the operand-start error and consumed (nb6). The node span:
+/// no survivors = the point at the scan end (nb6); no dropped = the
+/// bare union of the survivors (nb9 `y`, nb12 `y, z`); with a dropped
+/// arg = right-after-the-colon .. the max arg end (m77_0005
+/// [2,15..3,6)). The validator: Table = "A Table's body must be a
+/// block"; Ref/Project = their own body validators (nb11 — the port is
+/// open, suppressed here); the unknown types = the tail's existing
+/// custom value-string check (nb10).
+fn body_bracket_scan(
+    input: &mut &str,
+    base: usize,
+    errs: &mut Vec<ParseError>,
+    ty_word: &str,
+    doc_binder_errors: &mut Vec<(usize, usize, String)>,
+    body_span: &mut Option<Span>,
+    body_is_block: &mut bool,
+    body_quoted: &mut bool,
+) {
+    let _ = eat(input, "[");
+    let mut colon_end: Option<usize> = None;
+    let mut surv: Vec<(usize, usize)> = Vec::new();
+    let mut dropped: Vec<(usize, usize)> = Vec::new();
+    // the application's value = a single closed string (the bb1
+    // validator-pass shape)
+    let mut string_valued = false;
+    loop {
+        if input.is_empty() {
+            break;
+        }
+        let trivia_start = offset(input, base);
+        ws(input);
+        if input.is_empty() {
+            break;
+        }
+        let c = input.as_bytes()[0];
+        match c {
+            b'\'' | b'"' => {
+                let qs = offset(input, base);
+                let b = input.as_bytes();
+                let mut k = 1;
+                while k < b.len() && b[k] != c && b[k] != b'\n' {
+                    k += if b[k] == b'\\' { 2 } else { 1 };
+                }
+                if k < b.len() && b[k] == c {
+                    let e = qs + k + 1;
+                    *input = &input[k + 1..];
+                    surv.push((qs, e));
+                    string_valued = true;
+                } else if k < b.len() {
+                    // the broken string at the newline: the lexer CE on
+                    // the partial token [quote..the newline) — dropped
+                    let end = qs + k;
+                    errs.push(ParseError {
+                        offset: qs,
+                        end: Some(end),
+                        message: "Invalid newline encountered while parsing".to_string(),
+                    });
+                    *input = &input[k + 1..]; // past the newline
+                    dropped.push((trivia_start, end));
+                } else {
+                    // the EOF-broken: their consumeUntil allowEof: false
+                    let end = qs + b.len();
+                    errs.push(ParseError {
+                        offset: qs,
+                        end: Some(end),
+                        message: "EOF reached while parsing".to_string(),
+                    });
+                    *input = &input[b.len()..];
+                    dropped.push((trivia_start, end));
+                    break;
+                }
+            }
+            b'`' => {
+                let qs = offset(input, base);
+                let b = input.as_bytes();
+                let mut k = 1;
+                while k < b.len() && b[k] != b'`' {
+                    k += 1;
+                }
+                if k < b.len() {
+                    let e = qs + k + 1;
+                    *input = &input[k + 1..];
+                    surv.push((qs, e));
+                } else {
+                    let end = qs + b.len();
+                    errs.push(ParseError {
+                        offset: qs,
+                        end: Some(end),
+                        message: "EOF reached while parsing".to_string(),
+                    });
+                    *input = &input[b.len()..];
+                    dropped.push((trivia_start, end));
+                    break;
+                }
+            }
+            b',' => {
+                let s = offset(input, base);
+                *input = &input[1..];
+                surv.push((s, s + 1));
+            }
+            b':' => {
+                let s = offset(input, base);
+                *input = &input[1..];
+                if colon_end.is_none() {
+                    // the attribute colon: the node = the POST-colon args
+                    colon_end = Some(s + 1);
+                    surv.clear();
+                    dropped.clear();
+                } else {
+                    surv.push((s, s + 1));
+                }
+            }
+            b']' => {
+                let s = offset(input, base);
+                *input = &input[1..];
+                errs.push(ParseError {
+                    offset: s,
+                    end: Some(s + 1),
+                    message: "Expect an identifier".to_string(),
+                });
+                break;
+            }
+            b'}' => {
+                let s = offset(input, base);
+                *input = &input[1..];
+                errs.push(ParseError {
+                    offset: s,
+                    end: Some(s + 1),
+                    message: "Invalid start of operand \"{}\"".to_string(),
+                });
+                // the operand-start damage ENDS the scan — the node point
+                // lands right after the brace (nb6: [3,2)-(3,2))
+                break;
+            }
+            _ => {
+                // the bare-ident/number run or a single punct char = an
+                // arg (the commas separate, the idents continue — the
+                // m77_0005/nb12 evidence: no operand errors on them)
+                let s = offset(input, base);
+                let n = input
+                    .chars()
+                    .take_while(|ch| is_bare_ident(*ch))
+                    .map(|ch| ch.len_utf8())
+                    .sum::<usize>()
+                    .max(1)
+                    .min(input.len());
+                *input = &input[n..];
+                surv.push((s, s + n));
+            }
+        }
+    }
+    let scan_end = offset(input, base);
+    let node = if surv.is_empty() {
+        (scan_end, scan_end)
+    } else if dropped.is_empty() {
+        let s = surv.iter().map(|x| x.0).min().unwrap();
+        let e = surv.iter().map(|x| x.1).max().unwrap();
+        (s, e)
+    } else {
+        let start = colon_end.unwrap_or(scan_end);
+        let e = surv
+            .iter()
+            .map(|x| x.1)
+            .chain(dropped.iter().map(|d| d.1))
+            .max()
+            .unwrap_or(start);
+        (start, e.max(start))
+    };
+    if ty_word.eq_ignore_ascii_case("table") {
+        doc_binder_errors.push((
+            node.0,
+            node.1,
+            "A Table's body must be a block".to_string(),
+        ));
+        // the tail's custom value-string check is Table-specific noise
+        *body_quoted = true;
+    } else if ty_word.eq_ignore_ascii_case("ref") || ty_word.eq_ignore_ascii_case("project") {
+        // their Ref/Project run their own body validators on the
+        // application (nb11: the ref-body errors) — the port is open
+        *body_quoted = true;
+    } else if surv.len() == 1 && dropped.is_empty() && string_valued {
+        // the application's value IS a quoted string — their
+        // "value can only be a string" check passes (bb1's `note: 'n'`)
+        *body_quoted = true;
+    }
+    *body_is_block = false;
+    *body_span = Some(node.0..node.1);
+}
+
 fn skip_line(input: &mut &str) {
     match input.find('\n') {
         Some(i) => *input = &input[i + 1..],
@@ -4315,6 +4609,10 @@ fn custom_element(
         settings_span = Some(ls..real_end.max(ls));
         ws(input);
     }
+    // the body: a colon introduces the inline value; a brace the block
+    let mut body_span: Option<Span> = None;
+    let mut body_is_block = false;
+    let mut body_quoted = false;
     // their discardUntil: whenever the current token isn't `{`/`:` — AT EOF
     // TOO — it logs on the CURRENT token's full span (the EOF token is a
     // zero-width point at the source end), drops it, and keeps discarding
@@ -4339,15 +4637,34 @@ fn custom_element(
             if input.is_empty() || peek_is(input, "{") || peek_is(input, ":") {
                 break;
             }
+            // a colon-bearing `[` bracket = their BODY application (the
+            // m77_0005 family): the discard stops and the scan runs below
+            if peek_is(input, "[")
+                && bracket_body_has_colon(input)
+                && !bracket_has_ref_key(input)
+            {
+                break;
+            }
             if consume_one_token(input).is_none() {
                 break;
             }
         }
+        if peek_is(input, "[")
+            && bracket_body_has_colon(input)
+            && !bracket_has_ref_key(input)
+        {
+            body_bracket_scan(
+                input,
+                base,
+                errs,
+                &ty_word,
+                doc_binder_errors,
+                &mut body_span,
+                &mut body_is_block,
+                &mut body_quoted,
+            );
+        }
     }
-    // the body: a colon introduces the inline value; a brace the block
-    let mut body_span: Option<Span> = None;
-    let mut body_is_block = false;
-    let mut body_quoted = false;
     if peek_is(input, "{") {
         let bs = offset(input, base);
         let _ = eat(input, "{");
@@ -5184,6 +5501,46 @@ fn table(
             end: if tok_len > 0 { Some(off + tok_len) } else { None },
             message: "Expect an opening brace '{' or a colon ':'".to_string(),
         });
+        // the token-wise pre-discard: stop at a colon-bearing `[`
+        // bracket (the m77_0005 body application) — the bulk find('{')
+        // below would swallow it whole. A bracket carrying a top-level
+        // `ref:` key = their binder territory (hh1) — the scan stays
+        // off and the pre-round-99 discard behavior holds.
+        while !input.is_empty()
+            && !input.starts_with('{')
+            && !(peek_is(input, "[")
+                && bracket_body_has_colon(input)
+                && !bracket_has_ref_key(input))
+        {
+            if consume_one_token(input).is_none() {
+                break;
+            }
+        }
+        // the colon-bearing `[` bracket = their BODY application (the
+        // m77_0005 family): the element recovers with the bracket as the
+        // body node, the Table validator fires on the node, and the
+        // top-level walk resumes AFTER the bracket (the following lines
+        // re-dispatch as their own elements)
+        if peek_is(input, "[")
+            && bracket_body_has_colon(input)
+            && !bracket_has_ref_key(input)
+        {
+            let mut bs: Option<Span> = None;
+            let mut bib = false;
+            let mut bq = false;
+            body_bracket_scan(
+                input,
+                base,
+                errs,
+                "Table",
+                binder_out,
+                &mut bs,
+                &mut bib,
+                &mut bq,
+            );
+            t.span = start..offset(input, base);
+            return Ok(t);
+        }
         let _ = eat(input, ":");
         // discard to the block's `{` (their discardUntil) — a colon body
         // on a Table has no port equivalent, so only `{` continues
