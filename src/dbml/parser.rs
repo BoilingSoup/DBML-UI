@@ -3708,7 +3708,11 @@ fn records_block(
     'rows: loop {
         ws(input);
         if input.is_empty() {
-            errs.push(err_at(offset(input, base), "unterminated records block"));
+            // t3: their blockExpression nesting — EVERY unclosed block's
+            // close errs at the EOF token (the records' + the enclosing
+            // table's = two at the same point); the old internal message
+            // never matched theirs
+            errs.push(err_at(offset(input, base), "Expect a closing brace '}'"));
             break;
         }
         if eat(input, "}") {
@@ -7262,7 +7266,9 @@ fn table_group(
     'members: loop {
         ws(input);
         if input.is_empty() {
-            errs.push(err_at(offset(input, base), "unterminated table group"));
+            // t2: their blockExpression's close consume errs at the EOF
+            // token (the old internal message never matched theirs)
+            errs.push(err_at(offset(input, base), "Expect a closing brace '}'"));
             break;
         }
         if eat(input, "}") {
@@ -7462,6 +7468,9 @@ fn table_group(
             break;
         }
         if input.is_empty() {
+            // t2: the group unclosed at EOF — their close consume errs at
+            // the EOF token (the loop-top branch is unreachable from here)
+            errs.push(err_at(offset(input, base), "Expect a closing brace '}'"));
             break;
         }
     }
