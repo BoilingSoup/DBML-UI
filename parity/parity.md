@@ -817,14 +817,27 @@ tools below. Never say done when the sweep still finds shapes.
   validate-layer renders it with the doc access). h1 = 11/12 (the
   missing-table = the last 1); hh1 = not promoted (the open-shapes
   rule). m77_0039 = 45 vs 25 — the composite = the queue.
-- ROUND-63 QUEUE:
-  * the missing-table via the binder-chains (the custom_element
-    signature gains the chains param; the ref-entry pushes the chain,
-    the validate renders with the doc access);
-  * m77_0039's remaining composite stack;
-  * the 'Expect an identifier' stack (the missing remainder);
-  * s5's span puzzle, the colon-op cluster (17), the index-field
-    paren-name (17), m43_0242 records-comma.
+- ROUND 63 LANDED — the missing-table via the binder-chains: the
+  custom_element signature gains the chains param (the single call-site
+  passes it through), the inline-body ref-entry pushes the
+  endpoint-table chain (the table fragment = the single var) — the
+  validate's resolve_prefix renders it with the doc access: the missing
+  table errs at the fragment (h1's 4,42-4,48), the existing resolves
+  silently. h1 = 12/12 (hh1 PROMOTED), battery 113/113, corpus 78/78,
+  lib 84/84. Both seeds hold (143/300, 309/600) — the h1 family = the
+  narrow slice, the wide clusters = the round-64 pivot (the user
+  approved the re-ordering).
+- ROUND-64 QUEUE (the wide-cluster pivot — the biggest signatures
+  first):
+  * the column-pair extras (33 extra name-form + 33 extra type — the
+    WIDEST cluster: re-examine the field-name dispatch against the
+    CURRENT engine, the landscape = 15 mechanisms past the round-43
+    state);
+  * the close-brace cluster (28 missing 'Expect a closing brace');
+  * the custom-element appear extras (29-32);
+  * the composite queue (m77_0039's line-18 recovery, the
+    Expect-an-identifier remainder, s5's span puzzle, the colon-op
+    cluster, the index-field paren-name, m43_0242) = the background.
   * s5 (`, 1 int` at a field start): theirs = ONE name error at
     1,10-2,6 — the span starts at the TABLE'S OPEN-BRACE END and ends
     mid-line — the mechanism unexplained (the block-child node's
