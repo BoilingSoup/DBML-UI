@@ -953,10 +953,19 @@ tools below. Never say done when the sweep still finds shapes.
   walk's line-4 stop = the existing ✓ — the LOGS = the lines 5-26 =
   the WALK = ... the audit = the walk's actual reach vs the logs'
   positions = the round-76 first action with the fresh eyes).
-- ROUND-76 QUEUE:
-  * the post-value walk's reach audit (the line-scope verification
-    against the m77_0039 ledger — the walk's line-4 stop = the
-    existing claim vs the 41 logs' positions);
+- ROUND 76 LANDED — THE LINE-SCOPE WALL: the reach-audit = ONE
+  instrumented run (67 walk-iterations on the m77_0039 = the
+  file-wide walk) and the root = the ws() running BEFORE the
+  newline-check — the whitespace consumed the line-break before the
+  guard saw it. THE FIX = the raw pre-ws lookahead (the newline =
+  the walk's wall). m77_0039: missing=9/extra=32 → missing=4/extra=5
+  (the valid constructs parse — the ledger's lines 11-26 = clean);
+  h1 = 12/12; battery 122/122, corpus 78/78, lib 84/84. Both seeds
+  hold (146/300, 315/600). The over-fire ledger = the instrument that
+  found a one-line root cause in one session.
+- ROUND-77 QUEUE:
+  * the walk's remaining deltas (the m77_0039's missing=4/extra=5 =
+    the line-5 records-block shapes);
   * the composite queue (the m77_0099-family cascade, s5's span
     puzzle, the colon-op cluster, the index-field paren-name,
     m43_0242 records-comma).
