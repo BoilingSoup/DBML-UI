@@ -1758,3 +1758,83 @@ dumps = the r96 pins, upstream unchanged).
 - OWNED ELSEWHERE: the index-field paren-name + the m43_0242
   records-comma (Agent D — the records/index/column function
   families); dispatch-level changes D requests = ours.
+
+## Round 101 addendum — THE S5 SPAN PUZZLE SOLVED (the newline-trivia comma-expression model), the port LANDED
+
+THE MECHANISM (the s5 family, fully traced from their sources):
+- Their NEWLINE = a trivia token — gatherTrivia attaches it to the
+  PREVIOUS non-trivia token's trailingTrivia; the parser's token list
+  = trivia-free. hasTrailingNewLines(previous) = the application's
+  args-walk stop — but the commaExpression's OWN comma-loop has NO
+  such stop: `check(COMMA)` sees ACROSS any trivia.
+- CONSEQUENCE: any arg whose next token (across any newlines) is `,`
+  absorbs the comma-separated fields into ONE CommaExpressionNode.
+  The Empty field (a leading/trailing/double comma) = the point at
+  previous().end (the `{`'s end at the body start — probe s5: the
+  node = [1,10-2,6) = the brace end .. the `1` end).
+- The merge KILLS convertFuncAppToElem (the last arg stops being a
+  block — s5h's `Note { 'x' }` + the comma-line = a plain field) and
+  REWRITES the previous arg's diagnostics: the type-position merge →
+  'Invalid column type' @ the union (s5n: the standalone numeric-type
+  error @ `123` REPLACED by [123-start..1-end)); the settings-position
+  merge → the remains walk ('These fields' per part — s5o/s5q).
+- The body-start comma-line = the commaExpression as the CALLEE: ONE
+  name error @ the node, the type parses after (s5/s5b/s5c/s5e/s5f/
+  s5k; s5f's double comma = TWO Empty points inside the node).
+
+THE PORT (all in column()/table(), probe-exact on 15 shapes):
+- `comma_expr_continuation` (beside the brace swallower): the
+  `,`-separated field scanner across the trivia (the bare runs, the
+  balanced blocks/parens; the Empty points; the `}`/`#` stop).
+- The `,`-lead arm (empty_point = the `{`'s end, the body-start only):
+  the CE = the callee, the name error @ [Empty..the-last-field-end),
+  the field survives into the type machinery.
+- The type-position absorption (site 1): after the ty-walk, a `,`
+  (the same line or across the newlines) = 'Invalid column type' @
+  [ty-start..the-run-end), the standalone numeric-type check
+  REPLACED, the trailing = the remains walk. The same-line form
+  covers `var,char(255)` (m77_0290 = the seed case that converged).
+- The items-position absorption (site 2): the line-end peek = `,` →
+  the LAST item + the run = ONE Item::CommaExpr (never a Word/List/
+  Block — the 'These fields' per-part rule follows from the existing
+  head_ok/last_ok checks); s5q's chain = TWO runs = two nodes, the
+  trailing word separate.
+
+THE OPEN TAILS (recorded): s5h (the comma-line after a converted
+ELEMENT = theirs merges into the element's application args — ours
+errs the callee-field name error instead), s5l (a note-only table =
+theirs 'A Table must have at least one column' @ the element — ours
+silent: the zero-column check has no note-only arm), s5s (the
+duplicate triple-quote strings in a Note = theirs 'A Note can only
+contain one string' @ the second block — ours storms), the
+cross-line NAME comma (the c1/c2 stream is same-line-only; their
+commaExpression crosses — ours breaks at the newline), the comments
+inside a comma-run (the `#` stops ours' scan).
+THE GATES: corpus 78/78, schema 78/78, battery **153/153** (the 15
+s5 probes promoted), lib 122/122, editor 61/61, fmt/fuzz/oracle —
+all green.
+THE SEEDS: **seed-77 = 152/300 (+1, m77_0290), seed-43 = 325/600
+(+1, m43_0569)** — zero regressions (the divergent-list diff clean
+both ways). The dumps = /tmp/agentA-ours-r101-{77,43}.json + the
+divergent lists /tmp/agentA-div-r101-{77,43}.json.
+
+## Round 102 queue
+
+- THE 'EXPECT AN IDENTIFIER' OVER-FIRE (the widest signature: 38
+  extra seed-77 / 84 extra seed-43) = THREE sub-classes (the
+  position-ledger, the r101 clustering):
+  * the `}`-line logs (21 seed-43 + 5 seed-77): ours errs ident on
+    `}` lines where theirs is silent — the m43_0067 records-flow +
+    the m43_0285 composite (the digit-lead nested element
+    `1Table orders {...}` = theirs converts + the CLOSED-nested
+    swallow; ours' child walk spills TEN errors — the round-42 child
+    loop needs the ident-ident-block conversion);
+  * the `'''` triple-quote logs (10 + 7): the duplicate note-string
+    check (s5s = the probe) + the sticky-note flows;
+  * the ref-op tokens on the `Ref:`-lines (15 + 15): `.`,`<`,`>`,`?`,
+    `(`,`)` logged as ident-junk by ours' walk where theirs' ref
+    machinery consumes them (m77_0070 = the round-72 recorded shape).
+- The s5 open tails (the after-element merge, the note-only zero-
+  column check, the note one-string check, the cross-line name
+  comma).
+- OWNED ELSEWHERE: the paren-name + the records-comma (Agent D).

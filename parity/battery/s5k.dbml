@@ -1,0 +1,4 @@
+Table t {
+  , 1 int
+  b varchar
+}

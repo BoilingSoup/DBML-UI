@@ -1,0 +1,4 @@
+Table t {
+  a varchar(255)
+  , 1 int
+}

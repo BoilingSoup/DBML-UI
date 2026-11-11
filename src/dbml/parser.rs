@@ -2636,7 +2636,12 @@ fn column_settings_from(kvs: Vec<(String, Option<SettingVal>)>) -> ColumnSetting
     s
 }
 
-fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column> {
+fn column(
+    input: &mut &str,
+    base: usize,
+    errs: &mut Vec<ParseError>,
+    empty_point: Option<usize>,
+) -> R<Column> {
     let start = offset(input, base);
     let mut name_off = offset(input, base);
     let mut binder_errors: Vec<(usize, usize, String)> = Vec::new();
@@ -2847,6 +2852,24 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
                 "A column name must be an identifier or a quoted identifier".to_string(),
             ));
         }
+    } else if gather == "," && empty_point.is_some() {
+        // their commaExpression as the field CALLEE (the body-start
+        // comma-line): the Empty = the point at the previous real
+        // token's end (the body's `{`), the comma-separated fields
+        // follow; the name check anchors the node [Empty .. the last
+        // field's end] and the field SURVIVES (probes s5/s5b/s5c/s5e/
+        // s5f/s5k: ONE name error, the type parses after). The walk
+        // falls through to the type machinery below.
+        let ep = empty_point.unwrap();
+        let ce_end = comma_expr_continuation(input, base).unwrap_or(ep);
+        name_off = ep;
+        name = String::new();
+        name_end = ce_end.max(ep);
+        binder_errors.push((
+            name_off,
+            name_end,
+            "A column name must be an identifier or a quoted identifier".to_string(),
+        ));
     } else {
         match ident(input, base) {
             Ok(n) => {
@@ -3188,14 +3211,30 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
     }
     // their column-node lint anchor reads [name start .. type end]
     let ty_end = offset(input, base);
-    if !ty.is_empty() && ty.bytes().all(|c| c.is_ascii_digit()) {
+    sp(input);
+    // their commaExpression: a `,` after the type token (the same line
+    // or across the trivia newlines) continues the expression — the
+    // comma-fields absorb into ONE CommaExpressionNode = args[0] whose
+    // union = [type start .. the last field's end]; 'Invalid column
+    // type' anchors the union and the standalone type checks above are
+    // REPLACED (probes s5a/s5g/s5i/s5j/s5m/s5n/s5q/s5r). The trailing
+    // tokens = the remains (the walk below).
+    let comma_type_end: Option<usize> = if !input.is_empty()
+        && !input.starts_with(['}', '#'])
+    {
+        comma_expr_continuation(input, base)
+    } else {
+        None
+    };
+    if let Some(ce) = comma_type_end {
+        binder_errors.push((ty_start, ce, "Invalid column type".to_string()));
+    } else if !ty.is_empty() && ty.bytes().all(|c| c.is_ascii_digit()) {
         // a NUMBER node at the type position: their validateColumn's
         // type check errs 'Invalid column type' at the type node
         // (probe w3: `123 456` = the name error at `123` + the
         // invalid-type at `456` 2,7-2,10)
         binder_errors.push((ty_start, ty_end, "Invalid column type".to_string()));
     }
-    sp(input);
     // their table-body field = a function application: callee = the name,
     // args = [type, ...inline items]. convertFuncAppToElem turns it into a
     // nested ELEMENT when the LAST arg is a block and the remaining args
@@ -3216,6 +3255,10 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
         Word(String),
         List(Vec<(String, Option<SettingVal>)>, Vec<super::ast::SettingOcc>),
         Block,
+        /// the comma-expression continuation: the last arg + the
+        /// comma-fields = ONE node (their commaExpression — the s5
+        /// family); never a Word/List/Block for the shape rules
+        CommaExpr,
     }
     let mut items: Vec<(Item, Span)> = Vec::new();
     // the last REAL arg's end — the column node's union end (a field with
@@ -3228,6 +3271,20 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
     loop {
         sp(input);
         if input.is_empty() || input.starts_with(['\n', '\r', '}', '#']) {
+            // their commaExpression continues across the trivia: a `,`
+            // after the LAST arg absorbs the comma-fields into ONE node
+            // [the arg's start .. the last field's end]; the items after
+            // the run = separate args (probe s5q: two comma-lines chain
+            // into two nodes, the trailing word = its own arg)
+            if !items.is_empty() && !input.is_empty() && !input.starts_with(['}', '#']) {
+                let mstart = items.len() - 1;
+                let ms = items[mstart].1.start;
+                if let Some(me) = comma_expr_continuation(input, base) {
+                    items.truncate(mstart);
+                    items.push((Item::CommaExpr, ms..me));
+                    continue;
+                }
+            }
             break;
         }
         if peek_is(input, "[") {
@@ -3385,6 +3442,7 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
                             }
                         }
                         Item::Block => {}
+                        Item::CommaExpr => {}
                     }
                 }
             }
@@ -3425,6 +3483,79 @@ fn swallow_balanced_braces(input: &mut &str) {
     // exhaust within the source: a foreign "" slice would break the
     // pointer-difference offsets
     *input = &input[input.len()..];
+}
+
+/// Skip a balanced `( … )` group — the comma-expression's paren field.
+fn swallow_balanced_parens(input: &mut &str) {
+    let mut depth = 0i32;
+    for (k, &c) in input.as_bytes().iter().enumerate() {
+        match c {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    *input = &input[k + 1..];
+                    return;
+                }
+            }
+            _ => {}
+        }
+    }
+    *input = &input[input.len()..];
+}
+
+/// Their commaExpression: the fields are the `,`-separated operand runs
+/// and the trivia (the newlines included) is INVISIBLE between tokens —
+/// so a `,` after any parsed arg (the same line or the next line's lead)
+/// continues the expression. The Empty field (a leading/trailing/double
+/// comma) anchors prevToken.end = the comma's end (probe s5f: the node
+/// spans the Empty point .. the last field). The run's caller supplies
+/// the node START (the last parsed arg's start / the Empty's point);
+/// returns the run's END (the last field's end) when a comma followed.
+/// The `}`/`#`/EOF stops the scan (the mid-typing close belongs to the
+/// enclosing flow).
+fn comma_expr_continuation(
+    input: &mut &str,
+    base: usize,
+) -> Option<usize> {
+    let mut end: Option<usize> = None;
+    loop {
+        let probe = input.trim_start_matches(|c| matches!(c, ' ' | '\t' | '\r' | '\n'));
+        if !probe.starts_with(',') {
+            break;
+        }
+        *input = probe;
+        let _ = eat(input, ",");
+        // the Empty field rides before the next comma / the line end —
+        // the point = the comma's end (prevToken = the comma token)
+        let comma_end = offset(input, base);
+        end = Some(comma_end.max(end.unwrap_or(comma_end)));
+        sp(input);
+        if input.is_empty() || input.starts_with([',', '\n', '\r', '}', '#']) {
+            continue;
+        }
+        // the field: their normalExpression's operand shapes — the bare
+        // run (the digit-lead = a number), the block, the paren group
+        let fe = if input.starts_with('{') {
+            swallow_balanced_braces(input);
+            offset(input, base)
+        } else if input.starts_with('(') {
+            swallow_balanced_parens(input);
+            offset(input, base)
+        } else {
+            let g = input
+                .find(|c: char| c.is_whitespace() || c == ',')
+                .unwrap_or(input.len());
+            if g == 0 {
+                // a junk char — the recorded tail; stop the scan
+                break;
+            }
+            *input = &input[g..];
+            offset(input, base)
+        };
+        end = Some(fe.max(end.unwrap_or(fe)));
+    }
+    end
 }
 
 
@@ -5559,6 +5690,9 @@ fn table(
             }
         }
     }
+    // the Empty's anchor for the body-start comma-line: the `{`'s end
+    // (their EmptyNode = prevToken.end; the `{` = the previous real token)
+    let body_open_end = offset(input, base);
     loop {
         ws(input);
         if input.is_empty() {
@@ -5569,6 +5703,21 @@ fn table(
         if eat(input, "}") {
             break;
         }
+        // the body-start comma-line: their commaExpression = the field
+        // CALLEE with the Empty anchored at the `{`'s end (the previous
+        // real token) — later comma-lines merge into the previous arg
+        // instead (the s5 family; the after-element form = the recorded
+        // tail)
+        let empty_point = if t.columns.is_empty()
+            && t.indexes.is_empty()
+            && t.checks.is_none()
+            && t.note.is_none()
+            && t.custom.is_empty()
+        {
+            Some(body_open_end)
+        } else {
+            None
+        };
         if peek_kw_then(input, "Note", ':') {
             let note_start = offset(input, base);
             let _ = eat(input, "Note");
@@ -5886,7 +6035,7 @@ fn table(
             }
             continue;
         }
-        match column(input, base, errs) {
+        match column(input, base, errs, empty_point) {
             Ok(c) => t.columns.push(c),
             Err(e) => {
                 // an empty message = the block-close sentinel: the errors
