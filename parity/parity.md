@@ -862,9 +862,18 @@ tools below. Never say done when the sweep still finds shapes.
   The position-tally = the method that found it (the `'`-lead = 11 of
   the appear-extras). Probe pp1; battery 117/117, corpus 78/78, lib
   84/84. Both seeds hold (145/300, 312/600).
-- ROUND-68 QUEUE (the wide-cluster pivot continues):
-  * the appear-extras' remainder (the T-lead = 7 — the `Table]`-class
-    keyword-breaks; the R-lead = 3; the multi-span union-ends = 14);
+- ROUND 68 LANDED — the table body-check's discardUntil CONSUMES the
+  junk when no `{` exists: the unconsumed tail re-dispatched as a
+  phantom custom element (`Table pare integer` = the body-check once +
+  the phantom element trio; theirs = the body-check once). SEED-77 =
+  146/300 (+1), SEED-43 = 314/600 (+2!). Probe ss2; battery 118/118,
+  corpus 78/78, lib 84/84. (The s1 `T{able a {` shape = ALREADY green
+  — the round-64+ mechanisms covered it.) The audit-note: the same
+  None-arm shape exists in the enum/project/group body-checks — the
+  same consume-fix applies when the probes show it.
+- ROUND-69 QUEUE (the wide-cluster pivot continues):
+  * the None-arm audit: the enum/project/group/tablepartial
+    body-checks' no-`{` arms = the same consume-fix probe-first;
   * the Expect-an-identifier stack (the missing remainder);
   * the composite queue (m77_0039's line-18 recovery, s5's span
     puzzle, the colon-op cluster, the index-field paren-name,
