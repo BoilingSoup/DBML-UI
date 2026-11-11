@@ -623,7 +623,7 @@ tools below. Never say done when the sweep still finds shapes.
   (the pre-child-loop engine — the round-42/43 ports may move it; the
   next seed-43 re-measure tells).
 
-## The round-47 RESULT + the round-48 queue
+## The rounds 47-48 RESULT + the round-49 queue
 
 - RESOLVED (round 47): the two recorded column-pair shapes. (1) The
   `'''` TRIPLE-QUOTE header gather — theirs = the consumeUntil scan
@@ -637,11 +637,17 @@ tools below. Never say done when the sweep still finds shapes.
   legacy junk arm's Err (battery r2/r3). s-probes 5/5 (s4 `pk]`
   already matched). Seed-77 129→135/300; the pair-extras signatures
   dropped 44→30 / 37→30.
-- ROUND-48 QUEUE (probed, unported):
-  * the 'expected identifier' LEAK re-exposed (21 extra): the line-death
-    change re-opens ident()-fail leaks at NEW call sites — the
-    remaining structured-trio positions (the enum/ref/group field
-    flows?), the same treatment as round 44;
+- ROUND 48 LANDED: the table-header junk-name arm (the m42_0014 shape —
+  the operand error on the junk token, the name-form at the junk's END
+  point, the sync to the body's `{` with NO body-check error; the
+  composite m77_0006 fully PASSES) and the COMMA-STREAM name node (the
+  call-form field `abc, def` streams the name node across the comma —
+  the pair anchors the whole node 2,3-2,11, the type parses after;
+  battery c26). Seed-77 135→136/300.
+- ROUND-49 QUEUE (probed, unported):
+  * the 'expected identifier' LEAK remainder (19 extra): the enum/ref/
+    group/records header flows + the note-value sites — the same
+    structured treatment as the table header (round 48's arm);
   * s5 (`, 1 int` at a field start): theirs = ONE name error at
     1,10-2,6 — the span starts at the TABLE'S OPEN-BRACE END and ends
     mid-line — the mechanism unexplained (the block-child node's
