@@ -4525,6 +4525,10 @@ fn records_block(
     let mut columns = Vec::new();
     let mut column_spans = Vec::new();
     let paren_start = offset(input, base);
+    // the last REAL token's end inside the tuple — the partial header
+    // node's end for the death-path pair (the trivia stays out,
+    // m43_0520: the pair ends at `odd` 4.15, not at the EOF)
+    let mut last_elem_end = paren_start;
     if eat(input, "(") {
         // their tupleExpression: one element, then a comma-terminated
         // loop; a missing comma errs once at the offending token and
@@ -4533,13 +4537,36 @@ fn records_block(
         // flags odd, errs at col; `(a b c)` errs at b only, tuple [a])
         loop {
             sp(input);
-            if input.is_empty() || eat(input, ")") {
+            if eat(input, ")") {
                 break;
+            }
+            if input.is_empty() {
+                // the loop-top EOF (m43_0520: the sync ran to the EOF):
+                // the same torn-header death as the comma-fail path below
+                errs.push(err_at(offset(input, base), "Expect a closing parenthesis ')'"));
+                errs.push(ParseError {
+                    offset: rec_start,
+                    end: Some(last_elem_end),
+                    message: "A column must have a type".to_string(),
+                });
+                errs.push(ParseError {
+                    offset: rec_start,
+                    end: Some(last_elem_end),
+                    message: "A column name must be an identifier or a quoted identifier"
+                        .to_string(),
+                });
+                return Err(Fail {
+                    offset: offset(input, base),
+                    end: None,
+                    message: String::new(),
+                    partial_occs: Vec::new(),
+                });
             }
             let start = offset(input, base);
             let name = ident(input, base)?;
             column_spans.push(start..offset(input, base));
             columns.push(name);
+            last_elem_end = offset(input, base);
             sp(input);
             if eat(input, ",") {
                 continue;
@@ -4547,9 +4574,29 @@ fn records_block(
             if input.is_empty() {
                 // the close consume at the EOF token (m43_0440: the
                 // torn header errs 'Expect a closing parenthesis ')' at
-                // the EOF point, zero-width)
+                // the EOF point, zero-width) — and the partial records
+                // node rides validateColumn: the pair anchors the whole
+                // header .. the EOF, then the header DIES (their block
+                // catch pushes the partial node; no 'expected {' after
+                // records header)
                 errs.push(err_at(offset(input, base), "Expect a closing parenthesis ')'"));
-                break;
+                errs.push(ParseError {
+                    offset: rec_start,
+                    end: Some(last_elem_end),
+                    message: "A column must have a type".to_string(),
+                });
+                errs.push(ParseError {
+                    offset: rec_start,
+                    end: Some(last_elem_end),
+                    message: "A column name must be an identifier or a quoted identifier"
+                        .to_string(),
+                });
+                return Err(Fail {
+                    offset: offset(input, base),
+                    end: None,
+                    message: String::new(),
+                    partial_occs: Vec::new(),
+                });
             }
             if eat(input, ")") {
                 break;
@@ -4593,7 +4640,15 @@ fn records_block(
                 (Some(c), Some(p), Some(b)) => c.min(p) < b,
                 (Some(c), None, Some(b)) => c < b,
                 (None, Some(p), Some(b)) => p < b,
-                (None, None, _) => false,
+                // a `}` ahead with no `,`/`)` before it = the BLOCK
+                // handler — the error propagates (mt1/la4: the mid-typing
+                // contract keeps the later constructs alive)
+                (None, None, Some(_)) => false,
+                // NO closer ahead at all: the tuple's OWN handler
+                // recovers — the sync runs to the EOF and the close
+                // consume errs there (m43_0520: the paren at the EOF
+                // point + the pair at the header)
+                (None, None, None) => true,
                 // no block close ahead: the tuple's own handler recovers
                 _ => true,
             };
@@ -4607,6 +4662,30 @@ fn records_block(
                         break;
                     }
                 }
+            } else {
+                // the `}` hands the error to the BLOCK handler — the
+                // PartialParsingError PROPAGATES (their blockExpression
+                // catches it and validateColumn flags the partial
+                // records node: the pair anchors the whole header,
+                // mt1/m43_0440's shape); ours' line-local recovery keeps
+                // the later table alive (the mid-typing contract)
+                errs.push(ParseError {
+                    offset: rec_start,
+                    end: Some(last_elem_end),
+                    message: "A column must have a type".to_string(),
+                });
+                errs.push(ParseError {
+                    offset: rec_start,
+                    end: Some(last_elem_end),
+                    message: "A column name must be an identifier or a quoted identifier"
+                        .to_string(),
+                });
+                return Err(Fail {
+                    offset: offset(input, base),
+                    end: None,
+                    message: String::new(),
+                    partial_occs: Vec::new(),
+                });
             }
         }
         // the header node ends just past `)` — capture BEFORE the
