@@ -182,12 +182,27 @@ fn is_bare_ident(c: char) -> bool {
 fn ident(input: &mut &str, base: usize) -> R<String> {
     if let Some(rest) = input.strip_prefix('"') {
         // their quotedVariable: consumeUntil("\"", raw: false) — escapes
-        // decode inline and cannot end the token
+        // decode inline and cannot end the token. A newline or true EOF
+        // inside the scan errs EXACTLY like the single-quote consumeUntil
+        // (the 49154ce shape): 'Invalid newline encountered while
+        // parsing' at the sentinel, 'EOF reached while parsing' at the
+        // EOF token, both anchoring the PARTIAL token [quote..stop)
+        let quote = offset(input, base);
         let mut name = String::new();
         let mut r = rest;
         loop {
+            // the scan advances the LOCAL r — the stop point = the quote
+            // plus the consumed distance
+            let scan_stop = quote + (input.len() - r.len());
             if r.is_empty() {
-                return fail(offset(input, base), "unterminated quoted identifier");
+                return fail_with_end(quote, scan_stop, "EOF reached while parsing");
+            }
+            if r.starts_with('\n') {
+                return fail_with_end(
+                    quote,
+                    scan_stop,
+                    "Invalid newline encountered while parsing",
+                );
             }
             if r.starts_with('\\') {
                 r = &r[1..];
@@ -2453,6 +2468,31 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
                 });
                 return Err(Fail {
                     offset: g_end,
+                    end: None,
+                    message: String::new(),
+                    partial_occs: Vec::new(),
+                });
+            }
+            Err(e)
+                if e.message == "Invalid newline encountered while parsing"
+                    || e.message == "EOF reached while parsing" =>
+            {
+                // the dq-quoted name's scan hit a newline/EOF (probe
+                // m77_0056 `"odd col`: the newline error at the PARTIAL
+                // token 2,3-2,11 REPLACES the name-form error, the field
+                // DIES — no type error after; the next line parses fresh)
+                errs.push(ParseError {
+                    offset: e.offset,
+                    end: e.end,
+                    message: e.message,
+                });
+                // the dq partial token runs to the NEWLINE (spaces do
+                // not stop it — m77_0056's `"odd col` errs 2,3-2,11):
+                // the line is consumed, the next parses fresh
+                let nl = input.find('\n').unwrap_or(input.len());
+                *input = &input[nl..];
+                return Err(Fail {
+                    offset: e.end.unwrap_or(e.offset),
                     end: None,
                     message: String::new(),
                     partial_occs: Vec::new(),
