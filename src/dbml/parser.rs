@@ -3977,43 +3977,66 @@ fn custom_element(
     errs: &mut Vec<ParseError>,
     doc_binder_errors: &mut Vec<(usize, usize, String)>,
 ) -> R<()> {
-    let type_start = offset(input, base);
+    let mut type_start;
     // their elementDeclaration's type consume at the PROGRAM level: junk
     // errs 'Expect an identifier' on the junk token; at EOF both it and
-    // the sync's 'Unexpected EOF' log; the program sync advances ONE token
+    // the sync's 'Unexpected EOF' log; the program sync advances ONE token.
+    // b1: a QUOTED token is not a valid type — 'Expect an identifier' at
+    // the token's span and the element RESTARTS at the next token (the
+    // quoted rides in no node)
     let ty_word: String;
-    let _ty = match ident(input, base) {
-        Ok(t) => {
-            ty_word = t.clone();
-            t
-        }
-        Err(_) => {
-            let eof = offset(input, base);
-            if input.is_empty() {
-                errs.push(ParseError {
-                    offset: eof,
-                    end: Some(eof),
-                    message: "Expect an identifier".to_string(),
-                });
-                errs.push(ParseError {
-                    offset: eof,
-                    end: Some(eof),
-                    message: "Unexpected EOF".to_string(),
-                });
-                return Ok(());
-            }
-            let mut probe = *input;
-            let tok_len = consume_one_token(&mut probe).unwrap_or(1);
-            let junk = input[..tok_len.min(input.len())].to_string();
+    loop {
+        type_start = offset(input, base);
+        if input.starts_with('"') {
+            let qs = type_start;
+            let line_nl = input.find('\n').unwrap_or(input.len());
+            // the close scan starts AFTER the opening quote
+            let close = input[1..line_nl]
+                .find('"')
+                .map(|k| k + 2)
+                .unwrap_or(line_nl);
             errs.push(ParseError {
-                offset: eof,
-                end: Some(eof + tok_len),
+                offset: qs,
+                end: Some(qs + close),
                 message: "Expect an identifier".to_string(),
             });
-            *input = &input[tok_len.min(input.len())..];
-            return Ok(());
+            *input = &input[close..];
+            ws(input);
+            continue;
         }
-    };
+        match ident(input, base) {
+            Ok(t) => {
+                ty_word = t;
+                break;
+            }
+            Err(_) => {
+                let eof = offset(input, base);
+                if input.is_empty() {
+                    errs.push(ParseError {
+                        offset: eof,
+                        end: Some(eof),
+                        message: "Expect an identifier".to_string(),
+                    });
+                    errs.push(ParseError {
+                        offset: eof,
+                        end: Some(eof),
+                        message: "Unexpected EOF".to_string(),
+                    });
+                    return Ok(());
+                }
+                let mut probe = *input;
+                let tok_len = consume_one_token(&mut probe).unwrap_or(1);
+                let junk = input[..tok_len.min(input.len())].to_string();
+                errs.push(ParseError {
+                    offset: eof,
+                    end: Some(eof + tok_len),
+                    message: "Expect an identifier".to_string(),
+                });
+                *input = &input[tok_len.min(input.len())..];
+                return Ok(());
+            }
+        }
+    }
     ws(input);
     // the name: their normalExpression attempt unless :/{/[ follows; junk
     // errs the operand-start error and the name = the EmptyNode point at
