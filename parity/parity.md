@@ -1933,5 +1933,50 @@ m43_0285)** — zero regressions. The dumps =
   remaining `}`-line cases (the records-in-table flow = m43_0067);
 - The s5 open tails (the after-element merge, the note-only zero-
   column check, the cross-line name comma);
+- OWNED ELSEWHERE: the paren-name + the records-comma (Agent D).
+
+## Round 104 addendum — THE REF-OP/INFIX VALUE MECHANISMS LANDED (m77_0070 CONVERGED, +4 seed-43)
+
+THE MECHANISMS (the m77_0070 ledger's two halves):
+1. THE INFIX VALUE CHAIN: the colon-body value's OP tokens (`<>?`,
+   `.`, …) are their expression's infix chain — NEVER logged; the
+   value-node = the union through the last operand (ours already
+   matched the span). Ours' entry-walk logged them as post-phase
+   junk. THE FIX: the walk's value-phase op tokens = silent-advance.
+2. THE PER-ARG VALUE ERRORS (the pre-existing gap, ro5/ro6): their
+   validateBody errs PER ARG — the body = the application {callee:
+   the first comma-expression unit, args: the JUXTAPOSITION-separated
+   units}; the infix-ops bind WITHIN a unit (ro1: `bar baz <>? qux` =
+   ONE arg [baz..qux]); the comma = the commaExpression's field
+   separator (the unit CONTINUES — the h1 map); the callee unit never
+   errs per-arg (ro3: `bar.baz` = ONE error). THE FIX: the walk's
+   unit tracking (the callee/arg units, the after_op/after_comma
+   flags) + the per-arg 'A Custom element value can only be a
+   string' @ each arg's span at the walk's exit.
+3. THE UNTERMINATED DQ AT THE TYPE POSITION: their LEXER's
+   broken-string token — the newline hit errs 'Invalid newline
+   encountered while parsing' @ the partial token, the EOF hit errs
+   'EOF reached while parsing'; the token is gathered OUT of the
+   stream (gatherInvalid) → the element NEVER starts: no restart, no
+   EOF junk-logs (the m77_0070 line-6: ours logged the b1 ident +
+   the restart's EOF pair; theirs = the CE + the clean exit). THE
+   FIX: the type-loop's dq arm = the unterminated branch (the CE +
+   the drop-return).
+
+THE GATES: corpus 78/78, schema 78/78, battery **170/170** (the 5
+promotions: ro1/ro3/ro5/ro6 + m77_0070), lib 122/122, editor 61/61,
+fmt/fuzz/oracle — all green.
+THE SEEDS: **seed-77 = 153/300 (+1, m77_0070), seed-43 = 331/600
+(+4: m43_0083, m43_0295, m43_0304, m43_0387)** — zero regressions.
+The dumps = /tmp/agentA-ours-r104-{77,43}.json + the lists
+/tmp/agentA-div-r104-{77,43}.json.
+
+## Round 105 queue
+
+- The remaining `}`-line cases (the records-in-table flow = m43_0067)
+  + the next over-fire clustering (the ledger re-run on the r104
+  divergent set);
+- The s5 open tails (the after-element merge, the note-only zero-
+  column check, the cross-line name comma);
 - Iterate until a full round adds zero new mechanisms.
 - OWNED ELSEWHERE: the paren-name + the records-comma (Agent D).

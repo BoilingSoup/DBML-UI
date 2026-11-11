@@ -4553,6 +4553,30 @@ fn custom_element(
                 .find('"')
                 .map(|k| k + 2)
                 .unwrap_or(line_nl);
+            if close == line_nl {
+                // the UNTERMINATED dq at the type position = their LEXER's
+                // broken-string token: the newline hit errs 'Invalid
+                // newline encountered while parsing' at the partial token,
+                // the EOF hit errs 'EOF reached while parsing' — the token
+                // is gathered OUT of the stream (gatherInvalid), so the
+                // element NEVER starts: no restart, no EOF junk-logs (the
+                // m77_0070 ledger: theirs = the CE + the clean exit)
+                let (msg, end) = if line_nl < input.len() {
+                    (
+                        "Invalid newline encountered while parsing",
+                        qs + line_nl,
+                    )
+                } else {
+                    ("EOF reached while parsing", qs + line_nl)
+                };
+                errs.push(ParseError {
+                    offset: qs,
+                    end: Some(end),
+                    message: msg.to_string(),
+                });
+                *input = &input[close..];
+                return Ok(());
+            }
             errs.push(ParseError {
                 offset: qs,
                 end: Some(qs + close),
@@ -5101,6 +5125,19 @@ fn custom_element(
             // rides in no node. The ref-setting entries inside stay
             // unqueued (the ref-binder = the follow-up)
             let mut vend = vs;
+            // their validateBody's PER-ARG errors: the body = the
+            // application {callee: the first comma-expression, args: the
+            // JUXTAPOSITION-separated units}; the infix-ops bind WITHIN a
+            // unit (probe ro6: `bar baz qux` = the args [baz],[qux];
+            // probe ro1: `bar baz <>? qux` = ONE arg [baz..qux]); the
+            // comma = the commaExpression's field separator (the unit
+            // continues — the h1 map)
+            let mut unit_start: Option<usize> = None;
+            let mut unit_end = vs;
+            let mut callee_closed = false;
+            let mut after_op = false;
+            let mut after_comma = false;
+            let mut arg_spans: Vec<Span> = Vec::new();
             let mut in_value = true;
             loop {
                 // the RAW pre-ws lookahead: the newline = the walk's wall
@@ -5144,13 +5181,50 @@ fn custom_element(
                     }
                     *input = p2;
                     vend = offset(input, base);
+                    // the unit tracking: the first operand = the callee
+                    // unit; a juxtaposed operand closes it (or the prior
+                    // arg) and opens a new arg; an infix-right EXTENDS the
+                    // current unit; a comma-field EXTENDS it too
+                    if !callee_closed {
+                        if unit_start.is_none() {
+                            unit_start = Some(js);
+                        } else if after_op || after_comma {
+                            unit_end = vend;
+                        } else {
+                            // the juxtaposition closes the CALLEE unit (the
+                            // callee itself never errs per-arg)
+                            callee_closed = true;
+                            unit_start = Some(js);
+                            unit_end = vend;
+                        }
+                    } else if after_op {
+                        unit_end = vend;
+                    } else if after_comma {
+                        unit_end = vend;
+                    } else {
+                        arg_spans.push(unit_start.unwrap()..unit_end);
+                        unit_start = Some(js);
+                        unit_end = vend;
+                    }
+                    after_op = false;
+                    after_comma = false;
                 } else if b0 == b',' && in_value {
                     // the comma-expression separator: silent
                     *input = &input[tl..];
+                    after_comma = true;
                 } else {
                     if in_value && b0 == b':' {
                         // the next entry's colon ends the value-node
                         in_value = false;
+                    }
+                    if in_value && is_op_char(b0) {
+                        // the infix-op token: their expression parse binds
+                        // it into the value's expression chain — silent
+                        // (the m77_0070 ledger: `parent.id <>? child.paren`
+                        // = ONE infix value, the op tokens never log)
+                        *input = &input[tl..];
+                        after_op = true;
+                        continue;
                     }
                     if in_value {
                         errs.push(ParseError {
@@ -5327,6 +5401,21 @@ fn custom_element(
                     });
                     *input = &input[tl..];
                 }
+            }
+            // the walk's exit: the open arg-unit closes — the callee unit
+            // never errs per-arg; each arg errs 'A Custom element value
+            // can only be a string' at its own span (their validateBody)
+            if let Some(us) = unit_start {
+                if callee_closed {
+                    arg_spans.push(us..unit_end);
+                }
+            }
+            for sp in &arg_spans {
+                doc_binder_errors.push((
+                    sp.start,
+                    sp.end,
+                    "A Custom element value can only be a string".to_string(),
+                ));
             }
             body_span = Some(vs..vend.max(vs + 1));
             }
