@@ -845,13 +845,20 @@ tools below. Never say done when the sweep still finds shapes.
   tuple) or 'Invalid column type' at the settings-list (j2's
   2,10-2,30). SEED-43 = 312/600 (+2!), seed-77 = 145/300. Probe mm1;
   battery 116/116, corpus 78/78, lib 84/84.
-- ROUND-66 QUEUE (the wide-cluster pivot continues):
-  * the close-brace cluster (28 missing 'Expect a closing brace' —
-    the widest remaining);
-  * the custom-element appear extras (29-32);
-  * the composite queue (m77_0039's line-18 recovery, the
-    Expect-an-identifier remainder, s5's span puzzle, the colon-op
-    cluster, the index-field paren-name, m43_0242) = the background.
+- ROUND 66 — THE CLOSE-BRACE CLUSTER = THE COMPOSITE-TAIL (the
+  strategic finding): the 24 missing-close cases probed via the two
+  minimal shapes (the enum with the values, the table with the
+  duplicate-default) = BOTH ALREADY GREEN — the 24 = the composites
+  where the upstream damage shifts the block-flow before the EOF
+  close. NOT a single-mechanism cluster — the per-case grind = the
+  background queue (the round-50 audit-pattern applies per-flow).
+- ROUND-67 QUEUE (the wide-cluster pivot continues):
+  * the custom-element appear extras (29-32) — the position-tally
+    first (the same method as the round-64 paren/quote discovery);
+  * the Expect-an-identifier stack (the missing remainder);
+  * the composite queue (m77_0039's line-18 recovery, s5's span
+    puzzle, the colon-op cluster, the index-field paren-name,
+    m43_0242) = the background.
   * s5 (`, 1 int` at a field start): theirs = ONE name error at
     1,10-2,6 — the span starts at the TABLE'S OPEN-BRACE END and ends
     mid-line — the mechanism unexplained (the block-child node's
