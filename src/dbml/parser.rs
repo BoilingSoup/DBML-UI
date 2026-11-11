@@ -4420,12 +4420,47 @@ fn custom_element(
         ws(input);
         let vs = offset(input, base);
         body_quoted = input.starts_with('\'') || input.starts_with('"');
-        // the inline value runs to the line end (their expression)
-        match input.find(['\n', '\r']) {
-            Some(k) => *input = &input[k..],
-            None => *input = &input[input.len()..],
+        if body_quoted {
+            // b1: the inline value = the STRING TOKEN — the body node
+            // ends at the string's end (3,28 = the 'n's end, not the
+            // `]`'s) and the trailing INVALID-OPERAND token errs
+            // 'Expect an identifier' (the `]` at 3,28-3,29); the
+            // juxtaposed words are their application's args and stay
+            // silent. The `}` = the ENCLOSING flow's close (the
+            // program's junk arm or the host table's body) — leave it
+            let mut t = *input;
+            let _ = note_value(&mut t, base);
+            let vend = offset(&t, base);
+            *input = t;
+            loop {
+                ws(input);
+                if input.is_empty() || input.starts_with('\n') || input.starts_with('}') {
+                    break;
+                }
+                let mut p2 = *input;
+                let tl = consume_one_token(&mut p2).unwrap_or(0);
+                if tl == 0 {
+                    break;
+                }
+                if input.starts_with(']') {
+                    let js = offset(input, base);
+                    errs.push(ParseError {
+                        offset: js,
+                        end: Some(js + tl),
+                        message: "Expect an identifier".to_string(),
+                    });
+                }
+                *input = &input[tl..];
+            }
+            body_span = Some(vs..vend.max(vs + 1));
+        } else {
+            // the inline value runs to the line end (their expression)
+            match input.find(['\n', '\r']) {
+                Some(k) => *input = &input[k..],
+                None => *input = &input[input.len()..],
+            }
+            body_span = Some(vs..offset(input, base));
         }
-        body_span = Some(vs..offset(input, base));
     }
     // their element node = the UNION of the arg spans (type, name, setting
     // list, body) — with no body it ends at the last REAL arg's end, never
