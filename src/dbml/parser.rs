@@ -5341,11 +5341,58 @@ fn custom_element(
 
 /// A top-level sticky note: `Note name { '''text''' }` — dbdiagram's
 /// canvas sticky. The body is one note value (triple- or single-quoted).
+/// their NoteValidator: the note body's EXTRA string blocks err
+/// 'A Note can only contain one string' at each block's node span
+/// (probes nt1/nt2/nt3/nt5 — the second `'''…'''`/`'…'` block's own
+/// span); the blocks are consumed either way
+fn note_extra_strings(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) {
+    loop {
+        let save = *input;
+        ws(input);
+        if !(input.starts_with('\'') || input.starts_with('"')) {
+            *input = save;
+            break;
+        }
+        let ss = offset(input, base);
+        let mut t2 = *input;
+        match note_value(&mut t2, base) {
+            Ok(_) => {
+                let se = offset(&t2, base);
+                errs.push(ParseError {
+                    offset: ss,
+                    end: Some(se),
+                    message: "A Note can only contain one string".to_string(),
+                });
+                *input = t2;
+            }
+            Err(e) => {
+                errs.push(ParseError {
+                    offset: e.offset,
+                    end: e.end,
+                    message: e.message,
+                });
+                *input = t2;
+                break;
+            }
+        }
+    }
+}
+
 fn sticky_note(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<StickyNote> {
     let start = offset(input, base);
     let _ = eat(input, "Note");
     ws(input);
-    let name = ident(input, base)?;
+    // nt4: the NAMELESS top-level sticky note — their
+    // StickyNoteValidator errs at the whole element span (start .. the
+    // block's end) and the body STILL parses (the one-string check rides)
+    let mut name = String::new();
+    let name_missing = match ident(input, base) {
+        Ok(n) => {
+            name = n;
+            false
+        }
+        Err(_) => true,
+    };
     ws(input);
     if !eat(input, "{") {
         return fail(offset(input, base), "expected '{' after note name");
@@ -5364,12 +5411,23 @@ fn sticky_note(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<S
         }
     };
     ws(input);
+    // their NoteValidator: the body's EXTRA string blocks err once each
+    // at the block's span (probes s5s/nt1/nt3)
+    note_extra_strings(input, base, errs);
+    ws(input);
     if !eat(input, "}") {
         // their blockExpression's close consume errs at the EOF token /
         // the current token — the same message as every block close
         // (probe m43_0223)
         errs.push(err_at(offset(input, base), "Expect a closing brace '}'"));
         skip_line(input);
+    }
+    if name_missing {
+        errs.push(ParseError {
+            offset: start,
+            end: Some(offset(input, base)),
+            message: "Sticky note must have a name".to_string(),
+        });
     }
     Ok(StickyNote {
         name,
@@ -5780,6 +5838,9 @@ fn table(
                         }
                     }
                     ws(input);
+                    // the extra string blocks err once each (probe nt5)
+                    note_extra_strings(input, base, errs);
+                    ws(input);
                     let _ = eat(input, "}");
                     if !val_ok {
                         binder_out.push((
@@ -5916,6 +5977,9 @@ fn table(
                     String::new()
                 }
             };
+            ws(input);
+            // the extra string blocks err once each (probe nt2)
+            note_extra_strings(input, base, errs);
             ws(input);
             let be;
             if eat(input, "}") {

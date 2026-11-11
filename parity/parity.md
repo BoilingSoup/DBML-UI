@@ -1838,3 +1838,61 @@ divergent lists /tmp/agentA-div-r101-{77,43}.json.
   column check, the note one-string check, the cross-line name
   comma).
 - OWNED ELSEWHERE: the paren-name + the records-comma (Agent D).
+
+## Round 102 addendum — THE NOTE ONE-STRING MECHANISM LANDED (+ the battery-harness correction)
+
+THE MECHANISM: their NoteValidator walks the note body's string
+children — the SECOND (and later) string block errs 'A Note can only
+contain one string' @ the block's own node span ([start..end), the
+`'''…'''` or `'…'` block); the blocks still parse. Probes: s5s (the
+top-level sticky note, the triple-quote pair), nt1 (the sq pair),
+nt2 (the nested nameless in a table — OURS WAS SILENT there), nt3
+(the triple then the sq), nt5 (the named note-in-table — ours already
+had the name error, the one-string was missing).
+THE PORT: `note_extra_strings` (beside sticky_note_value) — after the
+content parse, the loop scans further string blocks (note_value per
+block, the span = the block), errs once each, consumes; wired at
+THREE sites: the top-level sticky_note, the table's nameless `Note {`
+arm, the table's `Note <name> {` arm.
+THE NT4 TAIL LANDED: the NAMELESS top-level sticky note (`Note {` at
+the program level) = theirs 'Sticky note must have a name' @ the
+WHOLE element span (start .. the block's end) with the body STILL
+parsing (the one-string error rides) — ours' sticky_note ident-
+required fail replaced by the deferred check (the probe nt4: TWO
+errors).
+
+THE BATTERY-HARNESS CORRECTION: the round-101 addendum's "battery
+153/153" was premature — the battery cases.json was NOT rewritten
+after the s5 promotion, so the r101 compare ran on the stale
+138-entry set (the 15 new probes = never compared; the fresh-vs-
+stale theirs-dump mismatch masked it). The r102 battery = the FULL
+160-entry set, both sides fresh: **160/160**. The r101 seed claims
+were unaffected (the seeds = compared per-case, complete).
+
+THE GATES: run.mjs 78/78, run_schema.mjs 78/78, battery **160/160**
+(the 7 promotions: s5s + nt1-nt6), lib 122/122, editor 61/61,
+fmt/fuzz/oracle — all green.
+THE SEEDS: **seed-77 = 152/300 (+0), seed-43 = 326/600 (+1,
+m43_0550 — a `'''` note-string case)** — zero regressions. The
+dumps = /tmp/agentA-ours-r102-{77,43}.json + the lists
+/tmp/agentA-div-r102-{77,43}.json.
+
+## Round 103 queue
+
+- THE 'EXPECT AN IDENTIFIER' OVER-FIRE — the two remaining
+  sub-classes (the position-ledger, the r102 clustering):
+  * the `}`-line logs (21 seed-43 + 5 seed-77): the m43_0067
+    records-in-table flow + the m43_0285 composite (the digit-lead
+    nested element `1Table orders {...}` = theirs converts via
+    convertFuncAppToElem + the CLOSED-nested swallow; ours' child
+    walk spills — the round-42 child loop needs the
+    ident-ident-block conversion);
+  * the ref-op tokens on the `Ref:`-lines (15 + 15): the
+    `.`,`<`,`>`,`?`,`(`,`)` logged by ours' walk where theirs' ref
+    machinery consumes them (m77_0070 = the minimal ledger: the line-5
+    op tokens + the line-6 dq-newline CE missing — the composite
+    reach = via the upstream unclosed bodies, the round-72/74 map
+    applies; the per-flow context guards).
+- The s5 open tails (the after-element merge, the note-only zero-
+  column check, the cross-line name comma).
+- OWNED ELSEWHERE: the paren-name + the records-comma (Agent D).
