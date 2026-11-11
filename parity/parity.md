@@ -781,9 +781,22 @@ tools below. Never say done when the sweep still finds shapes.
   for the unbracketed bodies — the token-walk attempt over-fired (16
   vs 12) and was reverted the same session; the port = the
   entry-loop refactor (round 60).
-- ROUND-60 QUEUE:
-  * the settings_list_occs entry-loop refactor for the unbracketed
-    colon-bodies (the h1 map above = the spec);
+- ROUND 60 LANDED — the inline-body's non-quoted value = the
+  h1-mapped TWO-PHASE walk: the VALUE phase extends the node union
+  over the operand tokens (the color = `#`+hex consumed as ONE token
+  — consume_one_token emits the `#` alone and the hex tail re-logged
+  as digit-lead junk; the idents; the quoted strings via note_value),
+  the `,` = the silent comma-expression separator, the next entry's
+  `:` logs 'Expect an identifier' and ends the value-node — the h1
+  SPANS = theirs (the element = 1,1-4,28, the value-string =
+  4,12-4,28; the 4,54 swallow-tail deltas dead). The POST-value phase
+  = the silent skip: their walk = the ATTRIBUTE-ENTRY parse with the
+  ref-binder running (the ref-diags + the 4 consume-logs = the
+  remaining 7) — the settings_list_occs entry-loop extraction = the
+  round-61 queue (hh1 = 5/12, NOT promoted per the open-shapes rule).
+- ROUND-61 QUEUE:
+  * the settings_list_occs entry-loop extraction for the unbracketed
+    colon-bodies (the ref-binder + the consume-logs semantics);
   * the 'Expect an identifier' stack (the missing remainder);
   * s5's span puzzle, the colon-op cluster (17), the index-field
     paren-name (17), m43_0242 records-comma.
