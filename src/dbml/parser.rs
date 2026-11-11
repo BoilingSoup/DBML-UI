@@ -4162,6 +4162,32 @@ fn custom_element(
         // itself). No `]` in the rest = the unclosed-list flow below.
         match input.find(']') {
             Some(k) => {
+                // the contents walk: their expression's operand check
+                // errs the INVALID-OPERAND starts inside the list (d1's
+                // `{` at 1,15-1,16, code 1005, a SyntaxToken); the
+                // idents/ops/`[` are the args and stay silent
+                let mut wt = &input[1..k];
+                loop {
+                    ws(&mut wt);
+                    if wt.is_empty() {
+                        break;
+                    }
+                    let invalid = wt.starts_with('{')
+                        || wt.starts_with('}')
+                        || wt.starts_with(')');
+                    let js = offset(wt, base);
+                    let mut p2 = wt;
+                    let tl = consume_one_token(&mut p2).unwrap_or(1);
+                    let tl = tl.min(wt.len());
+                    if invalid {
+                        errs.push(ParseError {
+                            offset: js,
+                            end: Some(js + tl),
+                            message: "Expect an identifier".to_string(),
+                        });
+                    }
+                    wt = &wt[tl..];
+                }
                 *input = &input[k + 1..];
                 settings_span = Some(ls..offset(input, base));
             }
