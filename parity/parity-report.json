@@ -1,492 +1,397 @@
 {
   "pinnedCommit": "6b0c25b5d87ef8f44236eeb1e9dc149848e1503e",
-  "pass": 97,
+  "pass": 78,
   "fail": 0,
   "cases": [
     {
-      "name": "c1",
-      "status": "ok",
-      "count": 1
-    },
-    {
-      "name": "c10",
-      "status": "ok",
-      "count": 2
-    },
-    {
-      "name": "c11",
-      "status": "ok",
-      "count": 3
-    },
-    {
-      "name": "c12",
-      "status": "ok",
-      "count": 2
-    },
-    {
-      "name": "c13",
-      "status": "ok",
-      "count": 2
-    },
-    {
-      "name": "c14",
-      "status": "ok",
-      "count": 3
-    },
-    {
-      "name": "c15",
-      "status": "ok",
-      "count": 2
-    },
-    {
-      "name": "c16",
-      "status": "ok",
-      "count": 2
-    },
-    {
-      "name": "c17",
-      "status": "ok",
-      "count": 3
-    },
-    {
-      "name": "c18",
-      "status": "ok",
-      "count": 2
-    },
-    {
-      "name": "c18t",
-      "status": "ok",
-      "count": 2
-    },
-    {
-      "name": "c19",
-      "status": "ok",
-      "count": 3
-    },
-    {
-      "name": "c2",
-      "status": "ok",
-      "count": 1
-    },
-    {
-      "name": "c20",
-      "status": "ok",
-      "count": 3
-    },
-    {
-      "name": "c21",
-      "status": "ok",
-      "count": 1
-    },
-    {
-      "name": "c22",
-      "status": "ok",
-      "count": 1
-    },
-    {
-      "name": "c23",
-      "status": "ok",
-      "count": 1
-    },
-    {
-      "name": "c24",
+      "name": "clean-minimal",
       "status": "ok",
       "count": 0
     },
     {
-      "name": "c25",
-      "status": "ok",
-      "count": 5
-    },
-    {
-      "name": "c26",
-      "status": "ok",
-      "count": 2
-    },
-    {
-      "name": "c3",
+      "name": "col-inline-bare-foo",
       "status": "ok",
       "count": 1
     },
     {
-      "name": "c4",
-      "status": "ok",
-      "count": 2
-    },
-    {
-      "name": "c4b",
-      "status": "ok",
-      "count": 2
-    },
-    {
-      "name": "c4c",
-      "status": "ok",
-      "count": 4
-    },
-    {
-      "name": "c4d",
-      "status": "ok",
-      "count": 2
-    },
-    {
-      "name": "c4e",
-      "status": "ok",
-      "count": 2
-    },
-    {
-      "name": "c5",
-      "status": "ok",
-      "count": 3
-    },
-    {
-      "name": "c5clean",
-      "status": "ok",
-      "count": 5
-    },
-    {
-      "name": "c6",
-      "status": "ok",
-      "count": 5
-    },
-    {
-      "name": "c7",
-      "status": "ok",
-      "count": 4
-    },
-    {
-      "name": "c8",
-      "status": "ok",
-      "count": 2
-    },
-    {
-      "name": "c9",
-      "status": "ok",
-      "count": 1
-    },
-    {
-      "name": "d1",
-      "status": "ok",
-      "count": 2
-    },
-    {
-      "name": "d2",
-      "status": "ok",
-      "count": 4
-    },
-    {
-      "name": "d3",
-      "status": "ok",
-      "count": 3
-    },
-    {
-      "name": "d4",
-      "status": "ok",
-      "count": 6
-    },
-    {
-      "name": "d5",
-      "status": "ok",
-      "count": 6
-    },
-    {
-      "name": "d6",
-      "status": "ok",
-      "count": 5
-    },
-    {
-      "name": "d7",
-      "status": "ok",
-      "count": 3
-    },
-    {
-      "name": "e1",
-      "status": "ok",
-      "count": 4
-    },
-    {
-      "name": "e10",
-      "status": "ok",
-      "count": 6
-    },
-    {
-      "name": "e11",
-      "status": "ok",
-      "count": 1
-    },
-    {
-      "name": "e12",
-      "status": "ok",
-      "count": 2
-    },
-    {
-      "name": "e13",
-      "status": "ok",
-      "count": 2
-    },
-    {
-      "name": "e14",
-      "status": "ok",
-      "count": 2
-    },
-    {
-      "name": "e15",
+      "name": "col-inline-bare-pk",
       "status": "ok",
       "count": 0
     },
     {
-      "name": "e16",
-      "status": "ok",
-      "count": 1
-    },
-    {
-      "name": "e17",
-      "status": "ok",
-      "count": 1
-    },
-    {
-      "name": "e18",
-      "status": "ok",
-      "count": 3
-    },
-    {
-      "name": "e19",
-      "status": "ok",
-      "count": 2
-    },
-    {
-      "name": "e2",
-      "status": "ok",
-      "count": 4
-    },
-    {
-      "name": "e20",
-      "status": "ok",
-      "count": 3
-    },
-    {
-      "name": "e21",
-      "status": "ok",
-      "count": 2
-    },
-    {
-      "name": "e22",
-      "status": "ok",
-      "count": 3
-    },
-    {
-      "name": "e23",
+      "name": "col-inline-bare-unique",
       "status": "ok",
       "count": 0
     },
     {
-      "name": "e24",
+      "name": "col-keyword-block",
+      "status": "ok",
+      "count": 2
+    },
+    {
+      "name": "col-multiword-type",
       "status": "ok",
       "count": 3
     },
     {
-      "name": "e25",
-      "status": "ok",
-      "count": 2
-    },
-    {
-      "name": "e26",
-      "status": "ok",
-      "count": 3
-    },
-    {
-      "name": "e27",
-      "status": "ok",
-      "count": 6
-    },
-    {
-      "name": "e28",
-      "status": "ok",
-      "count": 2
-    },
-    {
-      "name": "e29",
-      "status": "ok",
-      "count": 2
-    },
-    {
-      "name": "e3",
-      "status": "ok",
-      "count": 6
-    },
-    {
-      "name": "e30",
+      "name": "desktop-errs",
       "status": "ok",
       "count": 4
     },
     {
-      "name": "e31",
+      "name": "desktop-errs2",
+      "status": "ok",
+      "count": 1
+    },
+    {
+      "name": "desktop-test",
+      "status": "ok",
+      "count": 1
+    },
+    {
+      "name": "dup-enum",
+      "status": "ok",
+      "count": 1
+    },
+    {
+      "name": "dup-table-and-enum",
+      "status": "ok",
+      "count": 0
+    },
+    {
+      "name": "dup-table",
+      "status": "ok",
+      "count": 1
+    },
+    {
+      "name": "enum-duplicate-member",
+      "status": "ok",
+      "count": 2
+    },
+    {
+      "name": "enum-ref-member",
+      "status": "ok",
+      "count": 1
+    },
+    {
+      "name": "group-missing-member",
+      "status": "ok",
+      "count": 1
+    },
+    {
+      "name": "group-ok",
+      "status": "ok",
+      "count": 1
+    },
+    {
+      "name": "key-col-pk-inline-gt",
+      "status": "ok",
+      "count": 0
+    },
+    {
+      "name": "key-col-pk-lt",
+      "status": "ok",
+      "count": 0
+    },
+    {
+      "name": "key-col-unique-inline-gt",
+      "status": "ok",
+      "count": 0
+    },
+    {
+      "name": "key-col-unique-lt",
+      "status": "ok",
+      "count": 0
+    },
+    {
+      "name": "key-composite-missing",
+      "status": "ok",
+      "count": 3
+    },
+    {
+      "name": "key-composite-ok",
+      "status": "ok",
+      "count": 3
+    },
+    {
+      "name": "key-idx-pk-inline-gt",
+      "status": "ok",
+      "count": 2
+    },
+    {
+      "name": "key-idx-pk-lt",
+      "status": "ok",
+      "count": 2
+    },
+    {
+      "name": "key-idx-unique-inline-gt",
+      "status": "ok",
+      "count": 2
+    },
+    {
+      "name": "key-idx-unique-lt",
+      "status": "ok",
+      "count": 2
+    },
+    {
+      "name": "key-none-inline-gt",
+      "status": "ok",
+      "count": 2
+    },
+    {
+      "name": "key-none-lt",
+      "status": "ok",
+      "count": 2
+    },
+    {
+      "name": "op-dash-nn-nn",
       "status": "ok",
       "count": 4
     },
     {
-      "name": "e32",
-      "status": "ok",
-      "count": 5
-    },
-    {
-      "name": "e33",
-      "status": "ok",
-      "count": 1
-    },
-    {
-      "name": "e34",
-      "status": "ok",
-      "count": 1
-    },
-    {
-      "name": "e36",
-      "status": "ok",
-      "count": 5
-    },
-    {
-      "name": "e37",
-      "status": "ok",
-      "count": 5
-    },
-    {
-      "name": "e38",
-      "status": "ok",
-      "count": 1
-    },
-    {
-      "name": "e39",
-      "status": "ok",
-      "count": 1
-    },
-    {
-      "name": "e4",
-      "status": "ok",
-      "count": 2
-    },
-    {
-      "name": "e40",
-      "status": "ok",
-      "count": 1
-    },
-    {
-      "name": "e41",
-      "status": "ok",
-      "count": 2
-    },
-    {
-      "name": "e42",
-      "status": "ok",
-      "count": 2
-    },
-    {
-      "name": "e43",
-      "status": "ok",
-      "count": 5
-    },
-    {
-      "name": "e44",
-      "status": "ok",
-      "count": 5
-    },
-    {
-      "name": "e45",
+      "name": "op-dash-nn-unspec",
       "status": "ok",
       "count": 4
     },
     {
-      "name": "e5",
+      "name": "op-dash-null-nn",
       "status": "ok",
       "count": 6
     },
     {
-      "name": "e6",
-      "status": "ok",
-      "count": 2
-    },
-    {
-      "name": "e7",
-      "status": "ok",
-      "count": 2
-    },
-    {
-      "name": "e8",
-      "status": "ok",
-      "count": 3
-    },
-    {
-      "name": "e9",
-      "status": "ok",
-      "count": 3
-    },
-    {
-      "name": "g1",
-      "status": "ok",
-      "count": 2
-    },
-    {
-      "name": "g2",
-      "status": "ok",
-      "count": 1
-    },
-    {
-      "name": "g3",
-      "status": "ok",
-      "count": 3
-    },
-    {
-      "name": "g4",
-      "status": "ok",
-      "count": 4
-    },
-    {
-      "name": "g5",
-      "status": "ok",
-      "count": 2
-    },
-    {
-      "name": "g6",
-      "status": "ok",
-      "count": 1
-    },
-    {
-      "name": "g7",
-      "status": "ok",
-      "count": 1
-    },
-    {
-      "name": "h1",
-      "status": "ok",
-      "count": 3
-    },
-    {
-      "name": "h2",
-      "status": "ok",
-      "count": 1
-    },
-    {
-      "name": "h3",
-      "status": "ok",
-      "count": 1
-    },
-    {
-      "name": "h4",
-      "status": "ok",
-      "count": 3
-    },
-    {
-      "name": "h5",
-      "status": "ok",
-      "count": 3
-    },
-    {
-      "name": "nl1",
+      "name": "op-dash-null-unspec",
       "status": "ok",
       "count": 6
     },
     {
-      "name": "q1",
+      "name": "op-dash-unspec-nn",
+      "status": "ok",
+      "count": 6
+    },
+    {
+      "name": "op-dash-unspec-unspec",
+      "status": "ok",
+      "count": 6
+    },
+    {
+      "name": "op-gt-nn-nn",
+      "status": "ok",
+      "count": 2
+    },
+    {
+      "name": "op-gt-nn-unspec",
+      "status": "ok",
+      "count": 4
+    },
+    {
+      "name": "op-gt-null-nn",
+      "status": "ok",
+      "count": 2
+    },
+    {
+      "name": "op-gt-null-unspec",
+      "status": "ok",
+      "count": 4
+    },
+    {
+      "name": "op-gt-unique-parent",
+      "status": "ok",
+      "count": 2
+    },
+    {
+      "name": "op-gt-unspec-nn",
+      "status": "ok",
+      "count": 2
+    },
+    {
+      "name": "op-gt-unspec-unspec",
+      "status": "ok",
+      "count": 4
+    },
+    {
+      "name": "op-gtq-nn-nn",
+      "status": "ok",
+      "count": 4
+    },
+    {
+      "name": "op-gtq-nn-unspec",
+      "status": "ok",
+      "count": 2
+    },
+    {
+      "name": "op-gtq-null-nn",
+      "status": "ok",
+      "count": 4
+    },
+    {
+      "name": "op-gtq-null-unspec",
+      "status": "ok",
+      "count": 2
+    },
+    {
+      "name": "op-gtq-unspec-nn",
+      "status": "ok",
+      "count": 4
+    },
+    {
+      "name": "op-gtq-unspec-unspec",
+      "status": "ok",
+      "count": 2
+    },
+    {
+      "name": "op-lt-nn-nn",
+      "status": "ok",
+      "count": 2
+    },
+    {
+      "name": "op-lt-nn-unspec",
+      "status": "ok",
+      "count": 2
+    },
+    {
+      "name": "op-lt-null-nn",
+      "status": "ok",
+      "count": 4
+    },
+    {
+      "name": "op-lt-null-unspec",
+      "status": "ok",
+      "count": 4
+    },
+    {
+      "name": "op-lt-unspec-nn",
+      "status": "ok",
+      "count": 4
+    },
+    {
+      "name": "op-lt-unspec-unspec",
+      "status": "ok",
+      "count": 4
+    },
+    {
+      "name": "op-ltgt-nn-nn",
+      "status": "ok",
+      "count": 0
+    },
+    {
+      "name": "op-ltgt-nn-unspec",
+      "status": "ok",
+      "count": 2
+    },
+    {
+      "name": "op-ltgt-null-nn",
+      "status": "ok",
+      "count": 2
+    },
+    {
+      "name": "op-ltgt-null-unspec",
+      "status": "ok",
+      "count": 4
+    },
+    {
+      "name": "op-ltgt-unspec-nn",
+      "status": "ok",
+      "count": 2
+    },
+    {
+      "name": "op-ltgt-unspec-unspec",
+      "status": "ok",
+      "count": 4
+    },
+    {
+      "name": "op-ltgtq-nn-nn",
+      "status": "ok",
+      "count": 2
+    },
+    {
+      "name": "op-ltgtq-nn-unspec",
+      "status": "ok",
+      "count": 0
+    },
+    {
+      "name": "op-ltgtq-null-nn",
+      "status": "ok",
+      "count": 4
+    },
+    {
+      "name": "op-ltgtq-null-unspec",
+      "status": "ok",
+      "count": 2
+    },
+    {
+      "name": "op-ltgtq-unspec-nn",
+      "status": "ok",
+      "count": 4
+    },
+    {
+      "name": "op-ltgtq-unspec-unspec",
+      "status": "ok",
+      "count": 2
+    },
+    {
+      "name": "op-ltq-nn-nn",
+      "status": "ok",
+      "count": 2
+    },
+    {
+      "name": "op-ltq-nn-unspec",
+      "status": "ok",
+      "count": 2
+    },
+    {
+      "name": "op-ltq-null-nn",
+      "status": "ok",
+      "count": 4
+    },
+    {
+      "name": "op-ltq-null-unspec",
+      "status": "ok",
+      "count": 4
+    },
+    {
+      "name": "op-ltq-unspec-nn",
+      "status": "ok",
+      "count": 4
+    },
+    {
+      "name": "op-ltq-unspec-unspec",
+      "status": "ok",
+      "count": 4
+    },
+    {
+      "name": "records-fk-clean",
       "status": "ok",
       "count": 1
+    },
+    {
+      "name": "records-fk-violation",
+      "status": "ok",
+      "count": 2
+    },
+    {
+      "name": "records-null-in-required",
+      "status": "ok",
+      "count": 2
+    },
+    {
+      "name": "ref-missing-column",
+      "status": "ok",
+      "count": 1
+    },
+    {
+      "name": "ref-missing-composite-half",
+      "status": "ok",
+      "count": 2
+    },
+    {
+      "name": "ref-missing-table",
+      "status": "ok",
+      "count": 1
+    },
+    {
+      "name": "reported-index-pk",
+      "status": "ok",
+      "count": 0
     }
   ]
 }

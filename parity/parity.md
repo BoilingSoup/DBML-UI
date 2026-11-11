@@ -567,8 +567,15 @@ tools below. Never say done when the sweep still finds shapes.
 ## The mutation-campaign state (round 44 entry point)
 
 - Seed 77 (300 cases, /tmp/mut-cases.json, the dumps /tmp/mut-ours-*.json
-  + /tmp/mut-theirs.json): **128/300 identical** after rounds 42-45 (from
-  120 at the round-41 base). ROUND 45: the dq-quoted scan's newline/EOF
+  + /tmp/mut-theirs.json): **129/300 identical** after rounds 42-46 (from
+  120 at the round-41 base). ROUND 46: the custom-element name-walk's dq
+  partial ported (r2 `Tabl"e a { id int }`: the newline error at the
+  partial token 1,5-1,20, the gather takes it, the operand walk
+  re-attempts across the trivia — at EOF 'Unexpected EOF' + the
+  EmptyNode name 2,1-2,1; battery q2). The TableGroup `Note: 'x` sq
+  shape ALREADY matched (r3 = battery q3). The r1 shape (`a in"t int`)
+  recorded as COMPOSITE with the open lexer cluster ('Expect a
+  following space' at the type token + the inline-settings cascade). ROUND 45: the dq-quoted scan's newline/EOF
   error ported into ident() (consumeUntil hits a newline → 'Invalid
   newline encountered while parsing' at the PARTIAL token — spaces do
   not stop it, m77_0056's `"odd col` = 2,3-2,11; EOF → 'EOF reached
