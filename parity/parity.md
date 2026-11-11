@@ -899,12 +899,26 @@ tools below. Never say done when the sweep still finds shapes.
   122/122, corpus 78/78, lib 84/84. Seed-43 = 315/600 (+1), seed-77 =
   146/300. (The m77_0099 = the 20-diag cascade — the dq-line-rule =
   ONE piece of it; the case = the queue.)
-- ROUND-72 QUEUE:
+- ROUND 72 — THE ENTRY-WALK OVER-FIRE = THE WIDEST SIGNATURE (102
+  extra 'Expect an identifier' = 3× the next): the round-61 walk's
+  logs over-fire on the composites in three families — (1) 50 logs at
+  positions PAST the line-end (the empty-segment logs), (2) 25 on the
+  ref-op tokens (`?<>`/`?>` — theirs' ref-parse handles them, ours'
+  walk logs them — the m77_0070 `Ref: parent.id <>? child.paren`
+  shape reaches the walk via the upstream unclosed bodies), (3) the
+  `}`-block-close logs where theirs = silent. THE FIX = the walk's
+  CONTEXT-GUARD (the fresh-context design: the walk's reach must stop
+  at the construct boundaries their walk respects — the ref-entries
+  delegate to the ref-parse, the block-closes end the walk) = the
+  round-73 spec. The h1/hh1 = the narrow shapes where the walk = the
+  measured-correct — the guard = the generalization.
+- ROUND-73 QUEUE:
+  * the entry-walk's context-guard (the line-end/EOF stop + the
+    ref-op delegation + the block-close handling) — probe-first with
+    the m77_0070/0085 shapes;
   * the composite queue (m77_0039's line-18 recovery, the
-    m77_0099-family's remaining cascade pieces, s5's span puzzle, the
-    colon-op cluster, the index-field paren-name, m43_0242
-    records-comma) — the per-case grind with the tally-method
-    prioritization.
+    m77_0099-family cascade, s5's span puzzle, the colon-op cluster,
+    the index-field paren-name, m43_0242 records-comma).
   * s5 (`, 1 int` at a field start): theirs = ONE name error at
     1,10-2,6 — the span starts at the TABLE'S OPEN-BRACE END and ends
     mid-line — the mechanism unexplained (the block-child node's
