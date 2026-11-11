@@ -4743,6 +4743,9 @@ fn custom_element(
     // the body: a colon introduces the inline value; a brace the block
     let mut body_span: Option<Span> = None;
     let mut body_is_block = false;
+    // the nested-element colon body (the markInvalid'd ElementDeclaration):
+    // the element node = the KEYWORD ONLY and the body checks stay off
+    let mut body_nested = false;
     let mut body_quoted = false;
     // their discardUntil: whenever the current token isn't `{`/`:` — AT EOF
     // TOO — it logs on the CURRENT token's full span (the EOF token is a
@@ -5039,6 +5042,56 @@ fn custom_element(
             }
             body_span = Some(vs..vend.max(vs + 1));
         } else {
+            // the NESTED-ELEMENT body: their expression parse converts
+            // `ident [ident] { block }` via convertFuncAppToElem and the
+            // elementDeclaration's body check markInvalids it — 'An
+            // element's simple body must not be an element declaration'
+            // @ the nested span, the element node = the KEYWORD ONLY
+            // (the markInvalid'd body rides in no arg), the nested's
+            // internals fully silent (probes ne1-ne4; the m43_0285
+            // digit-lead form — their lexer's `1Table` = an identifier)
+            let nested_brace = (|inp: &str| -> Option<usize> {
+                let is_bare = |s: &str| {
+                    !s.is_empty()
+                        && s.bytes()
+                            .all(|b| (b as char).is_ascii_alphanumeric() || b == b'_')
+                };
+                let bare_stop =
+                    |s: &str| s.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(s.len());
+                let mut p = inp;
+                let g1 = bare_stop(p);
+                if !is_bare(&p[..g1]) {
+                    return None;
+                }
+                p = p[g1..].trim_start();
+                // the one-arg form `Bar { … }` (the element = {type, body})
+                // or the two-arg `Bar baz { … }` ({type, name, body})
+                if !p.starts_with('{') {
+                    let g2 = bare_stop(p);
+                    if !is_bare(&p[..g2]) {
+                        return None;
+                    }
+                    p = p[g2..].trim_start();
+                }
+                if p.starts_with('{') {
+                    Some(inp.len() - p.len())
+                } else {
+                    None
+                }
+            })(input);
+            if let Some(brace_off) = nested_brace {
+                let vs_nested = offset(input, base);
+                *input = &input[brace_off..];
+                swallow_balanced_braces(input);
+                let be = offset(input, base);
+                errs.push(ParseError {
+                    offset: vs_nested,
+                    end: Some(be),
+                    message: "An element's simple body must not be an element declaration"
+                        .to_string(),
+                });
+                body_nested = true;
+            } else {
             // the inline value = the h1-mapped ENTRY semantics: the
             // value-phase = the operand tokens (the idents/colors/the
             // quoted strings) extending the value-node union, the `,` =
@@ -5276,6 +5329,7 @@ fn custom_element(
                 }
             }
             body_span = Some(vs..vend.max(vs + 1));
+            }
         }
     }
     // their element node = the UNION of the arg spans (type, name, setting
@@ -5300,7 +5354,14 @@ fn custom_element(
     let indexes_kind = known_ctx == Some("An Indexes can only appear inside a Table or a TablePartial");
     doc_binder_errors.push((
         type_start,
-        element_end,
+        if body_nested {
+            // the markInvalid'd nested-element body rides in NO arg —
+            // the element node = the type token + the bodyColon (probe
+            // ne1: [0,4) = `foo:`, ne2's `y:` = [19,21))
+            type_start + ty_word.len() + 1
+        } else {
+            element_end
+        },
         known_ctx
             .unwrap_or("A Custom element can only appear in a Project or a Dep")
             .to_string(),

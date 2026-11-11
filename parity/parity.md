@@ -1896,3 +1896,42 @@ dumps = /tmp/agentA-ours-r102-{77,43}.json + the lists
 - The s5 open tails (the after-element merge, the note-only zero-
   column check, the cross-line name comma).
 - OWNED ELSEWHERE: the paren-name + the records-comma (Agent D).
+
+## Round 103 addendum — THE NESTED-ELEMENT COLON BODY LANDED (m43_0285 CONVERGED)
+
+THE MECHANISM: their elementDeclaration's colon-body expression = the
+Pratt parse + convertFuncAppToElem — `ident [ident] { block }`
+converts to a NESTED ElementDeclarationNode; the body check
+markInvalids it: 'An element's simple body must not be an element
+declaration' @ the nested span ([the value start .. the block's `}`
+end) — the digit-lead `1Table` = their lexer's identifier, the same
+shape as ne1-ne4. The markInvalid'd body rides in NO arg: the
+element node = the type token + the bodyColon ONLY (ne1: [0,4) =
+`foo:`; ne2's `y:` = [19,21)) and the nested's INTERNALS are fully
+silent (ne3's `!!!broken` junk = nothing). The placement error
+anchors the keyword+colon span, NOT the whole element.
+THE PORT: the nested-element pre-dispatch in custom_element's
+colon-body non-quoted branch (the bare-run closure, the one-arg
+`Bar { … }` and the two-arg `Bar baz { … }` forms, the balanced
+swallow) + the `body_nested` flag: the placement = [type_start ..
+the colon end), the value-string/inline-field checks stay off, the
+walk skipped. m43_0285 = 2/2 on the seed case → the FULL case
+CONVERGED (its 8 remaining deltas were all downstream of these two).
+THE GATES: corpus 78/78, schema 78/78, battery **165/165** (the 5
+promotions: ne1-ne4 + m43_0285), lib 122/122, editor 61/61,
+fmt/fuzz/oracle — all green.
+THE SEEDS: **seed-77 = 152/300 (+0), seed-43 = 327/600 (+1,
+m43_0285)** — zero regressions. The dumps =
+/tmp/agentA-ours-r103-{77,43}.json + the lists
+/tmp/agentA-div-r103-{77,43}.json.
+
+## Round 104 queue
+
+- THE 'EXPECT AN IDENTIFIER' OVER-FIRE — the ref-op sub-class (15 +
+  15): the `.`,`<`,`>`,`?`,`(`,`)` logged by ours' walk where theirs'
+  ref machinery consumes them (m77_0070 = the minimal ledger) + the
+  remaining `}`-line cases (the records-in-table flow = m43_0067);
+- The s5 open tails (the after-element merge, the note-only zero-
+  column check, the cross-line name comma);
+- Iterate until a full round adds zero new mechanisms.
+- OWNED ELSEWHERE: the paren-name + the records-comma (Agent D).
