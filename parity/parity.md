@@ -464,12 +464,9 @@ tools below. Never say done when the sweep still finds shapes.
        the absolute delta (close_abs = bs+1+end; the skip clamps so
        a close line already consumed as a junk child fails the eat
        safely). Battery = 84/84 (nl1 PROMOTED), corpus 78/78 with
-       ranges, lib tests 84/84. KNOWN OPEN inside the cluster: the
-       t1 shape (a junk `!!!broken` line in a TOP-LEVEL table) —
-       ours errs the operand storm + the column pair (10), theirs
-       the column pair only (2), 3,3-3,12 — a fresh pre-existing
-       cluster OUTSIDE the child loop (the operand-retry walk); and
-       the nested-CLOSED-with-junk-string shapes unmeasured — the
+       ranges, lib tests 84/84. The t1 operand-storm cluster RESOLVED
+       in round 43 (see the field-name dispatch below); the
+       nested-CLOSED-with-junk-string shapes unmeasured — the
        fresh-seed clustering will refine. The port (round 33): the
        custom-element body's child parse — their element = {type: c,
        name: id, body: the BlockExpression (3,5)-(4,19)} (the block =
@@ -479,6 +476,47 @@ tools below. Never say done when the sweep still finds shapes.
        loop (the ref block = a nested element parsed inside), the
        element span = the union ending at the last real token (4,19),
        the battery probe = nl1
+     * ROUND 43 — the field-name junk dispatch (column()) PORTED,
+       15/16 probe shapes identical, battery 91/91 (g1-g7 promoted),
+       corpus 78/78. The dispatch map (the whitespace-delimited
+       GATHER at the name position is the key):
+       (a) an ALL-OPERATOR gather (`!`, `!!!`, `! !`, `-` — is_op_char
+       runs, further op tokens folding across trivia incl blank
+       lines) = their PREFIX-OP APPLICATION: the name node = the run
+       .. the next operand's END (v1 `!`→2,3-3,5 through the next
+       line's `id`; x2/x3/v5 identical; w2 skips blank lines); the
+       name check errs at the node and the field SURVIVES — the type
+       parses after the operand (v1: `int`, no type error); a `}`
+       operand errs 'Invalid start of operand "}"' at the FULL token
+       WITHOUT consuming it (it is the block's own close; w1: the
+       pair anchors through the `}` 2,3-3,2); EOF errs 'Unexpected
+       EOF' zero-width and the pair anchors the RUN only (x1:
+       2,3-2,4); NO operand-start error otherwise, NO retry storm.
+       (b) a PUNCT+IDENT gather (`!x`, `!!!broken`, `!broken`) = ONE
+       invalid token: the name = the junk node, no operand error,
+       the walk CONTINUES — the type + settings ride (w4:
+       `!!!broken int [pk]` = the name error only); no type on the
+       line → the type error anchors the junk node too — the PAIR
+       (v2 2,3-2,5, v3 2,3-2,12).
+       (d) a DIGIT-LEADING token = a NUMBER node: the name check errs
+       at it and the walk continues (v4 `123 broken` = the name
+       error only; w3 `123 456` = the name + 'Invalid column type'
+       at the numeric type node) — ours previously parsed
+       digit-lead names SILENTLY (ident() accepts them).
+       (e) a numeric TYPE token (all-ascii-digits) errs 'Invalid
+       column type' at the type node (w3: 2,7-2,10).
+       (.) a lone `.` keeps UNKNOWN_PREFIX_OP ('Unexpected . in an
+       expression', m43_0059). The tuple-callee `(` arm and the
+       legacy single-token operand-die arm unchanged.
+       OPEN (the v7 probe, `@#$ x int`): the LEXER junk-char flow —
+       theirs errs 'Unexpected token @'/'Unexpected token $' per
+       invalid char (gathered out), `#` without a following space errs
+       'Expect a following space' AND the `#` rides as the name node
+       (the name error 2,4-2,5), then `x` = the type and `int` =
+       the inline settings ('Inline column settings can only be pk
+       or unique' 2,9-2,12); ours errs the operand storm per char.
+       A SEPARATE cluster from (a)/(b) — the lexer's invalid-char +
+       invalid-comment handling, unported.
      * the custom-setting check anchors the value node ?? the name (the
        round-17 finding: probe x1 PASS: `uniEnum e` spans 42..51, the
        `{` junk point excluded); m43_0230/0255 PASS. The custom-setting check anchors
