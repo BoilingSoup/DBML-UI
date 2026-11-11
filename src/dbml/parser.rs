@@ -2647,8 +2647,14 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
         .find(|c: char| c.is_whitespace())
         .unwrap_or(input.len());
     let gather = input[..gather_len].to_string();
-    let mut name_end;
-    let name;
+    let mut name_end = 0usize;
+    let mut name = String::new();
+    // the bad-name shapes that consume their token and CONTINUE into the
+    // type flow (their validateColumn: the name check fires always, the
+    // type error only on args=[] — col-probes: `'x'` = the pair, `'x' int`
+    // = the name error only, `'x' [pk]` = the name + the invalid-type at
+    // the list, the same flow as the `(`-tuple callee arm below)
+    let mut bad_name_consumed = false;
     if gather.starts_with('\'') && !gather.starts_with("'''") {
         // r5: a single-quoted token at the field-name position = the
         // sq-string scan — an unterminated string errs the newline
@@ -2659,7 +2665,9 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
             Ok(_) => {
                 // a terminated string as the name = the string value
                 // rides (the name-check = theirs' identifier rule — the
-                // walk continues after the string)
+                // walk continues after the string; the TYPE FLOW runs on
+                // the remainder — col5: `int` suppresses the type error,
+                // col6: the `[pk]` list takes the invalid-type check)
                 *input = t5;
                 name_end = offset(input, base);
                 name = String::new();
@@ -2669,16 +2677,7 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
                     "A column name must be an identifier or a quoted identifier"
                         .to_string(),
                 ));
-                return Ok(Column {
-                    name: String::new(),
-                    name_span: name_off..name_end,
-                    ty: String::new(),
-                    ty_end: name_end,
-                    full_end: name_end,
-                    span: start..offset(input, base),
-                    binder_errors,
-                    settings: Default::default(),
-                });
+                bad_name_consumed = true;
             }
             Err(e) => {
                 errs.push(ParseError {
@@ -2697,15 +2696,38 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
             }
         }
     }
-    if gather.starts_with("'''") {
+    if bad_name_consumed {
+        // the sq-string name consumed its token and rode the name check
+        // above — the type flow below parses the remainder
+    } else if gather.starts_with("'''") {
         // j3: a `'''` at the field-name position = their lexer's
-        // triple-quote token — the consumeUntil scan errs 'EOF reached
-        // while parsing' at the PARTIAL token (multi-line, to EOF) and
-        // the field dies (the round-47 header mechanism at the field
-        // position)
+        // triple-quote token. Their fieldDeclaration takes the string
+        // operand as the CALLEE and validateFields flags it: the pair
+        // anchors the STRING node (m43_0501: 6.3-8.6 = the whole
+        // triple-quote token, no operand error), then the field dies
+        // (the round-47 header mechanism at the field position)
         let mut t3 = *input;
         match note_value(&mut t3, base) {
-            Ok(_) => *input = t3,
+            Ok(_) => {
+                *input = t3;
+                // the terminated string = the field's callee: the pair
+                // anchors the STRING node (m43_0501: 6.3-8.6); an
+                // UNTERMINATED triple keeps the pre-existing flow (probe
+                // col11: theirs carries only the lexer + brace errors)
+                let sq3_end = offset(input, base);
+                errs.push(ParseError {
+                    offset: name_off,
+                    end: Some(sq3_end),
+                    message: "A column must have a type".to_string(),
+                });
+                errs.push(ParseError {
+                    offset: name_off,
+                    end: Some(sq3_end),
+                    message:
+                        "A column name must be an identifier or a quoted identifier"
+                            .to_string(),
+                });
+            }
             Err(e) => {
                 errs.push(ParseError {
                     offset: e.offset,
@@ -2721,8 +2743,7 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
             message: String::new(),
             partial_occs: Vec::new(),
         });
-    }
-    if gather == "." {
+    } else if gather == "." {
         // their leftExpression_bp checks isOpToken FIRST: a prefix-invalid
         // op (the member dot) errs UNKNOWN_PREFIX_OP quoting the value
         // (probe m43_0059) — the pair anchors the post-dot point, the
@@ -2751,8 +2772,7 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
             message: String::new(),
             partial_occs: Vec::new(),
         });
-    }
-    if input.starts_with(|c: char| c.is_ascii_digit()) {
+    } else if input.starts_with(|c: char| c.is_ascii_digit()) {
         // (d) a digit-leading token is a NUMBER node in their stream — the
         // name check errs at it and the walk CONTINUES (probe w3: `123
         // 456` = the name error at `123` + 'Invalid column type' at the
@@ -2852,6 +2872,50 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
             Ok(n) => {
                 name = n;
                 name_end = offset(input, base);
+                // their callee = the application expression: a member
+                // chain glues into ONE node (`a.b`, `a . b` — the dot
+                // binds across trivia, probe t_dot) and the chain is
+                // not a variable → the name check errs on the WHOLE
+                // node (col13/col14: the type still parses after;
+                // col12/col15: args=[] → the type error on the same
+                // span)
+                let mut glued = false;
+                loop {
+                    let save_m = *input;
+                    sp(input);
+                    if !input.starts_with('.') {
+                        *input = save_m;
+                        break;
+                    }
+                    let _ = eat(input, ".");
+                    sp(input);
+                    let pend = input
+                        .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+                        .unwrap_or(input.len());
+                    if pend == 0 {
+                        *input = save_m;
+                        break;
+                    }
+                    let part = input[..pend].to_string();
+                    *input = &input[pend..];
+                    name_end = offset(input, base);
+                    name.push('.');
+                    name.push_str(&part);
+                    glued = true;
+                }
+                // their lexer lexes `…` as a FUNCTION token — never a
+                // valid column name: the name check fires ALWAYS (probe
+                // col3: `x` int errs the name error only; col1: no type
+                // on the line → the type error rides the args=[] rule
+                // below; col7: the [pk] list takes the invalid-type)
+                if glued || gather.starts_with('`') {
+                    binder_errors.push((
+                        name_off,
+                        name_end,
+                        "A column name must be an identifier or a quoted identifier"
+                            .to_string(),
+                    ));
+                }
                 // their call-form/streamed name (probe c1/c2): a `,` after
                 // the name continues the node across the comma — `abc, def`
                 // errs the name check at the WHOLE node (2,3-2,11), the

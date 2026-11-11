@@ -1,0 +1,4 @@
+Table t {
+  a int
+  'x'
+}
