@@ -5352,7 +5352,26 @@ fn ref_stmt(
         }));
     }
     if !eat(input, ":") {
-        return fail(offset(input, base), "expected ':' after Ref");
+        // p2 (`Ref r]x: a.b > c.d`): their elementDeclaration's body
+        // check errs at the offending token and the sync consumes to the
+        // `:` — the inline ref still parses (the binder errors ride)
+        let mut probe = *input;
+        let tok_len = consume_one_token(&mut probe).unwrap_or(1);
+        let jstart = offset(input, base);
+        errs.push(ParseError {
+            offset: jstart,
+            end: Some(jstart + tok_len),
+            message: "Expect an opening brace '{' or a colon ':'".to_string(),
+        });
+        loop {
+            if input.is_empty() || peek_is(input, ":") {
+                break;
+            }
+            if consume_one_token(input).is_none() {
+                break;
+            }
+        }
+        let _ = eat(input, ":");
     }
     ws(input);
     let body_input = *input;
@@ -7061,7 +7080,9 @@ fn enum_def(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Enum
     // full span errs and is dropped, then the scan continues to `{` (the
     // body still parses — probe m43_0034: `Enum e_statu\ns {` errs at
     // the `s` token, the body follows)
+    let mut header_errored = false;
     if !input.is_empty() && !peek_is(input, "{") {
+        header_errored = true;
         let mut probe = *input;
         let tok_len = consume_one_token(&mut probe).unwrap_or(1);
         let jstart = offset(input, base);
@@ -7080,12 +7101,16 @@ fn enum_def(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Enum
         }
     }
     if input.is_empty() {
+        // p4 (`Enum e]x` at EOF): the discard already erred at the junk
+        // token — theirs emits NO second check at the EOF point
         let eof = offset(input, base);
-        errs.push(ParseError {
-            offset: eof,
-            end: Some(eof),
-            message: "Expect an opening brace '{' or a colon ':'".to_string(),
-        });
+        if !header_errored {
+            errs.push(ParseError {
+                offset: eof,
+                end: Some(eof),
+                message: "Expect an opening brace '{' or a colon ':'".to_string(),
+            });
+        }
         return Ok(Enum {
             name: String::new(),
             schema: None,
@@ -7476,7 +7501,33 @@ fn project(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Proje
     };
     ws(input);
     if !eat(input, "{") {
-        return fail(offset(input, base), "expected '{' after project name");
+        // p3 (`Project p]x { }`): their body check errs at the offending
+        // token and the sync consumes to the `{` — the body still parses
+        let mut probe = *input;
+        let tok_len = consume_one_token(&mut probe).unwrap_or(1);
+        let jstart = offset(input, base);
+        errs.push(ParseError {
+            offset: jstart,
+            end: Some(jstart + tok_len),
+            message: "Expect an opening brace '{' or a colon ':'".to_string(),
+        });
+        if !input.starts_with('{') {
+            match input.find('{') {
+                Some(k) => {
+                    *input = &input[k..];
+                    let _ = eat(input, "{");
+                }
+                None => {
+                    return Ok(Project {
+                        name,
+                        span: start..offset(input, base),
+                        database_type: None,
+                        note: None,
+                        binder_errors: Vec::new(),
+                    });
+                }
+            }
+        }
     }
     let mut p = Project {
         name,
