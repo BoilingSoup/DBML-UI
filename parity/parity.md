@@ -623,7 +623,7 @@ tools below. Never say done when the sweep still finds shapes.
   (the pre-child-loop engine — the round-42/43 ports may move it; the
   next seed-43 re-measure tells).
 
-## The rounds 47-51 RESULT + the round-52 queue
+## The rounds 47-52 RESULT + the round-53 queue
 
 - RESOLVED (round 47): the two recorded column-pair shapes. (1) The
   `'''` TRIPLE-QUOTE header gather — theirs = the consumeUntil scan
@@ -678,10 +678,20 @@ tools below. Never say done when the sweep still finds shapes.
   binds the left endpoint's variables even with the tuple side missing
   (Table 'a' does not exist 1,7-1,8) — only the variable-less bindees
   skip. t1 FULLY IDENTICAL (battery y1). Seed-77 140→141/300.
-- ROUND-52 QUEUE (probed, unported):
-  * the custom-element pair span cluster (33 extra / 31 missing
-    'A Custom element can only appear') — the element-node spans in
-    the composite shapes;
+- ROUND 52 LANDED: the custom-element name's BROKEN-BRACKET
+  extension — a LATER-LINE unclosed `[` = their lexer's junk token:
+  'Expect a closing bracket' errs at the EOF point and the contents'
+  idents ride the NAME node (z1 `a int\n [pk, not null`: the name node
+  = 1,5-2,15, the element = 1,3-2,15, NO setting-list error); the
+  SAME-LINE `[` stays the settings branch (e3/e10/e27 un-regressed)
+  and the later-line PLAIN idents do NOT join the name (v3/v4: the
+  name stays `int`, the body check errs at them). Battery aa1
+  promoted. Seed-77 141→142/300.
+- ROUND-53 QUEUE (probed, unported):
+  * the custom-element pair span cluster remainder (32 extra / 30
+    missing) — the composite element-node spans (m77_0014's
+    2,13-3,28 start-at-the-type-arg shape, m77_0039's `Tabl[e orders {`,
+    m77_0043's Note-sticky span);
   * the 'Expect an identifier' stack (31 missing / 17 extra);
   * s5 (`, 1 int` at a field start): theirs = ONE name error at
     1,10-2,6 — the span starts at the TABLE'S OPEN-BRACE END and ends
