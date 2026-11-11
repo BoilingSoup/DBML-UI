@@ -1885,19 +1885,19 @@ mod doc_tests {
 #[cfg(test)]
 mod error_tests {
     use super::*;
-    use crate::app::{update, App};
+    use crate::app::App;
 
     fn broken_app() -> App {
-        // 'Table' with no name: error points at the '{'
-        let mut app = App::with_source("Table {\n  id integer [pk]\n}\n".into());
-        let _ = update(
-            &mut app,
-            crate::app::Message::KeyPressed(
-                crate::editor::KeyCode::Char('i'),
-                crate::editor::KeyModifiers::NONE,
-            ),
-        );
-        app
+        // junk between the table name and the brace: a PARSE error pointing
+        // at the junk — ours and theirs agree ("Expect an opening brace
+        // '{' or a colon ':'" @ row 1 col 13, theirs-dump-verified). A
+        // bare `Table {` with no name is NOT a parse error anymore (nor in
+        // theirs): their parser recovers it and the validator flags
+        // "A Table must have a name" (code 3002) spanning the element.
+        // (No key events here: a KeyPressed Char('i') TYPES an `i` in the
+        // default non-vim mode, which would garble the fixture — the
+        // with_source pipeline already parsed and validated.)
+        App::with_source("Table users junk {\n  id integer [pk]\n}\n".into())
     }
 
     #[test]
@@ -2024,7 +2024,12 @@ mod error_tests {
         let app = App::with_source("Table users {\n  id integer [pk]\n}\ngibberish\n".into());
         assert!(!app.cur().parse_errors.is_empty(), "fixture is broken");
         let marks = error_marks(&app);
-        assert_eq!(marks[0].row, 3, "the gibberish mark is on the last line");
+        // the first parse error anchors at EOF, one row PAST the gibberish
+        // token (theirs-dump-verified: their first diagnostic is the same
+        // "Unexpected EOF" @ the row after the token, code 1002); the
+        // gibberish line itself stays marked by the spanned "A Custom
+        // element can only appear in a Project or a Dep" (their rows 4-5)
+        assert_eq!(marks[0].row, 4);
         // two rows under the buffer, aligned with the marked token
         let p = pos_to_px(
             crate::editor::buffer::Pos {

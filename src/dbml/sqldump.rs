@@ -2081,18 +2081,23 @@ impl Importer {
             };
             out.push_str(&head);
             for c in &t.cols {
+                // setting order = their getFieldLines: unique, pk,
+                // not null, increment, check, default, (ref), note
                 let mut settings = Vec::new();
+                if c.unique {
+                    settings.push("unique".into());
+                }
                 if c.pk {
                     settings.push("pk".into());
+                }
+                if c.not_null {
+                    settings.push("not null".into());
                 }
                 if c.increment {
                     settings.push("increment".into());
                 }
-                if c.unique {
-                    settings.push("unique".into());
-                }
-                if c.not_null {
-                    settings.push("not null".into());
+                if let Some(ch) = &c.check {
+                    settings.push(format!("check: {ch}"));
                 }
                 if let Some(d) = &c.default {
                     if d.starts_with("`nextval(") {
@@ -2121,9 +2126,6 @@ impl Importer {
                 if let Some(n) = &c.note {
                     settings.push(format!("note: {}", super::fmt::quote_note(n)));
                 }
-                if let Some(ch) = &c.check {
-                    settings.push(format!("check: {ch}"));
-                }
                 let ty = if c.ty.is_empty() {
                     "int".to_string()
                 } else if c.ty.starts_with('"') && c.ty.ends_with('"') {
@@ -2143,32 +2145,9 @@ impl Importer {
                 }
                 out.push('\n');
             }
-            if !t.indexes.is_empty() {
-                out.push_str("\n  indexes {\n");
-                for (cols, name, unique, ty, pk) in &t.indexes {
-                    let col_list = cols.iter().map(|c| q(c)).collect::<Vec<_>>().join(", ");
-                    let mut settings = Vec::new();
-                    if *pk {
-                        settings.push("pk".into());
-                    }
-                    if *unique {
-                        settings.push("unique".into());
-                    }
-                    if let Some(n) = name {
-                        settings.push(format!("name: '{}'", n.replace('\'', "''")));
-                    }
-                    if let Some(ty) = ty {
-                        settings.push(format!("type: {ty}"));
-                    }
-                    let suffix = if settings.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" [{}]", settings.join(", "))
-                    };
-                    out.push_str(&format!("    ({col_list}){suffix}\n"));
-                }
-                out.push_str("  }\n");
-            }
+            // sub-block order = their exportTables: fields, Checks,
+            // Indexes, Note (the table's closing brace follows the last
+            // sub-block with no blank line)
             if !t.checks.is_empty() {
                 out.push_str("\n  Checks {\n");
                 for (name, expr) in &t.checks {
@@ -2180,8 +2159,57 @@ impl Importer {
                 }
                 out.push_str("  }\n");
             }
+            if !t.indexes.is_empty() {
+                // their getIndexLines: an expression column renders
+                // backticked verbatim, a single plain column stays bare,
+                // multiple columns get one parenthesized group (a single
+                // expression's own parens are NOT doubled)
+                let render_col = |c: &String| -> String {
+                    let plain = !c.is_empty()
+                        && c.chars()
+                            .all(|ch| ch.is_alphanumeric() || ch == '_');
+                    if plain {
+                        c.clone()
+                    } else {
+                        format!("`{c}`")
+                    }
+                };
+                out.push_str("\n  Indexes {\n");
+                for (cols, name, unique, ty, pk) in &t.indexes {
+                    let line_body = if cols.len() == 1 {
+                        render_col(&cols[0])
+                    } else {
+                        format!(
+                            "({})",
+                            cols.iter().map(render_col).collect::<Vec<_>>().join(", ")
+                        )
+                    };
+                    // setting order = their getIndexLines: pk, type,
+                    // unique, name
+                    let mut settings = Vec::new();
+                    if *pk {
+                        settings.push("pk".into());
+                    }
+                    if let Some(ty) = ty {
+                        settings.push(format!("type: {ty}"));
+                    }
+                    if *unique {
+                        settings.push("unique".into());
+                    }
+                    if let Some(n) = name {
+                        settings.push(format!("name: \"{n}\""));
+                    }
+                    let suffix = if settings.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" [{}]", settings.join(", "))
+                    };
+                    out.push_str(&format!("    {line_body}{suffix}\n"));
+                }
+                out.push_str("  }\n");
+            }
             if let Some(n) = &t.note {
-                out.push_str(&format!("  note: {}\n", super::fmt::quote_note(n)));
+                out.push_str(&format!("  Note: {}\n", super::fmt::quote_note(n)));
             }
             out.push_str("}\n\n");
         }
@@ -2231,14 +2259,15 @@ impl Importer {
                 _ => q(ref_table),
             };
             // referential actions ride the Ref settings (upstream goldens
-            // — except Oracle's, which drop them entirely)
+            // — except Oracle's, which drop them entirely); their
+            // exportRefs renders update before delete, lowercased
             let mut st = Vec::new();
             if self.dialect != Dialect::Oracle {
-                if let Some(d) = on_delete {
-                    st.push(format!("delete: {d}"));
-                }
                 if let Some(u) = on_update {
-                    st.push(format!("update: {u}"));
+                    st.push(format!("update: {}", u.to_ascii_lowercase()));
+                }
+                if let Some(d) = on_delete {
+                    st.push(format!("delete: {}", d.to_ascii_lowercase()));
                 }
             }
             let settings = if st.is_empty() {
