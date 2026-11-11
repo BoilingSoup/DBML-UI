@@ -2315,6 +2315,54 @@ fn column(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Column
     let gather = input[..gather_len].to_string();
     let mut name_end;
     let name;
+    if gather.starts_with('\'') && !gather.starts_with("'''") {
+        // r5: a single-quoted token at the field-name position = the
+        // sq-string scan — an unterminated string errs the newline
+        // error at the partial token (2,3-2,22 = to the line end) and
+        // the field DIES (theirs builds no custom element from it)
+        let mut t5 = *input;
+        match note_value(&mut t5, base) {
+            Ok(_) => {
+                // a terminated string as the name = the string value
+                // rides (the name-check = theirs' identifier rule — the
+                // walk continues after the string)
+                *input = t5;
+                name_end = offset(input, base);
+                name = String::new();
+                binder_errors.push((
+                    name_off,
+                    name_end,
+                    "A column name must be an identifier or a quoted identifier"
+                        .to_string(),
+                ));
+                return Ok(Column {
+                    name: String::new(),
+                    name_span: name_off..name_end,
+                    ty: String::new(),
+                    ty_end: name_end,
+                    full_end: name_end,
+                    span: start..offset(input, base),
+                    binder_errors,
+                    settings: Default::default(),
+                });
+            }
+            Err(e) => {
+                errs.push(ParseError {
+                    offset: e.offset,
+                    end: e.end,
+                    message: e.message,
+                });
+                let nl = input.find('\n').unwrap_or(input.len());
+                *input = &input[nl..];
+                return Err(Fail {
+                    offset: offset(input, base),
+                    end: None,
+                    message: String::new(),
+                    partial_occs: Vec::new(),
+                });
+            }
+        }
+    }
     if gather.starts_with("'''") {
         // j3: a `'''` at the field-name position = their lexer's
         // triple-quote token — the consumeUntil scan errs 'EOF reached
