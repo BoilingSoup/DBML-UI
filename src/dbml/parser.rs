@@ -397,6 +397,24 @@ fn note_value(input: &mut &str, base: usize) -> R<String> {
 fn type_str(input: &mut &str, base: usize) -> R<String> {
     let mut out = String::new();
     loop {
+        if let Some(rest) = input.strip_prefix('`') {
+            // w1: the backtick-quoted token at the type position = the
+            // verbatim consume to the close backtick (the dq-branch's
+            // sibling — the mis-scan = the quote-family eating the
+            // backtick as an unterminated scan: 'EOF reached' @2,20)
+            let btq = offset(input, base);
+            let close = rest.find('`').ok_or_else(|| {
+                Fail {
+                    offset: btq,
+                    end: Some(btq + rest.len() + 1),
+                    message: "EOF reached while parsing".to_string(),
+                    partial_occs: Vec::new(),
+                }
+            })?;
+            out.push_str(&input[..close + 2]);
+            *input = &rest[close + 1..];
+            continue;
+        }
         if let Some(rest) = input.strip_prefix('"') {
             // their quoted identifier: consumeUntil('"') - the EOF/newline
             // failures anchor the PARTIAL TOKEN like the string scans
