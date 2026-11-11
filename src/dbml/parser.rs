@@ -4154,29 +4154,44 @@ fn custom_element(
     let mut settings_span: Option<Span> = None;
     if peek_is(input, "[") {
         let ls = offset(input, base);
-        // their node spans are the UNION of the args' spans — the swallow's
-        // junk tokens are markInvalid'ed and ride in NO arg, so the
-        // setting-list node (and with it the element node) ends at the
-        // last REAL attribute's end, not at the swallow tail
-        let list_res = settings_list_occs(input, base, errs, false);
-        let real_end = match &list_res {
-            // a normally-closed list: the `]` is real, the consumption end
-            // IS the real end; a list that died at EOF returns Ok too — its
-            // real end is the last REAL attribute's end (the swallow's junk
-            // rides in no node)
-            Ok((_, occs, closed)) => {
-                // the occ's own end covers the parsed value (the union
-                // rule); the value_span's INIT point (the value position
-                // after the trivia) is not a node
-                if *closed {
-                    offset(input, base)
-                } else {
-                    occs.iter().map(|o| o.end).max().unwrap_or(offset(input, base))
-                }
+        // d1 (`Tabl[e orders {` + a nested `[...]`): their element's list
+        // = the FLAT bracket scan — the ListExpressionNode = [`[`..the
+        // FIRST `]`] inclusive (the trace: [4,36) through the nested
+        // list's close); the contents = expressions (junk-tolerant) and
+        // the entries are never validated (the binder flags the list
+        // itself). No `]` in the rest = the unclosed-list flow below.
+        match input.find(']') {
+            Some(k) => {
+                *input = &input[k + 1..];
+                settings_span = Some(ls..offset(input, base));
             }
-            Err(f) => f.partial_occs.iter().map(|o| o.end).max().unwrap_or(f.offset),
-        };
-        settings_span = Some(ls..real_end.max(ls));
+            None => {
+                // their node spans are the UNION of the args' spans — the
+                // swallow's junk tokens are markInvalid'ed and ride in NO
+                // arg, so the setting-list node (and with it the element
+                // node) ends at the last REAL attribute's end, not at the
+                // swallow tail
+                let list_res = settings_list_occs(input, base, errs, false);
+                let real_end = match &list_res {
+                    // a normally-closed list: the `]` is real, the
+                    // consumption end IS the real end; a list that died at
+                    // EOF returns Ok too — its real end is the last REAL
+                    // attribute's end (the swallow's junk rides in no node)
+                    Ok((_, occs, closed)) => {
+                        // the occ's own end covers the parsed value (the
+                        // union rule); the value_span's INIT point (the
+                        // value position after the trivia) is not a node
+                        if *closed {
+                            offset(input, base)
+                        } else {
+                            occs.iter().map(|o| o.end).max().unwrap_or(offset(input, base))
+                        }
+                    }
+                    Err(f) => f.partial_occs.iter().map(|o| o.end).max().unwrap_or(f.offset),
+                };
+                settings_span = Some(ls..real_end.max(ls));
+            }
+        }
         ws(input);
     }
     // their discardUntil: whenever the current token isn't `{`/`:` — AT EOF

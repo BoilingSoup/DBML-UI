@@ -619,9 +619,11 @@ tools below. Never say done when the sweep still finds shapes.
   * eof-parse: 14 cases — 'EOF reached while parsing' missing;
   * the index-field cluster: 'An index field must be an identifier...'
     extra 17 (the `(name) [unique, name: 'ix']` paren-name shape);
-- The seed-43 600-case campaign state: 295/600 at the round-41 base
-  (the pre-child-loop engine — the round-42/43 ports may move it; the
-  next seed-43 re-measure tells).
+- The seed-43 600-case campaign state: **309/600** (re-measured at the
+  round-54 engine, a863d77's parent — from 295 at the round-41 base;
+  the 13 mechanisms transferred without targeting that batch; the
+  divergent set = /tmp/m43-div.json, the dumps /tmp/m43-ours-*.json +
+  /tmp/m43-theirs.json, the case list /tmp/m43-cases.json).
 
 ## The rounds 47-54 RESULT + the round-55 queue
 
@@ -706,9 +708,21 @@ tools below. Never say done when the sweep still finds shapes.
   `}`-inclusion both regressed and were caught by the seed-77
   signature before commit). b1 6/6 (battery bb1). Seed-77 142→143/300
   (the 'Expect an identifier' extras signature GONE from the top-6).
-- ROUND-55 QUEUE (probed, unported):
-  * the composite spans (m77_0039's `Tabl[e orders {`, m77_0043's
-    Note-sticky span);
+- ROUND 55 IN FLIGHT (the white-box method's first round; the WIP
+  commit holds the port): the custom-element settings list = the FLAT
+  bracket scan (d1 `Tabl[e orders {` + a nested `[...]`: their
+  ListExpressionNode = [`[`..the FIRST `]`] INCLUSIVE, the contents =
+  expressions, the entries never validated — the binder flags the list
+  itself; ours' balanced scan swallowed to EOF and diverged into a
+  different recovery path). d1 = 3/4 — the REMAINING DELTA: the `{`
+  inside the list contents errs 'Expect an identifier' at 1,15-1,16
+  (ours' flat scan skips the contents silently). The battery = 110/110
+  with the port; the corpus/lib re-run pending. NEXT: port the
+  `{`-inside-list error, all three gates, promote d1, commit, re-measure
+  both seeds.
+- ROUND-55 QUEUE (after the in-flight port lands):
+  * the composite spans (m77_0039's remaining stack, m77_0043's
+    Note-sticky span) — trace-first;
   * the 'Expect an identifier' stack (the missing remainder);
   * s5's span puzzle, the colon-op cluster (17), the index-field
     paren-name (17), m43_0242 records-comma.
@@ -730,6 +744,39 @@ tools below. Never say done when the sweep still finds shapes.
   `(name) [unique, name: 'ix']` shape.
 - m43_0242's records-comma cluster (17): 'Expect a comma' missing —
   the recorded consume-anchor + the mid-typing recovery finding.
+
+## The white-box tracing method (round 55 onward, user-approved)
+
+The vendored engine (parity/upstream/dbml/packages/dbml-parse/src — the
+driver imports it DIRECTLY, no node_modules copy) is instrumented:
+core/types/errors.ts's CompileError constructor logs every diagnostic to
+stderr when DBML_TRACE=1 is set:
+
+  CE "<message>" @ [<start>,<end>) node=<NodeTypeName> code=<code>
+
+Usage:
+  cd parity/driver && DBML_TRACE=1 npx tsx theirs-dump-many.ts cases.json 2>&1 >/dev/null
+(the JSON goes to stdout, the trace to stderr — redirect separately;
+the harness parity-report stays clean without the env var).
+
+What it answers: every diagnostic's anchor NODE TYPE + span — the
+validator-layer question "which node did it anchor" becomes direct
+instead of inferred from span arithmetic. Evidence: z1's name error =
+an ArrayNode [int..null) (the round-52 broken-bracket port confirmed in
+one trace); d1's list = a ListExpressionNode [4,36) = the FLAT bracket
+scan to the FIRST `]` (the balanced-scan assumption was wrong — one
+trace exposed the whole m77_0039 span family).
+
+Limits: the trace shows the validators' anchors, not the parse-time
+control flow — the rules living IN the parse (the swallow-chain class,
+round 51) still need behavioral probes; the probes become
+confirmations, not searches. The per-cluster deep-dive = instrument the
+specific node builder (core/types/nodes.ts's span setters or the
+parser's node creation) the same env-gated way.
+
+The instrumentation = the HARNESS FIXTURE only — never shipped, never
+committed upstream; if lost, re-create the 6-line env-gated hook in
+errors.ts's constructor.
 
 ## Workflow rules
 
