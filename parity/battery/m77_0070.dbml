@@ -1,0 +1,6 @@
+Table parent { id integer 
+}
+t_id
+}
+Ref: parent.id <>? child.paren
+"Table child { parent_id integer [null]

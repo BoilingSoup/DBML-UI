@@ -1,0 +1,11 @@
+default: 1Table orders {
+  x timestamp [null, increment]
+  indexes {
+    x
+TableGroup g { orders }
+  }
+}
+Enum e_status {
+  open
+  closed [note: 'done']
+}
