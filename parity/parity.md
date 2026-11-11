@@ -1514,17 +1514,45 @@ MULTIPLE mechanisms each (the mutation cases = large multi-construct
 files), the per-case identity needs the whole composite queue, not
 one rule.
 
-## Round 97 queue
+## Round 97 addendum — THE NAMED-COLON BODY GATE (the colon-op cluster)
+
+THE MECHANISM (m43_0001's `Ref r0:` inside the unclosed `Table ñT {`):
+their body parse routes the KEYWORD + NAME + `:` header to the FIELD
+walk, NOT the element dispatch. The rd probes (the table body):
+- rd1 `Ref r0: a.b > c.d` → their FIELD walk errs THREE:
+  'Invalid start of operand ":"' @ the colon (token-anchored) +
+  'A column must have a type' @ the type + 'A column name must be an
+  identifier or a quoted identifier' — all three matched by OUR field
+  walk with NO new field code (the gate was the whole fix);
+- rd8 `Table u: x` / rd9 `Enum e: x` → the same three errors;
+- rd7 `Note: 'x'` (the BARE colon) → 0 errors (the valid table-note
+  element — the element path stays);
+- rd2 `Ref: ...` / rd3 `Ref {` / rd4 `Ref r0 {` (the named BLOCK) /
+  rd6 `Table u {` → 'must appear top-level' with their spans (the
+  element path stays);
+- rd5 `Ref r0` (the bare name, no colon) → their 0 errors (the column
+  `Ref` typed `r0`); ours still dispatches (3 errs) — LEFT OPEN (the
+  bare-name form risks the multi-line headers `Table users\n{`; the
+  gate cannot distinguish them same-line).
+THE FIX: `peek_named_colon_header` (beside peek_kw) + the gate at the
+TWO body dispatch sites — the round-42 child loop and the table-body
+nested dispatch. The PROJECT-block dispatch stays UNGATED (the named
+refs are legal there).
+THE GATES: corpus 78/78, schema 78/78, battery 127/127 (rd1/rd8/rd9
+promoted), lib 122/122, editor 61/61, fuzz, fmt — all green.
+THE SEEDS: **seed-77 = 150/300 (+3), seed-43 = 321/600 (+5)** (the
+dumps /tmp/mut-ours-r97.json + /tmp/m43-ours-r97.json, the lists
+/tmp/mut-div-r97.json + /tmp/m43-div-r97.json).
+
+## Round 98 queue
 
 - The composite queue per the convergence criterion: the
-  m77_0099-family cascade, s5's span puzzle, the colon-op cluster
-  (17), the index-field paren-name (17), m43_0242 records-comma;
-- The importer-emission parity (the raw-contract axis, NEW): our raw
-  import output vs their exporter's — the bool-setting order, the
-  check/default order, the ref-setting rendering, the index
-  paren/grouping style, inline-vs-block Indexes (then the
-  ("mysql_importer","ddl_create") skip retires);
+  m77_0099-family cascade, s5's span puzzle, the index-field
+  paren-name, m43_0242 records-comma;
+- The importer-emission parity (the raw-contract axis): the
+  bool-setting order, the check/default order, the ref-setting
+  rendering, the index paren/grouping style, inline-vs-block Indexes
+  (then the ("mysql_importer","ddl_create") skip retires);
 - The stale canvas::editor::error_tests fixtures (the 3 pre-existing
-  failures at HEAD, outside the recorded gates): the nameless-Table
-  App-pipeline parse and the gibberish mark-row expectation;
+  failures at HEAD, outside the recorded gates);
 - Iterate until a full round adds zero new mechanisms.
