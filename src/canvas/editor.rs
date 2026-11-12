@@ -1011,9 +1011,26 @@ pub struct DocHover {
 pub fn error_marks(app: &App) -> Vec<Mark> {
     let src = app.source();
     let lines: Vec<&str> = src.split('\n').collect();
+    // The marks draw in the BUFFER's row space, and the row below the
+    // document's last numbered line is not a line — no gutter number, no
+    // cursor. Their "expected }" anchors at END OF INPUT — one row past
+    // the trailing newline in the source's split — so the finding's row
+    // folds onto the last content line, where the broken syntax lives.
+    // The squiggle used to render beyond the EOF.
+    let last_content = app.editor().buf.last_content_row();
     let mut marks = Vec::new();
     let mut push = |offset: usize, end_off: Option<usize>, message: &str, warn: bool| {
         let (row, byte_col) = dbml_ui::dbml::parser::line_col_at(src, offset);
+        // an anchor past the document folds onto the last content line AT
+        // ITS END: the phantom row's column 0 is meaningless, and
+        // dbdiagram rides the EOF squiggle on the line's end cell, not
+        // its head
+        let (row, byte_col) = if row > last_content {
+            let len = lines.get(last_content).map(|l| l.len()).unwrap_or(0);
+            (last_content, len)
+        } else {
+            (row, byte_col)
+        };
         let Some(line) = lines.get(row) else {
             return;
         };
@@ -1036,12 +1053,15 @@ pub fn error_marks(app: &App) -> Vec<Mark> {
         // node — for record-row errors that is the whole row; a range
         // ending on a LATER row squiggles every line it crosses, like
         // Monaco: first row start-col to line end, middle rows whole,
-        // last row its start to the end column
+        // last row its start to the end column. An end PAST the document
+        // covers the folded line whole (Monaco clamps the end position to
+        // the line's end).
         match end_off
             .filter(|&e| e > offset)
             .map(|e| dbml_ui::dbml::parser::line_col_at(src, e))
         {
-            Some((erow, ecol)) if erow > row => {
+            Some((raw_erow, ecol)) if raw_erow.min(last_content) > row => {
+                let erow = raw_erow.min(last_content);
                 mark(row, start, line.chars().count(), message, warn);
                 for mid in (row + 1)..erow {
                     if let Some(ml) = lines.get(mid) {
@@ -1049,7 +1069,12 @@ pub fn error_marks(app: &App) -> Vec<Mark> {
                     }
                 }
                 if let Some(ll) = lines.get(erow) {
-                    let s = ll[..ecol.min(ll.len())].chars().count();
+                    let end_byte = if raw_erow > last_content {
+                        ll.len()
+                    } else {
+                        ecol.min(ll.len())
+                    };
+                    let s = ll[..end_byte].chars().count();
                     mark(erow, 0, s, message, warn);
                 }
             }
@@ -1302,14 +1327,17 @@ fn doc_row_content_w(row: &DocRow, text_w: f32) -> f32 {
 }
 
 /// Tooltip placement: below-right of the pointer preferred; an axis that
-/// would leave the pane flips to the other side of the pointer (above /
-/// left, still anchored to it) when the card fits there, and a card that
-/// fits nowhere clamps into the pane — pinned at its top/left edge.
-fn place_rect(hover: Point, w: f32, h: f32, bounds: Rectangle) -> Point {
+/// would leave the pane — or run into the bottom scrollbar's band
+/// (`bottom_reserve`: the horizontal bar floats over the text when it
+/// exists) — flips to the other side of the pointer (above / left, still
+/// anchored to it) when the card fits there, and a card that fits
+/// nowhere clamps into the pane above the band — pinned at its top/left
+/// edge.
+fn place_rect(hover: Point, w: f32, h: f32, bounds: Rectangle, bottom_reserve: f32) -> Point {
     let left = bounds.x + 4.0;
     let top = bounds.y + 4.0;
     let right = bounds.x + bounds.width - 4.0;
-    let bottom = bounds.y + bounds.height - 4.0;
+    let bottom = bounds.y + bounds.height - 4.0 - bottom_reserve;
     let mut x = hover.x + 14.0;
     if x + w > right && hover.x - 14.0 - w >= left {
         x = hover.x - 14.0 - w;
@@ -1324,7 +1352,7 @@ fn place_rect(hover: Point, w: f32, h: f32, bounds: Rectangle) -> Point {
 }
 
 /// Doc tooltip geometry: same placement rules as the error tooltip.
-fn doc_rect(hover: Point, doc: &DocHover, bounds: Rectangle) -> Rectangle {
+fn doc_rect(hover: Point, doc: &DocHover, bounds: Rectangle, bottom_reserve: f32) -> Rectangle {
     // the REAL mono advance the doc text renders with (the editor grid
     // width) — the old 13px*0.6 estimate ran ~7% narrow, so the widest
     // rows' pills drifted into the card's right edge
@@ -1340,13 +1368,21 @@ fn doc_rect(hover: Point, doc: &DocHover, bounds: Rectangle) -> Rectangle {
         + 24.0;
     // title zone + its divider + the rows + the bottom pad
     let h = (doc.rows.len() as f32 * 16.0) + 38.0;
-    Rectangle::new(place_rect(hover, widest, h, bounds), Size::new(widest, h))
+    Rectangle::new(
+        place_rect(hover, widest, h, bounds, bottom_reserve),
+        Size::new(widest, h),
+    )
 }
 
 /// Error tooltip: geometry plus the message wrapped to fit the pane,
 /// placed by `place_rect` like the doc card (flip above/left, clamp as
 /// a last resort).
-fn tooltip_layout(hover: Point, message: &str, bounds: Rectangle) -> (Rectangle, Vec<String>) {
+fn tooltip_layout(
+    hover: Point,
+    message: &str,
+    bounds: Rectangle,
+    bottom_reserve: f32,
+) -> (Rectangle, Vec<String>) {
     let text_w = (FONT_SIZE - 1.0) * CHAR_RATIO;
     let max_chars = (((bounds.width - 32.0) / text_w) as usize).max(10);
     let mut lines = Vec::new();
@@ -1389,7 +1425,7 @@ fn tooltip_layout(hover: Point, message: &str, bounds: Rectangle) -> (Rectangle,
     }
     let w = lines.iter().map(|l| l.chars().count()).max().unwrap_or(10) as f32 * text_w + 24.0;
     let h = lines.len() as f32 * 18.0 + 12.0;
-    let p = place_rect(hover, w, h, bounds);
+    let p = place_rect(hover, w, h, bounds, bottom_reserve);
     (Rectangle::new(p, Size::new(w, h)), lines)
 }
 
@@ -1874,7 +1910,7 @@ mod doc_tests {
                 .collect(),
         };
         let bounds = Rectangle::new(Point::new(0.0, 0.0), Size::new(400.0, 300.0));
-        let r = doc_rect(Point::new(390.0, 285.0), &doc, bounds);
+        let r = doc_rect(Point::new(390.0, 285.0), &doc, bounds, 0.0);
         assert!(r.x + r.width <= bounds.width + 0.5, "{r:?}");
         assert!(r.y >= bounds.y, "{r:?}");
     }
@@ -1894,6 +1930,14 @@ mod error_tests {
         app.cur_mut().diagnostics = diags.iter().map(|d| d.to_diagnostic()).collect();
     }
 
+    #[test]
+    fn dbg_buffer_shape() {
+        let app = App::with_source("Table t {\n  id int\n\n".into());
+        println!("source bytes: {:?}", app.source());
+        println!("line_count: {}", app.editor().buf.line_count());
+        println!("lines: {:?}", app.editor().buf.lines());
+    }
+
     fn broken_app() -> App {
         // junk between the table name and the brace: a PARSE error pointing
         // at the junk — ours and theirs agree ("Expect an opening brace
@@ -1905,6 +1949,57 @@ mod error_tests {
         // default non-vim mode, which would garble the fixture — the
         // with_source pipeline already parsed and validated.)
         App::with_source("Table users junk {\n  id integer [pk]\n}\n".into())
+    }
+
+    #[test]
+    fn a_diagnostic_past_the_last_line_folds_onto_the_last_content_line() {
+        // their "expected }" anchors at END OF INPUT — one row past the
+        // trailing newline in the source's split. The marks draw in the
+        // BUFFER's row space, where the row below the last numbered line
+        // is not a line — the finding folds onto the last content line
+        // (the squiggle used to render beyond the EOF, db.txt).
+        let mut app = App::with_source("Table t {\n  id int\n}\n".into());
+        app.focus = crate::app::Focus::Editor;
+        // the user's flow: delete the closing brace on the last line
+        let last = app.editor().buf.line_count() - 1;
+        app.editor_mut()
+            .buf
+            .move_cursor(crate::editor::buffer::Move::Jump(last, 1));
+        let _ = crate::app::update(
+            &mut app,
+            crate::app::Message::KeyPressed(
+                crate::editor::KeyCode::Backspace,
+                crate::editor::KeyModifiers::NONE,
+            ),
+        );
+        assert!(
+            app.source().ends_with("\n\n"),
+            "the brace is gone: {:?}",
+            app.source()
+        );
+        fill_their_diags(&mut app);
+        let marks = error_marks(&app);
+        assert!(
+            marks.iter().any(|m| m.message.contains("closing brace")),
+            "the missing closer is flagged: {marks:?}"
+        );
+        let last_content = app.editor().buf.last_content_row();
+        for m in &marks {
+            assert!(
+                m.row <= last_content,
+                "no mark past the last content line: {m:?}"
+            );
+        }
+        let folded = marks
+            .iter()
+            .find(|m| m.row == last_content && m.message.contains("closing brace"))
+            .expect("the folded mark rests on the last content line");
+        assert_eq!(
+            folded.start,
+            app.editor().buf.line(last_content).chars().count(),
+            "the squiggle rides the line's END cell, like dbdiagram: {folded:?}"
+        );
+        assert_eq!(folded.end, folded.start + 1);
     }
 
     #[test]
@@ -2038,40 +2133,53 @@ mod error_tests {
     #[test]
     fn hovering_below_the_last_line_misses() {
         // gibberish after the last block: the error mark rides the final
-        // line, and empty space under the buffer must not resolve onto
-        // that line — px_to_pos clamps its row, so the mark hit-test, the
-        // word lookup and the I-beam def cursor all used to fire there
+        // line. Their first parse error anchors at EOF, one row PAST the
+        // gibberish token (theirs-dump-verified: "Unexpected EOF" @ the
+        // row after the token, code 1002) — it FOLDS onto the last
+        // content line now (the row below the last numbered line is not
+        // a line: no gutter number, no cursor — the mark used to render
+        // beyond the EOF there). The gibberish line itself stays marked
+        // by the spanned "A Custom element can only appear in a Project
+        // or a Dep" (their rows 4-5)
         let mut app =
             App::with_source("Table users {\n  id integer [pk]\n}\ngibberish\n".into());
         assert!(!app.cur().parse_errors.is_empty(), "fixture is broken");
         fill_their_diags(&mut app);
         let marks = error_marks(&app);
-        // the first parse error anchors at EOF, one row PAST the gibberish
-        // token (theirs-dump-verified: their first diagnostic is the same
-        // "Unexpected EOF" @ the row after the token, code 1002); the
-        // gibberish line itself stays marked by the spanned "A Custom
-        // element can only appear in a Project or a Dep" (their rows 4-5)
-        assert_eq!(marks[0].row, 4);
-        // two rows under the buffer, aligned with the marked token
-        let p = pos_to_px(
+        let last_content = app.editor().buf.last_content_row();
+        assert_eq!(marks[0].row, last_content, "the EOF mark folds onto the last line");
+        // hovering the folded mark ON the last line resolves
+        let on_mark = pos_to_px(
             crate::editor::buffer::Pos {
-                row: 6,
+                row: last_content,
                 col: marks[0].start,
             },
             app.cur().editor_scroll,
             app.cur().editor_hscroll,
         );
-        assert!(mark_hover_at(&app, &marks, p).is_none());
-        // the clamped word used to resolve too (the last line's token)
-        assert!(word_at(&app, p).is_none());
-        assert!(doc_hover_at(&app, p).is_none());
+        assert!(mark_hover_at(&app, &marks, on_mark).is_some());
+        // a point BELOW the buffer clamps onto the last line too
+        // (px_to_pos), but a column PAST the mark's span misses it — the
+        // word lookup and the I-beam def cursor still miss (no token
+        // under the clamped cell: the gibberish word ends earlier)
+        let below = pos_to_px(
+            crate::editor::buffer::Pos {
+                row: last_content + 2,
+                col: app.editor().buf.line(last_content).chars().count() + 3,
+            },
+            app.cur().editor_scroll,
+            app.cur().editor_hscroll,
+        );
+        assert!(mark_hover_at(&app, &marks, below).is_none());
+        assert!(word_at(&app, below).is_none());
+        assert!(doc_hover_at(&app, below).is_none());
     }
 
     #[test]
     fn tooltip_wraps_and_clamps_into_pane() {
         let bounds = Rectangle::new(Point::new(0.0, 0.0), Size::new(400.0, 300.0));
         let long = "x".repeat(120);
-        let (r, lines) = tooltip_layout(Point::new(390.0, 280.0), &long, bounds);
+        let (r, lines) = tooltip_layout(Point::new(390.0, 280.0), &long, bounds, 0.0);
         assert!(lines.len() > 1, "long message wraps: {lines:?}");
         assert!(
             r.x >= bounds.x && r.x + r.width <= bounds.x + bounds.width + 0.5,
@@ -2082,9 +2190,36 @@ mod error_tests {
             "{r:?}"
         );
         // short message stays a single line
-        let (r, lines) = tooltip_layout(Point::new(20.0, 20.0), "expected name", bounds);
+        let (r, lines) = tooltip_layout(Point::new(20.0, 20.0), "expected name", bounds, 0.0);
         assert_eq!(lines, vec!["expected name".to_string()]);
         assert!(r.y > 20.0, "below the cursor: {r:?}");
+    }
+
+    #[test]
+    fn hover_cards_flip_above_and_clamp_clear_of_the_bottom_scrollbar() {
+        let bounds = Rectangle::new(Point::new(0.0, 0.0), Size::new(400.0, 300.0));
+        let w = 100.0;
+        let h = 40.0;
+        // a hover whose card fits under the bare pane edge but lands on
+        // the bottom scrollbar's band: the band pushes the card to the
+        // alternative (above) position
+        let hover = Point::new(100.0, 228.0);
+        let bare = place_rect(hover, w, h, bounds, 0.0);
+        assert!(bare.y + h <= bounds.height - 4.0, "fits under the bare edge");
+        assert!(
+            bare.y + h > bounds.height - 4.0 - SCROLLBAR_W,
+            "the bare placement covers the band: {bare:?}"
+        );
+        let with_band = place_rect(hover, w, h, bounds, SCROLLBAR_W);
+        assert!(
+            with_band.y + h <= bounds.height - 4.0 - SCROLLBAR_W,
+            "the card clears the band: {with_band:?}"
+        );
+        assert!(with_band.y < bare.y, "the card flipped above the pointer");
+        // a card that fits nowhere clamps into the pane (pinned at the
+        // top edge) — the flip was tried first
+        let clamped = place_rect(Point::new(100.0, 280.0), w, 290.0, bounds, SCROLLBAR_W);
+        assert_eq!(clamped.y, bounds.y + 4.0, "pinned at the top edge");
     }
 
     #[test]
@@ -2095,19 +2230,19 @@ mod error_tests {
             rows: vec![DocRow::plain("id integer".into())],
         };
         // roomy pane: below-right of the pointer wins
-        let r = doc_rect(Point::new(100.0, 100.0), &doc, bounds);
+        let r = doc_rect(Point::new(100.0, 100.0), &doc, bounds, 0.0);
         assert_eq!(r.x, 114.0);
         assert_eq!(r.y, 100.0 + LINE_HEIGHT + 4.0);
         // near the bottom: flips above, anchored just over the pointer line
-        let r = doc_rect(Point::new(100.0, 660.0), &doc, bounds);
+        let r = doc_rect(Point::new(100.0, 660.0), &doc, bounds, 0.0);
         assert!(r.y + r.height <= 700.0 - 4.0, "fits vertically: {r:?}");
         assert_eq!(r.y, 660.0 - r.height - 6.0);
         // near the right edge: flips left, right edge 14px from the pointer
-        let r = doc_rect(Point::new(470.0, 100.0), &doc, bounds);
+        let r = doc_rect(Point::new(470.0, 100.0), &doc, bounds, 0.0);
         assert!(r.x + r.width <= 500.0 - 4.0, "fits horizontally: {r:?}");
         assert_eq!(r.x + r.width, 470.0 - 14.0);
         // near both edges: both axes flip
-        let r = doc_rect(Point::new(470.0, 660.0), &doc, bounds);
+        let r = doc_rect(Point::new(470.0, 660.0), &doc, bounds, 0.0);
         assert!(r.x + r.width <= 500.0 - 4.0 && r.y + r.height <= 700.0 - 4.0, "{r:?}");
         // a card taller than the pane fits nowhere: pinned at the top
         let big = DocHover {
@@ -2116,7 +2251,7 @@ mod error_tests {
                 .map(|i| DocRow::plain(format!("col{i} integer")))
                 .collect(),
         };
-        let r = doc_rect(Point::new(100.0, 350.0), &big, bounds);
+        let r = doc_rect(Point::new(100.0, 350.0), &big, bounds, 0.0);
         assert_eq!(r.y, 4.0, "pinned at the pane top: {r:?}");
         assert!(r.x >= 4.0 && r.x + r.width <= 500.0 - 4.0, "{r:?}");
     }
@@ -2744,12 +2879,19 @@ impl canvas::Program<Message> for EditorOverlay<'_> {
         let mut frame = canvas::Frame::new(renderer, bounds.size());
         let app = self.app;
         let marks = error_marks(app);
+        // the hover cards keep clear of the bottom scrollbar's band: the
+        // horizontal bar floats over the text when there is overflow
+        let bottom_reserve = match scrollbar_layout(app, bounds).1 {
+            Some(_) => SCROLLBAR_W,
+            None => 0.0,
+        };
         // tooltips on hover: errors win, then definition docs; suppressed
         // while the completion popup is open
         if let Some(hover) = app.editor_hover {
             if app.completion.is_none() {
                 if let Some(m) = mark_hover_at(app, &marks, hover) {
-                    let (rect, lines) = tooltip_layout(hover, &m.message, bounds);
+                    let (rect, lines) =
+                        tooltip_layout(hover, &m.message, bounds, bottom_reserve);
                     frame.fill(
                         &canvas::Path::rounded_rectangle(
                             rect.position(),
@@ -2789,7 +2931,7 @@ impl canvas::Program<Message> for EditorOverlay<'_> {
                         });
                     }
                 } else if let Some(doc) = doc_hover_at(app, hover) {
-                    let rect = doc_rect(hover, &doc, bounds);
+                    let rect = doc_rect(hover, &doc, bounds, bottom_reserve);
                     // the diagram popups' card family: #303137, hairline
                     // border, rounded 8, a two-fill fake shadow (the canvas
                     // has no blur) — and dbml syntax coloring on the
