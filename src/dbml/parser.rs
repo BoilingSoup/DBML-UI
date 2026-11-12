@@ -1229,6 +1229,7 @@ enum SettingVal {
 /// until `]`, a `}` encounter, or EOF (a clean line end stops the
 /// application — hasTrailingNewLines). The gathered tokens are the ITEM's
 /// value application (their MISSING_SPACES ride along).
+#[allow(dead_code)] // Junk = theirs' outcome space; the matches carry it
 enum SwallowEnd {
     Bracket,
     Brace,
@@ -1290,7 +1291,7 @@ fn swallow_gather(
         return (SwallowEnd::Eof, None, Vec::new(), None, None);
     }
     let mut toks: Vec<RTok> = Vec::new();
-    let mut ending = SwallowEnd::Eof;
+    let ending;
     let mut brace_tok = None;
     let mut junk_tok: Option<RTok> = None;
     // the VALUE's application stops at a clean line end (their
@@ -1548,6 +1549,7 @@ fn settings_list(
 /// handles it (the block closes at the brace: the empty-message sentinel),
 /// otherwise the list handles its own error (synchronizeList consumes to
 /// the next `,`/`]`, `}`es included; at EOF the closing-bracket error).
+#[allow(dead_code)] // CloseOk = the scan-at-EOF arm the callers reach through Continue
 enum ListBrace {
     /// the block closes: return the empty-message sentinel, input at the `}`
     BlockClose,
@@ -1560,8 +1562,8 @@ enum ListBrace {
 
 fn list_brace_dispatch(
     input: &mut &str,
-    base: usize,
-    errs: &mut Vec<ParseError>,
+    _base: usize,
+    _errs: &mut Vec<ParseError>,
     block_ctx: bool,
 ) -> ListBrace {
     // their handler scan: the nearest `,`/`]`/`}` token decides — a `,`/`]`
@@ -1803,7 +1805,7 @@ fn settings_list_occs(
         // the VALUE node's span: their settings-note checks anchor the
         // value expression, not the key
         let mut v_span = offset(input, base)..offset(input, base);
-        let mut value_attempted = false;
+        let mut value_attempted;
         if eat(input, ":") {
             item_had_colon = true;
             value_attempted = true;
@@ -2310,7 +2312,6 @@ fn settings_list_occs(
                                     // bracket/EOF: the occurrence = the stream
                                     // span (c4c's EOF note check, c17's comma)
                                     if let Some(vs) = &vspan {
-                                        v_span = vs.clone();
                                         let text = whole[vs.start - whole_start..vs.end - whole_start].to_string();
                                         occs.push(super::ast::SettingOcc {
                                             broken: true,
@@ -2344,7 +2345,6 @@ fn settings_list_occs(
                         match ending {
                             SwallowEnd::Bracket | SwallowEnd::Comma => {
                                 if let Some(vs) = &vspan {
-                                    v_span = vs.clone();
                                     let text = whole[vs.start - whole_start..vs.end - whole_start].to_string();
                                     occs.push(super::ast::SettingOcc {
                                         broken: true,
@@ -2387,7 +2387,6 @@ fn settings_list_occs(
                             }
                             SwallowEnd::Eof => {
                                 if let Some(vs) = &vspan {
-                                    v_span = vs.clone();
                                     let text = whole[vs.start - whole_start..vs.end - whole_start].to_string();
                                     occs.push(super::ast::SettingOcc {
                                         broken: true,
@@ -2453,7 +2452,6 @@ fn settings_list_occs(
                                 // width, then the handler dispatch decides
                                 let bt = brace.unwrap();
                                 if let Some(vs) = &vspan {
-                                    v_span = vs.clone();
                                     let text = whole[vs.start - whole_start..vs.end - whole_start].to_string();
                                     occs.push(super::ast::SettingOcc {
                                         broken: true,
@@ -3242,7 +3240,7 @@ fn column(
         // expression — the same-line rule): the field = {callee: name(…),
         // args: []} — the callee isn't a variable, so BOTH validateColumn
         // errors anchor the callee node (name .. the paren group's end)
-        let p_start = offset(input, base);
+        let _p_start = offset(input, base);
         let mut depth = 0i32;
         let mut end = input.len();
         for (k, &c) in input.as_bytes().iter().enumerate() {
@@ -5271,7 +5269,7 @@ fn custom_element(
                 }
                 let mut probe = *input;
                 let tok_len = consume_one_token(&mut probe).unwrap_or(1);
-                let junk = input[..tok_len.min(input.len())].to_string();
+                let _junk = input[..tok_len.min(input.len())].to_string();
                 errs.push(ParseError {
                     offset: eof,
                     end: Some(eof + tok_len),
@@ -5302,7 +5300,7 @@ fn custom_element(
                 // PLAIN idents do NOT join the name (probe v3/v4: the
                 // name stays `int`, the body check errs at them)
                 let save0 = *input;
-                let send0 = name_end;
+                let _send0 = name_end;
                 ws(input);
                 let crossed_nl = save0.len() > input.len()
                     && save0[..save0.len() - input.len()].contains('\n');
@@ -6429,7 +6427,7 @@ fn table(
         ws(input);
     }
     if peek_is(input, "[") {
-        let (kvs, occs, list_closed) = settings_list_occs(input, base, errs, false)?;
+        let (kvs, occs, _list_closed) = settings_list_occs(input, base, errs, false)?;
         // their tableModule's settings validation: headercolor/note/dep
         // have their own rules; EVERY other key is free-form custom
         // metadata — once-only, and the value must be a string, a color,
@@ -6758,7 +6756,7 @@ fn table(
                 &mut nested_counts,
             );
             match item {
-                Ok(it) => {
+                Ok(_it) => {
                     // their element kind = the TYPE keyword that triggered
                     // the parse, not the recovered item (a trailing-dot
                     // `Ref: a.b - c.` still recovers as a REF — probe
@@ -8556,46 +8554,6 @@ fn is_equal_tuple_operands(n: &RNode) -> bool {
 /// callee checks (must-be-binary, per-side Invalid column reference,
 /// Unequal) vs the nodeSettings args walk (one single-binary per
 /// non-settings arg)
-fn validate_fields_split(callee: &RNode, args: &[RNode]) -> (Vec<(usize, String)>, Vec<(usize, String)>) {
-    let mut callee_errors = Vec::new();
-    let mut arg_errors = Vec::new();
-    if !is_binary_relationship(callee) {
-        callee_errors.push((
-            callee.start(),
-            "A Ref field must be a binary relationship".to_string(),
-        ));
-    } else if let RNode::Infix { left, right, .. } = callee {
-        // their per-side destructure counts
-        for side in [left.as_ref(), right.as_ref()] {
-            let frag = destructure_cvt(side).unwrap_or_default();
-            if frag.variables.len() + frag.tuple.len().min(1) < 2 {
-                callee_errors.push((side.start(), "Invalid column reference".to_string()));
-            }
-        }
-    }
-    if !is_equal_tuple_operands(callee) {
-        callee_errors.push((
-            callee.start(),
-            "Unequal fields in ref endpoints".to_string(),
-        ));
-    }
-    // nodeSettings: a trailing or leading `[...]` is the settings list;
-    // every other arg errs once
-    let mut rest: Vec<&RNode> = args.iter().collect();
-    if matches!(rest.last(), Some(RNode::Array { .. })) {
-        rest.pop();
-    } else if matches!(rest.first(), Some(RNode::Array { .. })) {
-        rest.remove(0);
-    }
-    for a in rest {
-        arg_errors.push((
-            a.start(),
-            "A Ref field should only have a single binary relationship".to_string(),
-        ));
-    }
-    (callee_errors, arg_errors)
-}
-
 // ---- bindFields (global_modules/ref/bind.ts): scan [callee, ...args],
 // skip bindees whose table or column fragment is absent, and hand the
 // surviving chains to validate.rs for their nodeReferee resolution (the
@@ -8977,7 +8935,7 @@ fn ref_body_pipeline_mode(
                 .collect();
             // the rest list may skip a leading Array: align the ends by
             // walking args with the same skip
-            let mut skip_head = matches!(args.first(), Some(RNode::Array { .. }))
+            let skip_head = matches!(args.first(), Some(RNode::Array { .. }))
                 && !matches!(args.last(), Some(RNode::Array { .. }));
             arg_ends = arg_ends
                 .into_iter()
@@ -8985,7 +8943,6 @@ fn ref_body_pipeline_mode(
                 .filter(|(i, _)| !(skip_head && *i == 0))
                 .map(|(_, e)| e)
                 .collect();
-            skip_head = false;
             rest.iter()
                 .zip(arg_ends.iter())
                 .map(|(a, e)| {

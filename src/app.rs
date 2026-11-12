@@ -3038,6 +3038,12 @@ fn save_dialog_task(
 ) -> iced::Task<Message> {
     let (tx, rx) = smol::channel::bounded(1);
     iced::Task::future(async move {
+        // the dialog thread spawns when the task RUNS — a dropped task
+        // (the tests) must never pop a native dialog
+        std::thread::spawn(move || {
+            let outcome = pick_save_path_blocking(&default_name, filter_name, patterns, title);
+            let _ = smol::block_on(tx.send(outcome));
+        });
         match rx.recv().await {
             Ok(PickOutcome::Chosen(p)) => then(p),
             _ => Message::PickerDismissed,
@@ -3176,6 +3182,10 @@ fn pick_file_blocking(kind: PickerKind) -> PickOutcome {
 fn open_file_picker_task(kind: PickerKind) -> iced::Task<Message> {
     let (tx, rx) = smol::channel::bounded(1);
     iced::Task::future(async move {
+        std::thread::spawn(move || {
+            let outcome = pick_file_blocking(kind);
+            let _ = smol::block_on(tx.send(outcome));
+        });
         match rx.recv().await {
             Ok(PickOutcome::Chosen(p)) => Message::OpenRecent(p),
             _ => Message::PickerDismissed,
@@ -3195,6 +3205,10 @@ fn export_pick_task(
 ) -> iced::Task<Message> {
     let (tx, rx) = smol::channel::bounded(1);
     iced::Task::future(async move {
+        std::thread::spawn(move || {
+            let outcome = pick_save_path_blocking(&default_name, filter_name, patterns, title);
+            let _ = smol::block_on(tx.send(outcome));
+        });
         match rx.recv().await {
             Ok(PickOutcome::Chosen(p)) => Message::ExportTo(kind, p),
             _ => Message::PickerDismissed,

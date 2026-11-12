@@ -1956,6 +1956,7 @@ mod error_tests {
         let mut app = App::with_source(
             "Table users {\n  id integer\n  username varchar\n  Records users(id, username) {\n    0, 'Alice, 'admin'\n    1, 'Bob', 'moderator'\n    2, 'Candice'\n  }\n}\n".into(),
         );
+        fill_their_diags(&mut app);
         let marks = error_marks(&app);
         let structure: Vec<&Mark> = marks
             .iter()
