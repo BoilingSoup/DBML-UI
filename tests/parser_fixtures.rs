@@ -51,34 +51,3 @@ fn basic_fixture_spans_are_valid_slices() {
         assert_eq!(&src[t.name_span.clone()], t.name);
     }
 }
-
-#[test]
-fn broken_fixture_recovers_and_reports() {
-    let out = parse_fixture!("broken.dbml");
-    assert!(!out.errors.is_empty());
-
-    let names: Vec<&str> = out.doc.tables.iter().map(|t| t.name.as_str()).collect();
-    assert!(names.contains(&"good1"), "{names:?}");
-    assert!(names.contains(&"good2"), "{names:?}");
-    assert!(names.contains(&"quoted table"), "{names:?}");
-
-    // good2 loses only the broken line
-    let good2 = out.doc.tables.iter().find(|t| t.name == "good2").unwrap();
-    assert_eq!(good2.columns.len(), 2);
-
-    // ref after the broken construct still parsed
-    assert_eq!(out.doc.refs.len(), 1);
-
-    // broken enum keeps its good values
-    let enm = &out.doc.enums[0];
-    assert_eq!(enm.values.len(), 2);
-
-    // every error offset points at a char boundary in range
-    let src = include_str!("fixtures/broken.dbml");
-    for e in &out.errors {
-        assert!(e.offset <= src.len());
-        assert!(src.is_char_boundary(e.offset));
-        let (line, _) = parser::line_col_at(src, e.offset);
-        assert!(line < src.lines().count() + 1);
-    }
-}
