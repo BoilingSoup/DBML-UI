@@ -21,6 +21,28 @@ pub fn format_source(src: &str) -> Option<String> {
     Some(render(&out.doc, &cm))
 }
 
+/// A single-quoted setting value (their consumeUntil("'", raw: false)):
+/// backslashes double and quotes escape as `\'` — sq_string's exact
+/// decode — so the emission always re-parses to the same value. (A bare
+/// `format!("'{}'")` emitted `name: 'a'b'` for a name the parser decoded
+/// out of `'a\'b'`: the bracket closed early and the output had parse
+/// errors — the fuzz idempotency failure.)
+pub(crate) fn quote_sq(v: &str) -> String {
+    let mut out = String::with_capacity(v.len() + 2);
+    out.push('\'');
+    for c in v.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\'' => out.push_str("\\'"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            other => out.push(other),
+        }
+    }
+    out.push('\'');
+    out
+}
+
 pub(crate) fn quote_note(n: &str) -> String {
     // their escapeNote (dbml-core DbmlExporter): backslashes double
     // first; a note with no newline/CR/quote stays single-quoted, anything
@@ -549,7 +571,7 @@ fn render(doc: &Document, cm: &CommentMap) -> String {
                 let key = "P:#0";
                 e.header("", key, &format!("Project {} {{", p.name));
                 if let Some(t) = &p.database_type {
-                    e.line("  ", key, "db", &format!("database_type: '{t}'"));
+                    e.line("  ", key, "db", &format!("database_type: {}", quote_sq(t)));
                 }
                 if let Some(n) = &p.note {
                     e.line("  ", key, "pn", &format!("note: {}", quote_note(n)));
@@ -589,7 +611,7 @@ fn render(doc: &Document, cm: &CommentMap) -> String {
                         let ty = if quoted || !c.ty.chars().any(|ch| ch.is_whitespace()) {
                             c.ty.clone()
                         } else {
-                            format!("\"{}\"", c.ty)
+                            format!("\"{}\"", escape_value(&c.ty))
                         };
                         text.push_str(&format!(" {}", ty));
                     }
@@ -614,7 +636,7 @@ fn render(doc: &Document, cm: &CommentMap) -> String {
                             st.push("pk".to_string());
                         }
                         if let Some(n) = &ix.name {
-                            st.push(format!("name: '{n}'"));
+                            st.push(format!("name: {}", quote_sq(n)));
                         }
                         if let Some(t) = &ix.index_type {
                             st.push(format!("type: {t}"));
@@ -626,7 +648,7 @@ fn render(doc: &Document, cm: &CommentMap) -> String {
                             .iter()
                             .map(|c| {
                                 if c.contains(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_')) {
-                                    format!("\"{c}\"")
+                                    format!("\"{}\"", escape_value(c))
                                 } else {
                                     c.clone()
                                 }
@@ -701,7 +723,7 @@ fn render(doc: &Document, cm: &CommentMap) -> String {
                 let name = if g.name.chars().all(|c| c.is_alphanumeric() || c == '_') {
                     g.name.clone()
                 } else {
-                    format!("\"{}\"", g.name)
+                    format!("\"{}\"", escape_value(&g.name))
                 };
                 let settings = if g.color.is_some() {
                     format!(" [color: {}]", g.color.clone().unwrap_or_default())
@@ -862,7 +884,10 @@ fn ident(n: &str) -> String {
     if !n.is_empty() && n.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
         n.to_string()
     } else {
-        format!("\"{n}\"")
+        // the quoted form must re-parse: the ident scan decodes `\"` and
+        // `\\`, so a name decoded from `"a\"b"` emits `"a\"b"` again (a
+        // bare `"a"b"` closed early and the output had parse errors)
+        format!("\"{}\"", escape_value(n))
     }
 }
 

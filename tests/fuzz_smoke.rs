@@ -284,14 +284,22 @@ fn check_invariants(src: &str, label: &str) {
 
 #[test]
 fn structured_inputs_hold_the_editor_invariants() {
-    let corpus: Vec<String> = std::fs::read_dir("tests/fixtures")
+    // SORTED by path: read_dir order is filesystem-hash order, so the
+    // same seed picked different files locally vs CI and a failure
+    // reproduced on neither machine's other runs
+    let mut paths: Vec<std::path::PathBuf> = std::fs::read_dir("tests/fixtures")
         .map(|rd| {
             rd.filter_map(|e| e.ok())
-                .filter(|e| e.path().extension().is_some_and(|x| x == "dbml"))
-                .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|x| x == "dbml"))
                 .collect()
         })
         .unwrap_or_default();
+    paths.sort();
+    let corpus: Vec<String> = paths
+        .iter()
+        .filter_map(|p| std::fs::read_to_string(p).ok())
+        .collect();
 
     let base = std::env::var("FUZZ_SEED")
         .ok()
@@ -302,14 +310,22 @@ fn structured_inputs_hold_the_editor_invariants() {
         let src = gen_dbml(&mut rng);
         check_invariants(&src, &format!("seed {}", base + i as u64));
     }
-    // mutations of real files
-    for i in 0..ITERS / 2 {
-        let mut rng = Rng::new(base.wrapping_mul(31) + i as u64);
-        let Some(real) = corpus.get(rng.below(corpus.len().max(1))) else {
-            break;
-        };
-        let src = mutate(&mut rng, real);
-        check_invariants(&src, &format!("mutated seed {}", base.wrapping_mul(31) + i as u64));
+    // mutations of real files: the CROSS-PRODUCT of fixtures and tier
+    // seeds — every fixture runs under every seed, so a defect surfaces
+    // on every machine instead of depending on which file a seed happened
+    // to pick from the unsorted corpus
+    for (fi, real) in corpus.iter().enumerate() {
+        for i in 0..ITERS / 2 {
+            let mut rng = Rng::new(base.wrapping_mul(31) + i as u64);
+            let src = mutate(&mut rng, real);
+            check_invariants(
+                &src,
+                &format!(
+                    "mutated fixture {fi} seed {}",
+                    base.wrapping_mul(31) + i as u64
+                ),
+            );
+        }
     }
 }
 

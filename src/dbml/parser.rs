@@ -4028,6 +4028,35 @@ fn validate_index_settings(
     }
 }
 
+/// A bare-comma index setting's value: the quoted form comes off with the
+/// real string scan (escapes decoded, trailing junk like `'x']`'s bracket
+/// dropped) — the lenient `trim_matches` left that bracket INSIDE the
+/// name, and the formatter's own quoting around it stopped parsing
+/// (fuzz, mutated basic.dbml seed 753542). Bare values and unterminated
+/// quotes keep the old trim.
+fn quoted_setting_val(v: &str) -> String {
+    if v.starts_with('\'') {
+        let mut cur = v;
+        if let Ok(s) = sq_string(&mut cur, 0) {
+            return s;
+        }
+    }
+    v.trim_matches('\'').trim_matches('"').to_string()
+}
+
+/// The ident-shaped run of a bare comma-form `type` value. The comma form
+/// skips the settings validator, so junk a mutation glued on (`hash?]`,
+/// `hash?`) would ride into the formatter's bare `type: {t}` emission and
+/// the RE-parse — which validates — would reject it: format(format(x))
+/// must stay Some. Empty ⇒ None (drop the setting).
+fn bare_type_val(v: &str) -> Option<String> {
+    let end = v
+        .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .unwrap_or(v.len());
+    let id = &v[..end];
+    (!id.is_empty()).then(|| id.to_string())
+}
+
 fn index(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Index> {
     let start = offset(input, base);
     let mut columns = Vec::new();
@@ -4307,10 +4336,18 @@ fn index(input: &mut &str, base: usize, errs: &mut Vec<ParseError>) -> R<Index> 
             } else if kv.eq_ignore_ascii_case("unique") {
                 idx.unique = true;
             } else if let Some((k, v)) = kv.split_once(':') {
-                let v = v.trim().trim_matches('\'').trim_matches('"');
-                match k.trim().to_ascii_lowercase().as_str() {
-                    "name" => idx.name = Some(v.to_string()),
-                    "type" => idx.index_type = Some(v.to_string()),
+                let key = k.trim().to_ascii_lowercase();
+                let v = v.trim();
+                let val = if v.starts_with('\'') {
+                    Some(quoted_setting_val(v))
+                } else if key == "type" {
+                    bare_type_val(v)
+                } else {
+                    Some(v.trim_matches('\'').trim_matches('"').to_string())
+                };
+                match (key.as_str(), val) {
+                    ("name", Some(v)) => idx.name = Some(v),
+                    ("type", Some(v)) => idx.index_type = Some(v),
                     _ => {}
                 }
             }
@@ -8927,7 +8964,6 @@ fn ref_body_pipeline_mode(
             } else if matches!(rest.first(), Some(RNode::Array { .. })) {
                 rest.remove(0);
             }
-            eprintln!("DBG arg-spans={:?} args={:?}", p.arg_spans, args.iter().map(|a| a.start()).collect::<Vec<_>>());
             let mut arg_ends: Vec<usize> = p
                 .arg_spans
                 .iter()
