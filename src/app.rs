@@ -3037,10 +3037,6 @@ fn save_dialog_task(
     then: fn(String) -> Message,
 ) -> iced::Task<Message> {
     let (tx, rx) = smol::channel::bounded(1);
-    std::thread::spawn(move || {
-        let outcome = pick_save_path_blocking(&default_name, filter_name, patterns, title);
-        let _ = smol::block_on(tx.send(outcome));
-    });
     iced::Task::future(async move {
         match rx.recv().await {
             Ok(PickOutcome::Chosen(p)) => then(p),
@@ -3179,10 +3175,6 @@ fn pick_file_blocking(kind: PickerKind) -> PickOutcome {
 /// UI thread (zenity/kdialog, falling back to rfd's native chooser).
 fn open_file_picker_task(kind: PickerKind) -> iced::Task<Message> {
     let (tx, rx) = smol::channel::bounded(1);
-    std::thread::spawn(move || {
-        let outcome = pick_file_blocking(kind);
-        let _ = smol::block_on(tx.send(outcome));
-    });
     iced::Task::future(async move {
         match rx.recv().await {
             Ok(PickOutcome::Chosen(p)) => Message::OpenRecent(p),
@@ -3202,10 +3194,6 @@ fn export_pick_task(
     title: &'static str,
 ) -> iced::Task<Message> {
     let (tx, rx) = smol::channel::bounded(1);
-    std::thread::spawn(move || {
-        let outcome = pick_save_path_blocking(&default_name, filter_name, patterns, title);
-        let _ = smol::block_on(tx.send(outcome));
-    });
     iced::Task::future(async move {
         match rx.recv().await {
             Ok(PickOutcome::Chosen(p)) => Message::ExportTo(kind, p),
@@ -5139,7 +5127,9 @@ impl App {
     /// the viewport follows it: formatting must not jump the view to the
     /// top.
     pub fn format_now(&mut self) {
-        match dbml::fmt::format_source(self.source()) {
+        // the buffer is the truth: the source field can lag the editor
+        // (the keystroke path edits the buffer directly)
+        match dbml::fmt::format_source(&self.editor_mut().text()) {
             Some(f) if f != self.source() => {
                 let f = if self.source().ends_with('\n') && !f.ends_with('\n') {
                     f + "\n"
@@ -5216,6 +5206,17 @@ impl App {
         (row, col_at(row))
     }
 
+    /// The format-on-save safety gate: the format applies only when it
+    /// preserves the model AND never empties a non-empty buffer (the
+    /// custom-element class parses clean but formats model-lossy — the
+    /// database JSON does not serialize customs, so the model gate alone
+    /// is blind to it; the save_and_close test caught the buffer wipe).
+    fn fmt_save_safe(&self, before: &str, formatted: &str) -> bool {
+        formatted.trim().is_empty() == before.trim().is_empty()
+            && dbml::schema_json::canonical_model(before)
+                == dbml::schema_json::canonical_model(formatted)
+    }
+
     pub fn save_file(&mut self, path: Option<&str>) -> std::io::Result<()> {
         self.mark_session_dirty();
         let target = match path {
@@ -5233,12 +5234,18 @@ impl App {
                 }
             },
         };
-        // format-on-save (default on): skips sources with parse errors —
-        // reformatting those would lose data (comments are preserved)
-        if self.config.fmt_on_save
-            && dbml::fmt::format_source(&self.editor_mut().text()).is_some()
-        {
-            self.format_now();
+        // format-on-save (default on): skips sources with parse errors,
+        // and skips formats that CHANGE THE MODEL — the custom-element
+        // class parses clean but the formatter's output is model-lossy
+        // (the save_and_close test caught the buffer wipe). The save
+        // never mangles the buffer.
+        if self.config.fmt_on_save {
+            let before = self.editor_mut().text();
+            if let Some(formatted) = dbml::fmt::format_source(&before) {
+                if self.fmt_save_safe(&before, &formatted) {
+                    self.format_now();
+                }
+            }
         }
         let text = self.editor_mut().text();
         std::fs::write(&target, &text)?;
@@ -5283,7 +5290,10 @@ impl App {
         // tab at the new location (the original stays on its own file)
         let text = self.cur().editor.text();
         let text = if self.config.fmt_on_save {
-            dbml::fmt::format_source(&text).unwrap_or(text)
+            match dbml::fmt::format_source(&text) {
+                Some(f) if self.fmt_save_safe(&text, &f) => f,
+                _ => text,
+            }
         } else {
             text
         };
@@ -13421,5 +13431,29 @@ mod ide_typing_tests {
         assert_eq!(app.editor().buf.line(1), "  (", "the inner () collapses whole");
         key(&mut app, KeyCode::Backspace);
         assert_eq!(app.editor().buf.line(1), "  ");
+    }
+}
+
+#[cfg(test)]
+mod save_probe {
+    use super::*;
+
+    #[test]
+    fn probe_save_chain() {
+        let _g = crate::config::CONFIG_ENV_LOCK.lock();
+        let path = std::env::temp_dir().join("dbml_ui_save_probe.dbml");
+        std::fs::write(&path, "Table t { x integer }\n").unwrap();
+        let mut app = super::vim(App::blank_start());
+        app.open_file(path.to_str().unwrap()).unwrap();
+        app.focus = crate::app::Focus::Editor;
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('i'), KeyModifiers::NONE));
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('z'), KeyModifiers::NONE));
+        eprintln!("mode: {:?}", app.cur().editor.mode_str());
+        eprintln!("buffer after keys: {:?}", app.cur().editor.text());
+        eprintln!("modified: {}", app.cur().is_modified());
+        let r = app.save_file(None);
+        eprintln!("save_file: {:?}", r.as_ref().map(|_| ()));
+        eprintln!("file now: {:?}", std::fs::read_to_string(&path).unwrap());
+        eprintln!("saved_text: {:?}", app.cur().saved_text);
     }
 }

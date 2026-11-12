@@ -894,3 +894,30 @@ fn card_str(c: super::validate::Card) -> &'static str {
         Many => "0..*",
     }
 }
+
+/// The model fingerprint: the database JSON with the token spans
+/// stripped and the keys sorted — the format-on-save gate compares
+/// before/after and applies the format only when it preserves this
+/// (the format_preserves_model property, in production).
+pub fn canonical_model(src: &str) -> serde_json::Value {
+    fn canonical(v: &serde_json::Value) -> serde_json::Value {
+        match v {
+            serde_json::Value::Array(a) => {
+                serde_json::Value::Array(a.iter().map(canonical).collect())
+            }
+            serde_json::Value::Object(m) => {
+                let mut out = serde_json::Map::new();
+                for (k, val) in m {
+                    if k == "token" {
+                        continue;
+                    }
+                    out.insert(k.clone(), canonical(val));
+                }
+                serde_json::Value::Object(out)
+            }
+            other => other.clone(),
+        }
+    }
+    let parsed = super::parser::parse(src);
+    canonical(&to_database_json(&parsed.doc, src))
+}
