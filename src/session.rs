@@ -40,6 +40,9 @@ pub struct SessionTab {
     /// Raise order across tables and stickies, most recently grabbed
     /// last: (true = Table, false = Note), name.
     pub item_z: Vec<(bool, String)>,
+    /// The TableGroups' own raise order, most recently grabbed last
+    /// (the group z tier — groups still paint under every table).
+    pub group_z: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -118,6 +121,10 @@ pub fn encode(s: &Session) -> String {
         }
         for (is_table, name) in &t.item_z {
             out.push_str(&format!("z {} {name}\n", if *is_table { 'T' } else { 'N' }));
+        }
+        // the groups' own raise order (the group z tier)
+        for name in &t.group_z {
+            out.push_str(&format!("gz {name}\n"));
         }
     }
     out
@@ -214,6 +221,10 @@ pub fn decode(text: &str) -> Option<Session> {
                 let (kind, name) = val.split_once(' ')?;
                 t.item_z.push((kind == "T", name.to_string()));
             }
+            "gz" => {
+                let t = next_tab.as_mut()?;
+                t.group_z.push(val.to_string());
+            }
             _ => return None,
         }
         if rest.is_empty() {
@@ -250,6 +261,7 @@ mod tests {
                 ],
                 note_pos: vec![("idea".into(), 2, 9, 14, 5)],
                 item_z: vec![(false, "idea".into()), (true, "users".into())],
+                group_z: vec!["staff".into(), "order group".into()], // quoted name with a space
             }],
         };
         assert_eq!(decode(&encode(&s)), Some(s));

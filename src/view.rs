@@ -165,13 +165,13 @@ pub fn root(app: &App) -> Element<'_, Message> {
             ),
             // raised items (recently grabbed) paint last: the overlap
             // priority persists after the drop, tables over stickies
-            // and stickies over tables alike
+            // and stickies over tables alike. A dragged group's members
+            // were appended here at the grab (a block, in their existing
+            // relative order) — the group's z boost lives in this order.
             item_z: &app.cur().item_z,
-            // a dragged TableGroup raises all its member tables
-            drag_group: match &app.drag {
-                Drag::Group { name, .. } => Some(name.clone()),
-                _ => None,
-            },
+            // the TableGroups' own raise order: the regions sort among
+            // themselves (always under every table)
+            group_z: &app.cur().group_z,
             // the sticky being dragged/resized paints after every other
             // note: an item dragged over another rides on top
             drag_note: match &app.drag {
@@ -214,6 +214,7 @@ pub fn root(app: &App) -> Element<'_, Message> {
             } else {
                 None
             },
+            group_z: &app.cur().group_z,
         })
         .width(Fill)
         .height(Fill),

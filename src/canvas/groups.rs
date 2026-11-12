@@ -36,6 +36,31 @@ fn group_note_cx(name: &str, label_x: f32, s: Size) -> f32 {
         + 0.6 * s.width
 }
 
+/// The groups in paint order: the grabbed ones in their raise order
+/// (`group_z`, most recently grabbed last) above the never-grabbed ones
+/// in declaration order. The group z tier sits entirely UNDER the
+/// tables/stickies — this only orders the regions among themselves, so
+/// an upper group's band covers a lower group's label where they
+/// overlap instead of the label bleeding through it.
+pub fn groups_paint_order<'a>(layout: &'a Layout, group_z: &[String]) -> Vec<&'a GroupRegion> {
+    let mut indexed: Vec<(Option<usize>, usize, &'a GroupRegion)> = layout
+        .groups
+        .iter()
+        .enumerate()
+        .map(|(i, g)| (group_z.iter().position(|n| n == &g.name), i, g))
+        .collect();
+    indexed.sort_by_key(|(z, i, _)| (*z, *i));
+    indexed.into_iter().map(|(_, _, g)| g).collect()
+}
+
+/// A region's full rect in frame px (the label occluder an UPPER group
+/// casts onto the groups below it).
+fn region_rect_px(g: &GroupRegion, zoom: f32, pan: Vector) -> Rectangle {
+    let s = cell_size(zoom);
+    let top_left = to_px(g.rect.0, g.rect.1, zoom, pan);
+    Rectangle::new(top_left, Size::new(g.rect.2 as f32 * s.width, g.rect.3 as f32 * s.height))
+}
+
 /// Draw every group region (called from `diagram::paint` before edges):
 /// dbdiagram's CONTAINER look — translucent tinted body, a solid
 /// group-color header band carrying the name (like a table header), and
@@ -43,7 +68,11 @@ fn group_note_cx(name: &str, label_x: f32, s: Size) -> f32 {
 /// sticky rect in paint order — the group paints below them all, and
 /// since iced draws all text above all meshes, the label clips to the
 /// band's visible slivers around them (a table parked over the band
-/// must not show the name through its body).
+/// must not show the name through its body). `group_z` orders the
+/// regions among themselves (the group z tier): the regions paint in
+/// that order, and a group's label ALSO clips around every region
+/// ABOVE it — without that clip the lower group's label bleeds through
+/// the upper group's band.
 pub fn draw_groups(
     frame: &mut canvas::Frame,
     layout: &Layout,
@@ -51,10 +80,13 @@ pub fn draw_groups(
     pan: Vector,
     pointer: Option<iced::Point>,
     occluders: &[Rectangle],
+    group_z: &[String],
 ) {
     // authored in 1:1 px (dbdiagram's stage transform)
     let k = zoom / 20.0;
-    for g in &layout.groups {
+    let order = groups_paint_order(layout, group_z);
+    for (rank, g) in order.iter().enumerate() {
+        let g: &GroupRegion = g;
         let s = cell_size(zoom);
         let top_left = to_px(g.rect.0, g.rect.1, zoom, pan);
         let size = Size::new(g.rect.2 as f32 * s.width, g.rect.3 as f32 * s.height);
@@ -91,10 +123,16 @@ pub fn draw_groups(
         // slivers around every table/sticky above the group (iced draws
         // all text above all meshes): a table parked over the band hides
         // the name with its body, the same occlusion a header band gets.
+        // The regions ABOVE this one in the group z order occlude it too.
         let label_x = top_left.x + LABEL_INSET * s.width;
         let band_rect = Rectangle::new(top_left, band);
+        let upper_regions: Vec<Rectangle> = order[rank + 1..]
+            .iter()
+            .map(|up| region_rect_px(up, zoom, pan))
+            .collect();
         let band_occluders: Vec<Rectangle> = occluders
             .iter()
+            .chain(upper_regions.iter())
             .filter(|r| r.intersects(&band_rect))
             .copied()
             .collect();
@@ -187,16 +225,19 @@ pub fn draw_groups(
 
 /// The group whose HEADER BAND contains the point, if any — the note
 /// tooltip in the overlay AND the group-drag press target (full width,
-/// one cell tall: it IS the container's header row).
-pub fn group_label_hit(
-    layout: &Layout,
+/// one cell tall: it IS the container's header row). The TOPMOST band
+/// under the point wins (the group z order, see `groups_paint_order`) —
+/// the click belongs to what you see.
+pub fn group_label_hit<'a>(
+    layout: &'a Layout,
     zoom: f32,
     pan: Vector,
     p: iced::Point,
-) -> Option<&dbml_ui::layout::GroupRegion> {
-    layout
-        .groups
-        .iter()
+    group_z: &[String],
+) -> Option<&'a dbml_ui::layout::GroupRegion> {
+    groups_paint_order(layout, group_z)
+        .into_iter()
+        .rev()
         .find(|g| label_band(g, zoom, pan).contains(p))
 }
 
@@ -213,19 +254,24 @@ fn label_band(g: &GroupRegion, zoom: f32, pan: Vector) -> Rectangle {
 
 /// The group's color-picker icon hit zone — exactly where `draw_groups`
 /// paints the circles (the band's right end). Clicking it opens the
-/// picker for the GROUP's color, which cascades to its members.
-pub fn group_icon_hit(
-    layout: &Layout,
+/// picker for the GROUP's color, which cascades to its members. The
+/// TOPMOST icon wins (the group z order, see `groups_paint_order`).
+pub fn group_icon_hit<'a>(
+    layout: &'a Layout,
     zoom: f32,
     pan: Vector,
     p: iced::Point,
-) -> Option<&GroupRegion> {
+    group_z: &[String],
+) -> Option<&'a GroupRegion> {
     let s = cell_size(zoom);
-    layout.groups.iter().rev().find(|g| {
-        let top_left = to_px(g.rect.0, g.rect.1, zoom, pan);
-        let (c, half_w, half_h) = group_icon_geometry(g, top_left, s);
-        (p.x - c.x).abs() <= half_w && (p.y - c.y).abs() <= half_h
-    })
+    groups_paint_order(layout, group_z)
+        .into_iter()
+        .rev()
+        .find(|g| {
+            let top_left = to_px(g.rect.0, g.rect.1, zoom, pan);
+            let (c, half_w, half_h) = group_icon_geometry(g, top_left, s);
+            (p.x - c.x).abs() <= half_w && (p.y - c.y).abs() <= half_h
+        })
 }
 
 /// The picker icon's geometry, shared by the draw pass and the hit test
@@ -292,6 +338,78 @@ mod tests {
         ))
     }
 
+    /// Two OVERLAPPING regions: "one" at (0,0), "two" one cell right —
+    /// their header bands share territory.
+    fn overlapping_group_layout() -> Layout {
+        let src = "Table a { id integer }\nTable b { x integer }\n\
+                   TableGroup one { a }\nTableGroup two { b }\n";
+        let mut l = dbml_ui::layout::layout(&dbml_ui::model::build(
+            &dbml_ui::dbml::parser::parse(src).doc,
+        ));
+        // pin the regions so the bands genuinely overlap (auto-layout may
+        // already separate them)
+        l.groups[1].rect.0 = l.groups[0].rect.0 + 1;
+        l.groups[1].rect.1 = l.groups[0].rect.1;
+        l
+    }
+
+    #[test]
+    fn the_group_tier_orders_grabbed_regions_above_declaration_order() {
+        let l = group_layout(); // declares "one" then "two"
+        // never grabbed: declaration order
+        let names: Vec<&str> =
+            groups_paint_order(&l, &[]).iter().map(|g| g.name.as_str()).collect();
+        assert_eq!(names, vec!["one", "two"]);
+        // grabbing "one" lifts it above "two"
+        let names: Vec<&str> = groups_paint_order(&l, &["one".into()])
+            .iter()
+            .map(|g| g.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["two", "one"], "the last-grabbed group paints last");
+        // both grabbed: raise recency decides
+        let names: Vec<&str> = groups_paint_order(&l, &["one".into(), "two".into()])
+            .iter()
+            .map(|g| g.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["one", "two"]);
+        // a stale name (a deleted group) falls back harmlessly
+        let names: Vec<&str> =
+            groups_paint_order(&l, &["gone".into(), "two".into()])
+                .iter()
+                .map(|g| g.name.as_str())
+                .collect();
+        assert_eq!(names, vec!["one", "two"]);
+    }
+
+    #[test]
+    fn the_topmost_band_wins_the_hit() {
+        let l = overlapping_group_layout();
+        let zoom = 20.0;
+        let pan = Vector::new(0.0, 0.0);
+        // a point inside BOTH bands (the overlap): group_z decides which
+        // group owns it — the last-grabbed one, mirroring the paint order
+        let tl = to_px(l.groups[0].rect.0, l.groups[0].rect.1, zoom, pan);
+        let s = cell_size(zoom);
+        let shared = Point::new(tl.x + 1.5 * s.width, tl.y + 0.5 * s.height);
+        assert!(
+            label_band(&l.groups[0], zoom, pan).contains(shared)
+                && label_band(&l.groups[1], zoom, pan).contains(shared),
+            "the fixture actually overlaps"
+        );
+        // never grabbed: declaration order — "two" paints last, wins
+        assert_eq!(
+            group_label_hit(&l, zoom, pan, shared, &[]).unwrap().name,
+            "two"
+        );
+        // "one" grabbed: it paints last, takes the hit back
+        assert_eq!(
+            group_label_hit(&l, zoom, pan, shared, &["one".into()])
+                .unwrap()
+                .name,
+            "one"
+        );
+    }
+
     #[test]
     fn region_color_parses_or_falls_back_to_the_table_default() {
         let g = GroupRegion {
@@ -335,7 +453,7 @@ mod tests {
         // "one" is ~1.74 cells wide (3 chars at Row::CHAR_CELL): a point
         // inside the band's first cell hits the region
         let in_band = Point::new(tl.x + 0.8 * s.width, tl.y + 0.5 * s.height);
-        assert_eq!(group_label_hit(&l, zoom, pan, in_band).unwrap().name, "one");
+        assert_eq!(group_label_hit(&l, zoom, pan, in_band, &[]).unwrap().name, "one");
 
         // the region's middle sits well below the one-cell band: the frame
         // itself is not a hit target (boxes/edges own their own hits)
@@ -343,13 +461,13 @@ mod tests {
             tl.x + one.rect.2 as f32 * s.width * 0.5,
             tl.y + one.rect.3 as f32 * s.height * 0.5,
         );
-        assert!(group_label_hit(&l, zoom, pan, mid).is_none());
+        assert!(group_label_hit(&l, zoom, pan, mid, &[]).is_none());
 
         // and the second region's own band returns that one
         let two = &l.groups[1];
         let tl2 = to_px(two.rect.0, two.rect.1, zoom, pan);
         let in_band2 = Point::new(tl2.x + 0.8 * s.width, tl2.y + 0.5 * s.height);
-        assert_eq!(group_label_hit(&l, zoom, pan, in_band2).unwrap().name, "two");
+        assert_eq!(group_label_hit(&l, zoom, pan, in_band2, &[]).unwrap().name, "two");
     }
 
     #[test]
@@ -368,16 +486,16 @@ mod tests {
             tl.x + one.rect.2 as f32 * s.width - 0.3 * s.width,
             tl.y + 0.5 * s.height,
         );
-        assert_eq!(group_label_hit(&l, zoom, pan, right_end).unwrap().name, "one");
+        assert_eq!(group_label_hit(&l, zoom, pan, right_end, &[]).unwrap().name, "one");
         // one row down: member territory, not the band
         let below = Point::new(
             tl.x + 0.8 * s.width,
             tl.y + 1.5 * s.height,
         );
-        assert!(group_label_hit(&l, zoom, pan, below).is_none());
+        assert!(group_label_hit(&l, zoom, pan, below, &[]).is_none());
         // above the region: nothing
         let above = Point::new(tl.x + 0.8 * s.width, tl.y - 0.5 * s.height);
-        assert!(group_label_hit(&l, zoom, pan, above).is_none());
+        assert!(group_label_hit(&l, zoom, pan, above, &[]).is_none());
     }
 
     #[test]
@@ -398,11 +516,11 @@ mod tests {
             tl.x + one.rect.2 as f32 * s.width - 0.6 * s.width - icon_w / 2.0,
             tl.y + s.height * 0.5,
         );
-        assert!(group_icon_hit(&l, zoom, pan, c).is_some());
+        assert!(group_icon_hit(&l, zoom, pan, c, &[]).is_some());
         // the band's LEFT end is not the icon (the old next-to-the-label
         // slot is long gone)
-        assert!(group_icon_hit(&l, zoom, pan, Point::new(tl.x + 1.0 * s.width, c.y)).is_none());
+        assert!(group_icon_hit(&l, zoom, pan, Point::new(tl.x + 1.0 * s.width, c.y), &[]).is_none());
         // below the band: member territory
-        assert!(group_icon_hit(&l, zoom, pan, Point::new(c.x, tl.y + 1.5 * s.height)).is_none());
+        assert!(group_icon_hit(&l, zoom, pan, Point::new(c.x, tl.y + 1.5 * s.height), &[]).is_none());
     }
 }

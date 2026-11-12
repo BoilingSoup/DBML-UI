@@ -87,7 +87,7 @@ pub fn hit_topmost<'a>(
     p: Point,
     item_z: &[RaisedItem],
 ) -> Option<PaintItem<'a>> {
-    paint_items(layout, item_z, None, None, None)
+    paint_items(layout, item_z, None, None)
         .into_iter()
         .rev()
         .find(|item| match item {
@@ -587,9 +587,11 @@ pub struct Diagram<'a> {
     /// last): a raised item paints after every unraised one, so the
     /// last-grabbed item keeps priority over whatever it crossed.
     pub item_z: &'a [RaisedItem],
-    /// The TableGroup being dragged (its name): member tables paint
-    /// after every non-member for the duration of the drag.
-    pub drag_group: Option<String>,
+    /// The TableGroups' own raise order (the group z tier — most
+    /// recently grabbed last): orders the regions among themselves.
+    /// Every group still paints under every table; grabbing a group's
+    /// band promotes its member tables in `item_z`.
+    pub group_z: &'a [String],
     /// The sticky being dragged or resized (its name): it paints after
     /// every other note (an item dragged over another rides on top).
     pub drag_note: Option<String>,
@@ -709,7 +711,7 @@ impl canvas::Program<crate::app::Message> for Diagram<'_> {
                 clock: self.clock,
                 selected_note: self.selected_note.as_deref(),
                 item_z: self.item_z,
-                drag_group: self.drag_group.as_deref(),
+                group_z: self.group_z,
                 drag_note: self.drag_note.as_deref(),
                 drag_edges: self.drag_edges.as_deref(),
             },
@@ -786,13 +788,25 @@ impl canvas::Program<crate::app::Message> for Diagram<'_> {
                 None => {
                     // a group's header band reads as movable (it drags the
                     // whole container) — except its picker icon, a link
-                    if super::groups::group_icon_hit(self.layout, self.zoom, self.pan, local)
-                        .is_some()
+                    if super::groups::group_icon_hit(
+                        self.layout,
+                        self.zoom,
+                        self.pan,
+                        local,
+                        self.group_z,
+                    )
+                    .is_some()
                     {
                         return Interaction::Pointer;
                     }
-                    if super::groups::group_label_hit(self.layout, self.zoom, self.pan, local)
-                        .is_some()
+                    if super::groups::group_label_hit(
+                        self.layout,
+                        self.zoom,
+                        self.pan,
+                        local,
+                        self.group_z,
+                    )
+                    .is_some()
                     {
                         return Interaction::Move;
                     }
@@ -873,9 +887,9 @@ struct HoverState<'a> {
     selected_note: Option<&'a str>,
     /// Raise order across tables AND stickies: raised items paint last.
     item_z: &'a [RaisedItem],
-    /// The TableGroup being dragged (its name): member tables paint
-    /// after every non-member for the duration of the drag.
-    drag_group: Option<&'a str>,
+    /// The TableGroups' own raise order: orders the regions among
+    /// themselves in `draw_groups` (the group z tier).
+    group_z: &'a [String],
     /// The sticky being dragged/resized (its name): it paints last.
     drag_note: Option<&'a str>,
     /// Indices of the dragged table's lines: painted above the tables.
@@ -895,8 +909,9 @@ pub enum PaintItem<'a> {
 ///   (the static layering: stickies float above untouched tables)
 /// - raised items in grab order — tables and notes interleave, so the
 ///   last-grabbed item outranks everything it crossed, whatever kind
-/// - a dragged group's members outrank every non-member (and every
-///   note) for the drag's duration
+///   (a dragged group's members were appended to `item_z` at the grab,
+///   as a block in their existing relative order — the group tier's
+///   boost lives in the raise order, not here)
 /// - the dragged table / dragged sticky go LAST — the drag owns its own
 ///   body and paints after its raised lines
 ///
@@ -905,7 +920,6 @@ pub enum PaintItem<'a> {
 pub(crate) fn paint_items<'a>(
     layout: &'a Layout,
     item_z: &[RaisedItem],
-    drag_group: Option<&str>,
     drag_note: Option<&str>,
     drag_table: Option<&str>,
 ) -> Vec<PaintItem<'a>> {
@@ -914,13 +928,8 @@ pub(crate) fn paint_items<'a>(
         BaseTable(usize),
         BaseNote(usize),
         Raised(usize),
-        GroupMember(usize),
         DragNote,
     }
-    let group_members: &[usize] = drag_group
-        .and_then(|name| layout.groups.iter().find(|g| g.name == name))
-        .map(|g| g.members.as_slice())
-        .unwrap_or(&[]);
     let rank_of = |t: &TableBox| {
         item_z.iter().position(|r| match r {
             RaisedItem::Table(title) => title == &t.title,
@@ -937,7 +946,6 @@ pub(crate) fn paint_items<'a>(
     for (i, b) in layout.boxes.iter().enumerate() {
         let rank = match rank_of(b) {
             None => Rank::BaseTable(i),
-            Some(pos) if group_members.contains(&b.node) => Rank::GroupMember(pos),
             Some(pos) => Rank::Raised(pos),
         };
         seq.push((rank, PaintItem::Table(b)));
@@ -954,7 +962,6 @@ pub(crate) fn paint_items<'a>(
         Rank::BaseTable(i) => (0, *i),
         Rank::BaseNote(i) => (1, *i),
         Rank::Raised(pos) => (2, *pos),
-        Rank::GroupMember(pos) => (3, *pos),
         Rank::DragNote => (4, 0),
     });
     let mut seq: Vec<PaintItem> = seq.into_iter().map(|(_, item)| item).collect();
@@ -1018,23 +1025,11 @@ fn paint(
     } else {
         None
     };
-    // while a TableGroup is dragged, its member tables paint after every
-    // non-member (and every note) for the drag's duration — the group
-    // takes priority over the canvas
-    let drag_group = hs
-        .drag_group
-        .and_then(|name| layout.groups.iter().find(|g| g.name == name));
     // ONE paint sequence for tables and stickies: unraised tables (doc
     // order), unraised notes (schema order), then raised items in grab
     // order — the last-grabbed item outranks everything it crossed,
     // whatever kind. The dragged table/note rank last.
-    let seq = paint_items(
-        layout,
-        hs.item_z,
-        drag_group.map(|g| g.name.as_str()),
-        hs.drag_note,
-        dragging_table,
-    );
+    let seq = paint_items(layout, hs.item_z, hs.drag_note, dragging_table);
     let rect_of = |item: &PaintItem| match item {
         PaintItem::Table(b) => box_rect(b, zoom, pan),
         PaintItem::Note(n) => note_rect_px(n, zoom, pan),
@@ -1042,8 +1037,9 @@ fn paint(
     let rects: Vec<Rectangle> = seq.iter().map(rect_of).collect();
     // the groups paint first (behind everything), so EVERY table and
     // sticky is above them — their label text clips around all of it
-    // group regions sit behind everything (dbdiagram's labeled frames)
-    super::groups::draw_groups(frame, layout, zoom, pan, hs.pointer, &rects);
+    // group regions sit behind everything (dbdiagram's labeled frames);
+    // group_z orders the regions among themselves (the group z tier)
+    super::groups::draw_groups(frame, layout, zoom, pan, hs.pointer, &rects, hs.group_z);
     // the highlight's glow pass FIRST (under every core): all highlighted
     // edges' soft bands paint before any line core, so overlapping
     // highlighted lines share one glow level instead of compounding
@@ -2633,7 +2629,7 @@ Table b { x int }";
         // b raised paints after a; raising a flips it; a raised NOTE
         // outranks raised tables grabbed BEFORE it, and vice versa
         let z = vec![RaisedItem::Table("b".into())];
-        let seq = paint_items(&l, &z, None, None, None);
+        let seq = paint_items(&l, &z, None, None);
         let names: Vec<&str> = seq
             .iter()
             .map(|item| match item {
@@ -2643,7 +2639,7 @@ Table b { x int }";
             .collect();
         assert_eq!(names, vec!["a", "b"], "b raised paints after a");
         let z = vec![RaisedItem::Table("a".into())];
-        let seq = paint_items(&l, &z, None, None, None);
+        let seq = paint_items(&l, &z, None, None);
         let names: Vec<&str> = seq
             .iter()
             .map(|item| match item {
@@ -2674,16 +2670,16 @@ Note n { '''x''' }";
                 .collect()
         }
         // no raises: sticky above the table
-        assert_eq!(names(&paint_items(&l, &[], None, None, None)), vec!["a", "n"]);
+        assert_eq!(names(&paint_items(&l, &[], None, None)), vec!["a", "n"]);
         // the table grabbed: it outranks the unraised sticky
         let z = vec![RaisedItem::Table("a".into())];
-        assert_eq!(names(&paint_items(&l, &z, None, None, None)), vec!["n", "a"]);
+        assert_eq!(names(&paint_items(&l, &z, None, None)), vec!["n", "a"]);
         // then the sticky grabbed: the last grab wins
         let z = vec![RaisedItem::Table("a".into()), RaisedItem::Note("n".into())];
-        assert_eq!(names(&paint_items(&l, &z, None, None, None)), vec!["a", "n"]);
+        assert_eq!(names(&paint_items(&l, &z, None, None)), vec!["a", "n"]);
         // and a second table grab flips it again
         let z = vec![RaisedItem::Note("n".into()), RaisedItem::Table("a".into())];
-        assert_eq!(names(&paint_items(&l, &z, None, None, None)), vec!["n", "a"]);
+        assert_eq!(names(&paint_items(&l, &z, None, None)), vec!["n", "a"]);
         // a raised NOTE paints before a table grabbed later, above one
         // grabbed earlier
         let src2 = "Table a { id int }
@@ -2697,7 +2693,7 @@ Note n { '''x''' }";
             RaisedItem::Table("a".into()),
             RaisedItem::Table("b".into()),
         ];
-        assert_eq!(names(&paint_items(&l2, &z, None, None, None)), vec!["n", "a", "b"]);
+        assert_eq!(names(&paint_items(&l2, &z, None, None)), vec!["n", "a", "b"]);
     }
 
     #[test]
@@ -3128,7 +3124,7 @@ mod interaction_tests {
             // the test constructor leaks an empty raise list (a Diagram
             // borrows its item_z for its lifetime)
             item_z: Box::leak(Vec::new().into_boxed_slice()),
-            drag_group: None,
+            group_z: &[],
             drag_note: None,
             drag_edges: None,
         }
@@ -4129,9 +4125,9 @@ fn draw_tooltip_pill(
 /// True when the pointer sits on a header's color-picker glyph: the
 /// overlay suppresses the popup/glyph chrome there (the picker owns the
 /// press).
-fn picker_glyph_hovered(layout: &Layout, zoom: f32, pan: Vector, p: Point) -> bool {
+fn picker_glyph_hovered(layout: &Layout, zoom: f32, pan: Vector, p: Point, group_z: &[String]) -> bool {
     palette_icon_hit(layout, zoom, pan, p).is_some()
-        || super::groups::group_icon_hit(layout, zoom, pan, p).is_some()
+        || super::groups::group_icon_hit(layout, zoom, pan, p, group_z).is_some()
 }
 
 /// The diagram pane's event capture: the wheel over an open popup card
@@ -4146,6 +4142,9 @@ pub struct DiagramOverlay<'a> {
     pub pan: Vector,
     /// Cursor position over the canvas (local px), as `Diagram::hover`.
     pub hover: Option<Point>,
+    /// The group z tier, for the group-band/icon hit tests (topmost
+    /// wins).
+    pub group_z: &'a [String],
 }
 
 impl canvas::Program<crate::app::Message> for DiagramOverlay<'_> {
@@ -4174,6 +4173,7 @@ impl canvas::Program<crate::app::Message> for DiagramOverlay<'_> {
                 p,
                 bounds,
                 &mut frame,
+                self.group_z,
             );
         }
         vec![frame.into_geometry()]
@@ -4193,10 +4193,11 @@ fn draw_active_popup(
     p: Point,
     bounds: Rectangle,
     frame: &mut canvas::Frame,
+    group_z: &[String],
 ) {
     // the picker glyphs sit on the same header/band hover targets the
     // popups below use: while one is under the pointer nothing pops
-    if picker_glyph_hovered(layout, zoom, pan, p) {
+    if picker_glyph_hovered(layout, zoom, pan, p, group_z) {
         return;
     }
     // The left icon cluster and the field card compose: hovering a
@@ -4248,7 +4249,7 @@ fn draw_active_popup(
     // a group's label hover pops the same card a column does — the
     // Note section and the Custom Properties bullet list (the old
     // pointer note pill duplicated the card's Note section)
-    if let Some(g) = super::groups::group_label_hit(layout, zoom, pan, p) {
+    if let Some(g) = super::groups::group_label_hit(layout, zoom, pan, p, group_z) {
         if g.note.is_some() || !g.custom.is_empty() {
             draw_group_popup(frame, g, zoom, pan, bounds);
             return;
@@ -4301,7 +4302,7 @@ TableGroup g { users t }
         let tl = to_px(b.x, b.y, zoom, pan);
         let (c, _, _) = palette_icon_geometry(b, tl, s);
         assert!(palette_icon_hit(&l, zoom, pan, c).is_some());
-        assert!(picker_glyph_hovered(&l, zoom, pan, c));
+        assert!(picker_glyph_hovered(&l, zoom, pan, c, &[]));
 
         // the GROUP glyph's center: the band's right end (the zone
         // groups.rs draws)
@@ -4313,13 +4314,13 @@ TableGroup g { users t }
             gtl.x + g.rect.2 as f32 * s.width - 0.6 * s.width - icon_w / 2.0,
             gtl.y + s.height * 0.5,
         );
-        assert!(super::super::groups::group_icon_hit(&l, zoom, pan, gc).is_some());
-        assert!(picker_glyph_hovered(&l, zoom, pan, gc));
+        assert!(super::super::groups::group_icon_hit(&l, zoom, pan, gc, &[]).is_some());
+        assert!(picker_glyph_hovered(&l, zoom, pan, gc, &[]));
 
         // the same header away from the glyph: the custom-properties
         // card still shows (users carries [owner: ...])
         let header_left = Point::new(tl.x + 1.0 * s.width, tl.y + 0.5 * s.height);
-        assert!(!picker_glyph_hovered(&l, zoom, pan, header_left));
+        assert!(!picker_glyph_hovered(&l, zoom, pan, header_left, &[]));
     }
 
     #[test]
@@ -4404,13 +4405,13 @@ Ref: b.a_id > a.id
         // mid-drag: a's grab raised it to item_z's end and its line is
         // raised — the table must come AFTER the raised edges, i.e. last
         let z = vec![RaisedItem::Table("a".into())];
-        let seq = paint_items(&l, &z, None, None, Some("a"));
+        let seq = paint_items(&l, &z, None, Some("a"));
         assert_eq!(titles(&seq).last(), Some(&"a"));
         // at rest: the persistent raise keeps a last either way
-        let seq = paint_items(&l, &z, None, None, None);
+        let seq = paint_items(&l, &z, None, None);
         assert_eq!(titles(&seq).last(), Some(&"a"));
         // no raise at all: doc order is preserved
-        let seq = paint_items(&l, &[], None, None, None);
+        let seq = paint_items(&l, &[], None, None);
         assert_eq!(titles(&seq), vec!["a", "b"]);
     }
 }

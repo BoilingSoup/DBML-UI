@@ -478,7 +478,7 @@ mod tests {
         // grab c then a: the unraised one first, then the raised in
         // grab order (most recent wins)
         let z = vec![RaisedItem::Note("c".into()), RaisedItem::Note("a".into())];
-        let ordered = crate::canvas::diagram::paint_items(&layout, &z, None, None, None);
+        let ordered = crate::canvas::diagram::paint_items(&layout, &z, None, None);
         let names: Vec<&str> = ordered
             .iter()
             .filter_map(|item| match item {
@@ -488,7 +488,7 @@ mod tests {
             .collect();
         assert_eq!(names, vec!["b", "c", "a"]);
         // the dragged note rides above the raised ones
-        let ordered = crate::canvas::diagram::paint_items(&layout, &z, None, Some("b"), None);
+        let ordered = crate::canvas::diagram::paint_items(&layout, &z, Some("b"), None);
         let names: Vec<&str> = ordered
             .iter()
             .filter_map(|item| match item {
@@ -503,7 +503,7 @@ mod tests {
             RaisedItem::Note("b".into()),
             RaisedItem::Note("b".into()),
         ];
-        let ordered = crate::canvas::diagram::paint_items(&layout, &z, None, None, None);
+        let ordered = crate::canvas::diagram::paint_items(&layout, &z, None, None);
         let names: Vec<&str> = ordered
             .iter()
             .filter_map(|item| match item {

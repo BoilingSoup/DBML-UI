@@ -649,6 +649,15 @@ pub struct Tab {
     /// alike. Unraised items keep the static order (tables, then
     /// stickies floating above them).
     pub item_z: Vec<RaisedItem>,
+    /// The TABLEGROUPS' own raise order (most recently grabbed last) —
+    /// the first of the two z tiers. Groups sort among themselves by
+    /// this (never-grabbed ones keep declaration order beneath grabbed
+    /// ones) but every group region still paints UNDER every table and
+    /// sticky; the tiers never mix. Grabbing a group's header band also
+    /// promotes its member tables to the top of `item_z` (a block, in
+    /// their existing relative order), and that boost persists after the
+    /// release.
+    pub group_z: Vec<String>,
     /// Sticky-note rects (x, y, w, h in cells, by note name) — user
     /// drags + corner resizes; absent notes keep the auto slot.
     pub note_pos: std::collections::HashMap<String, (i32, i32, i32, i32)>,
@@ -710,6 +719,7 @@ impl Tab {
             scroll_anim: None,
             scroll_target: None,
             item_z: Vec::new(),
+            group_z: Vec::new(),
             zoom: crate::view::BASE_ZOOM,
             pan: Vector::default(),
             hover_edges: Vec::new(),
@@ -1126,6 +1136,7 @@ impl App {
                         RaisedItem::Note(s) => (false, s.clone()),
                     })
                     .collect(),
+                group_z: t.group_z.clone(),
             });
         }
         crate::session::Session {
@@ -1177,6 +1188,7 @@ impl App {
                         RaisedItem::Note(s) => (false, s.clone()),
                     })
                     .collect(),
+                group_z: t.group_z.clone(),
             });
         }
         crate::session::Session {
@@ -2171,6 +2183,7 @@ impl App {
             self.cur().zoom,
             self.cur().pan,
             p,
+            &self.cur().group_z,
         ) {
             let name = g.name.clone();
             let s = cell_size(self.cur().zoom);
@@ -2195,9 +2208,14 @@ impl App {
         // starts below). A group's HEADER band is the same kind of
         // surface: it drags the whole group, and a line crossing the
         // band must not hijack that press into a color picker.
-        let on_group_band =
-            crate::canvas::groups::group_label_hit(&self.cur().diagram, self.cur().zoom, self.cur().pan, p)
-                .is_some();
+        let on_group_band = crate::canvas::groups::group_label_hit(
+            &self.cur().diagram,
+            self.cur().zoom,
+            self.cur().pan,
+            p,
+            &self.cur().group_z,
+        )
+        .is_some();
         // open space = nothing topmost under the press (a sticky covering
         // a line must not resurrect the line's picker from underneath)
         if top.is_none() && !on_group_band {
@@ -2222,6 +2240,7 @@ impl App {
             self.cur().zoom,
             self.cur().pan,
             p,
+            &self.cur().group_z,
         ) {
             let name = g.name.clone();
             let originals = g
@@ -2236,6 +2255,49 @@ impl App {
                         .map(|b| (b.title.clone(), (b.x, b.y)))
                 })
                 .collect::<Vec<_>>();
+            // the members' CURRENT table-level paint order: unraised ones
+            // in static box order beneath raised ones in item_z position
+            // — the exact relative order paint_items gives them today
+            let mut member_titles: Vec<(u8, usize, String)> = {
+                let cur = self.cur();
+                g.members
+                    .iter()
+                    .filter_map(|&node| {
+                        cur.diagram.boxes.iter().enumerate().find(|(_, b)| b.node == node)
+                    })
+                    .map(|(i, b)| {
+                        match cur
+                            .item_z
+                            .iter()
+                            .position(|r| matches!(r, RaisedItem::Table(t) if t == &b.title))
+                        {
+                            Some(pos) => (1u8, pos, b.title.clone()),
+                            None => (0u8, i, b.title.clone()),
+                        }
+                    })
+                    .collect()
+            };
+            member_titles.sort_by_key(|(tier, pos, _)| (*tier, *pos));
+            // raise the GROUP in its own tier — groups sort among
+            // themselves, still under every table — and promote the
+            // member tables to the top of the shared table/sticky raise
+            // order, appended as a block in the order above: overlapping
+            // members keep their table-level priority among themselves,
+            // and the boost PERSISTS after the release (item_z's own
+            // rule) — the drag re-z's the group's children over whatever
+            // they crossed
+            {
+                let z = &mut self.cur_mut().item_z;
+                for (_, _, title) in member_titles.drain(..) {
+                    z.retain(|r| *r != RaisedItem::Table(title.clone()));
+                    z.push(RaisedItem::Table(title));
+                }
+            }
+            {
+                let gz = &mut self.cur_mut().group_z;
+                gz.retain(|n| n != &name);
+                gz.push(name.clone());
+            }
             // the group's move reflows the diagram: hold the auto-placed
             // stickies where they are for the whole drag
             self.pin_auto_notes();
@@ -4117,6 +4179,7 @@ fn apply_session_layout(tab: &mut Tab, st: &crate::session::SessionTab) {
                 }
             })
             .collect();
+        tab.group_z = st.group_z.clone();
     }
     // re-lay-out with the applied overrides (the tab was constructed
     // with the default layout before this)
@@ -4212,6 +4275,7 @@ impl App {
         self.cur_mut().table_pos.clear();
         self.cur_mut().note_pos.clear();
         self.cur_mut().item_z.clear();
+        self.cur_mut().group_z.clear();
         self.cur_mut().file = None;
         self.cur_mut().saved_text = tpl.to_string();
         self.editor_mut().set_text(tpl);
@@ -5178,6 +5242,7 @@ impl App {
         self.cur_mut().table_pos.clear();
         self.cur_mut().note_pos.clear();
         self.cur_mut().item_z.clear();
+        self.cur_mut().group_z.clear();
         self.cur_mut().file = None;
         self.cur_mut().saved_text = content.to_string();
         self.cur_mut().disk_hash = None;
@@ -6733,6 +6798,96 @@ mod tests {
         let _ = update(&mut app, Message::CanvasPressed(Point::new(tl.x + s.width, tl.y + s.height * 0.5)));
         assert_eq!(app.cur().item_z.last(), Some(&RaisedItem::Table("t2".into())));
         assert_eq!(app.cur().item_z.len(), 2, "one entry per raised table");
+    }
+
+    #[test]
+    fn grabbing_a_group_band_promotes_its_members_over_other_tables() {
+        // the group z tier: the band grab raises the GROUP among groups
+        // and promotes its member tables to the top of the shared
+        // table/sticky raise order — over a table the user raised
+        // earlier — and the boost PERSISTS after the release (db.txt:
+        // users in UsersGroup must paint over a higher-priority follows
+        // once the group drag ends)
+        let src = "Table users { id integer }\nTable follows { x integer }\n\
+                   TableGroup UsersGroup { users }\n";
+        let mut app = App::with_source(src.into());
+        let zoom = app.cur().zoom;
+        let pan = app.cur().pan;
+        let s = crate::canvas::diagram::cell_size(zoom);
+        // raise follows first: it now outranks the untouched users
+        let f = app.diagram().boxes.iter().find(|b| b.title == "follows").unwrap();
+        let tl = crate::canvas::diagram::to_px(f.x, f.y, zoom, pan);
+        let _ = update(&mut app, Message::CanvasPressed(Point::new(tl.x + s.width, tl.y + s.height * 0.5)));
+        let _ = update(&mut app, Message::CanvasReleased(Point::new(tl.x + s.width, tl.y + s.height * 0.5)));
+        assert_eq!(app.cur().item_z, vec![RaisedItem::Table("follows".into())]);
+        // grab the group's header band: users jumps ABOVE follows in the
+        // raise order, and the group enters its own tier
+        let g = &app.cur().diagram.groups[0];
+        let tl = crate::canvas::diagram::to_px(g.rect.0, g.rect.1, zoom, pan);
+        let band_pt = Point::new(tl.x + 5.0, tl.y + 10.0);
+        let _ = update(&mut app, Message::CanvasPressed(band_pt));
+        assert!(matches!(app.drag, Drag::Group { .. }), "band press = group drag");
+        assert_eq!(app.cur().group_z, vec!["UsersGroup".to_string()]);
+        assert_eq!(
+            app.cur().item_z,
+            vec![
+                RaisedItem::Table("follows".into()),
+                RaisedItem::Table("users".into())
+            ],
+            "the member block rides above the earlier raise"
+        );
+        // drag + release: the boost persists
+        let to = Point::new(band_pt.x + 20.0, band_pt.y + 20.0);
+        let _ = update(&mut app, Message::CanvasMoved(to));
+        let _ = update(&mut app, Message::CanvasReleased(to));
+        assert!(matches!(app.drag, Drag::None));
+        let titles: Vec<&str> = crate::canvas::diagram::paint_items(
+            &app.cur().diagram,
+            &app.cur().item_z,
+            None,
+            None,
+        )
+        .iter()
+        .filter_map(|item| match item {
+            crate::canvas::diagram::PaintItem::Table(b) => Some(b.title.as_str()),
+            _ => None,
+        })
+        .collect();
+        assert_eq!(
+            titles.last(),
+            Some(&"users"),
+            "users paints over follows after the release"
+        );
+    }
+
+    #[test]
+    fn group_grab_keeps_the_members_relative_order() {
+        // members appended as a BLOCK in their current paint order:
+        // overlapping members keep their table-level priority among
+        // themselves (users raised first paints above the unraised posts,
+        // both above every non-member)
+        let src = "Table users { id integer }\nTable posts { x integer }\n\
+                   TableGroup g { users\nposts }\n";
+        let mut app = App::with_source(src.into());
+        let zoom = app.cur().zoom;
+        let pan = app.cur().pan;
+        let s = crate::canvas::diagram::cell_size(zoom);
+        let u = app.diagram().boxes.iter().find(|b| b.title == "users").unwrap();
+        let tl = crate::canvas::diagram::to_px(u.x, u.y, zoom, pan);
+        let _ = update(&mut app, Message::CanvasPressed(Point::new(tl.x + s.width, tl.y + s.height * 0.5)));
+        let _ = update(&mut app, Message::CanvasReleased(Point::new(tl.x + s.width, tl.y + s.height * 0.5)));
+        // grab the group band
+        let g = &app.cur().diagram.groups[0];
+        let tl = crate::canvas::diagram::to_px(g.rect.0, g.rect.1, zoom, pan);
+        let _ = update(&mut app, Message::CanvasPressed(Point::new(tl.x + 5.0, tl.y + 10.0)));
+        assert_eq!(
+            app.cur().item_z,
+            vec![
+                RaisedItem::Table("posts".into()),
+                RaisedItem::Table("users".into())
+            ],
+            "the block preserves the paint order: unraised posts beneath raised users"
+        );
     }
 
     #[test]
@@ -12910,6 +13065,7 @@ mod clipboard_menu_tests {
         app.cur_mut().table_pos.insert("users".into(), (31, 17));
         app.cur_mut().note_pos.insert("idea".into(), (2, 9, 14, 5));
         app.cur_mut().item_z = vec![RaisedItem::Table("users".into())];
+        app.cur_mut().group_z = vec!["staff".into()];
         let src = app.source().to_string();
         app.cur_mut().set_source(&src);
 
@@ -12920,6 +13076,7 @@ mod clipboard_menu_tests {
         assert_eq!(back.cur().table_pos.get("users"), Some(&(31, 17)));
         assert_eq!(back.cur().note_pos.get("idea"), Some(&(2, 9, 14, 5)));
         assert_eq!(back.cur().item_z, vec![RaisedItem::Table("users".into())]);
+        assert_eq!(back.cur().group_z, vec!["staff".to_string()], "the group z tier restores too");
         let b = back
             .cur()
             .diagram
