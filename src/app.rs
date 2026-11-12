@@ -1944,6 +1944,9 @@ impl App {
         if self.config.vim && self.editor().mode == editor::Mode::Normal {
             self.editor_mut().mode = editor::Mode::Visual;
             self.editor_mut().visual_linewise = false;
+            // vim normal/visual never rest past the last char: a click
+            // one char beyond the EOL clamps onto the line's last char
+            self.editor_mut().buf.clamp_cursor_to_line_end();
         }
         self.editor_mut().cancel_pending();
         self.drag = Drag::EditorSelect;
@@ -1957,6 +1960,10 @@ impl App {
         self.editor_mut()
             .buf
             .move_cursor(editor::buffer::Move::Jump(pos.row, pos.col));
+        // vim normal/visual never rest past the last char mid-drag either
+        if self.config.vim && self.editor().mode != editor::Mode::Insert {
+            self.editor_mut().buf.clamp_cursor_to_line_end();
+        }
         self.follow_cursor_horizontal();
     }
 
@@ -1992,6 +1999,8 @@ impl App {
             if vim && ed.mode == editor::Mode::Visual {
                 ed.mode = editor::Mode::Normal;
                 ed.visual_linewise = false;
+                // the collapsed click's caret: off the past-EOL cell
+                ed.buf.clamp_cursor_to_line_end();
             }
         }
         self.keep_cursor_visible();
@@ -13618,5 +13627,36 @@ mod save_probe {
         eprintln!("save_file: {:?}", r.as_ref().map(|_| ()));
         eprintln!("file now: {:?}", std::fs::read_to_string(&path).unwrap());
         eprintln!("saved_text: {:?}", app.cur().saved_text);
+    }
+}
+
+#[cfg(test)]
+mod vim_click_clamp_tests {
+    use super::*;
+
+    /// db.txt: a vim-normal click one char past the EOL rests on the
+    /// line's last char — vim never parks the cursor on the insert cell.
+    #[test]
+    fn vim_click_past_eol_clamps_to_last_char() {
+        let mut app = vim(App::with_source("Table t {\n  id int\n}\n".into()));
+        app.focus = Focus::Editor;
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('j'), KeyModifiers::NONE));
+        let line_len = app.editor().buf.line_len(1);
+        let past_eol = crate::canvas::editor::pos_to_px(
+            crate::editor::buffer::Pos { row: 1, col: line_len + 2 },
+            0.0,
+            0.0,
+        );
+        let _ = update(&mut app, Message::EditorPressed(past_eol));
+        let (_, col) = app.editor().buf.cursor();
+        assert_eq!(
+            col,
+            line_len.saturating_sub(1),
+            "the click rests ON the last char, not past it"
+        );
+        // the release collapses the visual back to normal — still clamped
+        let _ = update(&mut app, Message::MouseReleased);
+        let (_, col) = app.editor().buf.cursor();
+        assert_eq!(col, line_len.saturating_sub(1), "still clamped after release");
     }
 }
