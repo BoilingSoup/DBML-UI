@@ -1930,7 +1930,20 @@ impl App {
     /// the pointer and start the drag (MouseMovedWindow extends,
     /// MouseReleased finalizes).
     fn editor_select_pressed(&mut self, local: Point) {
-        let pos = self.clamped_click_pos(local);
+        let mut pos = self.clamped_click_pos(local);
+        // vim normal/visual never rest past the last char, and never
+        // ANCHOR a selection there: clamp the click cell before the
+        // cursor lands on it. Clamping after the jump left the anchor on
+        // the past-EOL cell — the release's anchor==cursor collapse then
+        // failed, so the click stuck in visual mode — and a press with a
+        // selection already active (the stuck click's successor) rendered
+        // the block cursor one char past the line until the release
+        // clamped it back: the momentary blip. Insert mode keeps its
+        // past-end caret by design.
+        if self.config.vim && self.editor().mode != editor::Mode::Insert {
+            let last = self.editor().buf.line_len(pos.row).saturating_sub(1);
+            pos.col = pos.col.min(last);
+        }
         self.editor_mut().buf.cancel_selection();
         self.editor_mut()
             .buf
@@ -1939,14 +1952,10 @@ impl App {
         // a mouse drag IS a visual selection in vim (gvim enters charwise
         // visual on drag): without this, `y` after a mouse highlight arms
         // the normal-mode yank operator instead of yanking. A press also
-        // abandons any half-typed operator/count. Insert mode keeps its
-        // caret behavior (no mode switch).
+        // abandons any half-typed operator/count.
         if self.config.vim && self.editor().mode == editor::Mode::Normal {
             self.editor_mut().mode = editor::Mode::Visual;
             self.editor_mut().visual_linewise = false;
-            // vim normal/visual never rest past the last char: a click
-            // one char beyond the EOL clamps onto the line's last char
-            self.editor_mut().buf.clamp_cursor_to_line_end();
         }
         self.editor_mut().cancel_pending();
         self.drag = Drag::EditorSelect;
@@ -13661,5 +13670,69 @@ mod vim_click_clamp_tests {
         let _ = update(&mut app, Message::MouseReleased);
         let (_, col) = app.editor().buf.cursor();
         assert_eq!(col, line_len.saturating_sub(1), "still clamped after release");
+    }
+
+    /// The blip: clicking past the EOL with a selection already active
+    /// (visual at press) used to land the cursor ON the past-EOL cell —
+    /// the block cursor rendered one char beyond the line until the
+    /// release clamped it back. The press clamps the click cell before
+    /// the cursor lands on it, so no update ever holds a past-EOL
+    /// normal/visual cursor.
+    #[test]
+    fn visual_press_past_eol_never_lands_on_the_insert_cell() {
+        let mut app = vim(App::with_source("Table t {\n  id int\n}\n".into()));
+        app.focus = Focus::Editor;
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('j'), KeyModifiers::NONE));
+        let line_len = app.editor().buf.line_len(1);
+        let past_eol = crate::canvas::editor::pos_to_px(
+            crate::editor::buffer::Pos { row: 1, col: line_len + 2 },
+            0.0,
+            0.0,
+        );
+        // a live visual selection (v + l), then the click
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('v'), KeyModifiers::NONE));
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('l'), KeyModifiers::NONE));
+        let _ = update(&mut app, Message::EditorPressed(past_eol));
+        let (_, col) = app.editor().buf.cursor();
+        assert_eq!(
+            col,
+            line_len.saturating_sub(1),
+            "the press itself rests ON the last char — no past-EOL frame"
+        );
+        let _ = update(&mut app, Message::MouseReleased);
+        assert_eq!(
+            app.editor().mode,
+            editor::Mode::Normal,
+            "a collapsed click lands back in normal"
+        );
+    }
+
+    /// A plain past-EOL click collapses: the selection anchor is the
+    /// clamped cell, so the release's anchor==cursor check fires. The
+    /// anchor used to be captured pre-clamp (the past-EOL cell), the
+    /// collapse failed, and the click stuck in visual — its successor's
+    /// press then showed the blip.
+    #[test]
+    fn plain_click_past_eol_collapses_instead_of_sticking_in_visual() {
+        let mut app = vim(App::with_source("Table t {\n  id int\n}\n".into()));
+        app.focus = Focus::Editor;
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Char('j'), KeyModifiers::NONE));
+        let line_len = app.editor().buf.line_len(1);
+        let past_eol = crate::canvas::editor::pos_to_px(
+            crate::editor::buffer::Pos { row: 1, col: line_len + 2 },
+            0.0,
+            0.0,
+        );
+        let _ = update(&mut app, Message::EditorPressed(past_eol));
+        let _ = update(&mut app, Message::MouseReleased);
+        assert_eq!(
+            app.editor().mode,
+            editor::Mode::Normal,
+            "the click collapsed — no stuck visual"
+        );
+        assert_eq!(app.editor().buf.selection_anchor(), None, "no leftover highlight");
+        let (row, col) = app.editor().buf.cursor();
+        assert_eq!(row, 1);
+        assert_eq!(col, line_len.saturating_sub(1), "resting ON the last char");
     }
 }
