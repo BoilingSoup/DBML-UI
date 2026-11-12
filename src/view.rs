@@ -1504,11 +1504,12 @@ fn paint_tab<R: iced::advanced::graphics::geometry::Renderer>(
             if tab.is_modified() {
                 // +0.5 optical: the drawn spokes center a half-pixel
                 // high of the × glyph's ink (measured off the strip).
-                // A drag-covered tab anchors the mark to its visible
-                // remnant (never under the dragged tab): it disappears
-                // only when the remnant itself is gone — the same
-                // rule the clipped title text follows — instead of
-                // vanishing the moment the sweep passes its slot.
+                // The anchor = natural (rect.x + 15) floored by the
+                // caller's arg: the sliver path passes the natural
+                // anchor so the drag-cover occludes the mark exactly
+                // like the clipped title text (covered under the
+                // dragged card, revealed incrementally); the floor
+                // arg remains the remnant-anchor hook for sweeps.
                 let c = Point::new((rect.x + 15.0).max(asterisk_floor), rect.center_y() + 0.5);
                 let r = 4.5;
                 for i in 0..4 {
@@ -1739,11 +1740,16 @@ pub fn paint_tab_strip<R: iced::advanced::graphics::geometry::Renderer>(
                                 hovered,
                                 close_hover,
                                 width,
-                                // the draft frame is pre-translated to the
-                                // sliver's origin, so local x=0 is the
-                                // remnant's left edge — 1px pad + the 4.5
-                                // spoke radius keeps the mark fully inside
-                                5.5,
+                                // the mark's NATURAL anchor (local x + 15):
+                                // the sliver clip occludes it like the
+                                // title text — covered while the dragged
+                                // card sits over its spot, revealed
+                                // incrementally as the drag moves away.
+                                // (Clamping the mark to the remnant's
+                                // left edge made it ride the dragged
+                                // card's edge mid-drag — the floor arg
+                                // still guards the close-sweep case.)
+                                local.x + 15.0,
                             );
                         });
                     }
