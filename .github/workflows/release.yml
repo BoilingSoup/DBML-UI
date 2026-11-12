@@ -381,8 +381,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Install sqlite3 (the oracle)
-        run: sudo apt-get update && sudo apt-get install -y sqlite3
+      - name: Install sqlite3 (the oracle) + the GTK link deps (rfd's
+        gtk3 file dialogs pull glib-sys)
+        run: sudo apt-get update && sudo apt-get install -y sqlite3 libgtk-3-dev
       - name: Pin and prepare the upstream compiler
         run: sh parity/setup.sh
       - name: Install the driver's node deps
@@ -391,10 +392,38 @@ jobs:
         run: |
           cargo build --release --example parity_dump
           cargo build --release --example parity_schema
+          cargo build --release --example boa_spike
       - name: Gate — diagnostics
         run: node parity/run.mjs
       - name: Gate — schema output
         run: node parity/run_schema.mjs
+      - name: Gate — the embedded engine's fidelity (Boa vs the node reference)
+        run: |
+          python3 -c "
+          import json, os
+          base = 'parity/corpus/'
+          files = sorted(base + f for f in os.listdir(base) if f.endswith('.dbml'))
+          json.dump([{'name': f, 'path': f} for f in files], open('/tmp/boa-cases.json', 'w'))
+          print(len(files), 'cases')
+          "
+          ./target/release/examples/boa_spike /tmp/boa-cases.json > /tmp/boa-out.json
+          node parity/driver/theirs-dump-many.ts /tmp/boa-cases.json > /tmp/node-out.json
+          python3 - <<'PY'
+          import json
+          def load(fp, keyf):
+              raw = json.load(open(fp))
+              if isinstance(raw, str): raw = json.loads(raw)
+              out = {}
+              for it in raw:
+                  key = keyf(it).split('/')[-1]
+                  out[key] = sorted((d['type'], d['text'], d.get('row'), d.get('column'), d.get('endRow'), d.get('endColumn')) for d in it['diagnostics'])
+              return out
+          boa = load('/tmp/boa-out.json', lambda it: (it.get('name') or it.get('path', '')))
+          ref = load('/tmp/node-out.json', lambda it: (it.get('name') or it.get('path', '')))
+          bad = [k for k in sorted(set(boa) | set(ref)) if boa.get(k) != ref.get(k)]
+          print(f'embedded-vs-reference: {len(ref) - len(bad)}/{len(ref)} identical')
+          assert not bad, bad[:8]
+          PY
       - name: Gate — differential fuzz (grammar-shaped corpus)
         run: |
           python3 parity/fuzz.py 300
