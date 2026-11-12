@@ -9383,6 +9383,10 @@ mod scroll_tests {
             Message::KeyPressed(KeyCode::Char('d'), KeyModifiers::CONTROL),
         );
         force_finish(&mut app);
+        // ctrl is long gone: clear the arbiter's tracked state — off-X11
+        // (headless CI) ctrl_held() is None and falls back to this flag,
+        // which would re-bridge the bare letter into the chord instead
+        app.physical_ctrl = false;
         // the rolled-off bare d arrives within the rollout window
         let _ = update(
             &mut app,
@@ -9431,6 +9435,10 @@ mod scroll_tests {
         force_finish(&mut app);
         app.last_scroll_chord =
             Some(std::time::Instant::now() - SCROLL_CHORD_ROLLOUT - std::time::Duration::from_millis(1));
+        // ctrl was released long before: clear the arbiter's tracked state
+        // — off-X11 (headless CI) ctrl_held() is None and falls back to
+        // this flag, which would re-bridge the bare d into ctrl+d
+        app.physical_ctrl = false;
         let _ = update(
             &mut app,
             Message::KeyPressed(KeyCode::Char('d'), KeyModifiers::NONE),
