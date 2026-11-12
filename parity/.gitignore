@@ -1,2 +1,6 @@
 upstream/
 driver/node_modules/
+.cases.json
+.cases-schema.json
+parity-report.json
+parity-schema-report.json

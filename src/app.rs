@@ -738,27 +738,19 @@ impl Tab {
         self.highlights = dbml_ui::dbml::highlight::highlight(src);
         let out = dbml::parser::parse(src);
         self.parse_errors = out.errors.clone();
-        // dbdiagram-style diagnostics: their provideErrors is
-        // interpretFile().getErrors() — parse + binder + interpret errors
-        // ALL flow, always; infos exist only where interpretation
-        // succeeded (broken constructs never produce them)
-        let diagnostics = dbml::validate::validate_with_parse(
-            &out.doc,
-            src,
-            &out.binder_errors,
-            &out.binder_chains,
-            &out.record_count_errors,
-            &out.errors,
-        );
+        // the squiggles = THEIR engine's (boa_diag, async): the local
+        // diagnostics stay empty until the reply lands. The records gate
+        // uses the native parse+binder errors directly — the same
+        // file-level gate theirs' interpret applies, without the full
+        // native validate pass (the results were being overwritten by
+        // the boa reply anyway)
+        let diagnostics = Vec::new();
         // their interpret gate (shouldInterpretNode): the records sample
         // rows exist only for an otherwise-clean file — database: null
         // under any parse/binder error (schema probe on errs.dbml), so
         // the record icons and the record panel stay empty while the
         // diagram itself still renders from the parse model
-        let blocking = !out.errors.is_empty()
-            || diagnostics
-                .iter()
-                .any(|d| d.severity == dbml::validate::Severity::Error);
+        let blocking = !out.errors.is_empty() || !out.binder_errors.is_empty();
         let mut doc = out.doc;
         if blocking {
             for t in &mut doc.tables {
@@ -10036,9 +10028,11 @@ mod diagnostics_panel_tests {
         // parse — while a parse error stands the semantic pass is
         // suppressed entirely (their pipeline), so the fixture must not
         // carry one
-        App::with_source(
+        let mut app = App::with_source(
             "Table a {\n  id integer [pk]\n}\nRef: a.id > b.x\nRef: a.id > a.nope\n".into(),
-        )
+        );
+        app.fill_their_diags();
+        app
     }
 
     #[test]
@@ -10111,6 +10105,7 @@ mod diagnostics_panel_tests {
         // and once the error is gone the warning returns
         app.cur_mut()
             .set_source("Table t {\n  id integer\n  indexes {\n    (id), unique\n  }\n}\n");
+        app.fill_their_diags();
         assert!(app.cur().parse_errors.is_empty());
         // the comma-form finding is their validateNode class — an ERROR
         assert!(
@@ -10206,6 +10201,7 @@ mod goto_definition_tests {
     fn applying_a_fix_keeps_the_cursor_and_one_undo_reverts() {
         let src = "Table a { id integer [pk] }\nTable b { a_id integer [null] }\nRef: b.a_id > a.id\n";
         let mut app = super::vim(App::with_source(src.into()));
+        app.fill_their_diags();
         app.focus = crate::app::Focus::Editor;
         let _ = update(&mut app, Message::DiagnosticGoto(0));
         let _ = update(&mut app, Message::ApplyDiagnosticFix(0, 0));

@@ -4467,7 +4467,14 @@ mod diff_tests {
             if src.is_empty() {
                 continue;
             }
-            let app = crate::app::App::with_source(src.clone());
+            let mut app = crate::app::App::with_source(src.clone());
+            // the fixes = their engine's: fill synchronously (the app
+            // path pumps via the poll tick)
+            {
+                let mut e = dbml_ui::dbml::boa_diag::Engine::new().expect("engine");
+                let ds = e.parse(&src);
+                app.cur_mut().diagnostics = ds.iter().map(|d| d.to_diagnostic()).collect();
+            }
             let diags = app.all_diagnostics();
             let fixes: Vec<_> = diags
                 .iter()
