@@ -631,7 +631,13 @@ pub struct Tab {
     /// The document generation this tab's diagnostics request carries —
     /// the stale replies drop against it.
     pub diag_gen: u64,
-    /// Syntax-highlight tokens for `source` (byte spans), rebuilt with it.
+    /// The generation whose worker reply has been APPLIED. The worker
+    /// drains its inbox to the latest request, so a burst (startup
+    /// restore, several quick opens) parses only the newest — the other
+    /// tabs' requests are consumed unparsed and nothing ever re-requests
+    /// them. This flag knows which tabs are missing their reply: switching
+    /// to one re-kicks its current generation.
+    pub diag_done: Option<u64>,    /// Syntax-highlight tokens for `source` (byte spans), rebuilt with it.
     pub highlights: Vec<dbml_ui::dbml::highlight::Token>,
     /// User-dragged table positions (diagram cells, by table name);
     /// survive re-parses while editing.
@@ -695,6 +701,7 @@ impl Tab {
             parse_errors: Vec::new(),
             diagnostics: Vec::new(),
             diag_gen: 0,
+            diag_done: None,
             highlights: Vec::new(),
             table_pos: Default::default(),
             note_pos: Default::default(),
@@ -768,8 +775,13 @@ impl Tab {
         }
         self.diagnostics = diagnostics;
         // their engine takes over the squiggles: kick the diagnostics
-        // request for this generation (the worker drains to the latest)
-        self.diag_gen = self.diag_gen.wrapping_add(1);
+        // request for this generation (the worker drains to the latest).
+        // The generation is GLOBALLY unique across tabs: the reply is
+        // matched by scanning the tabs for it, and per-tab counters
+        // collide on every multi-tab restore (apply_session_layout
+        // re-runs set_source, so both tabs sat at gen 2 and the
+        // background tab's reply kept matching the first one)
+        self.diag_gen = next_diag_gen();
         dbml::boa_diag::request(self.diag_gen, self.source.clone());
     }
 
@@ -1266,6 +1278,9 @@ impl App {
         // dropped tabs leave the session stale: the SessionTick rewrites
         // the file without them
         self.session_dirty = dropped > 0;
+        // same drain race as the clean restore: the ACTIVE tab's request
+        // must be the newest one in the inbox
+        self.rekick_diagnostics(self.active);
     }
 
     /// Reopen the files named by a clean-exit record: each path is read
@@ -1316,6 +1331,23 @@ impl App {
         // restored splits obey the same pane floors as live drags
         self.split = self.clamp_split(s.split);
         self.session_dirty = dropped > 0;
+        // the burst of restore requests raced the lazy worker boot: the
+        // drain keeps only the newest, so make the ACTIVE tab's request
+        // the newest deterministically (the others recover on switch)
+        self.rekick_diagnostics(self.active);
+    }
+
+    /// Re-kick the diagnostics worker for a tab whose reply never landed
+    /// (see `diag_done`). Same generation, same content: an extra parse
+    /// is wasted only when a reply is already in flight.
+    fn rekick_diagnostics(&mut self, idx: usize) {
+        let (gen, src) = {
+            let t = &self.tabs[idx];
+            (t.diag_gen, t.source.clone())
+        };
+        if self.tabs[idx].diag_done != Some(gen) {
+            dbml::boa_diag::request(gen, src);
+        }
     }
 
     /// Mark the session snapshot stale (called from every edit/structure
@@ -1550,6 +1582,10 @@ impl App {
     /// state swaps itself; hover animation lives on the Tab with the edge
     /// indices it indexes.)
     fn after_tab_switch(&mut self) {
+        // a starved tab's reply may never have landed: re-kick its
+        // generation (a no-op when diag_done already matches — the
+        // diagnostics are on the tab and nothing re-parses)
+        self.rekick_diagnostics(self.active);
         // the editing mode is a global preference: a tab opened/saved
         // under the other mode comes back in the config's mode
         self.editor_mut().mode = if self.config.vim {
@@ -3506,6 +3542,7 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
                 for t in &mut app.tabs {
                     if t.diag_gen == reply.gen {
                         t.diagnostics = reply.diagnostics();
+                        t.diag_done = Some(reply.gen);
                         break;
                     }
                 }
@@ -4027,6 +4064,15 @@ fn handle_message(app: &mut App, message: Message) -> iced::Task<Message> {
 /// of a never-arranged file, or a legacy session) starts from the
 /// auto-arranged layout instead — file open and new diagram share that
 /// initial arrangement.
+/// Globally-unique diagnostics generation. Replies are matched by
+/// scanning the tabs for the generation, so two tabs must never share one
+/// (per-tab counters collide on every multi-tab restore).
+fn next_diag_gen() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    SEQ.fetch_add(1, Ordering::Relaxed)
+}
+
 fn apply_session_layout(tab: &mut Tab, st: &crate::session::SessionTab) {
     if st.table_pos.is_empty() {
         let schema = model::build(&dbml::parser::parse(&tab.source).doc);
@@ -8019,6 +8065,105 @@ mod file_watch_tests {
         app.open_file(b.to_str().unwrap()).unwrap();
         assert_eq!(app.cur().file.as_deref(), Some(b.as_path()), "b opened");
         assert!(app.source().contains("Table b"));
+    }
+}
+
+#[cfg(test)]
+mod diag_starve_tests {
+    use super::*;
+
+    struct TempDir(std::path::PathBuf);
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "dbml-ui-diag-{}-{tag}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+        fn path(&self, name: &str) -> std::path::PathBuf {
+            self.0.join(name)
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn wait_for(app: &mut App, mut done: impl FnMut(&App) -> bool) {
+        // the worker inbox is process-global: parallel tests flood it with
+        // their own set_source requests, and a re-kick can be drained by a
+        // newer one. Re-fire every still-starved tab until a quiet window
+        // lets a request through — the same recovery the switch path uses
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while std::time::Instant::now() < deadline {
+            let _ = update(app, Message::BoaPoll);
+            if done(app) {
+                return;
+            }
+            for i in 0..app.tabs.len() {
+                if app.tabs[i].diag_done.is_none() {
+                    app.rekick_diagnostics(i);
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        panic!("timed out waiting for the diagnostics worker");
+    }
+
+    #[test]
+    fn restored_multi_tab_session_recovers_starved_diagnostics() {
+        // the worker drains its inbox to the LATEST request, so the burst
+        // a multi-tab restore fires parses only one tab — the others sat
+        // at empty marks until an EDIT re-kicked them (the active tab is
+        // re-kicked at restore; a starved background tab recovers when
+        // you switch to it)
+        let dir = TempDir::new("restore");
+        let a = dir.path("a.dbml");
+        let b = dir.path("b.dbml");
+        std::fs::write(&a, "Table users {\n  id integer [not null\n}\n").unwrap();
+        std::fs::write(&b, "Table posts {\n  id int\n}\nRef: posts.nope > posts.id\n").unwrap();
+        let s = crate::session::Session {
+            active: 0,
+            split: 0.5,
+            clean: true,
+            tabs: vec![
+                crate::session::SessionTab {
+                    file: Some(a.to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+                crate::session::SessionTab {
+                    file: Some(b.to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+            ],
+        };
+        let mut app = App::blank_start();
+        app.restore_open_files(s);
+        assert_eq!(app.tabs.len(), 2, "both tabs restored");
+        // the ACTIVE tab's reply (its re-kicked request is the newest)
+        wait_for(&mut app, |app| app.cur().diag_done.is_some());
+        assert!(
+            !app.cur().diagnostics.is_empty(),
+            "active tab carries marks"
+        );
+        // the background tab starved under the drain: switching to it
+        // re-kicks its generation — no edit needed
+        app.activate_tab(1);
+        wait_for(&mut app, |app| {
+            app.tabs.iter().all(|t| t.diag_done.is_some())
+        });
+        for (i, t) in app.tabs.iter().enumerate() {
+            assert_eq!(
+                t.diag_done,
+                Some(t.diag_gen),
+                "tab {i} never received its diagnostics reply"
+            );
+            assert!(!t.diagnostics.is_empty(), "tab {i} has no marks");
+        }
     }
 }
 
