@@ -333,11 +333,17 @@ fn push_edge(s: &mut String, r: &EdgeRoute) {
     let units: Vec<(f32, f32)> = r.pts.iter().map(|&(x, y)| pt_px(x, y)).collect();
     let d = rounded_edge_path(&units, 8.0);
     // the line's color mirrors the canvas: explicit `[color:]`, else the
-    // referenced table's header color (`inherited`), else the gray default
+    // referenced table's header color (`inherited`), else the gray default.
+    // The inherited dark header option counts as no color (#1f2128 — the
+    // default header band, rgb(31,33,40) below): the dark swatch renders
+    // the same band as an uncolored table, so its lines wear the same
+    // default gray (edge_base_color's rule, canvas/diagram.rs)
     let stroke = r
         .color
         .as_deref()
-        .or(r.inherited.as_deref())
+        .or(r.inherited
+            .as_deref()
+            .filter(|h| !h.eq_ignore_ascii_case("#1f2128")))
         .unwrap_or("#7f838d");
     s.push_str(&format!(
         r##"<path d="{d}" fill="none" stroke="{stroke}" stroke-width="1.5"/>"##
@@ -569,6 +575,22 @@ mod tests {
         let svg = svg_of("Table a { id integer }\nTableGroup g { a }");
         assert!(svg.contains("fill=\"rgb(31,33,40)\""), "group band: {svg}");
         assert!(!svg.contains("rgb(30,105,253)"), "no group blue: {svg}");
+    }
+
+    #[test]
+    fn the_dark_header_option_exports_the_default_gray_line() {
+        // a table colored with the dark swatch renders the same header
+        // band as an uncolored table, so its relationship line exports in
+        // the same default gray — never the inherited near-black
+        let svg = svg_of(
+            "Table a [headercolor: #1f2128] { id integer [pk] }\nTable b { a_id integer }\nRef: b.a_id > a.id\n",
+        );
+        // line + cardinality end markers, all in the default gray
+        assert_eq!(svg.matches("stroke=\"#7f838d\"").count(), 4);
+        assert!(
+            !svg.contains("stroke=\"#1f2128\""),
+            "no near-black relationship stroke"
+        );
     }
 
     #[test]

@@ -1198,12 +1198,20 @@ fn paint(
 
 /// A line's base color: an explicit `[color: …]` wins, else the
 /// referenced table's resolved header color (its TableGroup cascade
-/// included), else the default gray.
+/// included), else the default gray. The inherited DARK header option
+/// counts as no color: the dark swatch renders the same header band as
+/// an uncolored table, so its lines wear the same default gray — the
+/// hover path (`edge_hover_color`) reconciles the two the same way.
 fn edge_base_color(edge: &EdgeRoute) -> Color {
     edge.color
         .as_deref()
         .and_then(theme::hex_color)
-        .or_else(|| edge.inherited.as_deref().and_then(theme::hex_color))
+        .or_else(|| {
+            edge.inherited
+                .as_deref()
+                .filter(|h| !h.eq_ignore_ascii_case(theme::DARK_HEADER_HEX))
+                .and_then(theme::hex_color)
+        })
         .unwrap_or(theme::LINE)
 }
 
@@ -1264,7 +1272,9 @@ fn paint_edge(
     // thick under the highlight color). A `[color: ...]` ref replaces
     // the gray base, and a line WITHOUT one renders in the referenced
     // table's header color (`inherited`) — the whole relationship (line
-    // + markers) renders in it (live-verified).
+    // + markers) renders in it (live-verified). The dark header option
+    // is excepted: it renders the same default gray as an uncolored
+    // table (edge_base_color's rule).
     let k = zoom / 20.0;
     let mut core = edge_stroke(zoom);
     let base = edge_base_color(edge);
@@ -2972,6 +2982,45 @@ Ref: likes.post_id > posts.id
 ",
         );
         assert_eq!(edge_hover_color(&l.edges[0]), theme::EDGE_HOVER);
+    }
+
+    #[test]
+    fn the_dark_header_option_wears_the_default_gray_line() {
+        // the dark swatch renders the SAME header band as an uncolored
+        // table, so its relationship lines wear the same default gray:
+        // only a NON-dark header color (or an explicit `[color:]`) tints
+        // the line. Both renderers agree — the hover stays the blue in
+        // every case here.
+        let layout_of = |src: &str| {
+            dbml_ui::layout::layout(&dbml_ui::model::build(
+                &dbml_ui::dbml::parser::parse(src).doc,
+            ))
+        };
+        let ref_line = "Table likes { post_id integer }\nRef: likes.post_id > posts.id\n";
+        // the default cascade: gray
+        let l = layout_of(&format!("Table posts {{ id integer [pk] }}\n{ref_line}"));
+        assert_eq!(edge_base_color(&l.edges[0]), theme::LINE);
+        // the dark swatch as an EXPLICIT pick: gray too — the fix (it
+        // used to paint the line in the inherited near-black)
+        let l = layout_of(&format!(
+            "Table posts [headercolor: #1f2128] {{ id integer [pk] }}\n{ref_line}"
+        ));
+        assert_eq!(l.edges[0].inherited.as_deref(), Some("#1f2128"));
+        assert_eq!(edge_base_color(&l.edges[0]), theme::LINE);
+        // …case-insensitively
+        let l = layout_of(&format!(
+            "Table posts [headercolor: #1F2128] {{ id integer [pk] }}\n{ref_line}"
+        ));
+        assert_eq!(edge_base_color(&l.edges[0]), theme::LINE);
+        // a real header color still tints the line (and both keep the blue
+        // hover off — the line highlights in its own color)
+        let l = layout_of(&format!(
+            "Table posts [headercolor: #7a4f9e] {{ id integer [pk] }}\n{ref_line}"
+        ));
+        assert_eq!(
+            edge_base_color(&l.edges[0]),
+            theme::hex_color("#7a4f9e").unwrap()
+        );
     }
 
     #[test]
