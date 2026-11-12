@@ -400,7 +400,7 @@ jobs:
         run: |
           python3 -c "import json, os; base = 'parity/corpus/'; files = sorted(base + f for f in os.listdir(base) if f.endswith('.dbml')); json.dump([{'name': f, 'path': f} for f in files], open('/tmp/boa-cases.json', 'w'))"
           ./target/release/examples/boa_spike /tmp/boa-cases.json parity/bundle/dbml-parse.iife.js > /tmp/boa-out.json
-          node parity/driver/theirs-dump-many.ts /tmp/boa-cases.json > /tmp/node-out.json
+          ./parity/driver/node_modules/.bin/tsx --tsconfig parity/driver/tsconfig.json parity/driver/theirs-dump-many.ts /tmp/boa-cases.json > /tmp/node-out.json
           python3 parity/driver/boa_gate.py /tmp/boa-out.json /tmp/node-out.json
       - name: Gate — differential fuzz (grammar-shaped corpus)
         run: |
