@@ -159,6 +159,22 @@ impl Buffer {
         self.lines.len()
     }
 
+    /// True when the last row is the EOL marker a trailing newline
+    /// stores: an empty row below real content. The lone empty row of a
+    /// fresh buffer is line 1, not a marker.
+    pub fn has_eol_marker(&self) -> bool {
+        self.lines.len() > 1 && self.lines.last().is_some_and(|l| l.is_empty())
+    }
+
+    /// The EOL-marker row, when one exists (see `has_eol_marker`).
+    pub fn eol_marker_row(&self) -> Option<usize> {
+        if self.has_eol_marker() {
+            Some(self.lines.len() - 1)
+        } else {
+            None
+        }
+    }
+
     /// The last CONTENT line's row: a document stored with a trailing
     /// newline keeps that newline as an empty last row (the file's EOL
     /// marker), which vim never shows as a line nor rests the cursor on.
@@ -166,7 +182,7 @@ impl Buffer {
     /// document (and the horizontal scrollbar's reserved space under it)
     /// is not a cursor destination.
     pub fn last_content_row(&self) -> usize {
-        if self.lines.len() > 1 && self.lines.last().is_some_and(|l| l.is_empty()) {
+        if self.has_eol_marker() {
             self.lines.len() - 2
         } else {
             self.lines.len() - 1
@@ -954,6 +970,18 @@ impl Buffer {
 
     pub fn insert_newline(&mut self) {
         self.push_history();
+        self.split_cursor_row();
+        self.set_col(0);
+        self.anchor_cursor_line();
+    }
+
+    /// Split the cursor row at the cursor column, the cursor landing on
+    /// the tail row. Shared by `insert_newline` (insert mode, historyful)
+    /// and `insert_newline_raw` (a step inside composed one-unit edits).
+    /// The tail may still be filled by the edit's later steps — an edit
+    /// that ENDS with the cursor on an empty last row calls
+    /// `anchor_cursor_line` to keep that row a real line.
+    fn split_cursor_row(&mut self) {
         self.delete_selection();
         let (r, cpos) = (self.cursor.row, self.cursor.col);
         let mut line = self.lines[r].clone();
@@ -962,7 +990,25 @@ impl Buffer {
         self.lines[r] = line;
         self.lines.insert(r + 1, rest);
         self.cursor.row += 1;
-        self.set_col(0);
+    }
+
+    /// The edit just created (or landed the cursor on) its line: when
+    /// that row is the LAST row and EMPTY it would read as the file's
+    /// EOL marker — unnumbered in the gutter, dd clamps off it, the
+    /// cursor strands there (the unnumbered last line). Push the marker
+    /// below instead: the cursor's line stays real and the document
+    /// gains its trailing newline (Enter/`o` at the end of a
+    /// no-trailing-newline document ends the file `…\n\n`, vim's eol).
+    /// A non-empty tail (smart-enter's indent, a filled paste) is
+    /// already a plain line and stays marker-free. Call at the END of
+    /// the edit, after any steps that fill the split tail.
+    pub(crate) fn anchor_cursor_line(&mut self) {
+        if self.lines.len() > 1
+            && self.cursor.row + 1 == self.lines.len()
+            && self.lines[self.cursor.row].is_empty()
+        {
+            self.lines.push(String::new());
+        }
     }
 
     /// `o`: open a line below the cursor's line, wearing the indent the
@@ -979,6 +1025,11 @@ impl Buffer {
         self.lines.insert(r + 1, indent.clone());
         self.cursor.row += 1;
         self.set_col(indent.chars().count());
+        // `o` on the last row of a no-trailing-newline document: an empty
+        // indent would read as the EOL marker and swallow the opened line
+        // (the cursor would strand on the unnumbered row) — the marker
+        // moves below the new line instead
+        self.anchor_cursor_line();
     }
 
     /// `O`: open a line above, the cursor riding up onto it (the old
@@ -1208,8 +1259,11 @@ impl Buffer {
         if total > 0 {
             self.delete_str_raw(total);
         }
-        self.insert_newline_raw();
-        self.move_cursor(Move::Up);
+        // the replaced span becomes one seeded line: a plain row insert —
+        // NOT insert_newline_raw, whose empty-tail rule would grow a
+        // no-trailing-newline document by a marker row (cc adds no line)
+        self.lines.insert(row, String::new());
+        self.move_cursor(Move::Jump(row, 0));
     }
 
     /// vim `r`: replace `n` chars starting at the cursor with `c` as a
@@ -1265,6 +1319,7 @@ impl Buffer {
         self.push_history();
         self.delete_next_char_raw();
         self.insert_newline_raw();
+        self.anchor_cursor_line();
         true
     }
 
@@ -1328,14 +1383,7 @@ impl Buffer {
     }
 
     pub(crate) fn insert_newline_raw(&mut self) {
-        self.delete_selection();
-        let (r, cpos) = (self.cursor.row, self.cursor.col);
-        let mut line = self.lines[r].clone();
-        let off = char_off(&line, cpos);
-        let rest = line.split_off(off);
-        self.lines[r] = line;
-        self.lines.insert(r + 1, rest);
-        self.cursor.row += 1;
+        self.split_cursor_row();
         self.cursor.col = 0;
     }
 
@@ -2088,6 +2136,59 @@ mod tests {
         assert!(b.search_hl_spans().is_empty());
         assert!(b.set_search_pattern("foo"));
         assert_eq!(b.search_hl_spans().len(), 2);
+    }
+
+    #[test]
+    fn split_last_row_of_a_no_eol_document() {
+        // an empty tail on the last row would read as the file's EOL
+        // marker and swallow the new line: the marker moves below it
+        let mut b = buf("ab");
+        b.move_cursor(Move::Jump(0, 2));
+        b.insert_newline();
+        assert_eq!(b.lines(), ["ab", "", ""]);
+        assert_eq!(b.pos(), Pos { row: 1, col: 0 });
+        assert_eq!(b.last_content_row(), 1);
+        // a non-empty tail is a plain line: no marker, the document keeps
+        // its missing trailing newline
+        let mut b = buf("ab");
+        b.move_cursor(Move::Jump(0, 1));
+        b.insert_newline();
+        assert_eq!(b.lines(), ["a", "b"]);
+        assert!(!b.has_eol_marker());
+        // a document that already ends with its marker: the split leaves
+        // it alone
+        let mut b = buf("a\n");
+        b.move_cursor(Move::Jump(0, 1));
+        b.insert_newline();
+        assert_eq!(b.lines(), ["a", "", ""]);
+        assert_eq!(b.pos(), Pos { row: 1, col: 0 });
+    }
+
+    #[test]
+    fn open_line_below_on_a_no_eol_last_line_keeps_it_a_line() {
+        let mut b = buf("a\nb");
+        b.move_cursor(Move::Jump(1, 1));
+        b.open_line_below();
+        assert_eq!(b.lines(), ["a", "b", "", ""]);
+        assert_eq!(b.pos(), Pos { row: 2, col: 0 });
+        // a non-empty indent needs no marker: the new last line is real
+        let mut b = buf("a\n  x");
+        b.move_cursor(Move::Jump(1, 3));
+        b.open_line_below();
+        assert_eq!(b.lines(), ["a", "  x", "  "]);
+        assert!(!b.has_eol_marker());
+    }
+
+    #[test]
+    fn cc_on_a_no_eol_document_does_not_grow_it() {
+        // change_lines replaces the span with ONE seeded line — a plain
+        // row insert, not the split rule (which would append a marker)
+        let mut b = buf("solo");
+        b.move_cursor(Move::Jump(0, 2));
+        b.change_lines(1);
+        assert_eq!(b.lines(), ["", ""]);
+        assert_eq!(b.pos(), Pos { row: 0, col: 0 });
+        assert_eq!(b.last_content_row(), 0, "one line, its marker below");
     }
 
     #[test]

@@ -505,6 +505,13 @@ fn find_word_boundary(input: &str, from: usize, forward: bool) -> usize {
         if was_vim && self.mode != Mode::Insert {
             self.buf.clamp_cursor_to_line_end();
         }
+        // the EOL-marker row is not a line (no gutter number, not a click
+        // or motion destination): no key leaves the cursor RESTING on it,
+        // any mode. The old normal-dispatch clamp missed the operator
+        // sequences — dd itself used to strand the caret on the unnumbered
+        // row, and the next lone `d` then visibly teleported it onto the
+        // line above as the operator armed.
+        self.clamp_off_eol_marker();
         // leaving a vim mode for another hides the search match bands
         // (vim's :noh on mode-changing actions) — the pattern stays for
         // `n`/`N`, and a fresh `/` or find query re-shows them
@@ -1069,6 +1076,15 @@ _ => Action::None,
         } else {
             self.buf.cancel_selection();
         }
+        // Down from the last content line stays put when the row below is
+        // the EOL-marker row: not a line, never a caret destination (the
+        // caret parked there read as the unnumbered-line bug; vim's <Down>
+        // on the last line does not move either)
+        if matches!(m, CursorMove::Down)
+            && Some(self.buf.pos().row + 1) == self.buf.eol_marker_row()
+        {
+            return;
+        }
         self.buf.move_cursor(m);
     }
 
@@ -1175,7 +1191,7 @@ _ => Action::None,
             self.count = None;
             return action;
         }
-        let action = self.dispatch_normal(key, m);
+        let action = self.dispatch_normal_match(key, m);
         if self.pending.is_none() {
             self.count = None;
             self.op_count = None;
@@ -1200,26 +1216,33 @@ _ => Action::None,
         }
     }
 
-    fn dispatch_normal(&mut self, key: KeyEvent, m: KeyModifiers) -> Action {
-        let action = self.dispatch_normal_match(key, m);
-        // vim never rests the cursor on the document's EOL marker: the
-        // empty last row a trailing newline stores is not a line, so a
-        // motion that landed there (j past the end, a search, a jump)
-        // clamps back onto the last content line — dd then operates on
-        // the line the cursor visibly sits on, never the brace above an
-        // empty-looking row.
-        if self.mode == Mode::Normal {
-            let (row, col) = self.buf.cursor();
-            let marker_row = self.buf.line_count().saturating_sub(1);
-            let has_marker =
-                marker_row > 0 && self.buf.line(marker_row).is_empty();
-            if has_marker && row == marker_row {
-                let last = self.buf.last_content_row();
-                let col = col.min(self.buf.line_len(last));
-                self.buf.move_cursor(CursorMove::Jump(last, col));
+    /// The cursor never RESTS on the document's EOL-marker row (the empty
+    /// last row a trailing newline stores — unnumbered in the gutter, not
+    /// a click or motion destination). Normal mode folds it onto the last
+    /// content line, so dd operates on the line the cursor visibly sits
+    /// on, never the brace above an empty-looking row. Insert mode goes
+    /// the other way: the row the caret is editing IS a line — an edit
+    /// that left the caret on an empty last row anchors it (the file
+    /// gains its trailing newline, the marker moving below; the op-level
+    /// `anchor_cursor_line` calls normally settle this first, this is the
+    /// safety net for paths that bypass them). Runs after every key (see
+    /// handle_key); visual keeps its old landing (a selection may legally
+    /// span onto the marker row).
+    fn clamp_off_eol_marker(&mut self) {
+        if let Some(marker) = self.buf.eol_marker_row() {
+            if self.buf.pos().row == marker {
+                if self.mode == Mode::Insert {
+                    self.buf.anchor_cursor_line();
+                } else if self.mode == Mode::Normal {
+                    let col = self.buf.pos().col;
+                    let last = self.buf.last_content_row();
+                    self.buf.move_cursor(CursorMove::Jump(
+                        last,
+                        col.min(self.buf.line_len(last)),
+                    ));
+                }
             }
         }
-        action
     }
 
     fn dispatch_normal_match(&mut self, key: KeyEvent, m: KeyModifiers) -> Action {
@@ -3105,6 +3128,10 @@ _ => Action::None,
                 }
             }
         }
+        // the Enter created the cursor's line: an empty last row would
+        // read as the file's EOL marker (the unnumbered-line bug) — it
+        // stays a real line, the marker moving below it
+        self.buf.anchor_cursor_line();
         Action::Changed
     }
 
@@ -3156,6 +3183,11 @@ _ => Action::None,
                 .take_while(|c| c.is_whitespace())
                 .count();
             self.buf.move_cursor(CursorMove::Jump(first, nb));
+            // a linewise put onto the last row of a no-trailing-newline
+            // document opens its slot through the split rule: when the
+            // paste leaves the cursor on an empty last row (an empty
+            // register line), that row must not read as the EOL marker
+            self.buf.anchor_cursor_line();
             Action::Changed
         } else {
             // charwise put: inline after (p) / before (P) the cursor char;
@@ -3338,7 +3370,10 @@ mod tests {
         e.handle_key(enter());
         assert_eq!(e.buf.lines()[2], "  ");
         assert_eq!(e.buf.pos(), Pos { row: 2, col: 2 });
-        // a `{` before the caret opens one level deeper
+        // a `{` before the caret opens one level deeper; the opened line
+        // wears the unit indent (non-empty), so it is already a real last
+        // line — no EOL marker is gained, the doc keeps no trailing
+        // newline
         let mut e = editor("Table users {");
         e.buf.move_cursor(CursorMove::Jump(0, 13));
         e.handle_key(key('i'));
@@ -3389,6 +3424,91 @@ mod tests {
         assert_eq!(e.cursor(), (0, 6));
         e.handle_key(key('b'));
         assert_eq!(e.cursor(), (0, 4));
+    }
+
+    #[test]
+    fn enter_at_a_no_eol_documents_end_keeps_the_new_line_real() {
+        // the empty doc (New file): Enter opens line 2 — a real, numbered
+        // line with the cursor ON it, the file's EOL marker moving below.
+        // The old behavior made the new line the marker row itself: no
+        // gutter number, the caret stranded on the unnumbered row, and
+        // dd then operated on the clamped line above.
+        let mut e = editor("");
+        e.handle_key(key('i'));
+        e.handle_key(enter());
+        assert_eq!(e.buf.lines(), ["", "", ""]);
+        assert_eq!(e.buf.pos(), Pos { row: 1, col: 0 }, "caret on the opened line");
+        assert_eq!(e.buf.last_content_row(), 1);
+        // esc + dd removes the opened line; the caret rests on line 1,
+        // never on the marker row (dd runs through handle_sequence, which
+        // the old normal-dispatch clamp never covered)
+        e.handle_key(esc());
+        e.handle_key(key('d'));
+        e.handle_key(key('d'));
+        assert_eq!(e.buf.lines(), ["", ""]);
+        assert_eq!(e.buf.pos(), Pos { row: 0, col: 0 }, "off the marker row");
+    }
+
+    #[test]
+    fn o_on_a_no_eol_last_line_opens_a_real_line() {
+        let mut e = editor("Table t {\n}");
+        e.handle_key(key('G'));
+        e.handle_key(key('o'));
+        assert_eq!(e.buf.lines(), ["Table t {", "}", "", ""]);
+        assert_eq!(e.buf.pos(), Pos { row: 2, col: 0 }, "the opened line, not the marker");
+        e.handle_key(esc());
+        assert_eq!(e.buf.pos(), Pos { row: 2, col: 0 }, "Esc keeps the caret there");
+        // dd deletes the line the caret is ON — the opened one, whose
+        // number the gutter shows — and the caret lands on a content row
+        e.handle_key(key('d'));
+        e.handle_key(key('d'));
+        assert_eq!(e.buf.lines(), ["Table t {", "}", ""]);
+        assert_eq!(e.buf.pos(), Pos { row: 1, col: 0 });
+    }
+
+    #[test]
+    fn insert_down_from_the_last_line_stays_off_the_marker_row() {
+        let mut e = editor("one\n");
+        e.handle_key(key('G'));
+        e.handle_key(key('i'));
+        e.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(
+            e.buf.pos().row,
+            0,
+            "<Down> on the last line stays: the row below is the marker"
+        );
+        // a real line below still moves
+        let mut e = editor("one\ntwo\n");
+        e.handle_key(key('i'));
+        e.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        e.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(e.buf.pos().row, 1, "the last content line is reachable");
+    }
+
+    #[test]
+    fn linewise_paste_of_an_empty_line_onto_a_no_eol_last_line() {
+        // p opens its slot through the same split rule as Enter: the
+        // pasted empty line must not be swallowed by the EOL marker
+        let mut e = editor("x\n\ny");
+        e.handle_key(key('j'));
+        e.handle_key(key('y'));
+        e.handle_key(key('y'));
+        e.handle_key(key('G'));
+        e.handle_key(key('p'));
+        assert_eq!(e.buf.lines(), ["x", "", "y", "", ""]);
+        assert_eq!(e.buf.pos(), Pos { row: 3, col: 0 }, "ON the pasted line, not the marker");
+    }
+
+    #[test]
+    fn r_enter_on_a_no_eol_documents_last_char() {
+        // r<Enter> replaces the char with a line break: the new (empty)
+        // line is real, the marker below it
+        let mut e = editor("ab");
+        e.handle_key(key('l'));
+        e.handle_key(key('r'));
+        e.handle_key(enter());
+        assert_eq!(e.buf.lines(), ["a", "", ""]);
+        assert_eq!(e.buf.pos(), Pos { row: 1, col: 0 });
     }
 
     #[test]
@@ -3490,14 +3610,18 @@ mod tests {
 
     #[test]
     fn open_lines_below_and_above() {
+        // `o` on a no-trailing-newline document opens a REAL line: the
+        // empty opened row would read as the file's EOL marker (the
+        // unnumbered line), so the marker moves below it and the doc
+        // gains its trailing newline
         let mut e = editor("one");
         e.handle_key(key('o'));
         assert_eq!(e.mode, Mode::Insert);
         e.handle_key(key('t'));
-        assert_eq!(e.text(), "one\nt");
+        assert_eq!(e.text(), "one\nt\n");
         e.handle_key(esc());
         e.handle_key(key('O'));
-        assert_eq!(e.text(), "one\n\nt");
+        assert_eq!(e.text(), "one\n\nt\n");
         assert_eq!(e.cursor().0, 1);
     }
 

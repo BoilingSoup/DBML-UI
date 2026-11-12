@@ -4122,7 +4122,10 @@ fn finish_restored_tab(
     ) -> Tab {
         apply_session_layout(&mut tab, st);
         tab.editor.mode = mode_of(st.mode);
-        let row = st.cursor.0.min(tab.editor.buf.line_count().saturating_sub(1));
+        // the restored cursor folds onto the last CONTENT line: the
+        // EOL-marker row is not a line (a pre-fix session could have
+        // saved the caret parked on the unnumbered row)
+        let row = st.cursor.0.min(tab.editor.buf.last_content_row());
         let col = st.cursor.1.min(tab.editor.buf.line_len(row));
         tab.editor
             .buf
