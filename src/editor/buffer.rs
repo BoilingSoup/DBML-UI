@@ -787,13 +787,22 @@ impl Buffer {
 
     /// Port of tui-textarea's `next_cursor` (no viewport moves): computes
     /// the raw target for a move, or None when the cursor cannot move.
+    ///
+    /// No motion lands on the EOL-marker row (the empty row a trailing
+    /// blank line stores — unnumbered in the gutter, not a line): every
+    /// destination clamps to the last CONTENT row, whatever the mode that
+    /// issued the move (vim normal/visual/insert, Regular's caret, the
+    /// animated scroll's GotoRow ride). A landing there used to strand
+    /// visual `j` on the unnumbered row, and in insert mode it anchored
+    /// into a real line — one per Right-press at EOF.
     fn next_cursor(&self, (row, col): (usize, usize), m: Move) -> Option<(usize, usize)> {
         let lines = &self.lines;
+        let last = self.last_content_row();
         let fit_col = |col: usize, line: &str| col.min(line.chars().count());
         match m {
             Move::Forward => {
                 if col >= lines[row].chars().count() {
-                    (row + 1 < lines.len()).then(|| (row + 1, 0))
+                    (row + 1 <= last).then(|| (row + 1, 0))
                 } else {
                     Some((row, col + 1))
                 }
@@ -813,16 +822,18 @@ impl Buffer {
                 // aim survives the crossing (vim's curswant)
                 Some((row, fit_col(self.desired_col, &lines[row])))
             }
-            Move::Down => Some((
-                row + 1,
-                fit_col(self.desired_col, lines.get(row + 1)?),
-            )),
+            Move::Down => (row + 1 <= last).then(|| {
+                (
+                    row + 1,
+                    fit_col(self.desired_col, &lines[row + 1]),
+                )
+            }),
             Move::Head => Some((row, 0)),
             Move::End => Some((row, lines[row].chars().count())),
             Move::EndMax => Some((row, lines[row].chars().count())),
             Move::Top => Some((0, fit_col(col, &lines[0]))),
             Move::Bottom => {
-                let row = lines.len() - 1;
+                let row = last;
                 Some((row, fit_col(col, &lines[row])))
             }
             Move::WordEnd => {
@@ -832,7 +843,7 @@ impl Buffer {
                 } else {
                     let mut row = row;
                     loop {
-                        if row == lines.len() - 1 {
+                        if row == last {
                             break Some((row, lines[row].chars().count()));
                         }
                         row += 1;
@@ -845,7 +856,7 @@ impl Buffer {
             Move::WordForward => {
                 if let Some(col) = find_word_start_forward(&lines[row], col) {
                     Some((row, col))
-                } else if row + 1 < lines.len() {
+                } else if row + 1 <= last {
                     Some((row + 1, 0))
                 } else {
                     Some((row, lines[row].chars().count()))
@@ -870,7 +881,7 @@ impl Buffer {
                     }
                     prev_is_empty = is_empty;
                 }
-                let row = lines.len() - 1;
+                let row = last;
                 Some((row, fit_col(col, &lines[row])))
             }
             Move::ParagraphBack => {
@@ -886,6 +897,13 @@ impl Buffer {
                 Some((0, fit_col(col, &lines[0])))
             }
             Move::Jump(row, col) => {
+                // bounds-clamped as before, but NOT to the last CONTENT
+                // row: edit machinery (linewise put, r<Enter>, surround…)
+                // Jumps into the row it just split-opened, which
+                // transiently reads as the marker until the edit fills
+                // it. User-facing jumpers (G, select-all, session
+                // restore, clamped_click_pos) clamp to the last content
+                // row themselves.
                 let row = row.min(lines.len() - 1);
                 let col = fit_col(col, &lines[row]);
                 Some((row, col))
@@ -894,8 +912,9 @@ impl Buffer {
                 // curswant semantics: aim at the remembered column, keep
                 // the aim across short/blank lines (move_cursor preserves
                 // it for this move)
-                lines.get(row.min(lines.len() - 1))
-                    .map(|l| (row.min(lines.len() - 1), fit_col(self.desired_col, l)))
+                let row = row.min(last);
+                lines.get(row)
+                    .map(|l| (row, fit_col(self.desired_col, l)))
             }
         }
     }

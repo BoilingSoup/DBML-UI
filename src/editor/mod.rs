@@ -1295,7 +1295,14 @@ _ => Action::None,
                 Action::None
             }
             KeyCode::Char('a') => {
-                self.buf.move_cursor(CursorMove::Forward);
+                // vim's a: one cell right, past the last char at most —
+                // NEVER a wrap. Forward would carry the cursor onto the
+                // next row from an empty line (whose insert clamp then
+                // anchors the EOL-marker row into a real new line), and
+                // mid-document it would type into the line below.
+                let (r, c) = self.buf.cursor();
+                self.buf
+                    .move_cursor(CursorMove::Jump(r, c.saturating_add(1)));
                 self.mode = Mode::Insert;
                 Action::None
             }
@@ -3579,6 +3586,16 @@ mod tests {
         e.handle_key(key('d'));
         assert_eq!(e.text(), "one\n");
 
+        // a marker row below the last content line: j stays put EXACTLY
+        // (the old landing-on-marker + fold-back teleported the cursor to
+        // column 0)
+        let mut e = editor("one\n}}\n\n");
+        e.handle_key(key('G'));
+        e.handle_key(key('$'));
+        assert_eq!(e.cursor(), (1, 1), "$ lands on the last char");
+        e.handle_key(key('j'));
+        assert_eq!(e.cursor(), (1, 1), "j at EOF stays, column intact");
+
         // a real empty line before the marker is still a line: G lands
         // on it, not on the content line above
         let mut e = editor("one\n\n\n");
@@ -3595,6 +3612,138 @@ mod tests {
         e.handle_key(key('9'));
         e.handle_key(key('G'));
         assert_eq!(e.buf.pos(), Pos { row: 1, col: 0 });
+    }
+
+    #[test]
+    fn motions_never_land_on_the_eol_marker_row() {
+        // every next_cursor destination arm clamps to the last CONTENT
+        // row: the marker row is not a line, so no motion may land there
+        // (the raw-buffer sweep; resting clamps are Editor-level)
+        let mut b = Buffer::from_lines(["one", "}", ""]);
+        assert!(b.has_eol_marker());
+        let last = b.last_content_row();
+        assert_eq!(last, 1);
+
+        b.move_cursor(CursorMove::Jump(0, 0));
+        b.move_cursor(CursorMove::Down);
+        assert_eq!(b.pos(), Pos { row: 1, col: 0 }, "Down");
+        b.move_cursor(CursorMove::Forward);
+        b.move_cursor(CursorMove::Forward);
+        assert_eq!(b.pos().row, 1, "Forward's wrap refuses the marker row");
+        // Jump stays bounds-clamped only: edit machinery Jumps into the
+        // row it just split-opened (transiently the marker row)
+        b.move_cursor(CursorMove::GotoRow(9));
+        assert_eq!(b.pos().row, 1, "GotoRow (the scroll's cursor ride) clamps");
+        b.move_cursor(CursorMove::Bottom);
+        assert_eq!(b.pos().row, 1, "Bottom");
+        b.move_cursor(CursorMove::Jump(1, 0));
+        b.move_cursor(CursorMove::WordForward);
+        assert_eq!(b.pos().row, 1, "w's wrap refuses the marker row");
+        b.move_cursor(CursorMove::WordEnd);
+        assert_eq!(b.pos().row, 1, "e's scan stops at the last content row");
+        b.move_cursor(CursorMove::ParagraphForward);
+        assert_eq!(b.pos().row, 1, "paragraph-forward tail");
+    }
+
+    #[test]
+    fn visual_j_stays_off_the_eol_marker_row() {
+        // visual mode used to keep its marker-row landing ("a selection
+        // may legally span onto it") — but vim's j on the last line does
+        // not move, in visual just like in normal
+        let mut e = editor("one\n}\n\n");
+        e.handle_key(key('G'));
+        assert_eq!(e.buf.pos(), Pos { row: 1, col: 0 });
+        e.handle_key(key('v'));
+        assert_eq!(e.mode, Mode::Visual);
+        e.handle_key(key('j'));
+        e.handle_key(key('j'));
+        assert_eq!(
+            e.buf.pos(),
+            Pos { row: 1, col: 0 },
+            "visual j stays on the last line"
+        );
+        assert_eq!(e.mode, Mode::Visual);
+
+        // a blank NUMBERED last line with the marker below it: same
+        let mut e = editor("one\n\n\n");
+        e.handle_key(key('G'));
+        assert_eq!(e.buf.pos(), Pos { row: 1, col: 0 });
+        e.handle_key(key('v'));
+        e.handle_key(key('j'));
+        assert_eq!(
+            e.buf.pos(),
+            Pos { row: 1, col: 0 },
+            "visual j stays on the blank last line"
+        );
+    }
+
+    #[test]
+    fn a_on_the_last_blank_line_enters_insert_in_place() {
+        // vim's a never wraps: on an empty line it enters insert ON the
+        // line. The old Forward wrapped onto the EOL-marker row, whose
+        // insert clamp then anchored it into a real new line — "press a,
+        // gain a line"
+        let mut e = editor("one\n\n\n");
+        e.handle_key(key('G'));
+        e.handle_key(key('a'));
+        assert_eq!(e.mode, Mode::Insert);
+        assert_eq!(e.buf.pos(), Pos { row: 1, col: 0 }, "insert ON the blank line");
+        assert_eq!(e.buf.lines(), ["one", "", ""], "no line was created");
+        assert_eq!(e.text(), "one\n\n\n");
+
+        // a mid-document empty line: stays on the line too, never the
+        // next row (typing used to go into the line below)
+        let mut e = editor("x\n\ny\n");
+        e.handle_key(key('j'));
+        assert_eq!(e.buf.pos().row, 1);
+        e.handle_key(key('a'));
+        assert_eq!(e.buf.pos(), Pos { row: 1, col: 0 });
+        assert_eq!(e.buf.lines(), ["x", "", "y"]);
+
+        // at the last char: the caret lands on the insert cell (col len)
+        let mut e = editor("ab\n");
+        e.handle_key(key('G'));
+        e.handle_key(key('l'));
+        e.handle_key(key('a'));
+        assert_eq!(e.mode, Mode::Insert);
+        assert_eq!(e.buf.pos(), Pos { row: 0, col: 2 }, "caret on the insert cell");
+        e.handle_key(key('c'));
+        assert_eq!(e.text(), "abc\n");
+    }
+
+    #[test]
+    fn insert_right_at_the_end_never_creates_lines() {
+        // Right at the caret's line end must not wrap onto the
+        // EOL-marker row: the insert clamp anchored every landing, so
+        // each press used to materialize one more blank line
+        let mut e = editor("one\n}\n\n");
+        e.handle_key(key('G'));
+        e.handle_key(key('A'));
+        assert_eq!(e.buf.pos(), Pos { row: 1, col: 1 }, "A: the end cell");
+        for _ in 0..3 {
+            e.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        }
+        assert_eq!(e.buf.pos(), Pos { row: 1, col: 1 }, "Right stays at EOF");
+        assert_eq!(e.buf.lines(), ["one", "}", ""], "no line was created");
+        assert_eq!(e.text(), "one\n}\n\n");
+
+        // shift+Right shares the guard
+        let mut e = editor("one\n}\n\n");
+        e.handle_key(key('G'));
+        e.handle_key(key('A'));
+        e.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+        assert_eq!(e.buf.pos(), Pos { row: 1, col: 1 });
+
+        // blank numbered last line: col 0 == len 0, the wrap was
+        // immediate — every press added a line
+        let mut e = editor("one\n\n\n");
+        e.handle_key(key('G'));
+        e.handle_key(key('i'));
+        for _ in 0..3 {
+            e.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        }
+        assert_eq!(e.buf.pos(), Pos { row: 1, col: 0 });
+        assert_eq!(e.buf.lines(), ["one", "", ""], "no line was created");
     }
 
     #[test]

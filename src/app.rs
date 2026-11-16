@@ -6730,6 +6730,33 @@ mod tests {
         assert_ne!(ghost_col, 0, "the anchor line is long enough to catch a regression");
     }
 
+    /// Regular mode's Down/Right at EOF park on the unnumbered
+    /// EOL-marker row below the document: regular_key moves the caret
+    /// with raw buffer motions that bypassed every editor clamp. The
+    /// buffer now refuses to land there from any motion.
+    #[test]
+    fn regular_mode_arrows_stay_off_the_eol_marker_row() {
+        let mut app = app();
+        let src = "one\n}\n\n".to_string();
+        app.editor_mut().set_text(&src);
+        app.cur_mut().set_source(&src);
+        app.focus = Focus::Editor;
+        app.editor_mut()
+            .buf
+            .move_cursor(editor::buffer::Move::Jump(1, 1));
+
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(app.editor().buf.pos().row, 1, "Down stays on the last line");
+
+        let _ = update(&mut app, Message::KeyPressed(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(
+            app.editor().buf.pos(),
+            editor::buffer::Pos { row: 1, col: 1 },
+            "Right stays at EOF"
+        );
+        assert_eq!(app.editor().text(), "one\n}\n\n", "no line was created");
+    }
+
     /// Screen point of a table box corner plus an offset.
     fn over_box(app: &App, title: &str, dx: f32, dy: f32) -> Point {
         let b = app.diagram().boxes.iter().find(|b| b.title == title).unwrap();
